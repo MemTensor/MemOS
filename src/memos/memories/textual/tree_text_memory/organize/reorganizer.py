@@ -50,6 +50,7 @@ class QueueMessage:
         op_priority = {"add": 2, "remove": 2, "merge": 1}
         return op_priority[self.op] < op_priority[other.op]
 
+
 class GraphStructureReorganizer:
     def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder):
         self.queue = PriorityQueue()  # Min-heap
@@ -484,5 +485,6 @@ class GraphStructureReorganizer:
             else:
                 message.after_node[i] = GraphDBNode(**raw_node)
         return message
+
 
 MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""
