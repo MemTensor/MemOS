@@ -12,9 +12,15 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 def mock_graph_store():
     store = MagicMock()
     store.get_node.return_value = {
-        "id": "id",
-        "memory": "text",
-        "metadata": {"confidence": 90, "background": "", "tags": [], "sources": [], "usage": []},
+        "id": str(uuid.uuid4()),
+        "memory": "old text",
+        "metadata": {
+            "confidence": 90,
+            "background": "",
+            "tags": [],
+            "sources": [],
+            "usage": [],
+        },
     }
     store.search_by_embedding.return_value = [{"id": str(uuid.uuid4()), "score": 0.95}]
     store.get_edges.return_value = [{"from": "from_id", "to": "to_id", "type": "RELATE"}]
