@@ -766,8 +766,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, {"scope": scope})
-            return [_parse_node({"id": record["id"], **dict(record["node"])})
-                    for record in results]
+            return [_parse_node({"id": record["id"], **dict(record["node"])}) for record in results]
 
     def drop_database(self) -> None:
         """

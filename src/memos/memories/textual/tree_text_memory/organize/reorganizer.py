@@ -106,10 +106,8 @@ class GraphStructureReorganizer:
         Use schedule library to periodically trigger structure optimization.
         This runs until the stop flag is set.
         """
-        schedule.every(30).seconds.do(self.optimize_structure,
-                                     scope="LongTermMemory")
-        schedule.every(30).seconds.do(self.optimize_structure,
-                                     scope="UserMemory")
+        schedule.every(30).seconds.do(self.optimize_structure, scope="LongTermMemory")
+        schedule.every(30).seconds.do(self.optimize_structure, scope="UserMemory")
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
@@ -176,8 +174,7 @@ class GraphStructureReorganizer:
             return
 
         if self.graph_store.count_nodes(scope) == 0:
-            logger.debug(
-                f"[GraphStructureReorganizer] No nodes for scope={scope}. Skip.")
+            logger.debug(f"[GraphStructureReorganizer] No nodes for scope={scope}. Skip.")
             return
 
         self._is_optimizing[scope] = True
