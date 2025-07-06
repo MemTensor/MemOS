@@ -92,6 +92,16 @@ class Neo4jGraphDB(BaseGraphDB):
             result = session.run(query, memory_type=memory_type)
             return result.single()["count"]
 
+    def count_nodes(self, scope: str) -> int:
+        query = """
+        MATCH (n:Memory)
+        WHERE n.memory_type = $scope
+        RETURN count(n) AS count
+        """
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, {"scope": scope}).single()
+            return result["count"]
+
     def remove_oldest_memory(self, memory_type: str, keep_latest: int) -> None:
         """
         Remove all WorkingMemory nodes except the latest `keep_latest` entries.
@@ -729,6 +739,35 @@ class Neo4jGraphDB(BaseGraphDB):
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, {"scope": scope})
             return [_parse_node(dict(record["n"])) for record in results]
+
+    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+        """
+        Find nodes that are likely candidates for structure optimization:
+        - Isolated nodes, nodes with empty background, or nodes with exactly one child.
+        - Plus: the child of any parent node that has exactly one child.
+        """
+        query = """
+                // Case 1
+                MATCH (n:Memory)
+                WHERE n.memory_type = $scope
+                  AND (
+                    NOT (n)--()
+                    OR n.background IS NULL OR n.background = ''
+                    OR size([ (n)-[:PARENT]->() | 1 ]) = 1
+                  )
+                RETURN n.id AS id, n AS node
+                UNION
+                // Case 2
+                MATCH (p:Memory)-[:PARENT]->(c:Memory)
+                WHERE p.memory_type = $scope
+                  AND size([ (p)-[:PARENT]->() | 1 ]) = 1
+                RETURN c.id AS id, c AS node
+                """
+
+        with self.driver.session(database=self.db_name) as session:
+            results = session.run(query, {"scope": scope})
+            return [_parse_node({"id": record["id"], **dict(record["node"])})
+                    for record in results]
 
     def drop_database(self) -> None:
         """
