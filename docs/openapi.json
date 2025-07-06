@@ -884,7 +884,7 @@
             "type": "string",
             "title": "Session Id",
             "description": "Session ID for the MOS. This is used to distinguish between different dialogue",
-            "default": "5cc9f7d7-74c3-4bb3-9b4f-11adf416530b"
+            "default": "fe8a1b2a-712d-4cda-9c8d-5feeb3869e87"
           },
           "chat_model": {
             "$ref": "#/components/schemas/LLMConfigFactory",
@@ -939,6 +939,12 @@
             "type": "boolean",
             "title": "Enable Mem Scheduler",
             "description": "Enable memory scheduler for automated memory management",
+            "default": false
+          },
+          "PRO_MODE": {
+            "type": "boolean",
+            "title": "Pro Mode",
+            "description": "Enable PRO mode for complex query decomposition",
             "default": false
           }
         },
