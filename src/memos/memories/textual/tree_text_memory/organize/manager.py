@@ -218,18 +218,6 @@ class MemoryManager:
             merged_id, merged_text, merged_metadata.model_dump(exclude_none=True)
         )
 
-        # log to reorganizer before updating the graph
-        self.reorganizer.add_message(
-            QueueMessage(
-                op="update",
-                before_node=[
-                    original_id,
-                    source_node.id,
-                ],
-                after_node=[merged_id],
-            )
-        )
-
         # Add traceability edges: both original and new point to merged node
         self.graph_store.add_edge(original_id, merged_id, type="MERGED_TO")
         self.graph_store.update_node(original_id, {"status": "archived"})
@@ -246,6 +234,18 @@ class MemoryManager:
                 merged_id, related_node["id"], type="ANY", direction="ANY"
             ):
                 self.graph_store.add_edge(merged_id, related_node["id"], type="RELATE")
+
+        # log to reorganizer before updating the graph
+        self.reorganizer.add_message(
+            QueueMessage(
+                op="merge",
+                before_node=[
+                    original_id,
+                    source_node.id,
+                ],
+                after_node=[merged_id],
+            )
+        )
 
     def _inherit_edges(self, from_id: str, to_id: str) -> None:
         """

@@ -3,7 +3,7 @@ import threading
 import time
 import traceback
 
-from queue import Queue
+from queue import PriorityQueue
 from typing import Literal
 
 import numpy as np
@@ -46,10 +46,13 @@ class QueueMessage:
     def __str__(self) -> str:
         return f"QueueMessage(op={self.op}, before_node={self.before_node if self.before_node is None else len(self.before_node)}, after_node={self.after_node if self.after_node is None else len(self.after_node)})"
 
+    def __lt__(self, other: "QueueMessage") -> bool:
+        op_priority = {"add": 2, "remove": 2, "merge": 1}
+        return op_priority[self.op] < op_priority[other.op]
 
 class GraphStructureReorganizer:
     def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder):
-        self.queue = Queue()
+        self.queue = PriorityQueue()  # Min-heap
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
@@ -129,7 +132,7 @@ class GraphStructureReorganizer:
         handle_map = {
             "add": self.handle_add,
             "remove": self.handle_remove,
-            "update": self.handle_update,
+            "merge": self.handle_merge,
         }
         handle_map[message.op](message)
         logger.debug(f"message queue size: {self.queue.qsize()}")
@@ -151,16 +154,24 @@ class GraphStructureReorganizer:
                 logger.info(f"Resolved conflict between {added_node.id} and {existing_node.id}.")
 
     def handle_remove(self, message: QueueMessage):
-        """
-        Handle removing a memory item from the graph.
-        """
         logger.debug(f"Handling remove operation: {str(message)[:50]}")
 
-    def handle_update(self, message: QueueMessage):
-        """
-        Handle updating a memory item in the graph.
-        """
-        logger.debug(f"Handling update operation: {str(message)[:50]}")
+    def handle_merge(self, message: QueueMessage):
+        after_node = message.after_node[0]
+        logger.debug(f"Handling merge operation: <{after_node.memory}>")
+        prompt = [
+            {
+                "role": "user",
+                "content": MERGE_PROMPT.format(merged_text=after_node.memory),
+            },
+        ]
+        response = self.llm.generate(prompt)
+        after_node.memory = response.strip()
+        self.graph_store.update_node(
+            after_node.id,
+            {"memory": after_node.memory, **after_node.metadata.model_dump(exclude_none=True)},
+        )
+        logger.debug(f"Merged memory: {after_node.memory}")
 
     def optimize_structure(self, scope: str = "LongTermMemory", local_tree_threshold: int = 10):
         """
@@ -473,3 +484,5 @@ class GraphStructureReorganizer:
             else:
                 message.after_node[i] = GraphDBNode(**raw_node)
         return message
+
+MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""
