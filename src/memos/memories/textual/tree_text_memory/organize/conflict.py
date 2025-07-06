@@ -58,7 +58,7 @@ Statement 1: {memory.memory!s}
 Statement 2: {embedding_candidate.memory!s}""",
                 },
             ]
-            result = self.llm.generate(prompt).strip().lower()
+            result = self.llm.generate(prompt).strip()
             if "yes" in result.lower():
                 conflict_pairs.append([memory, embedding_candidate])
         if len(conflict_pairs):
