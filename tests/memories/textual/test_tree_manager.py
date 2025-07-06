@@ -12,8 +12,8 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 def mock_graph_store():
     store = MagicMock()
     store.get_node.return_value = {
-        "id": str(uuid.uuid4()),
-        "memory": "old text",
+        "id": "id",
+        "memory": "text",
         "metadata": {"confidence": 90, "background": "", "tags": [], "sources": [], "usage": []},
     }
     store.search_by_embedding.return_value = [{"id": str(uuid.uuid4()), "score": 0.95}]
@@ -30,8 +30,19 @@ def mock_embedder():
 
 
 @pytest.fixture
-def memory_manager(mock_graph_store, mock_embedder):
-    return MemoryManager(graph_store=mock_graph_store, embedder=mock_embedder)
+def mock_llm():
+    llm = MagicMock()
+    llm.run.side_effect = lambda *args, **kwargs: "mock_output"
+    return llm
+
+
+@pytest.fixture
+def memory_manager(mock_graph_store, mock_embedder, mock_llm):
+    return MemoryManager(
+        graph_store=mock_graph_store,
+        embedder=mock_embedder,
+        llm=mock_llm,
+    )
 
 
 def test_add_and_replace_working_memory(memory_manager):
