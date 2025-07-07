@@ -1,13 +1,18 @@
+import os
 import time
 import uuid
 
 from datetime import datetime
+
+from dotenv import load_dotenv
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
 
+
+load_dotenv()
 
 # 1. Create MOS Config and set openai config
 print(f"🚀 [{datetime.now().strftime('%H:%M:%S')}] Starting to create MOS configuration...")
@@ -18,17 +23,17 @@ print(user_name)
 
 # 1.1 Set openai config
 openapi_config = {
-    "model_name_or_path": "gpt-4o",
+    "model_name_or_path": "gpt-4o-mini",
     "temperature": 0.8,
     "max_tokens": 1024,
     "top_p": 0.9,
     "top_k": 50,
     "remove_think_prefix": True,
-    "api_key": "sk-xxxxxx",
-    "api_base": "https://api.openai.com/v1",
+    "api_key": os.getenv("OPENAI_API_KEY", "sk-xxxxx"),
+    "api_base": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
 }
 # 1.2 Set neo4j config
-neo4j_uri = "bolt://localhost:7687"
+neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 
 # 1.3  Create MOS Config
 config = {
@@ -69,6 +74,7 @@ config = {
 }
 
 mos_config = MOSConfig(**config)
+# you can set PRO_MODE to True to enable CoT enhancement mos_config.PRO_MODE = True
 mos = MOS(mos_config)
 
 print(

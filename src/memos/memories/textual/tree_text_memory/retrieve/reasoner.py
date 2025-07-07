@@ -34,10 +34,7 @@ class MemoryReasoner:
         """
         prompt_template = Template(REASON_PROMPT)
         memory_detailed_str = "\n".join(
-            [
-                f"[{m.id}] ({m.metadata.hierarchy_level}) {m.metadata.key}: {m.memory}"
-                for m in ranked_memories
-            ]
+            [f"[{m.id}] {m.metadata.key}: {m.memory}" for m in ranked_memories]
         )
         prompt = prompt_template.substitute(task=query, detailed_memory_list=memory_detailed_str)
 
