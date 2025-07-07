@@ -147,20 +147,20 @@ Documents are chunked and summarized to create searchable knowledge items.
 
 We use [`markitdown`](https://github.com/microsoft/markitdown) to convert files to Markdown format texts.
 
-**MarkItDown currently supports the conversion from:**  
+**MarkItDown currently supports the conversion from:**
 
 ```
-PDF  
-PowerPoint  
-Word  
-Excel  
-Images (EXIF metadata and OCR)  
-Audio (EXIF metadata and speech transcription)  
-HTML  
-Text-based formats (CSV, JSON, XML)  
-ZIP files (iterates over contents)  
-YouTube URLs  
-EPUBs  
+PDF
+PowerPoint
+Word
+Excel
+Images (EXIF metadata and OCR)
+Audio (EXIF metadata and speech transcription)
+HTML
+Text-based formats (CSV, JSON, XML)
+ZIP files (iterates over contents)
+YouTube URLs
+EPUBs
 ... and more!
 ```
 *(Content sourced from [MarkItDown GitHub repository](https://github.com/microsoft/markitdown))*
