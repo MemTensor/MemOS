@@ -32,8 +32,10 @@ class TreeTextMemory(BaseTextMemory):
         self.dispatcher_llm: OpenAILLM | OllamaLLM = LLMFactory.from_config(config.dispatcher_llm)
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
+        self.is_reorganize = config.reorganize
+
         self.memory_manager: MemoryManager = MemoryManager(
-            self.graph_store, self.embedder, self.extractor_llm
+            self.graph_store, self.embedder, self.extractor_llm, is_reorganize=self.is_reorganize
         )
 
     def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> None:

@@ -156,6 +156,11 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         description="Graph database configuration for the tree-memory storage",
     )
 
+    reorganize: bool | None = Field(
+        False,
+        description="Optional description for this memory configuration.",
+    )
+
 
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 

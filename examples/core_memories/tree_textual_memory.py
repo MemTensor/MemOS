@@ -183,6 +183,7 @@ memory = reader.get_memory(scene_data, type="chat", info={"user_id": "1234", "se
 
 for m_list in memory:
     my_tree_textual_memory.add(m_list)
+    my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 results = my_tree_textual_memory.search(
     "Talk about the user's childhood story?",
@@ -211,6 +212,7 @@ doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "sessi
 
 for m_list in doc_memory:
     my_tree_textual_memory.add(m_list)
+    my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 results = my_tree_textual_memory.search(
     "Tell me about what memos consist of?",

@@ -26,6 +26,7 @@ class MemoryManager:
         memory_size: dict | None = None,
         threshold: float | None = 0.80,
         merged_threshold: float | None = 0.92,
+        is_reorganize: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -42,7 +43,10 @@ class MemoryManager:
                 "UserMemory": 10000,
             }
         self._threshold = threshold
-        self.reorganizer = GraphStructureReorganizer(graph_store, llm, embedder)
+        self.is_reorganize = is_reorganize
+        self.reorganizer = GraphStructureReorganizer(
+            graph_store, llm, embedder, is_reorganize=is_reorganize
+        )
         self._merged_threshold = merged_threshold
 
     def add(self, memories: list[TextualMemoryItem]) -> None:

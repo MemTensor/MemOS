@@ -52,7 +52,9 @@ class QueueMessage:
 
 
 class GraphStructureReorganizer:
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder):
+    def __init__(
+        self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder, is_reorganize: bool
+    ):
         self.queue = PriorityQueue()  # Min-heap
         self.graph_store = graph_store
         self.llm = llm
@@ -61,17 +63,18 @@ class GraphStructureReorganizer:
         self.conflict_resolver = ConflictResolver(
             graph_store=graph_store, llm=llm, embedder=embedder
         )
+        self.is_reorganize = is_reorganize
+        if self.is_reorganize:
+            # start to listen to the queue in a separate thread
+            self.thread = threading.Thread(target=self.run)
+            self.thread.start()
 
-        # start to listen to the queue in a separate thread
-        self.thread = threading.Thread(target=self.run)
-        self.thread.start()
-
-        self._stop_scheduler = False
-        self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
-        self.structure_optimizer_thread = threading.Thread(
-            target=self._run_structure_organizer_loop
-        )
-        self.structure_optimizer_thread.start()
+            self._stop_scheduler = False
+            self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
+            self.structure_optimizer_thread = threading.Thread(
+                target=self._run_structure_organizer_loop
+            )
+            self.structure_optimizer_thread.start()
 
     def add_message(self, message: QueueMessage):
         self.queue.put_nowait(message)
@@ -82,6 +85,9 @@ class GraphStructureReorganizer:
         1) queue is empty
         2) any running structure optimization is done
         """
+        if not self.is_reorganize:
+            return
+
         if not self.queue.empty():
             self.queue.join()
         logger.debug("Queue is now empty.")
@@ -110,8 +116,8 @@ class GraphStructureReorganizer:
         Use schedule library to periodically trigger structure optimization.
         This runs until the stop flag is set.
         """
-        schedule.every(30).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(30).seconds.do(self.optimize_structure, scope="UserMemory")
+        schedule.every(20).seconds.do(self.optimize_structure, scope="LongTermMemory")
+        schedule.every(20).seconds.do(self.optimize_structure, scope="UserMemory")
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
@@ -122,6 +128,9 @@ class GraphStructureReorganizer:
         """
         Stop the reorganizer thread.
         """
+        if not self.is_reorganize:
+            return
+
         self.add_message(None)
         self.thread.join()
         logger.info("Reorganizer thread stopped.")

@@ -396,14 +396,10 @@ class Neo4jGraphDB(BaseGraphDB):
             record = session.run(query, {"center_id": center_id}).single()
 
             if not record:
-                logger.warning(
-                    f"No active node found for center_id={center_id} with status={center_status}"
-                )
                 return {"core_node": None, "neighbors": [], "edges": []}
 
             centers = record["centers"]
             if not centers or centers[0] is None:
-                logger.warning(f"Center node not found or inactive for id={center_id}")
                 return {"core_node": None, "neighbors": [], "edges": []}
 
             core_node = _parse_node(dict(centers[0]))

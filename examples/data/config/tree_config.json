@@ -33,5 +33,6 @@
       "auto_create": true,
       "embedding_dimension": 768
     }
-  }
+  },
+  "reorganize": false
 }
