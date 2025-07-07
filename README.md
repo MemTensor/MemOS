@@ -209,7 +209,7 @@ If you use MemOS in your research, please cite our paper:
 
 ## 🙌 Contributing
 
-We welcome contributions from the community! Please read our [contribution guidelines](./docs/contribution/overview.md) to get started.
+We welcome contributions from the community! Please read our [contribution guidelines](https://memos.openmem.net/docs/contribution/overview) to get started.
 
 ## 📄 License
 
