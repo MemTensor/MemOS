@@ -15,12 +15,10 @@ from utils import filter_memory_data
 from zep_cloud.client import Zep
 
 from memos.configs.mem_os import MOSConfig
-from memos.configs.memory import MemoryConfigFactory
 from memos.mem_os.main import MOS
-from memos.memories.factory import MemoryFactory
 
 
-def get_client(frame: str, user_id: str | None = None, version: str = "default"):
+def get_client(frame: str, user_id: str | None = None, version: str = "default", top_k: int = 20):
     if frame == "zep":
         zep = Zep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
         return zep
@@ -30,29 +28,10 @@ def get_client(frame: str, user_id: str | None = None, version: str = "default")
         return mem0
 
     elif frame == "memos":
-        config_path = "configs/text_memos_config.json"
-        with open(config_path) as f:
-            config_data = json.load(f)
-        config_data["config"]["extractor_llm"]["config"]["model_name_or_path"] = os.getenv("MODEL")
-        config_data["config"]["extractor_llm"]["config"]["api_key"] = os.getenv("OPENAI_API_KEY")
-        config_data["config"]["extractor_llm"]["config"]["api_base"] = os.getenv("OPENAI_BASE_URL")
-        config_data["config"]["vector_db"]["config"]["path"] = (
-            f"results/locomo/memos-{version}/storages/{user_id}/qdrant"
-        )
-        config_data["config"]["embedder"]["config"]["model_name_or_path"] = os.getenv(
-            "EMBEDDING_MODEL"
-        )
-
-        config = MemoryConfigFactory.model_validate(config_data)
-
-        m = MemoryFactory.from_config(config)
-        m.load(f"results/locomo/memos-{version}/storages/{user_id}")
-        return m
-
-    elif frame == "memos_mos":
         mos_config_path = "configs/mos_memos_config.json"
         with open(mos_config_path) as f:
             mos_config_data = json.load(f)
+        mos_config_data["top_k"] = top_k
         mos_config = MOSConfig(**mos_config_data)
         mos = MOS(mos_config)
         mos.create_user(user_id=user_id)
@@ -123,18 +102,6 @@ TEMPLATE_MEMOS = """Memories for user {speaker_1}:
 """
 
 
-def memos_search(client, query):
-    start = time()
-    search_results = client.search(query, top_k=20)
-    context = ""
-    for item in search_results:
-        item = item.to_dict()
-        context += f"{item['memory']}\n"
-    print(query, context)
-    duration_ms = (time() - start) * 1000
-    return context, duration_ms
-
-
 def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k=20):
     start = time()
     search_speaker_a_results = client.search(
@@ -192,7 +159,7 @@ def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k=20):
     return context, duration_ms
 
 
-def memos_mos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client=None):
+def memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client=None):
     start = time()
     search_a_results = client.search(
         query=query,
@@ -349,8 +316,8 @@ def search_query(client, query, metadata, frame, reversed_client=None, top_k=20)
         context, duration_ms = mem0_graph_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k
         )
-    elif frame == "memos_mos":
-        context, duration_ms = memos_mos_search(
+    elif frame == "memos":
+        context, duration_ms = memos_search(
             client, query, conv_id, speaker_a, speaker_b, reversed_client
         )
     return context, duration_ms
@@ -394,11 +361,11 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
     }
 
     reversed_client = None
-    if frame == "memos_mos":
+    if frame == "memos":
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
-        client = get_client(frame, speaker_a_user_id, version)
-        reversed_client = get_client(frame, speaker_b_user_id, version)
+        client = get_client(frame, speaker_a_user_id, version, top_k=top_k)
+        reversed_client = get_client(frame, speaker_b_user_id, version, top_k=top_k)
     else:
         client = get_client(frame, conv_id, version)
 
@@ -474,8 +441,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "memos_mos", "langmem"],
-        help="Specify the memory framework (zep or memos or mem0 or mem0_graph or memos_mos)",
+        choices=["zep", "memos", "mem0", "mem0_graph", "langmem"],
+        help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
     )
     parser.add_argument(
         "--version",

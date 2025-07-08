@@ -37,12 +37,11 @@ llm = LLMFactory.from_config(config)
 
 # Step 1: Prepare a mock ParsedTaskGoal
 parsed_goal = ParsedTaskGoal(
-    topic_level=["Multi-UAV Long-Term Coverage"],
-    concept_level=["Coverage Metrics", "Reward Function Design", "Energy Model"],
-    fact_level=["CT and FT Definition", "Reward Components", "Energy Cost Components"],
-    goal_type="explanation",
-    graph_suggestion="Use all relevant knowledge from previous paper review",
-    retrieval_keywords=["UAV", "coverage", "energy", "reward"],
+    memories=["Multi-UAV Long-Term Coverage", "Coverage Metrics", "Reward Function Design", "Energy Model",
+    "CT and FT Definition", "Reward Components", "Energy Cost Components"],
+    keys=["UAV", "coverage", "energy", "reward"],
+    tags=[],
+    goal_type="explanation"
 )
 
 query = "How can multiple UAVs coordinate to maximize coverage while saving energy?"
@@ -85,7 +84,53 @@ ranked_memories = [
             sources=["paper://multi-uav-coverage/metrics"],
             embedding=[0.01] * 768,
         ),
-    )
+    ),
+    TextualMemoryItem(
+        id="c34f5e6b-2d34-4e6f-8c9b-abcdef123456",
+        memory="The capital of France is Paris, which is known for the Eiffel Tower.",
+        metadata=TreeNodeTextualMemoryMetadata(
+            user_id=None,
+            session_id=None,
+            status="activated",
+            type="fact",
+            memory_time="2024-01-01",
+            source="file",
+            confidence=90.0,
+            entities=["France", "Paris", "Eiffel Tower"],
+            tags=["geography", "city", "landmark"],
+            visibility="public",
+            updated_at="2025-06-11T11:51:24.438001",
+            memory_type="LongTermMemory",
+            key="Geography Fact",
+            value="Paris is the capital of France",
+            hierarchy_level="concept",
+            sources=["wikipedia://paris"],
+            embedding=[0.03] * 768,
+        ),
+    ),
+    TextualMemoryItem(
+        id="d56a7b8c-3e45-4f7a-9dab-fedcba654321",
+        memory="Total energy cost is calculated from both mechanical movement and communication transmission.",
+        metadata=TreeNodeTextualMemoryMetadata(
+            user_id=None,
+            session_id=None,
+            status="activated",
+            type="fact",
+            memory_time="2024-01-01",
+            source="file",
+            confidence=89.0,
+            entities=["movement power", "transmission power"],
+            tags=["energy", "movement", "transmission"],
+            visibility="public",
+            updated_at="2025-06-11T11:51:24.438001",
+            memory_type="LongTermMemory",
+            key="Energy Cost Components",
+            value="Includes movement and communication energy",
+            hierarchy_level="fact",
+            sources=["paper://multi-uav-coverage/energy-detail"],
+            embedding=[0.04] * 768,
+        ),
+    ),
 ]
 
 # Step 7: Init memory retriever
