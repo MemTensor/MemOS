@@ -10,7 +10,6 @@ evaluation/data/langmemeval
 evaluation/*tmp/
 evaluation/results
 evaluation/.env
-evaluation/scripts/*.sh
 evaluation/configs/*
 .env
 
