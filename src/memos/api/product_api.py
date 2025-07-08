@@ -1,10 +1,10 @@
 import logging
-from fastapi import FastAPI
-from fastapi.requests import Request
 
-from memos.api.product_models import BaseResponse
+from fastapi import FastAPI
+
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.routers.product_router import router as product_router
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -26,4 +26,5 @@ app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)

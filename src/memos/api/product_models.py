@@ -1,10 +1,12 @@
 import uuid
-from typing import Any, Generic, TypeVar, Literal, TypeAlias
-from typing_extensions import TypedDict
+
+from typing import Generic, Literal, TypeAlias, TypeVar
+
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
+
 
 T = TypeVar("T")
-
 
 
 # ─── Message Types ──────────────────────────────────────────────────────────────
@@ -23,11 +25,11 @@ class MessageDict(TypedDict):
 
 class BaseRequest(BaseModel):
     """Base model for all requests."""
-    pass
 
 
 class BaseResponse(BaseModel, Generic[T]):
     """Base model for all responses."""
+
     code: int = Field(200, description="Response status code")
     message: str = Field(..., description="Response message")
     data: T | None = Field(None, description="Response data")
@@ -36,15 +38,21 @@ class BaseResponse(BaseModel, Generic[T]):
 # Product API Models
 class UserRegisterRequest(BaseRequest):
     """Request model for user registration."""
-    user_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="User ID for registration")
+
+    user_id: str = Field(
+        default_factory=lambda: str(uuid.uuid4()), description="User ID for registration"
+    )
     user_name: str | None = Field(None, description="User name for registration")
     interests: str | None = Field(None, description="User interests")
 
 
 class GetMemoryRequest(BaseRequest):
     """Request model for getting memories."""
+
     user_id: str = Field(..., description="User ID")
-    memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"] = Field(..., description="Memory type")
+    memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"] = Field(
+        ..., description="Memory type"
+    )
     mem_cube_ids: list[str] | None = Field(None, description="Cube IDs")
     search_query: str | None = Field(None, description="Search query")
 
@@ -70,11 +78,11 @@ class MemCubeRegister(BaseRequest):
 
 class ChatRequest(BaseRequest):
     """Request model for chat operations."""
+
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
-    
 
 
 class UserCreate(BaseRequest):
@@ -102,6 +110,7 @@ class MemoryResponse(BaseResponse[list]):
 
 class SuggestionResponse(BaseResponse[list]):
     """Response model for suggestion operations."""
+
     data: dict[str, list[str]] | None = Field(None, description="Response data")
 
 
@@ -127,6 +136,7 @@ class UserListResponse(BaseResponse[list]):
 
 class MemoryCreateRequest(BaseRequest):
     """Request model for creating memories."""
+
     user_id: str = Field(..., description="User ID")
     messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Memory content to store")
@@ -136,6 +146,7 @@ class MemoryCreateRequest(BaseRequest):
 
 class SearchRequest(BaseRequest):
     """Request model for searching memories."""
+
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Search query")
-    mem_cube_id: str | None = Field(None, description="Cube ID to search in") 
+    mem_cube_id: str | None = Field(None, description="Cube ID to search in")
