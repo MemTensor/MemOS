@@ -53,7 +53,6 @@ nltk = "^3.9.1"
 bert-score = "^0.3.13"
 scipy = "^1.10.1"
 python-dotenv = "^1.1.1"
-pydantic = "^2.11.7"
 langgraph = "^0.5.1"
 langmem = "^0.0.27"
 
