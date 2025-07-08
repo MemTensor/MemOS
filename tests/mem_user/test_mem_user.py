@@ -27,15 +27,22 @@ class TestUserManager:
         temp_dir = tempfile.mkdtemp()
         db_path = os.path.join(temp_dir, "test_memos.db")
         yield db_path
-        # Cleanup
-        if os.path.exists(db_path):
-            os.remove(db_path)
-        os.rmdir(temp_dir)
+        # Cleanup - note: file cleanup is handled by user_manager fixture
+        try:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            os.rmdir(temp_dir)
+        except (OSError, PermissionError):
+            # On Windows, files might still be locked, ignore cleanup errors
+            pass
 
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        # Ensure database connections are closed
+        manager.close()
 
     def test_initialization(self, temp_db):
         """Test UserManager initialization."""
@@ -93,7 +100,9 @@ class TestUserOperations:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_create_user(self, user_manager):
         """Test user creation."""
@@ -239,7 +248,9 @@ class TestCubeOperations:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_create_cube(self, user_manager):
         """Test cube creation."""
@@ -433,7 +444,9 @@ class TestUserRoles:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_user_roles(self, user_manager):
         """Test different user roles."""
@@ -483,7 +496,9 @@ class TestDatabaseIntegrity:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_cascade_delete_user_cubes(self, user_manager):
         """Test that user's owned cubes are handled when user is deleted."""

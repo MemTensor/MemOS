@@ -476,3 +476,13 @@ class UserManager:
             return False
         finally:
             session.close()
+
+    def close(self) -> None:
+        """Close the database engine and dispose of all connections.
+        
+        This method should be called when the UserManager is no longer needed
+        to ensure proper cleanup of database connections.
+        """
+        if hasattr(self, 'engine'):
+            self.engine.dispose()
+            logger.info("UserManager database connections closed")
