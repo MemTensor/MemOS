@@ -51,6 +51,10 @@ zep-cloud = "^2.15.0"
 rouge-score = "^0.1.2"
 nltk = "^3.9.1"
 bert-score = "^0.3.13"
+scipy = "^1.10.1"
+python-dotenv = "^1.1.1"
+langgraph = "^0.5.1"
+langmem = "^0.0.27"
 
 [[tool.poetry.source]]
 name = "mirrors"
