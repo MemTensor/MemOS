@@ -306,8 +306,6 @@ def search_query(client, query, metadata, frame, reversed_client=None, top_k=20)
 
     if frame == "zep":
         context, duration_ms = zep_search(client, query, conv_id, top_k)
-    elif frame == "memos":
-        context, duration_ms = memos_search(client, query)
     elif frame == "mem0":
         context, duration_ms = mem0_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k
