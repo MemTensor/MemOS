@@ -196,17 +196,25 @@ Join our community to ask questions, share your projects, and connect with other
 
 ## 📜 Citation
 
-If you use MemOS in your research, please cite our paper:
+> [!NOTE]
+> We publicly released the Short Version on May 28, 2025, making it the earliest work to propose the concept of a Memory Operating System for LLMs.
 
-```bibtex
-@misc{li2025memos,
-    title={MemOS: A Memory OS for AI System},
-    author={Zhiyu Li and Shichao Song and Chenyang Xi and Hanyu Wang and Chen Tang and Simin Niu and Ding Chen and Jiawei Yang and Chunyu Li and Qingchen Yu and Jihao Zhao and Yezhaohui Wang and Peng Liu and Zehao Lin and Pengyuan Wang and Jiahao Huo and Tianyi Chen and Kai Chen and Kehang Li and Zhen Tao and Junpeng Ren and Huayi Lai and Hao Wu and Bo Tang and Zhenren Wang and Zhaoxin Fan and Ningyu Zhang and Linfeng Zhang and Junchi Yan and Mingchuan Yang and Tong Xu and Wei Xu and Huajun Chen and Haofeng Wang and Hongkang Yang and Wentao Zhang and Zhi-Qin John Xu and Siheng Chen and Feiyu Xiong},
-    year={2025},
-    eprint={2507.03724},
-    archivePrefix={arXiv},
-    primaryClass={cs.CL}
-}
+If you use MemOS in your research, please cite our papers:
+
+```bib
+@article{li2025memosshort,
+  title={MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models},
+  author={Li, Zhiyu and Song, Shichao and Wang, Hanyu and Niu, Simin and Chen, Ding and Yang, Jiawei and Xi, Chenyang and Lai, Huayi and Zhao, Jihao and Wang, Yezhaohui and others},
+  journal={arXiv preprint arXiv:2505.22101},
+  year={2025}
+}  # Short Version
+
+@article{li2025memoslong,
+  title={MemOS: A Memory OS for AI System},
+  author={Zhiyu Li, Shichao Song, Chenyang Xi, Hanyu Wang, Chen Tang, Simin Niu, Ding Chen, Jiawei Yang, Chunyu Li, Qingchen Yu, Jihao Zhao, Yezhaohui Wang, Peng Liu, Zehao Lin, Pengyuan Wang, Jiahao Huo, Tianyi Chen, Kai Chen, Kehang Li, Zhen Tao, Junpeng Ren, Huayi Lai, Hao Wu, Bo Tang, Zhenren Wang, Zhaoxin Fan, Ningyu Zhang, Linfeng Zhang, Junchi Yan, Mingchuan Yang, Tong Xu, Wei Xu, Huajun Chen, Haofeng Wang, Hongkang Yang, Wentao Zhang, Zhi-Qin John Xu, Siheng Chen, Feiyu Xiong},
+  journal={arXiv preprint arXiv:2507.03724},
+  year={2025}
+}  # Long Version
 ```
 
 ## 🙌 Contributing
