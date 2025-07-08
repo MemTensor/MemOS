@@ -22,8 +22,8 @@
     <a href="https://memos.openmem.net/docs/home">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>
-    <a href="https://arxiv.org/abs/2505.22101">
-        <img src="https://img.shields.io/badge/arXiv-2505.22101-b31b1b.svg" alt="ArXiv Paper">
+    <a href="https://arxiv.org/abs/2507.03724">
+        <img src="https://img.shields.io/badge/arXiv-2507.03724-b31b1b.svg" alt="ArXiv Paper">
     </a>
     <a href="https://github.com/MemTensor/MemOS/discussions">
       <img src="https://img.shields.io/badge/GitHub-Discussions-181717.svg?logo=github" alt="GitHub Discussions">
@@ -199,11 +199,13 @@ Join our community to ask questions, share your projects, and connect with other
 If you use MemOS in your research, please cite our paper:
 
 ```bibtex
-@article{li2025memos,
-  title={MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models},
-  author={Li, Zhiyu and Song, Shichao and Wang, Hanyu and Niu, Simin and Chen, Ding and Yang, Jiawei and Xi, Chenyang and Lai, Huayi and Zhao, Jihao and Wang, Yezhaohui and others},
-  journal={arXiv preprint arXiv:2505.22101},
-  year={2025}
+@misc{li2025memos,
+    title={MemOS: A Memory OS for AI System},
+    author={Zhiyu Li and Shichao Song and Chenyang Xi and Hanyu Wang and Chen Tang and Simin Niu and Ding Chen and Jiawei Yang and Chunyu Li and Qingchen Yu and Jihao Zhao and Yezhaohui Wang and Peng Liu and Zehao Lin and Pengyuan Wang and Jiahao Huo and Tianyi Chen and Kai Chen and Kehang Li and Zhen Tao and Junpeng Ren and Huayi Lai and Hao Wu and Bo Tang and Zhenren Wang and Zhaoxin Fan and Ningyu Zhang and Linfeng Zhang and Junchi Yan and Mingchuan Yang and Tong Xu and Wei Xu and Huajun Chen and Haofeng Wang and Hongkang Yang and Wentao Zhang and Zhi-Qin John Xu and Siheng Chen and Feiyu Xiong},
+    year={2025},
+    eprint={2507.03724},
+    archivePrefix={arXiv},
+    primaryClass={cs.CL}
 }
 ```
 
@@ -220,6 +222,7 @@ MemOS is licensed under the [Apache 2.0 License](./LICENSE).
 Stay up to date with the latest MemOS announcements, releases, and community highlights.
 
 - **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
+- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
 - **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
 - **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
 - **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.
