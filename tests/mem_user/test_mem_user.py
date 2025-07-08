@@ -264,7 +264,7 @@ class TestCubeOperations:
         owner_id = user_manager.create_user("cube_owner", UserRole.USER)
 
         custom_cube_id = "custom_cube_123"
-        cube_path = "/path/to/cube"
+        cube_path = str(Path("/path/to/cube"))  # Use pathlib for cross-platform path handling
 
         cube_id = user_manager.create_cube(
             "custom_cube", owner_id, cube_path=cube_path, cube_id=custom_cube_id
