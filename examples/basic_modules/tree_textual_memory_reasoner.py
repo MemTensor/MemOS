@@ -37,11 +37,18 @@ llm = LLMFactory.from_config(config)
 
 # Step 1: Prepare a mock ParsedTaskGoal
 parsed_goal = ParsedTaskGoal(
-    memories=["Multi-UAV Long-Term Coverage", "Coverage Metrics", "Reward Function Design", "Energy Model",
-    "CT and FT Definition", "Reward Components", "Energy Cost Components"],
+    memories=[
+        "Multi-UAV Long-Term Coverage",
+        "Coverage Metrics",
+        "Reward Function Design",
+        "Energy Model",
+        "CT and FT Definition",
+        "Reward Components",
+        "Energy Cost Components",
+    ],
     keys=["UAV", "coverage", "energy", "reward"],
     tags=[],
-    goal_type="explanation"
+    goal_type="explanation",
 )
 
 query = "How can multiple UAVs coordinate to maximize coverage while saving energy?"
