@@ -70,18 +70,27 @@ class TestUserManager:
         # Replace the settings import
         monkeypatch.setattr("memos.mem_user.user_manager.settings", MockSettings())
 
+        manager = None
         try:
             manager = UserManager()
             expected_path = mock_memos_dir / "memos_users.db"
             assert manager.db_path == str(expected_path)
             assert os.path.exists(expected_path)
         finally:
+            # Close database connections first
+            if manager:
+                manager.close()
+
             # Cleanup
-            expected_path = mock_memos_dir / "memos_users.db"
-            if os.path.exists(expected_path):
-                os.remove(expected_path)
-            if os.path.exists(temp_dir):
-                os.rmdir(temp_dir)
+            try:
+                expected_path = mock_memos_dir / "memos_users.db"
+                if os.path.exists(expected_path):
+                    os.remove(expected_path)
+                if os.path.exists(temp_dir):
+                    os.rmdir(temp_dir)
+            except (OSError, PermissionError):
+                # On Windows, files might still be locked, ignore cleanup errors
+                pass
 
 
 class TestUserOperations:
