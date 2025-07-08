@@ -3,6 +3,9 @@
 
 name: Python tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:

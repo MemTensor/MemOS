@@ -1,0 +1,38 @@
+name: "\U0001F41B Bug / help"
+description: Create a report to help us improve MemOS
+labels: ["bug", "pending"]
+body:
+
+  - type: textarea
+    id: system-info
+    validations:
+      required: true
+    attributes:
+      label: System Info
+      description: |
+        Please share your system info with us. You can run the command **pip show MemoryOS** and copy-paste its output below.
+        请提供您的系统信息。您可以在命令行运行 **pip show MemoryOS** 并将其输出复制到该文本框中。
+
+      placeholder: MemoryOS version, platform, python version, ...
+
+  - type: textarea
+    id: reproduction
+    validations:
+      required: true
+    attributes:
+      label: Reproduction
+      description: |
+        Please provide entry arguments, error messages and stack traces that reproduces the problem.
+        请提供入口参数，错误日志以及异常堆栈以便于我们复现问题。
+
+      value: |
+        ```text
+        Put your message here.
+        ```
+
+  - type: textarea
+    id: others
+    validations:
+      required: false
+    attributes:
+      label: Others
