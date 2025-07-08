@@ -46,9 +46,9 @@ class APIConfig:
     "config": {
         "memory_filename": "activation_memory.pickle",
         "extractor_llm": {
-            "backend": "huggingface",
+            "backend": "huggingface_singleton",
             "config": {
-            "model_name_or_path": "Qwen/Qwen3-1.7B",
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "Qwen/Qwen3-1.7B"),
             "temperature": 0.8,
             "max_tokens": 1024,
             "top_p": 0.9,

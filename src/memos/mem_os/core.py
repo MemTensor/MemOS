@@ -477,16 +477,6 @@ class MOSCore:
                 logger.info(
                     f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
                 )
-            if (
-                (mem_cube_id in install_cube_ids)
-                and (mem_cube.act_mem is not None)
-                and self.config.enable_activation_memory
-            ):
-                memories = mem_cube.act_mem.extract(query)
-                result["act_mem"].append({"cube_id": mem_cube_id, "memories": [memories]})
-                logger.info(
-                    f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
-                )
         return result
 
     def add(

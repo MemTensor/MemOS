@@ -18,8 +18,9 @@ from memos.mem_os.utils.format_utils import (
     convert_graph_to_tree_forworkmem,
     remove_embedding_recursive,
     filter_nodes_by_tree_ids,
-    remove_embedding_from_memory_items,
     sort_children_by_memory_type,
+    convert_activation_memory_to_serializable,
+    convert_activation_memory_summary,
 )
 
 from memos.memories.activation.item import ActivationMemoryItem
@@ -35,46 +36,13 @@ logger = get_logger(__name__)
 CUBE_PATH = "/tmp/data"
 MOCK_DATA=json.loads(open("./tmp/fake_data.json", "r").read())
 
-def ensure_user_instance(max_instances: int = 100):
-    """
-    Decorator to ensure user instance exists before executing method.
-    
-    Args:
-        max_instances (int): Maximum number of user instances to keep in memory.
-                            When exceeded, least recently used instances are removed.
-    """
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(self, *args, **kwargs):
-            # Extract user_id from method signature
-            user_id = None
-            if user_id is None:
-                user_id = kwargs.get('user_id')
-            # Try to get user_id from positional arguments (first argument after self)
-            if len(args) > 0 and (user_id is None):
-                # Check if the first argument is user_id (string)
-                if isinstance(args[0], str):
-                    user_id = args[0]
-                # Check if the second argument is user_id (for methods like chat(query, user_id))
-                elif len(args) > 1 and isinstance(args[1], str):
-                    user_id = args[1]
-            if user_id is None:
-                raise ValueError(f"user_id parameter not found in method {func.__name__}")
-            
-            # Ensure user instance exists
-            self._ensure_user_instance(user_id, max_instances)
-            
-            # Call the original method
-            return func(self, *args, **kwargs)
-        
-        return wrapper
-    return decorator
+# Removed ensure_user_instance decorator as it's redundant with MOSCore's built-in validation
 
 
-class MOSProduct:
+class MOSProduct(MOSCore):
     """
-    The MOSProduct class manages multiple users and their MOSCore instances.
-    Each user has their own configuration and MOSCore instance.
+    The MOSProduct class inherits from MOSCore and manages multiple users.
+    Each user has their own configuration and cube access, but shares the same model instances.
     """
 
     def __init__(self, default_config: MOSConfig | None = None, max_user_instances: int = 100):
@@ -85,12 +53,35 @@ class MOSProduct:
             default_config (MOSConfig | None): Default configuration for new users
             max_user_instances (int): Maximum number of user instances to keep in memory
         """
+        # Initialize with a root config for shared resources
+        if default_config is None:
+            # Create a minimal config for root user
+            root_config = MOSConfig(
+                user_id="root",
+                session_id="root_session",
+                chat_model=default_config.chat_model if default_config else None,
+                mem_reader=default_config.mem_reader if default_config else None,
+                enable_mem_scheduler=default_config.enable_mem_scheduler if default_config else False,
+                mem_scheduler=default_config.mem_scheduler if default_config else None
+            )
+        else:
+            root_config = default_config.model_copy(deep=True)
+            root_config.user_id = "root"
+            root_config.session_id = "root_session"
+        
+        # Initialize parent MOSCore with root config
+        super().__init__(root_config)
+        
+        # Product-specific attributes
         self.default_config = default_config
-        # Use OrderedDict to maintain insertion order for LRU behavior
-        self.user_instances: OrderedDict[str, MOSCore] = OrderedDict()
-        self.user_configs: dict[str, MOSConfig] = {}
         self.max_user_instances = max_user_instances
-        # Use PersistentUserManager instead of UserManager
+        
+        # User-specific data structures
+        self.user_configs: dict[str, MOSConfig] = {}
+        self.user_cube_access: dict[str, set[str]] = {}  # user_id -> set of cube_ids
+        self.user_chat_histories: dict[str, dict] = {}
+        
+        # Use PersistentUserManager for user management
         self.global_user_manager = PersistentUserManager(user_id="root")
 
         # Initialize tiktoken for streaming
@@ -102,12 +93,9 @@ class MOSProduct:
             logger.warning(f"Failed to initialize tokenizer, will use character-based chunking: {e}")
             self.tokenizer = None
 
-        # Initialize with default config if provided
-        if default_config:
-            self._create_user_instance(default_config.user_id, default_config)
-        
-        # Restore user instances from persistent storage (limited by max_instances)
+        # Restore user instances from persistent storage
         self._restore_user_instances()
+        logger.info(f"User instances restored successfully, now user is {self.mem_cubes.keys()}")
 
     def _restore_user_instances(self) -> None:
         """Restore user instances from persistent storage after service restart."""
@@ -133,102 +121,131 @@ class MOSProduct:
                 session.close()
             
             for user_id, config in sorted_configs:
-                if user_id not in self.user_instances:
+                if user_id != "root":  # Skip root user
                     try:
-                        # Create MOSCore instance with restored config
-                        mos_instance = self._create_user_instance(user_id, config)
-                        logger.info(f"Restored user instance for {user_id}")
-                        
-                        # Load user cubes
-                        self._load_user_cubes(user_id)
+                        # Store user config and cube access
+                        self.user_configs[user_id] = config
+                        self._load_user_cube_access(user_id)
+                        logger.info(f"Restored user configuration for {user_id}")
                         
                     except Exception as e:
-                        logger.error(f"Failed to restore user instance for {user_id}: {e}")
+                        logger.error(f"Failed to restore user configuration for {user_id}: {e}")
                         
         except Exception as e:
             logger.error(f"Error during user instance restoration: {e}")
 
     def _ensure_user_instance(self, user_id: str, max_instances: int = None) -> None:
         """
-        Ensure user instance exists, creating it if necessary.
+        Ensure user configuration exists, creating it if necessary.
         
         Args:
             user_id (str): The user ID
             max_instances (int): Maximum instances to keep in memory (overrides class default)
         """
-        if user_id in self.user_instances:
-            # Move to end (most recently used)
-            self.user_instances.move_to_end(user_id)
+        if user_id in self.user_configs:
             return
         
         # Try to get config from persistent storage first
         stored_config = self.global_user_manager.get_user_config(user_id)
         if stored_config:
-            self._create_user_instance(user_id, stored_config)
+            self.user_configs[user_id] = stored_config
+            self._load_user_cube_access(user_id)
         else:
             # Use default config
             if not self.default_config:
                 raise ValueError(f"No configuration available for user {user_id}")
-            self._create_user_instance(user_id, self.default_config)
+            user_config = self.default_config.model_copy(deep=True)
+            user_config.user_id = user_id
+            user_config.session_id = f"{user_id}_session"
+            self.user_configs[user_id] = user_config
+            self._load_user_cube_access(user_id)
         
         # Apply LRU eviction if needed
         max_instances = max_instances or self.max_user_instances
-        if len(self.user_instances) > max_instances:
-            # Remove least recently used instance
-            oldest_user_id = next(iter(self.user_instances))
-            del self.user_instances[oldest_user_id]
-            logger.info(f"Removed least recently used user instance: {oldest_user_id}")
+        if len(self.user_configs) > max_instances:
+            # Remove least recently used instance (excluding root)
+            user_ids = [uid for uid in self.user_configs.keys() if uid != "root"]
+            if user_ids:
+                oldest_user_id = user_ids[0]
+                del self.user_configs[oldest_user_id]
+                if oldest_user_id in self.user_cube_access:
+                    del self.user_cube_access[oldest_user_id]
+                logger.info(f"Removed least recently used user configuration: {oldest_user_id}")
 
-    def _create_user_instance(self, user_id: str, config: MOSConfig) -> MOSCore:
-        """Create a new MOSCore instance for a user."""
+    def _load_user_cube_access(self, user_id: str) -> None:
+        """Load user's cube access permissions."""
+        try:
+            # Get user's accessible cubes from persistent storage
+            accessible_cubes = self.global_user_manager.get_user_cube_access(user_id)
+            self.user_cube_access[user_id] = set(accessible_cubes)
+        except Exception as e:
+            logger.warning(f"Failed to load cube access for user {user_id}: {e}")
+            self.user_cube_access[user_id] = set()
+
+    def _get_user_config(self, user_id: str) -> MOSConfig:
+        """Get user configuration."""
+        if user_id not in self.user_configs:
+            self._ensure_user_instance(user_id)
+        return self.user_configs[user_id]
+
+    def _validate_user_cube_access(self, user_id: str, cube_id: str) -> None:
+        """Validate user has access to the cube."""
+        if user_id not in self.user_cube_access:
+            self._load_user_cube_access(user_id)
+        
+        if cube_id not in self.user_cube_access.get(user_id, set()):
+            raise ValueError(f"User '{user_id}' does not have access to cube '{cube_id}'")
+
+    def _validate_user_access(self, user_id: str, cube_id: str = None) -> None:
+        """Validate user access using MOSCore's built-in validation."""
+        # Use MOSCore's built-in user validation
+        if cube_id:
+            self._validate_cube_access(user_id, cube_id)
+        else:
+            self._validate_user_exists(user_id)
+
+    def _create_user_config(self, user_id: str, config: MOSConfig) -> MOSConfig:
+        """Create a new user configuration."""
         # Create a copy of config with the specific user_id
         user_config = config.model_copy(deep=True)
         user_config.user_id = user_id
-        
-        # Create MOSCore instance with the persistent user manager
-        mos_instance = MOSCore(user_config, user_manager=self.global_user_manager)
-        
-        # Add to OrderedDict (most recently used)
-        self.user_instances[user_id] = mos_instance
-        self.user_configs[user_id] = user_config
+        user_config.session_id = f"{user_id}_session"
         
         # Save configuration to persistent storage
         self.global_user_manager.save_user_config(user_id, user_config)
         
-        return mos_instance
+        return user_config
 
-    def _get_or_create_user_instance(
+    def _get_or_create_user_config(
         self, user_id: str, config: MOSConfig | None = None
-    ) -> MOSCore:
-        """Get existing user instance or create a new one."""
-        if user_id in self.user_instances:
-            return self.user_instances[user_id]
+    ) -> MOSConfig:
+        """Get existing user config or create a new one."""
+        if user_id in self.user_configs:
+            return self.user_configs[user_id]
 
         # Try to get config from persistent storage first
         stored_config = self.global_user_manager.get_user_config(user_id)
         if stored_config:
-            return self._create_user_instance(user_id, stored_config)
+            return self._create_user_config(user_id, stored_config)
 
         # Use provided config or default config
         user_config = config or self.default_config
         if not user_config:
             raise ValueError(f"No configuration provided for user {user_id}")
 
-        return self._create_user_instance(user_id, user_config)
+        return self._create_user_config(user_id, user_config)
 
     def _load_user_cubes(self, user_id: str) -> None:
         """Load all cubes for a user into memory."""
-        if user_id not in self.user_instances:
-            return
-
-        mos_instance = self.user_instances[user_id]
+        # Get user's accessible cubes from persistent storage
         accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
 
         for cube in accessible_cubes[:1]:
-            if cube.cube_id not in mos_instance.mem_cubes:
+            if cube.cube_id not in self.mem_cubes:
                 try:
                     if cube.cube_path and os.path.exists(cube.cube_path):
-                        mos_instance.register_mem_cube(cube.cube_path, cube.cube_id, user_id)
+                        # Use MOSCore's register_mem_cube method directly
+                        self.register_mem_cube(cube.cube_path, cube.cube_id, user_id)
                     else:
                         logger.warning(
                             f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}"
@@ -383,7 +400,6 @@ class MOSProduct:
             mem_cube_id: str, 
             query: str,
             label: str,
-            mos_instance: MOSCore,
             ):
         """
         Send message to scheduler.
@@ -391,19 +407,42 @@ class MOSProduct:
             user_id: str,
             mem_cube_id: str,
             query: str,
-            mos_instance: MOSCore,
         """
         
-        if mos_instance.enable_mem_scheduler and (mos_instance.mem_scheduler is not None):
+        if self.enable_mem_scheduler and (self.mem_scheduler is not None):
             message_item = ScheduleMessageItem(
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=mos_instance.mem_cubes[mem_cube_id],
+                mem_cube=self.mem_cubes[mem_cube_id],
                 label=label,
                 content=query,
                 timestamp=datetime.now(),
             )
-            mos_instance.mem_scheduler.submit_messages(messages=[message_item])
+            self.mem_scheduler.submit_messages(messages=[message_item])
+
+    def register_mem_cube(
+        self, mem_cube_name_or_path: str, mem_cube_id: str | None = None, user_id: str | None = None
+    ) -> None:
+        """
+        Register a MemCube with the MOS.
+
+        Args:
+            mem_cube_name_or_path (str): The name or path of the MemCube to register.
+            mem_cube_id (str, optional): The identifier for the MemCube. If not provided, a default ID is used.
+        """
+
+        if mem_cube_id in self.mem_cubes:
+            logger.info(f"MemCube with ID {mem_cube_id} already in MOS, skip install.")
+        else:
+            if os.path.exists(mem_cube_name_or_path):
+                self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_dir(mem_cube_name_or_path)
+            else:
+                logger.warning(
+                    f"MemCube {mem_cube_name_or_path} does not exist, try to init from remote repo."
+                )
+                self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_remote_repo(
+                    mem_cube_name_or_path
+                )
 
     def user_register(
         self,
@@ -433,20 +472,20 @@ class MOSProduct:
                     "message": "No configuration provided for user registration",
                 }
             if not user_name:
-                user_name =  user_id
+                user_name = user_id
                 
             # Create user with configuration using persistent user manager
             created_user_id = self.global_user_manager.create_user_with_config(
                 user_id, user_config, UserRole.USER, user_id
             )
 
-            # Create MOSCore instance for this user
-            mos_instance = self._create_user_instance(user_id, user_config)
+            # Create user configuration
+            user_config = self._create_user_config(user_id, user_config)
 
-            # Create a default cube for the user
+            # Create a default cube for the user using MOSCore's methods
             default_cube_name = f"{user_name}_default_cube"
             mem_cube_name_or_path = f"{CUBE_PATH}/{default_cube_name}"
-            default_cube_id = mos_instance.create_cube_for_user(
+            default_cube_id = self.create_cube_for_user(
                 cube_name=default_cube_name, 
                 owner_id=user_id, 
                 cube_path=mem_cube_name_or_path
@@ -457,17 +496,15 @@ class MOSProduct:
                     default_mem_cube.dump(mem_cube_name_or_path)
                 except Exception as e:
                     print(e)
-            # Register the default cube with MOS
-            mos_instance.register_mem_cube(mem_cube_name_or_path, default_cube_id, user_id)
+            
+            # Register the default cube with MOS TODO overide
+            self.register_mem_cube(mem_cube_name_or_path, default_cube_id, user_id)
 
             # Add interests to the default cube if provided
             if interests:
-                mos_instance.add(
+                self.add(
                     memory_content=interests, mem_cube_id=default_cube_id, user_id=user_id
                 )
-
-            # Load all cubes for this user
-            self._load_user_cubes(user_id)
 
             return {
                 "status": "success",
@@ -479,7 +516,6 @@ class MOSProduct:
         except Exception as e:
             return {"status": "error", "message": f"Failed to register user: {e!s}"}
 
-    @ensure_user_instance()
     def get_suggestion_query(self, user_id: str) -> list[str]:
         """Get suggestion query from LLM.
         Args:
@@ -488,7 +524,7 @@ class MOSProduct:
         Returns:
             list[str]: The suggestion query list.
         """
-        mos_instance = self.user_instances[user_id]
+        
         suggestion_prompt = """
         You are a helpful assistant that can help users to generate suggestion query 
         I will get some user recently memories,
@@ -503,13 +539,13 @@ class MOSProduct:
             "query": ["query1", "query2", "query3"]
         }}
         """
-        memories = "\n".join([m.memory for m in mos_instance.search("my recently memories",user_id=user_id, top_k=5)["text_mem"][0]["memories"]])
+        memories = "\n".join([m.memory for m in super().search("my recently memories", user_id=user_id, top_k=10)["text_mem"][0]["memories"]])
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
-        response = mos_instance.chat_llm.generate(message_list)
+        response = self.chat_llm.generate(message_list)
         response_json = json.loads(response)
+        
         return response_json["query"]
 
-    @ensure_user_instance()
     def chat(
         self,
         query: str,
@@ -527,14 +563,18 @@ class MOSProduct:
         Returns:
             Generator[str, None, None]: The response string generator.
         """
-        mos_instance = self.user_instances[user_id]
+        # Use MOSCore's built-in validation
+        if cube_id:
+            self._validate_cube_access(user_id, cube_id)
+        else:
+            self._validate_user_exists(user_id)
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id)
         time_start = time.time()
-        memories_list = mos_instance.search(query, user_id)["text_mem"]
-        # Get response from MOSCore (returns string, not generator)
-        response = mos_instance.chat(query, user_id)
+        memories_list = super().search(query, user_id)["text_mem"]
+        # Get response from parent MOSCore (returns string, not generator)
+        response = super().chat(query, user_id)
         time_end = time.time()
         
         # Use tiktoken for proper token-based chunking
@@ -554,7 +594,6 @@ class MOSProduct:
         yield f"data: {json.dumps({'type': 'time', 'content': {'total_time': total_time, 'speed_improvement': '23%'}})}\n\n"
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
         
-    @ensure_user_instance()
     def chat_with_references(
         self,
         query: str,
@@ -574,21 +613,26 @@ class MOSProduct:
         Returns:
             Generator[str, None, None]: The response string generator with reference processing.
         """
-        mos_instance = self.user_instances[user_id]
+        # # Use MOSCore's built-in validation
+        # if cube_id:
+        #     self._validate_cube_access(user_id, cube_id)
+        # else:
+        #     self._validate_user_exists(user_id)
+        
         self._load_user_cubes(user_id)
         
         time_start = time.time()
-        memories_list = mos_instance.search(query, user_id)["text_mem"][0]["memories"]
+        memories_list = super().search(query, user_id, install_cube_ids=[cube_id] if cube_id else None)["text_mem"][0]["memories"]
         
         # Build custom system prompt with relevant memories
         system_prompt = self._build_system_prompt(user_id, memories_list)
         
         # Get chat history
-        target_user_id = user_id if user_id is not None else mos_instance.user_id
-        if target_user_id not in mos_instance.chat_history_manager:
-            mos_instance._register_chat_history(target_user_id)
+        target_user_id = user_id if user_id is not None else self.user_id
+        if target_user_id not in self.chat_history_manager:
+            self._register_chat_history(target_user_id)
         
-        chat_history = mos_instance.chat_history_manager[target_user_id]
+        chat_history = self.chat_history_manager[target_user_id]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
@@ -597,18 +641,22 @@ class MOSProduct:
         
         # Generate response with custom prompt
         past_key_values = None
-        if mos_instance.config.enable_activation_memory:
+        if self.config.enable_activation_memory:
             # Handle activation memory (copy MOSCore logic)
-            for mem_cube_id, mem_cube in mos_instance.mem_cubes.items():
-                if mem_cube.act_mem:
+            for mem_cube_id, mem_cube in self.mem_cubes.items():
+                if mem_cube.act_mem and mem_cube_id == cube_id:
                     kv_cache = next(iter(mem_cube.act_mem.get_all()), None)
                     past_key_values = (
                         kv_cache.memory if (kv_cache and hasattr(kv_cache, "memory")) else None
                     )
+                    if past_key_values is not None:
+                        logger.info(f"past_key_values is not None will apply to chat")
+                    else:
+                        logger.info(f"past_key_values is None will not apply to chat")
                     break
-            response = mos_instance.chat_llm.generate(current_messages, past_key_values=past_key_values)
+            response = self.chat_llm.generate(current_messages, past_key_values=past_key_values)
         else:
-            response = mos_instance.chat_llm.generate(current_messages)
+            response = self.chat_llm.generate(current_messages)
         
         time_end = time.time()
         
@@ -654,23 +702,20 @@ class MOSProduct:
         self._send_message_to_scheduler(user_id=user_id, 
                                         mem_cube_id=cube_id, 
                                         query=query, 
-                                        label=QUERY_LABEL,
-                                        mos_instance=mos_instance)
+                                        label=QUERY_LABEL)
         self._send_message_to_scheduler(user_id=user_id, 
                                         mem_cube_id=cube_id, 
                                         query=response, 
-                                        label=ANSWER_LABEL,
-                                        mos_instance=mos_instance)
-        mos_instance.chat_history_manager[user_id] = chat_history
+                                        label=ANSWER_LABEL)
+        self.chat_history_manager[user_id] = chat_history
         
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
         
 
-    @ensure_user_instance()
     def get_all(
         self,
         user_id: str,
-        memory_type: Literal["text_mem", "act_mem", "param_mem"],
+        memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"],
         mem_cube_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get all memory items for a user.
@@ -683,11 +728,10 @@ class MOSProduct:
         Returns:
             list[dict[str, Any]]: A list of memory items with cube_id and memories structure.
         """
-        mos_instance = self.user_instances[user_id]
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id)
-        memory_list = mos_instance.get_all(mem_cube_id=mem_cube_ids[0] if mem_cube_ids else None, user_id=user_id)[memory_type]
+        memory_list = super().get_all(mem_cube_id=mem_cube_ids[0] if mem_cube_ids else None, user_id=user_id)[memory_type]
         reformat_memory_list = []
         if memory_type == "text_mem":
             for memory in memory_list:
@@ -706,6 +750,13 @@ class MOSProduct:
                 reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": [memories_filtered]})
         elif memory_type == "act_mem":
             reformat_memory_list.append({"cube_id": "xxxxxxxxxxxxxxxx" if not mem_cube_ids else mem_cube_ids[0], "memories": MOCK_DATA})
+        elif memory_type == "para_mem":
+            cache_item = self.mem_cubes[mem_cube_ids[0]].act_mem.extract("这是一个小问题哈哈哈哈")
+            self.mem_cubes[mem_cube_ids[0]].act_mem.add([cache_item])
+            act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
+            # Convert activation memory to serializable format
+            serializable_act_mem = convert_activation_memory_to_serializable(act_mem_params)
+            reformat_memory_list.append({"cube_id": "xxxxxxxxxxxxxxxx" if not mem_cube_ids else mem_cube_ids[0], "memories": serializable_act_mem})
         return reformat_memory_list
     
     def _get_subgraph(
@@ -713,17 +764,15 @@ class MOSProduct:
         query: str,
         mem_cube_id: str,
         user_id: str | None = None, 
-        top_k: int = 5,
-        mos_instance: MOSCore | None = None
+        top_k: int = 5
     ) -> list[dict[str, Any]]:
         result = {"para_mem": [], "act_mem": [], "text_mem": []}
-        if mos_instance.config.enable_textual_memory and mos_instance.mem_cubes[mem_cube_id].text_mem:
+        if self.config.enable_textual_memory and self.mem_cubes[mem_cube_id].text_mem:
             result["text_mem"].append(
-                {"cube_id": mem_cube_id, "memories": mos_instance.mem_cubes[mem_cube_id].text_mem.get_relevant_subgraph(query, top_k=top_k)}
+                {"cube_id": mem_cube_id, "memories": self.mem_cubes[mem_cube_id].text_mem.get_relevant_subgraph(query, top_k=top_k)}
             )
         return result
 
-    @ensure_user_instance()
     def get_subgraph(
         self,
         user_id: str,
@@ -740,14 +789,13 @@ class MOSProduct:
         Returns:
             list[dict[str, Any]]: A list of memory items with cube_id and memories structure.
         """
-        mos_instance = self.user_instances[user_id]
+        
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id)
         memory_list = self._get_subgraph(query=query, 
                                          mem_cube_id=mem_cube_ids[0], 
                                          user_id=user_id, 
-                                         top_k=20,
-                                         mos_instance=mos_instance)["text_mem"]
+                                         top_k=20)["text_mem"]
         reformat_memory_list = []
         for memory in memory_list:
             memories = remove_embedding_recursive(memory["memories"])
@@ -763,17 +811,17 @@ class MOSProduct:
             tree_result["children"] = children_sort
             memories_filtered["tree_structure"] = tree_result
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": [memories_filtered]})
+        
         return reformat_memory_list
 
-    @ensure_user_instance()
-    def search(self, query: str, user_id: str, install_cube_ids: list[str] | None = None):
+    def search(self, query: str, user_id: str, install_cube_ids: list[str] | None = None, top_k: int = 20):
         """Search memories for a specific user."""
-        mos_instance = self.user_instances[user_id]
+        # Validate user access
+        self._validate_user_access(user_id)
 
         # Load user cubes if not already loaded
-
         self._load_user_cubes(user_id)
-        search_result = mos_instance.search(query, user_id, install_cube_ids)
+        search_result = super().search(query, user_id, install_cube_ids, top_k)
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
         for memory in text_memory_list:
@@ -790,9 +838,9 @@ class MOSProduct:
                 memories_list.append(memories)
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
         search_result["text_mem"] = reformat_memory_list
+        
         return search_result
 
-    @ensure_user_instance()
     def add(
         self,
         user_id: str,
@@ -802,34 +850,48 @@ class MOSProduct:
         mem_cube_id: str | None = None,
     ):
         """Add memory for a specific user."""
-        mos_instance = self.user_instances[user_id]
+        # Use MOSCore's built-in user/cube validation
+        if mem_cube_id:
+            self._validate_cube_access(user_id, mem_cube_id)
+        else:
+            self._validate_user_exists(user_id)
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id)
 
-        return mos_instance.add(messages, memory_content, doc_path, mem_cube_id, user_id)
+        result = super().add(messages, memory_content, doc_path, mem_cube_id, user_id)
+        
+        return result
 
     def list_users(self) -> list:
         """List all registered users."""
         return self.global_user_manager.list_users()
 
-    @ensure_user_instance()
     def get_user_info(self, user_id: str) -> dict:
         """Get user information including accessible cubes."""
-        mos_instance = self.user_instances[user_id]
-        return mos_instance.get_user_info()
+        # Use MOSCore's built-in user validation
+        # Validate user access
+        self._validate_user_access(user_id)
+        
+        result = super().get_user_info()
+        
+        return result
 
-    @ensure_user_instance()
     def share_cube_with_user(self, cube_id: str, owner_user_id: str, target_user_id: str) -> bool:
         """Share a cube with another user."""
-        mos_instance = self.user_instances[owner_user_id]
-        return mos_instance.share_cube_with_user(cube_id, target_user_id)
+        # Use MOSCore's built-in cube access validation
+        self._validate_cube_access(owner_user_id, cube_id)
+        
+        result = super().share_cube_with_user(cube_id, target_user_id)
+        
+        return result
 
-    @ensure_user_instance()
     def clear_user_chat_history(self, user_id: str) -> None:
         """Clear chat history for a specific user."""
-        mos_instance = self.user_instances[user_id]
-        mos_instance.clear_messages(user_id)
+        # Validate user access
+        self._validate_user_access(user_id)
+        
+        super().clear_messages(user_id)
 
     def update_user_config(self, user_id: str, config: MOSConfig) -> bool:
         """Update user configuration.
@@ -847,11 +909,7 @@ class MOSProduct:
             if success:
                 # Update in-memory config
                 self.user_configs[user_id] = config
-                
-                # Recreate MOSCore instance with new config if user is active
-                if user_id in self.user_instances:
-                    mos_instance = self._create_user_instance(user_id, config)
-                    logger.info(f"Updated configuration for user {user_id}")
+                logger.info(f"Updated configuration for user {user_id}")
                     
             return success
         except Exception as e:
@@ -870,14 +928,14 @@ class MOSProduct:
         return self.global_user_manager.get_user_config(user_id)
 
     def get_active_user_count(self) -> int:
-        """Get the number of active user instances in memory."""
-        return len(self.user_instances)
+        """Get the number of active user configurations in memory."""
+        return len(self.user_configs)
 
     def get_user_instance_info(self) -> dict[str, Any]:
-        """Get information about user instances in memory."""
+        """Get information about user configurations in memory."""
         return {
-            "active_instances": len(self.user_instances),
+            "active_instances": len(self.user_configs),
             "max_instances": self.max_user_instances,
-            "user_ids": list(self.user_instances.keys()),
-            "lru_order": list(self.user_instances.keys())  # OrderedDict maintains insertion order
+            "user_ids": list(self.user_configs.keys()),
+            "lru_order": list(self.user_configs.keys())  # OrderedDict maintains insertion order
         }

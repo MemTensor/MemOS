@@ -27,7 +27,7 @@ def get_mos_product_instance():
         from memos.configs.mem_os import MOSConfig
         mos_config = MOSConfig(**default_config)
         MOS_PRODUCT_INSTANCE = MOSProduct(default_config=mos_config)
-        logger.info("MOSProduct instance created successfully")
+        logger.info("MOSProduct instance created successfully with inheritance architecture")
     return MOS_PRODUCT_INSTANCE
 
 get_mos_product_instance()
@@ -265,24 +265,24 @@ async def update_user_config(user_id: str, config_data: dict):
         raise HTTPException(status_code=500, detail=str(traceback.format_exc()))
 
 
-@router.get("/instances/status", summary="Get user instance status", response_model=BaseResponse[dict])
+@router.get("/instances/status", summary="Get user configuration status", response_model=BaseResponse[dict])
 async def get_instance_status():
-    """Get information about active user instances in memory."""
+    """Get information about active user configurations in memory."""
     try:
         mos_product = get_mos_product_instance()
         status_info = mos_product.get_user_instance_info()
         return BaseResponse(
-            message="Instance status retrieved successfully",
+            message="User configuration status retrieved successfully",
             data=status_info
         )
     except Exception as e:
-        logger.error(f"Failed to get instance status: {traceback.format_exc()}")
+        logger.error(f"Failed to get user configuration status: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc()))
 
 
 @router.get("/instances/count", summary="Get active user count", response_model=BaseResponse[int])
 async def get_active_user_count():
-    """Get the number of active user instances in memory."""
+    """Get the number of active user configurations in memory."""
     try:
         mos_product = get_mos_product_instance()
         count = mos_product.get_active_user_count()

@@ -54,6 +54,7 @@ class LLMConfigFactory(BaseConfig):
         "openai": OpenAILLMConfig,
         "ollama": OllamaLLMConfig,
         "huggingface": HFLLMConfig,
+        "huggingface_singleton": HFLLMConfig,  # Add singleton support
     }
 
     @field_validator("backend")

@@ -44,7 +44,7 @@ class UserRegisterRequest(BaseRequest):
 class GetMemoryRequest(BaseRequest):
     """Request model for getting memories."""
     user_id: str = Field(..., description="User ID")
-    memory_type: Literal["text_mem", "act_mem", "param_mem"] = Field(..., description="Memory type")
+    memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"] = Field(..., description="Memory type")
     mem_cube_ids: list[str] | None = Field(None, description="Cube IDs")
     search_query: str | None = Field(None, description="Search query")
 

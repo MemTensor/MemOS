@@ -6,6 +6,12 @@ import json
 from typing import Dict, List, Any, Set, Tuple
 import math
 
+from memos.memories.activation.item import KVCacheItem
+from memos.log import get_logger
+
+logger = get_logger(__name__)
+
+
 def extract_node_name(memory: str) -> str:
     """从memory中提取前两个词作为node_name"""
     if not memory:
@@ -957,4 +963,97 @@ def filter_nodes_by_tree_ids(tree_data, nodes_data):
     # 返回保持原有结构的结果
     return {
         'nodes': filtered_nodes
+    }
+
+
+def convert_activation_memory_to_serializable(act_mem_items: List[KVCacheItem]) -> List[Dict[str, Any]]:
+    """
+    Convert activation memory items to a serializable format.
+    
+    Args:
+        act_mem_items: List of KVCacheItem objects
+        
+    Returns:
+        List of dictionaries with serializable data
+    """
+    serializable_items = []
+    
+    for item in act_mem_items:
+        # Extract basic information that can be serialized
+        serializable_item = {
+            "id": item.id,
+            "metadata": item.metadata,
+            "memory_info": {
+                "type": "DynamicCache",
+                "key_cache_layers": len(item.memory.key_cache) if item.memory else 0,
+                "value_cache_layers": len(item.memory.value_cache) if item.memory else 0,
+                "device": str(item.memory.key_cache[0].device) if item.memory and item.memory.key_cache else "unknown",
+                "dtype": str(item.memory.key_cache[0].dtype) if item.memory and item.memory.key_cache else "unknown",
+            }
+        }
+        
+        # Add tensor shape information if available
+        if item.memory and item.memory.key_cache:
+            key_shapes = []
+            value_shapes = []
+            
+            for i, key_tensor in enumerate(item.memory.key_cache):
+                if key_tensor is not None:
+                    key_shapes.append({
+                        "layer": i,
+                        "shape": list(key_tensor.shape)
+                    })
+                
+                if i < len(item.memory.value_cache) and item.memory.value_cache[i] is not None:
+                    value_shapes.append({
+                        "layer": i,
+                        "shape": list(item.memory.value_cache[i].shape)
+                    })
+            
+            serializable_item["memory_info"]["key_shapes"] = key_shapes
+            serializable_item["memory_info"]["value_shapes"] = value_shapes
+        
+        serializable_items.append(serializable_item)
+    
+    return serializable_items
+
+
+def convert_activation_memory_summary(act_mem_items: List[KVCacheItem]) -> Dict[str, Any]:
+    """
+    Create a summary of activation memory for API responses.
+    
+    Args:
+        act_mem_items: List of KVCacheItem objects
+        
+    Returns:
+        Dictionary with summary information
+    """
+    if not act_mem_items:
+        return {
+            "total_items": 0,
+            "summary": "No activation memory items found"
+        }
+    
+    total_items = len(act_mem_items)
+    total_layers = 0
+    total_parameters = 0
+    
+    for item in act_mem_items:
+        if item.memory and item.memory.key_cache:
+            total_layers += len(item.memory.key_cache)
+            
+            # Calculate approximate parameter count
+            for key_tensor in item.memory.key_cache:
+                if key_tensor is not None:
+                    total_parameters += key_tensor.numel()
+            
+            for value_tensor in item.memory.value_cache:
+                if value_tensor is not None:
+                    total_parameters += value_tensor.numel()
+    
+    return {
+        "total_items": total_items,
+        "total_layers": total_layers,
+        "total_parameters": total_parameters,
+        "summary": f"Activation memory contains {total_items} items with {total_layers} layers and approximately {total_parameters:,} parameters"
     }

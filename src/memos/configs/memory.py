@@ -51,9 +51,9 @@ class KVCacheMemoryConfig(BaseActMemoryConfig):
     @classmethod
     def validate_extractor_llm(cls, extractor_llm: LLMConfigFactory) -> LLMConfigFactory:
         """Validate the extractor_llm field."""
-        if extractor_llm.backend != "huggingface":
+        if extractor_llm.backend not in ["huggingface", "huggingface_singleton"]:
             raise ConfigurationError(
-                f"KVCacheMemoryConfig requires extractor_llm backend to be 'huggingface', got '{extractor_llm.backend}'"
+                f"KVCacheMemoryConfig requires extractor_llm backend to be 'huggingface' or 'huggingface_singleton', got '{extractor_llm.backend}'"
             )
         return extractor_llm
 
@@ -83,9 +83,9 @@ class LoRAMemoryConfig(BaseParaMemoryConfig):
     @classmethod
     def validate_extractor_llm(cls, extractor_llm: LLMConfigFactory) -> LLMConfigFactory:
         """Validate the extractor_llm field."""
-        if extractor_llm.backend not in ["huggingface"]:
+        if extractor_llm.backend not in ["huggingface", "huggingface_singleton"]:
             raise ConfigurationError(
-                f"LoRAMemoryConfig requires extractor_llm backend to be 'huggingface', got '{extractor_llm.backend}'"
+                f"LoRAMemoryConfig requires extractor_llm backend to be 'huggingface' or 'huggingface_singleton', got '{extractor_llm.backend}'"
             )
         return extractor_llm
 
