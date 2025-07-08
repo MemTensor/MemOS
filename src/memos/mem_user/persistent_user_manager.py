@@ -255,4 +255,16 @@ class PersistentUserManager(UserManager):
         self.delete_user_config(user_id)
         
         # Delete user using parent method
-        return super().delete_user(user_id) 
+        return super().delete_user(user_id)
+
+    def get_user_cube_access(self, user_id: str) -> list[str]:
+        """Get list of cube IDs that a user has access to.
+
+        Args:
+            user_id (str): The user ID.
+
+        Returns:
+            list[str]: List of cube IDs the user can access.
+        """
+        cubes = self.get_user_cubes(user_id)
+        return [cube.cube_id for cube in cubes] 
