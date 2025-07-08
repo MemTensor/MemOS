@@ -22,7 +22,7 @@ def mock_config():
         "chat_model": {
             "backend": "huggingface",
             "config": {
-                "model_name_or_path": "Qwen/Qwen3-1.7B",
+                "model_name_or_path": "hf-internal-testing/tiny-random-gpt2",
                 "temperature": 0.1,
                 "remove_think_prefix": True,
                 "max_tokens": 4096,
