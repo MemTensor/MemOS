@@ -150,9 +150,6 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 
 ## 📦 Installation
 
-> [!WARNING]
-> Currently, MemOS primarily supports Linux platforms. You may encounter issues on Windows and macOS temporarily.
-
 ### Install via pip
 
 ```bash
