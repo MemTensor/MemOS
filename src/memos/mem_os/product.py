@@ -269,10 +269,10 @@ class MOSProduct(MOSCore):
         base_prompt = (
             "You are a knowledgeable and helpful AI assistant with access to user memories. "
             "When responding to user queries, you should reference relevant memories using the provided memory IDs. "
-            "Use the reference format: [refid:memoriesID] "
+            "Use the reference format: [1-n:memoriesID] "
             "where refid is a sequential number starting from 1 and increments for each reference in your response, "
             "and memoriesID is the specific memory ID provided in the available memories list. "
-            "For example: [1:abc123], [2:def456], [3:ghi789]. "
+            "For example: [1:abc123], [2:def456], [3:ghi789], [4:jkl101], [5:mno112] "
             "Only reference memories that are directly relevant to the user's question. "
             "Make your responses natural and conversational while incorporating memory references when appropriate."
         )
