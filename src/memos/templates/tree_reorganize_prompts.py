@@ -53,3 +53,29 @@ Return valid JSON:
 Memory items:
 {joined_scene}
 """
+
+CONFLICT_DETECTOR_PROMPT = """You are given two plaintext statements. Determine if these two statements are factually contradictory. Respond with only "yes" if they contradict each other, or "no" if they do not contradict each other. Do not provide any explanation or additional text.
+Statement 1: {statement_1}
+Statement 2: {statement_2}
+"""
+
+CONFLICT_RESOLVER_PROMPT = """You are given two facts that conflict with each other. You are also given some contextual metadata of them. Your task is to analyze the two facts in light of the contextual metadata and try to reconcile them into a single, consistent, non-conflicting fact.
+- Don't output any explanation or additional text, just the final reconciled fact, try to be objective and remain independent of the context, don't use pronouns.
+- Try to judge facts by using its time, confidence etc.
+- Try to retain as much information as possible from the perspective of time.
+If the conflict cannot be resolved, output <answer>No</answer>. Otherwise, output the fused, consistent fact in enclosed with <answer></answer> tags.
+
+Output Example 1:
+<answer>No</answer>
+
+Output Example 2:
+<answer> ... </answer>
+
+Now reconcile the following two facts:
+Statement 1: {statement_1}
+Metadata 1: {metadata_1}
+Statement 2: {statement_2}
+Metadata 2: {metadata_2}
+"""
+
+REDUNDANCY_MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""

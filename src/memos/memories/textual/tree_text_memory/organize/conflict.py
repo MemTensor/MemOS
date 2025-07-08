@@ -8,6 +8,10 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.templates.tree_reorganize_prompts import (
+    CONFLICT_DETECTOR_PROMPT,
+    CONFLICT_RESOLVER_PROMPT,
+)
 
 
 logger = get_logger(__name__)
@@ -49,13 +53,16 @@ class ConflictDetector:
         for embedding_candidate in embedding_candidates:
             embedding_candidate = TextualMemoryItem.from_dict(embedding_candidate)
             prompt = [
-                {"role": "system", "content": "You are a conflict detector for memory items."},
+                {
+                    "role": "system",
+                    "content": "You are a conflict detector for memory items.",
+                },
                 {
                     "role": "user",
-                    "content": f"""
-You are given two plaintext statements. Determine if these two statements are factually contradictory. Respond with only "yes" if they contradict each other, or "no" if they do not contradict each other. Do not provide any explanation or additional text.
-Statement 1: {memory.memory!s}
-Statement 2: {embedding_candidate.memory!s}""",
+                    "content": CONFLICT_DETECTOR_PROMPT.format(
+                        statement_1=memory.memory,
+                        statement_2=embedding_candidate.memory,
+                    ),
                 },
             ]
             result = self.llm.generate(prompt).strip()
@@ -195,23 +202,3 @@ class ConflictResolver:
                 metadata_1[key] if metadata_1[key] is not None else metadata_2[key]
             )
         return TreeNodeTextualMemoryMetadata.model_validate(merged_metadata)
-
-
-CONFLICT_RESOLVER_PROMPT = """You are given two facts that conflict with each other. You are also given some contextual metadata of them. Your task is to analyze the two facts in light of the contextual metadata and try to reconcile them into a single, consistent, non-conflicting fact.
-- Don't output any explanation or additional text, just the final reconciled fact, try to be objective and remain independent of the context, don't use pronouns.
-- Try to judge facts by using its time, confidence etc.
-- Try to retain as much information as possible from the perspective of time.
-If the conflict cannot be resolved, output <answer>No</answer>. Otherwise, output the fused, consistent fact in enclosed with <answer></answer> tags.
-
-Output Example 1:
-<answer>No</answer>
-
-Output Example 2:
-<answer> ... </answer>
-
-Now reconcile the following two facts:
-Statement 1: {statement_1}
-Metadata 1: {metadata_1}
-Statement 2: {statement_2}
-Metadata 2: {metadata_2}
-"""
