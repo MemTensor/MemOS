@@ -188,8 +188,10 @@ class TestMOSInitialization:
         mock_user_manager.validate_user.assert_called_once_with("test_user")
 
     @patch("memos.mem_os.core.UserManager")
-    def test_mos_init_invalid_user(self, mock_user_manager_class, mock_config):
+    @patch("memos.mem_os.core.LLMFactory")
+    def test_mos_init_invalid_user(self, mock_llm_factory, mock_user_manager_class, mock_config):
         """Test MOS initialization with invalid user."""
+        mock_llm_factory.from_config.return_value = MagicMock()
         mock_user_manager = MagicMock()
         mock_user_manager.validate_user.return_value = False
         mock_user_manager_class.return_value = mock_user_manager
