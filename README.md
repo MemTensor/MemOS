@@ -150,6 +150,13 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 
 ## 📦 Installation
 
+> [!WARNING]
+> MemOS is compatible with Linux, Windows, and macOS.
+>
+> However, if you're using macOS, please note that there may be dependency issues that are difficult to resolve.
+>
+> For example, compatibility with macOS 13 Ventura is currently challenging.
+
 ### Install via pip
 
 ```bash
