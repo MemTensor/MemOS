@@ -2,40 +2,34 @@ name: "\U0001F680 Feature request"
 description: Submit a request for a new feature
 labels: ["enhancement", "pending"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Please do not create issues that are not related to new features under this category.
-        请勿在此分类下创建和新特性无关的 issues。
-
   - type: checkboxes
-    id: reminder
+    id: checklist
     attributes:
-      label: Reminder
-      description: |
-        Please ensure you have read the above rules carefully and searched the existing issues.
-        请确保您已经认真阅读了上述规则并且搜索过现有的 issues。
-
+      label: Pre-submission checklist
       options:
-        - label: I have read the above rules and searched the existing issues.
+        - label: I have searched existing issues and this feature hasn't been requested before | 我已搜索现有问题，确认此功能尚未被请求
+          required: true
+        - label: I have read the project documentation and confirmed this feature doesn't already exist | 我已阅读项目文档并确认此功能尚未存在
+          required: true
+        - label: This feature request is specific to MemOS and not a general software issue | 该功能请求是针对 MemOS 的，而不是一般软件问题
           required: true
 
   - type: textarea
-    id: description
+    id: problem
     validations:
       required: true
     attributes:
-      label: Description
-      description: |
-        A clear and concise description of the feature proposal.
-        请详细描述您希望加入的新功能特性。
+      label: Problem Statement
+      placeholder: |
+        Describe the problem you're trying to solve...
+        Example: "As a developer using MemOS, I find it difficult to..."
 
-  - type: textarea
+  - type: checkboxes
     id: contribution
-    validations:
-      required: false
     attributes:
-      label: Pull Request
-      description: |
-        Have you already created the relevant PR and submitted the code?
-        您是否已经创建了相关 PR 并提交了代码？
+      label: Implementation Contribution
+      options:
+        - label: I'm willing to implement this feature myself | 我愿意自己实现此功能
+          required: false
+        - label: I would like someone else to implement this | 我希望其他人来实现此功能
+          required: false
