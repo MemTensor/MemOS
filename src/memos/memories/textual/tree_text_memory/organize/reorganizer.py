@@ -21,9 +21,12 @@ from memos.memories.textual.tree_text_memory.organize.conflict import (
     ConflictDetector,
     ConflictResolver,
 )
+from memos.memories.textual.tree_text_memory.organize.redundancy import (
+    RedundancyDetector,
+    RedundancyResolver,
+)
 from memos.templates.tree_reorganize_prompts import (
     LOCAL_SUBCLUSTER_PROMPT,
-    REDUNDANCY_MERGE_PROMPT,
     REORGANIZE_PROMPT,
 )
 
@@ -67,6 +70,11 @@ class GraphStructureReorganizer:
         self.conflict_resolver = ConflictResolver(
             graph_store=graph_store, llm=llm, embedder=embedder
         )
+        self.redundancy_detector = RedundancyDetector(graph_store=graph_store, llm=llm)
+        self.redundancy_resolver = RedundancyResolver(
+            graph_store=graph_store, llm=llm, embedder=embedder
+        )
+
         self.is_reorganize = is_reorganize
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
@@ -155,7 +163,7 @@ class GraphStructureReorganizer:
         assert message.before_node is None and message.before_edge is None, (
             "Before node and edge should be None for `add` operation."
         )
-
+        # ———————— 1. check for conflicts ————————
         added_node = message.after_node[0]
         conflicts = self.conflict_detector.detect(added_node, scope=added_node.metadata.memory_type)
         if conflicts:
@@ -163,25 +171,22 @@ class GraphStructureReorganizer:
                 self.conflict_resolver.resolve(added_node, existing_node)
                 logger.info(f"Resolved conflict between {added_node.id} and {existing_node.id}.")
 
+        # ———————— 2. check for redundancy ————————
+        redundancy = self.redundancy_detector.detect(
+            added_node, scope=added_node.metadata.memory_type
+        )
+        if redundancy:
+            for added_node, existing_node in redundancy:
+                self.redundancy_resolver.resolve_two_nodes(added_node, existing_node)
+                logger.info(f"Resolved redundancy between {added_node.id} and {existing_node.id}.")
+
     def handle_remove(self, message: QueueMessage):
         logger.debug(f"Handling remove operation: {str(message)[:50]}")
 
     def handle_merge(self, message: QueueMessage):
         after_node = message.after_node[0]
         logger.debug(f"Handling merge operation: <{after_node.memory}>")
-        prompt = [
-            {
-                "role": "user",
-                "content": REDUNDANCY_MERGE_PROMPT.format(merged_text=after_node.memory),
-            },
-        ]
-        response = self.llm.generate(prompt)
-        after_node.memory = response.strip()
-        self.graph_store.update_node(
-            after_node.id,
-            {"memory": after_node.memory, **after_node.metadata.model_dump(exclude_none=True)},
-        )
-        logger.debug(f"Merged memory: {after_node.memory}")
+        self.redundancy_resolver.resolve_one_node(after_node)
 
     def optimize_structure(self, scope: str = "LongTermMemory", local_tree_threshold: int = 10):
         """

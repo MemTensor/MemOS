@@ -9,15 +9,16 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.tree_reorganize_prompts import (
-    CONFLICT_DETECTOR_PROMPT,
-    CONFLICT_RESOLVER_PROMPT,
+    REDUNDANCY_DETECTOR_PROMPT,
+    REDUNDANCY_MERGE_PROMPT,
+    REDUNDANCY_RESOLVER_PROMPT,
 )
 
 
 logger = get_logger(__name__)
 
 
-class ConflictDetector:
+class RedundancyDetector:
     EMBEDDING_THRESHOLD: float = 0.8  # Threshold for embedding similarity to consider conflict
 
     def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM):
@@ -28,13 +29,13 @@ class ConflictDetector:
         self, memory: TextualMemoryItem, top_k: int = 5, scope: str | None = None
     ) -> list[tuple[TextualMemoryItem, TextualMemoryItem]]:
         """
-        Detect conflicts by finding the most similar items in the graph database based on embedding, then use LLM to judge conflict.
+        Detect redundancy by finding the most similar items in the graph database based on embedding, then use LLM to judge conflict.
         Args:
             memory: The memory item (should have an embedding attribute or field).
             top_k: Number of top similar nodes to retrieve.
             scope: Optional memory type filter.
         Returns:
-            List of conflict pairs (each pair is a tuple: (memory, candidate)).
+            List of redundancy pairs (each pair is a tuple: (memory, candidate)).
         """
         # 1. Search for similar memories based on embedding
         embedding = memory.metadata.embedding
@@ -49,7 +50,7 @@ class ConflictDetector:
         ]
         # 3. Judge conflicts using LLM
         embedding_candidates = self.graph_store.get_nodes(embedding_candidates_ids)
-        conflict_pairs = []
+        redundant_pairs = []
         for embedding_candidate in embedding_candidates:
             embedding_candidate = TextualMemoryItem.from_dict(embedding_candidate)
             prompt = [
@@ -59,7 +60,7 @@ class ConflictDetector:
                 },
                 {
                     "role": "user",
-                    "content": CONFLICT_DETECTOR_PROMPT.format(
+                    "content": REDUNDANCY_DETECTOR_PROMPT.format(
                         statement_1=memory.memory,
                         statement_2=embedding_candidate.memory,
                     ),
@@ -67,27 +68,27 @@ class ConflictDetector:
             ]
             result = self.llm.generate(prompt).strip()
             if "yes" in result.lower():
-                conflict_pairs.append([memory, embedding_candidate])
-        if len(conflict_pairs):
+                redundant_pairs.append([memory, embedding_candidate])
+        if len(redundant_pairs):
             conflict_text = "\n".join(
-                f'"{pair[0].memory!s}" <==CONFLICT==> "{pair[1].memory!s}"'
-                for pair in conflict_pairs
+                f'"{pair[0].memory!s}" <==REDUNDANCY==> "{pair[1].memory!s}"'
+                for pair in redundant_pairs
             )
             logger.warning(
-                f"Detected {len(conflict_pairs)} conflicts for memory {memory.id}\n {conflict_text}"
+                f"Detected {len(redundant_pairs)} redundancies for memory {memory.id}\n {conflict_text}"
             )
-        return conflict_pairs
+        return redundant_pairs
 
 
-class ConflictResolver:
+class RedundancyResolver:
     def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
 
-    def resolve(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem) -> None:
+    def resolve_two_nodes(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem) -> None:
         """
-        Resolve detected conflicts between two memory items using LLM fusion.
+        Resolve detected redundancies between two memory items using LLM fusion.
         Args:
             memory_a: The first conflicting memory item.
             memory_b: The second conflicting memory item.
@@ -106,7 +107,7 @@ class ConflictResolver:
             },
             {
                 "role": "user",
-                "content": CONFLICT_RESOLVER_PROMPT.format(
+                "content": REDUNDANCY_RESOLVER_PROMPT.format(
                     statement_1=memory_a.memory,
                     metadata_1=metadata_1,
                     statement_2=memory_b.memory,
@@ -134,6 +135,21 @@ class ConflictResolver:
                 self._resolve_in_graph(memory_a, memory_b, merged_memory)
         except json.decoder.JSONDecodeError:
             logger.error(f"Failed to parse LLM response: {response}")
+
+    def resolve_one_node(self, memory: TextualMemoryItem) -> None:
+        prompt = [
+            {
+                "role": "user",
+                "content": REDUNDANCY_MERGE_PROMPT.format(merged_text=memory.memory),
+            },
+        ]
+        response = self.llm.generate(prompt)
+        memory.memory = response.strip()
+        self.graph_store.update_node(
+            memory.id,
+            {"memory": memory.memory, **memory.metadata.model_dump(exclude_none=True)},
+        )
+        logger.debug(f"Merged memory: {memory.memory}")
 
     def _hard_update(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem):
         """

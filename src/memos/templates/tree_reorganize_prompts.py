@@ -79,3 +79,8 @@ Metadata 2: {metadata_2}
 """
 
 REDUNDANCY_MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""
+
+
+REDUNDANCY_DETECTOR_PROMPT = """"""
+
+REDUNDANCY_RESOLVER_PROMPT = """"""
