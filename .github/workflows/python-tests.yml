@@ -3,6 +3,9 @@
 
 name: Python tests
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -22,6 +25,10 @@ jobs:
       matrix:
         os:
           - "ubuntu-latest"
+          - "windows-latest"
+          - "macos-14"
+          - "macos-15"
+          # Ref: https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-where-your-workflow-runs/choosing-the-runner-for-a-job
         python-version:
           - "3.10"
           - "3.11"
@@ -48,4 +55,4 @@ jobs:
         poetry run ruff format --check
     - name: Test with pytest
       run: |
-        PYTHONPATH=src poetry run pytest tests -vv
+        poetry run pytest tests -vv

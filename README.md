@@ -22,8 +22,8 @@
     <a href="https://memos.openmem.net/docs/home">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>
-    <a href="https://arxiv.org/abs/2505.22101">
-        <img src="https://img.shields.io/badge/arXiv-2505.22101-b31b1b.svg" alt="ArXiv Paper">
+    <a href="https://arxiv.org/abs/2507.03724">
+        <img src="https://img.shields.io/badge/arXiv-2507.03724-b31b1b.svg" alt="ArXiv Paper">
     </a>
     <a href="https://github.com/MemTensor/MemOS/discussions">
       <img src="https://img.shields.io/badge/GitHub-Discussions-181717.svg?logo=github" alt="GitHub Discussions">
@@ -31,7 +31,7 @@
     <a href="https://discord.gg/Txbx3gebZR">
       <img src="https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord" alt="Discord">
     </a>
-    <a href="docs/assets/memos-wechat-group.png">
+    <a href="docs/assets/qr_code.png">
       <img src="https://img.shields.io/badge/WeChat-Group-07C160.svg?logo=wechat" alt="WeChat Group">
     </a>
     <a href="https://opensource.org/license/apache-2-0/">
@@ -43,7 +43,7 @@
 ---
 
   <a href="https://memos.openmem.net/">
-    <img src="docs/assets/SOTA_Score.jpg" alt="SOTA SCORE">
+    <img src="docs/assets/sota_score.jpg" alt="SOTA SCORE">
   </a>
 
 
@@ -151,7 +151,11 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 ## 📦 Installation
 
 > [!WARNING]
-> Currently, MemOS primarily supports Linux platforms. You may encounter issues on Windows and macOS temporarily.
+> MemOS is compatible with Linux, Windows, and macOS.
+>
+> However, if you're using macOS, please note that there may be dependency issues that are difficult to resolve.
+>
+> For example, compatibility with macOS 13 Ventura is currently challenging.
 
 ### Install via pip
 
@@ -192,24 +196,50 @@ Join our community to ask questions, share your projects, and connect with other
 - **Discord**: Join our <a href="https://discord.gg/Txbx3gebZR" target="_blank">Discord Server</a>.
 - **WeChat**: Scan the QR code to join our WeChat group.
 
-<img src="docs/assets/qr-code.png" alt="QR Code" width="600">
+<img src="docs/assets/qr_code.png" alt="QR Code" width="600">
 
 ## 📜 Citation
 
-If you use MemOS in your research, please cite our paper:
+> [!NOTE]
+> We publicly released the Short Version on **May 28, 2025**, making it the earliest work to propose the concept of a Memory Operating System for LLMs.
+
+If you use MemOS in your research, we would appreciate citations to our papers.
 
 ```bibtex
-@article{li2025memos,
+
+@article{li2025memos_long,
+  title={MemOS: A Memory OS for AI System},
+  author={Li, Zhiyu and Song, Shichao and Xi, Chenyang and Wang, Hanyu and Tang, Chen and Niu, Simin and Chen, Ding and Yang, Jiawei and Li, Chunyu and Yu, Qingchen and Zhao, Jihao and Wang, Yezhaohui and Liu, Peng and Lin, Zehao and Wang, Pengyuan and Huo, Jiahao and Chen, Tianyi and Chen, Kai and Li, Kehang and Tao, Zhen and Ren, Junpeng and Lai, Huayi and Wu, Hao and Tang, Bo and Wang, Zhenren and Fan, Zhaoxin and Zhang, Ningyu and Zhang, Linfeng and Yan, Junchi and Yang, Mingchuan and Xu, Tong and Xu, Wei and Chen, Huajun and Wang, Haofeng and Yang, Hongkang and Zhang, Wentao and Xu, Zhi-Qin John and Chen, Siheng and Xiong, Feiyu},
+  journal={arXiv preprint arXiv:2507.03724},
+  year={2025},
+  url={https://arxiv.org/abs/2507.03724}
+}
+
+@article{li2025memos_short,
   title={MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models},
   author={Li, Zhiyu and Song, Shichao and Wang, Hanyu and Niu, Simin and Chen, Ding and Yang, Jiawei and Xi, Chenyang and Lai, Huayi and Zhao, Jihao and Wang, Yezhaohui and others},
   journal={arXiv preprint arXiv:2505.22101},
-  year={2025}
+  year={2025},
+  url={https://arxiv.org/abs/2505.22101}
+}
+
+@article{yang2024memory3,
+author = {Yang, Hongkang and Zehao, Lin and Wenjin, Wang and Wu, Hao and Zhiyu, Li and Tang, Bo and Wenqiang, Wei and Wang, Jinbo and Zeyun, Tang and Song, Shichao and Xi, Chenyang and Yu, Yu and Kai, Chen and Xiong, Feiyu and Tang, Linpeng and Weinan, E},
+title = {Memory$^3$: Language Modeling with Explicit Memory},
+journal = {Journal of Machine Learning},
+year = {2024},
+volume = {3},
+number = {3},
+pages = {300--346},
+issn = {2790-2048},
+doi = {https://doi.org/10.4208/jml.240708},
+url = {https://global-sci.com/article/91443/memory3-language-modeling-with-explicit-memory}
 }
 ```
 
 ## 🙌 Contributing
 
-We welcome contributions from the community! Please read our [contribution guidelines](./docs/contribution/overview.md) to get started.
+We welcome contributions from the community! Please read our [contribution guidelines](https://memos.openmem.net/docs/contribution/overview) to get started.
 
 ## 📄 License
 
@@ -220,6 +250,7 @@ MemOS is licensed under the [Apache 2.0 License](./LICENSE).
 Stay up to date with the latest MemOS announcements, releases, and community highlights.
 
 - **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
+- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
 - **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
 - **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
 - **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.
