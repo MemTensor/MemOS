@@ -69,10 +69,10 @@ class GraphStructureReorganizer:
         )
         self.is_reorganize = is_reorganize
         if self.is_reorganize:
-            # start to listen to the queue in a separate thread
-            self.thread = threading.Thread(target=self.run)
+            # ____ 1. For queue message driven thread ___________
+            self.thread = threading.Thread(target=self._run_message_consumer_loop)
             self.thread.start()
-
+            # ____ 2. For periodic structure optimization _______
             self._stop_scheduler = False
             self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
             self.structure_optimizer_thread = threading.Thread(
@@ -99,10 +99,9 @@ class GraphStructureReorganizer:
         while any(self._is_optimizing.values()):
             logger.debug(f"Waiting for structure optimizer to finish... {self._is_optimizing}")
             time.sleep(1)
-
         logger.debug("Structure optimizer is now idle.")
 
-    def run(self):
+    def _run_message_consumer_loop(self):
         while True:
             message = self.queue.get()
             if message is None:
