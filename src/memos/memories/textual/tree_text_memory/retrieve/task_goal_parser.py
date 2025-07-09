@@ -31,7 +31,7 @@ class TaskGoalParser:
         elif self.mode == "fine":
             if not self.llm:
                 raise ValueError("LLM not provided for slow mode.")
-            return self._parse_fine(task_description)
+            return self._parse_fine(task_description, context)
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
@@ -43,11 +43,11 @@ class TaskGoalParser:
             memories=[task_description], keys=[task_description], tags=[], goal_type="default"
         )
 
-    def _parse_fine(self, query: str) -> ParsedTaskGoal:
+    def _parse_fine(self, query: str, context: str = "") -> ParsedTaskGoal:
         """
         Slow mode: LLM structured parse.
         """
-        prompt = Template(TASK_PARSE_PROMPT).substitute(task=query.strip(), context="")
+        prompt = Template(TASK_PARSE_PROMPT).substitute(task=query.strip(), context=context)
         response = self.llm.generate(messages=[{"role": "user", "content": prompt}])
         return self._parse_response(response)
 
