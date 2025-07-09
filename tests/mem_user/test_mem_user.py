@@ -27,15 +27,22 @@ class TestUserManager:
         temp_dir = tempfile.mkdtemp()
         db_path = os.path.join(temp_dir, "test_memos.db")
         yield db_path
-        # Cleanup
-        if os.path.exists(db_path):
-            os.remove(db_path)
-        os.rmdir(temp_dir)
+        # Cleanup - note: file cleanup is handled by user_manager fixture
+        try:
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            os.rmdir(temp_dir)
+        except (OSError, PermissionError):
+            # On Windows, files might still be locked, ignore cleanup errors
+            pass
 
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        # Ensure database connections are closed
+        manager.close()
 
     def test_initialization(self, temp_db):
         """Test UserManager initialization."""
@@ -63,18 +70,27 @@ class TestUserManager:
         # Replace the settings import
         monkeypatch.setattr("memos.mem_user.user_manager.settings", MockSettings())
 
+        manager = None
         try:
             manager = UserManager()
             expected_path = mock_memos_dir / "memos_users.db"
             assert manager.db_path == str(expected_path)
             assert os.path.exists(expected_path)
         finally:
+            # Close database connections first
+            if manager:
+                manager.close()
+
             # Cleanup
-            expected_path = mock_memos_dir / "memos_users.db"
-            if os.path.exists(expected_path):
-                os.remove(expected_path)
-            if os.path.exists(temp_dir):
-                os.rmdir(temp_dir)
+            try:
+                expected_path = mock_memos_dir / "memos_users.db"
+                if os.path.exists(expected_path):
+                    os.remove(expected_path)
+                if os.path.exists(temp_dir):
+                    os.rmdir(temp_dir)
+            except (OSError, PermissionError):
+                # On Windows, files might still be locked, ignore cleanup errors
+                pass
 
 
 class TestUserOperations:
@@ -93,7 +109,9 @@ class TestUserOperations:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_create_user(self, user_manager):
         """Test user creation."""
@@ -239,7 +257,9 @@ class TestCubeOperations:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_create_cube(self, user_manager):
         """Test cube creation."""
@@ -264,7 +284,7 @@ class TestCubeOperations:
         owner_id = user_manager.create_user("cube_owner", UserRole.USER)
 
         custom_cube_id = "custom_cube_123"
-        cube_path = "/path/to/cube"
+        cube_path = str(Path("/path/to/cube"))  # Use pathlib for cross-platform path handling
 
         cube_id = user_manager.create_cube(
             "custom_cube", owner_id, cube_path=cube_path, cube_id=custom_cube_id
@@ -433,7 +453,9 @@ class TestUserRoles:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_user_roles(self, user_manager):
         """Test different user roles."""
@@ -483,7 +505,9 @@ class TestDatabaseIntegrity:
     @pytest.fixture
     def user_manager(self, temp_db):
         """Create UserManager instance with temporary database."""
-        return UserManager(db_path=temp_db)
+        manager = UserManager(db_path=temp_db)
+        yield manager
+        manager.close()
 
     def test_cascade_delete_user_cubes(self, user_manager):
         """Test that user's owned cubes are handled when user is deleted."""
