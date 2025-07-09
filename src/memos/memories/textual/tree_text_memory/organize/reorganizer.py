@@ -17,18 +17,9 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
-from memos.memories.textual.tree_text_memory.organize.conflict import (
-    ConflictDetector,
-    ConflictResolver,
-)
-from memos.memories.textual.tree_text_memory.organize.redundancy import (
-    RedundancyDetector,
-    RedundancyResolver,
-)
-from memos.templates.tree_reorganize_prompts import (
-    LOCAL_SUBCLUSTER_PROMPT,
-    REORGANIZE_PROMPT,
-)
+from memos.memories.textual.tree_text_memory.organize.conflict import ConflictHandler
+from memos.memories.textual.tree_text_memory.organize.redundancy import RedundancyHandler
+from memos.templates.tree_reorganize_prompts import LOCAL_SUBCLUSTER_PROMPT, REORGANIZE_PROMPT
 
 
 logger = get_logger(__name__)
@@ -66,14 +57,8 @@ class GraphStructureReorganizer:
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
-        self.conflict_detector = ConflictDetector(graph_store=graph_store, llm=llm)
-        self.conflict_resolver = ConflictResolver(
-            graph_store=graph_store, llm=llm, embedder=embedder
-        )
-        self.redundancy_detector = RedundancyDetector(graph_store=graph_store, llm=llm)
-        self.redundancy_resolver = RedundancyResolver(
-            graph_store=graph_store, llm=llm, embedder=embedder
-        )
+        self.conflict = ConflictHandler(graph_store=graph_store, llm=llm, embedder=embedder)
+        self.redundancy = RedundancyHandler(graph_store=graph_store, llm=llm, embedder=embedder)
 
         self.is_reorganize = is_reorganize
         if self.is_reorganize:
@@ -165,19 +150,17 @@ class GraphStructureReorganizer:
         )
         # ———————— 1. check for conflicts ————————
         added_node = message.after_node[0]
-        conflicts = self.conflict_detector.detect(added_node, scope=added_node.metadata.memory_type)
+        conflicts = self.conflict.detect(added_node, scope=added_node.metadata.memory_type)
         if conflicts:
             for added_node, existing_node in conflicts:
-                self.conflict_resolver.resolve(added_node, existing_node)
+                self.conflict.resolve(added_node, existing_node)
                 logger.info(f"Resolved conflict between {added_node.id} and {existing_node.id}.")
 
         # ———————— 2. check for redundancy ————————
-        redundancy = self.redundancy_detector.detect(
-            added_node, scope=added_node.metadata.memory_type
-        )
+        redundancy = self.redundancy.detect(added_node, scope=added_node.metadata.memory_type)
         if redundancy:
             for added_node, existing_node in redundancy:
-                self.redundancy_resolver.resolve_two_nodes(added_node, existing_node)
+                self.redundancy.resolve_two_nodes(added_node, existing_node)
                 logger.info(f"Resolved redundancy between {added_node.id} and {existing_node.id}.")
 
     def handle_remove(self, message: QueueMessage):

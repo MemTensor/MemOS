@@ -18,12 +18,13 @@ from memos.templates.tree_reorganize_prompts import (
 logger = get_logger(__name__)
 
 
-class RedundancyDetector:
-    EMBEDDING_THRESHOLD: float = 0.8  # Threshold for embedding similarity to consider conflict
+class RedundancyHandler:
+    EMBEDDING_THRESHOLD: float = 0.8  # Threshold for embedding similarity to consider redundancy
 
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM):
+    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
         self.graph_store = graph_store
         self.llm = llm
+        self.embedder = embedder
 
     def detect(
         self, memory: TextualMemoryItem, top_k: int = 5, scope: str | None = None
@@ -78,13 +79,6 @@ class RedundancyDetector:
                 f"Detected {len(redundant_pairs)} redundancies for memory {memory.id}\n {conflict_text}"
             )
         return redundant_pairs
-
-
-class RedundancyResolver:
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
-        self.graph_store = graph_store
-        self.llm = llm
-        self.embedder = embedder
 
     def resolve_two_nodes(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem) -> None:
         """

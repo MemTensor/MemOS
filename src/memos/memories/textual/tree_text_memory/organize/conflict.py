@@ -17,12 +17,13 @@ from memos.templates.tree_reorganize_prompts import (
 logger = get_logger(__name__)
 
 
-class ConflictDetector:
+class ConflictHandler:
     EMBEDDING_THRESHOLD: float = 0.8  # Threshold for embedding similarity to consider conflict
 
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM):
+    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
         self.graph_store = graph_store
         self.llm = llm
+        self.embedder = embedder
 
     def detect(
         self, memory: TextualMemoryItem, top_k: int = 5, scope: str | None = None
@@ -77,13 +78,6 @@ class ConflictDetector:
                 f"Detected {len(conflict_pairs)} conflicts for memory {memory.id}\n {conflict_text}"
             )
         return conflict_pairs
-
-
-class ConflictResolver:
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
-        self.graph_store = graph_store
-        self.llm = llm
-        self.embedder = embedder
 
     def resolve(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem) -> None:
         """
