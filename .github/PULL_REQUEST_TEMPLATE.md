@@ -14,7 +14,7 @@ Replace (summary), (issue), and (reviewer) with the appropriate information (No 
 
 Summary: (summary)
 
-Fixes #(issue)
+Fix: #(issue)
 
 Reviewer: @(reviewer)
 
