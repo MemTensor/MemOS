@@ -36,6 +36,7 @@ def get_mos_product_instance():
     global MOS_PRODUCT_INSTANCE
     if MOS_PRODUCT_INSTANCE is None:
         default_config = APIConfig.get_product_default_config()
+        print(default_config)
         from memos.configs.mem_os import MOSConfig
 
         mos_config = MOSConfig(**default_config)
@@ -177,15 +178,19 @@ async def chat(chat_req: ChatRequest):
     try:
         mos_product = get_mos_product_instance()
 
-        def generate_chat_response():
+        async def generate_chat_response():
             """Generate chat response as SSE stream."""
             try:
-                yield from mos_product.chat_with_references(
+                import asyncio
+                
+                for chunk in mos_product.chat_with_references(
                     query=chat_req.query,
                     user_id=chat_req.user_id,
                     cube_id=chat_req.mem_cube_id,
                     history=chat_req.history,
-                )
+                ):
+                    yield chunk
+                    await asyncio.sleep(0.1)  # 50ms delay between chunks
             except Exception as e:
                 logger.error(f"Error in chat stream: {e}")
                 error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"

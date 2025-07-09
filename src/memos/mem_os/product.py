@@ -245,7 +245,13 @@ class MOSProduct(MOSCore):
                 try:
                     if cube.cube_path and os.path.exists(cube.cube_path):
                         # Use MOSCore's register_mem_cube method directly
-                        self.register_mem_cube(cube.cube_path, cube.cube_id, user_id)
+                        # Only load act_mem since text_mem is stored in database
+                        self.register_mem_cube(
+                            cube.cube_path, 
+                            cube.cube_id, 
+                            user_id, 
+                            memory_types=["act_mem"]
+                        )
                     else:
                         logger.warning(
                             f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}"
@@ -420,28 +426,50 @@ class MOSProduct(MOSCore):
             self.mem_scheduler.submit_messages(messages=[message_item])
 
     def register_mem_cube(
-        self, mem_cube_name_or_path: str, mem_cube_id: str | None = None, user_id: str | None = None
+        self, 
+        mem_cube_name_or_path_or_object: str | GeneralMemCube, 
+        mem_cube_id: str | None = None, 
+        user_id: str | None = None,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None
     ) -> None:
         """
         Register a MemCube with the MOS.
 
         Args:
-            mem_cube_name_or_path (str): The name or path of the MemCube to register.
+            mem_cube_name_or_path_or_object (str | GeneralMemCube): The name, path, or GeneralMemCube object to register.
             mem_cube_id (str, optional): The identifier for the MemCube. If not provided, a default ID is used.
+            user_id (str, optional): The user ID to register the cube for.
+            memory_types (list[str], optional): List of memory types to load. 
+                If None, loads all available memory types.
+                Options: ["text_mem", "act_mem", "para_mem"]
         """
-
-        if mem_cube_id in self.mem_cubes:
-            logger.info(f"MemCube with ID {mem_cube_id} already in MOS, skip install.")
+        # Handle different input types
+        if isinstance(mem_cube_name_or_path_or_object, GeneralMemCube):
+            # Direct GeneralMemCube object provided
+            mem_cube = mem_cube_name_or_path_or_object
+            if mem_cube_id is None:
+                mem_cube_id = f"cube_{id(mem_cube)}"  # Generate a unique ID
         else:
+            # String path provided
+            mem_cube_name_or_path = mem_cube_name_or_path_or_object
+            if mem_cube_id is None:
+                mem_cube_id = mem_cube_name_or_path
+
+            if mem_cube_id in self.mem_cubes:
+                logger.info(f"MemCube with ID {mem_cube_id} already in MOS, skip install.")
+                return
+
+            # Create MemCube from path
             if os.path.exists(mem_cube_name_or_path):
-                self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_dir(mem_cube_name_or_path)
+                mem_cube = GeneralMemCube.init_from_dir(mem_cube_name_or_path, memory_types)
             else:
                 logger.warning(
                     f"MemCube {mem_cube_name_or_path} does not exist, try to init from remote repo."
                 )
-                self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_remote_repo(
-                    mem_cube_name_or_path
-                )
+                mem_cube = GeneralMemCube.init_from_remote_repo(mem_cube_name_or_path, memory_types=memory_types)
+
+        # Register the MemCube
+        self.mem_cubes[mem_cube_id] = mem_cube
 
     def user_register(
         self,
@@ -495,7 +523,12 @@ class MOSProduct(MOSCore):
                     print(e)
 
             # Register the default cube with MOS TODO overide
-            self.register_mem_cube(mem_cube_name_or_path, default_cube_id, user_id)
+            self.register_mem_cube(
+                mem_cube_name_or_path_or_object=default_mem_cube, 
+                mem_cube_id=default_cube_id, 
+                user_id=user_id,
+                memory_types=["act_mem"]
+            )
 
             # Add interests to the default cube if provided
             if interests:

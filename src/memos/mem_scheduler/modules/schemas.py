@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import ClassVar, TypeVar, List, Optional
 from uuid import uuid4
 
-from databricks.sdk.service.cleanrooms import ListCleanRoomsResponse
 from pydantic import BaseModel, Field, computed_field
 from typing_extensions import TypedDict
 
