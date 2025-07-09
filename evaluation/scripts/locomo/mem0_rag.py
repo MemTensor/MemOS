@@ -1,30 +1,30 @@
-'''
-Modify the code from the mem0 project, Original file link
-https://github.com/mem0ai/mem0/blob/main/evaluation/src/rag.py
-'''
+"""
+Modify the code from the mem0 project, Original file link is: https://github.com/mem0ai/mem0/blob/main/evaluation/src/rag.py
+"""
 
+import argparse
 import json
 import os
-import numpy as np
 import time
+
 from collections import defaultdict
 
 import numpy as np
 import tiktoken
-import argparse
 
 from dotenv import load_dotenv
 from jinja2 import Template
 from openai import OpenAI
 from tqdm import tqdm
 
+
 load_dotenv()
 
 PROMPT = """
-# Question: 
+# Question:
 {{QUESTION}}
 
-# Context: 
+# Context:
 {{CONTEXT}}
 
 # Short answer:
@@ -32,6 +32,7 @@ PROMPT = """
 
 TECHNIQUES = ["mem0", "rag", "langmem", "zep", "openai"]
 METHODS = ["add", "search"]
+
 
 class RAGManager:
     def __init__(self, data_path="data/locomo/locomo10_rag.json", chunk_size=500, k=2):
@@ -68,14 +69,13 @@ class RAGManager:
                     temperature=0,
                 )
                 t2 = time.time()
-                # return response.choices[0].message.content.strip(), t2 - t1
                 if response and response.choices:
                     content = response.choices[0].message.content
                     if content is not None:
                         return content.strip(), t2 - t1
                     else:
                         return "No content returned", t2 - t1
-                        print(f"❎ No content returned!")
+                        print("❎ No content returned!")
                 else:
                     return "Empty response", t2 - t1
             except Exception as e:
@@ -87,7 +87,7 @@ class RAGManager:
     def clean_chat_history(self, chat_history):
         cleaned_chat_history = ""
         for c in chat_history:
-            cleaned_chat_history += f"{c['timestamp']} | {c['speaker']}: " f"{c['text']}\n"
+            cleaned_chat_history += f"{c['timestamp']} | {c['speaker']}: {c['text']}\n"
 
         return cleaned_chat_history
 
@@ -96,7 +96,9 @@ class RAGManager:
         return response.data[0].embedding
 
     def calculate_similarity(self, embedding1, embedding2):
-        return np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
+        return np.dot(embedding1, embedding2) / (
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+        )
 
     def search(self, query, chunks, embeddings, k=1):
         """
@@ -114,16 +116,12 @@ class RAGManager:
         """
         t1 = time.time()
         query_embedding = self.calculate_embedding(query)
-        similarities = [self.calculate_similarity(query_embedding, embedding) for embedding in embeddings]
+        similarities = [
+            self.calculate_similarity(query_embedding, embedding) for embedding in embeddings
+        ]
 
         # Get indices of top-k most similar chunks
-        if k == 1:
-            # Original behavior - just get the most similar chunk
-            top_indices = [np.argmax(similarities)]
-        else:
-            # Get indices of top-k chunks
-            top_indices = np.argsort(similarities)[-k:][::-1]
-
+        top_indices = [np.argmax(similarities)] if k == 1 else np.argsort(similarities)[-k:][::-1]
         # Combine the top-k chunks
         combined_chunks = "\n<->\n".join([chunks[i] for i in top_indices])
 
@@ -161,10 +159,10 @@ class RAGManager:
         return chunks, embeddings
 
     def process_all_conversations(self, output_file_path):
-        with open(self.data_path, "r") as f:
+        with open(self.data_path) as f:
             data = json.load(f)
 
-        FINAL_RESULTS = defaultdict(list)
+        final_results = defaultdict(list)
         for key, value in tqdm(data.items(), desc="Processing conversations"):
             chat_history = value["conversation"]
             questions = value["question"]
@@ -183,7 +181,7 @@ class RAGManager:
                     context, search_time = self.search(question, chunks, embeddings, k=self.k)
                 response, response_time = self.generate_response(question, context)
 
-                FINAL_RESULTS[key].append(
+                final_results[key].append(
                     {
                         "question": question,
                         "answer": answer,
@@ -195,11 +193,11 @@ class RAGManager:
                     }
                 )
                 with open(output_file_path, "w+") as f:
-                    json.dump(FINAL_RESULTS, f, indent=4)
+                    json.dump(final_results, f, indent=4)
 
         # Save results
         with open(output_file_path, "w+") as f:
-            json.dump(FINAL_RESULTS, f, indent=4)
+            json.dump(final_results, f, indent=4)
 
 
 class Experiment:
@@ -208,26 +206,36 @@ class Experiment:
         self.chunk_size = chunk_size
 
     def run(self):
-        print(f"Running experiment with technique: {self.technique_type}, chunk size: {self.chunk_size}")
+        print(
+            f"Running experiment with technique: {self.technique_type}, chunk size: {self.chunk_size}"
+        )
 
 
 def main():
-
     parser = argparse.ArgumentParser(description="Run memory experiments")
-    parser.add_argument("--technique_type", choices=TECHNIQUES, default="rag", help="Memory technique to use")
+    parser.add_argument(
+        "--technique_type", choices=TECHNIQUES, default="rag", help="Memory technique to use"
+    )
     parser.add_argument("--chunk_size", type=int, default=500, help="Chunk size for processing")
-    parser.add_argument("--output_folder", type=str, default="results/", help="Output path for results")
+    parser.add_argument(
+        "--output_folder", type=str, default="results/", help="Output path for results"
+    )
     parser.add_argument("--top_k", type=int, default=30, help="Number of top memories to retrieve")
     parser.add_argument("--num_chunks", type=int, default=2, help="Number of chunks to process")
 
     args = parser.parse_args()
 
     if args.technique_type == "rag":
-        output_file_path = os.path.join(args.output_folder, f"rag_results_{args.chunk_size}_k{args.num_chunks}.json")
-        rag_manager = RAGManager(data_path="data/locomo/locomo10_rag.json", chunk_size=args.chunk_size, k=args.num_chunks)
+        output_file_path = os.path.join(
+            args.output_folder, f"rag_results_{args.chunk_size}_k{args.num_chunks}.json"
+        )
+        rag_manager = RAGManager(
+            data_path="data/locomo/locomo10_rag.json", chunk_size=args.chunk_size, k=args.num_chunks
+        )
         rag_manager.process_all_conversations(output_file_path)
 
-if __name__ =="__main__":
+
+if __name__ == "__main__":
     start = time.time()
     main()
     end = time.time()
