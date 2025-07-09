@@ -31,7 +31,7 @@
     <a href="https://discord.gg/Txbx3gebZR">
       <img src="https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord" alt="Discord">
     </a>
-    <a href="docs/assets/memos-wechat-group.png">
+    <a href="docs/assets/qr_code.png">
       <img src="https://img.shields.io/badge/WeChat-Group-07C160.svg?logo=wechat" alt="WeChat Group">
     </a>
     <a href="https://opensource.org/license/apache-2-0/">
@@ -43,7 +43,7 @@
 ---
 
   <a href="https://memos.openmem.net/">
-    <img src="docs/assets/SOTA_Score.jpg" alt="SOTA SCORE">
+    <img src="docs/assets/sota_score.jpg" alt="SOTA SCORE">
   </a>
 
 
@@ -151,7 +151,11 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 ## 📦 Installation
 
 > [!WARNING]
-> Currently, MemOS primarily supports Linux platforms. You may encounter issues on Windows and macOS temporarily.
+> MemOS is compatible with Linux, Windows, and macOS.
+>
+> However, if you're using macOS, please note that there may be dependency issues that are difficult to resolve.
+>
+> For example, compatibility with macOS 13 Ventura is currently challenging.
 
 ### Install via pip
 

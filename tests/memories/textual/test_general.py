@@ -1,5 +1,6 @@
 # TODO: Overcomplex. Use pytest fixtures instead of setUp/tearDown.
 import json
+import os
 import unittest
 import uuid
 
@@ -455,9 +456,9 @@ class TestGeneralTextMemory(unittest.TestCase):
 
     def test_dump(self):
         """Test dump functionality for GeneralTextMemory."""
-        test_dir = "/test/directory"
+        test_dir = "test/directory"
         memory_filename = "textual_memory.json"
-        memory_file_path = test_dir + "/" + memory_filename
+        memory_file_path = os.path.join(test_dir, memory_filename)
 
         # Set the config's memory_filename
         self.config.memory_filename = memory_filename
