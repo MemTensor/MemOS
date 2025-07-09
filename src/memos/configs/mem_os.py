@@ -57,6 +57,10 @@ class MOSConfig(BaseConfig):
         default=False,
         description="Enable memory scheduler for automated memory management",
     )
+    PRO_MODE: bool = Field(
+        default=False,
+        description="Enable PRO mode for complex query decomposition",
+    )
 
 
 class MemOSConfigFactory(BaseConfig):
