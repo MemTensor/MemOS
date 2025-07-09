@@ -17,7 +17,7 @@ from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT,
-    SIMPLE_STRUCT_MEM_READER_EXAMPLE
+    SIMPLE_STRUCT_MEM_READER_EXAMPLE,
 )
 
 
@@ -40,9 +40,11 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     def _process_chat_data(self, scene_data_info, info):
-        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", "\n".join(scene_data_info))
+        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace(
+            "${conversation}", "\n".join(scene_data_info)
+        )
         if self.config.remove_prompt_example:
-            prompt = prompt.replace(SIMPLE_STRUCT_MEM_READER_EXAMPLE, '')
+            prompt = prompt.replace(SIMPLE_STRUCT_MEM_READER_EXAMPLE, "")
 
         messages = [{"role": "user", "content": prompt}]
 
@@ -228,7 +230,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def parse_json_result(self, response_text):
         try:
             response_text = response_text.replace("```", "").replace("json", "")
-            response_text = re.sub(r'<think>.*?</think>', '', response_text).strip()
+            response_text = re.sub(r"<think>.*?</think>", "", response_text).strip()
             if response_text[-1] != "}":
                 response_text += "}"
             response_json = json.loads(response_text)

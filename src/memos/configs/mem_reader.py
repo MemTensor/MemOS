@@ -23,7 +23,8 @@ class BaseMemReaderConfig(BaseConfig):
         ..., description="Chunker configuration for the MemReader"
     )
     remove_prompt_example: bool = Field(
-        default=False, description="whether remove example in memory extraction prompt to save token"
+        default=False,
+        description="whether remove example in memory extraction prompt to save token",
     )
 
 
