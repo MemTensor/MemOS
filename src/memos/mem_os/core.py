@@ -266,8 +266,8 @@ class MOSCore:
         self.chat_history_manager[user_id] = chat_history
 
         # submit message to scheduler
-        if len(accessible_cubes) == 1:
-            mem_cube_id = accessible_cubes[0].cube_id
+        for accessible_mem_cube in accessible_cubes:
+            mem_cube_id = accessible_mem_cube.cube_id
             mem_cube = self.mem_cubes[mem_cube_id]
             if self.enable_mem_scheduler and self.mem_scheduler is not None:
                 message_item = ScheduleMessageItem(

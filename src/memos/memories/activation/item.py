@@ -1,5 +1,6 @@
 import uuid
 
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,6 +11,16 @@ class ActivationMemoryItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     memory: Any
     metadata: dict = {}
+
+
+class KVCacheRecords(BaseModel):
+    text_memories: list[str] = Field(
+        default=[],
+        description="The list of text memories transformed to the activation memory.",
+    )
+    timestamp: datetime = Field(
+        default_factory=datetime.now, description="submit time for schedule_messages"
+    )
 
 
 class KVCacheItem(ActivationMemoryItem):
@@ -23,3 +34,4 @@ class KVCacheItem(ActivationMemoryItem):
     )
 
     model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow DynamicCache as a field type
+    records: KVCacheRecords = KVCacheRecords()
