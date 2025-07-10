@@ -126,13 +126,49 @@ class MOSProduct(MOSCore):
                         # Store user config and cube access
                         self.user_configs[user_id] = config
                         self._load_user_cube_access(user_id)
-                        logger.info(f"Restored user configuration for {user_id}")
+                        
+                        # Pre-load all cubes for this user
+                        self._preload_user_cubes(user_id)
+                        
+                        logger.info(f"Restored user configuration and pre-loaded cubes for {user_id}")
 
                     except Exception as e:
                         logger.error(f"Failed to restore user configuration for {user_id}: {e}")
 
         except Exception as e:
             logger.error(f"Error during user instance restoration: {e}")
+
+    def _preload_user_cubes(self, user_id: str) -> None:
+        """Pre-load all cubes for a user into memory.
+        
+        Args:
+            user_id (str): The user ID to pre-load cubes for.
+        """
+        try:
+            # Get user's accessible cubes from persistent storage
+            accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
+            
+            for cube in accessible_cubes:
+                if cube.cube_id not in self.mem_cubes:
+                    try:
+                        if cube.cube_path and os.path.exists(cube.cube_path):
+                            # Pre-load cube with all memory types
+                            self.register_mem_cube(
+                                cube.cube_path, 
+                                cube.cube_id, 
+                                user_id, 
+                                memory_types=["act_mem"]
+                            )
+                            logger.info(f"Pre-loaded cube {cube.cube_id} for user {user_id}")
+                        else:
+                            logger.warning(
+                                f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}, skipping pre-load"
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error pre-loading cubes for user {user_id}: {e}")
 
     def _ensure_user_instance(self, user_id: str, max_instances: int | None = None) -> None:
         """
@@ -386,7 +422,6 @@ class MOSProduct(MOSCore):
         """
         if self.tokenizer:
             # Use tiktoken for proper token-based chunking
-            print(response)
             tokens = self.tokenizer.encode(response)
 
             for i in range(0, len(tokens), chunk_size):
@@ -676,7 +711,7 @@ class MOSProduct(MOSCore):
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
-            {"role": "user", "content": query},
+            {"role": "user", "content": query + "/nothink"},
         ]
 
         # Generate response with custom prompt
@@ -694,9 +729,9 @@ class MOSProduct(MOSCore):
                     else:
                         logger.info("past_key_values is None will not apply to chat")
                     break
-            response = self.chat_llm.generate(current_messages, past_key_values=past_key_values)
+            response_stream = self.chat_llm.generate_stream(current_messages, past_key_values=past_key_values)
         else:
-            response = self.chat_llm.generate(current_messages)
+            response_stream = self.chat_llm.generate_stream(current_messages)
 
         time_end = time.time()
 
@@ -704,10 +739,13 @@ class MOSProduct(MOSCore):
 
         # Initialize buffer for streaming
         buffer = ""
+        full_response = ""
 
         # Use tiktoken for proper token-based chunking
-        for chunk in self._chunk_response_with_tiktoken(response, chunk_size=5):
+        # for chunk in self._chunk_response_with_tiktoken(response, chunk_size=5):
+        for chunk in response_stream:
             buffer += chunk
+            full_response += chunk
 
             # Process buffer to ensure complete reference tags
             processed_chunk, remaining_buffer = self._process_streaming_references_complete(buffer)
@@ -738,12 +776,12 @@ class MOSProduct(MOSCore):
         total_time = round(float(time_end - time_start), 1)
         yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': '23%'}})}\n\n"
         chat_history.chat_history.append({"role": "user", "content": query})
-        chat_history.chat_history.append({"role": "assistant", "content": response})
+        chat_history.chat_history.append({"role": "assistant", "content": full_response})
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
         )
         self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=response, label=ANSWER_LABEL
+            user_id=user_id, mem_cube_id=cube_id, query=full_response, label=ANSWER_LABEL
         )
         self.chat_history_manager[user_id] = chat_history
 
@@ -752,11 +790,11 @@ class MOSProduct(MOSCore):
             user_id=user_id,
             messages=[
                 {"role": "user", "content": query},
-                {"role": "assistant", "content": response}
+                {"role": "assistant", "content": full_response}
             ],
             mem_cube_id=cube_id
         )
-        if len(self.chat_history_manager[user_id]) > 15:
+        if len(self.chat_history_manager[user_id].chat_history) > 30:
             self.chat_history_manager[user_id].chat_history.pop(0)
 
     def get_all(
