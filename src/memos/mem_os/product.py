@@ -567,14 +567,16 @@ class MOSProduct(MOSCore):
             "query": ["query1", "query2", "query3"]
         }}
         """
-        memories = "\n".join(
-            [
-                m.memory
-                for m in super().search("my recently memories", user_id=user_id, top_k=10)[
-                    "text_mem"
-                ][0]["memories"]
-            ]
-        )
+        text_mem_result = super().search("my recently memories", user_id=user_id, top_k=10)["text_mem"]
+        if text_mem_result:
+            memories = "\n".join(
+                [
+                    m.memory
+                    for m in text_mem_result[0]["memories"]
+                ]
+            )
+        else:
+            memories = ""
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
         response = self.chat_llm.generate(message_list)
         response_json = json.loads(response)
