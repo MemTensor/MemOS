@@ -33,11 +33,13 @@ You are given a cluster of memory items, each with an ID and content.
 Your task is to divide these into smaller, semantically meaningful sub-clusters.
 
 Instructions:
-- Look for naturally coherent themes or topics.
-- Ensure each sub-cluster is meaningful and not too large (5–10 items each).
-- Each sub-cluster must contain at least 2 items. Singletons should be discarded.
-- Each item ID must appear in exactly one sub-cluster. Do not duplicate items.
-- Return strictly valid JSON. Do not include any extra text.
+- Identify natural topics by analyzing common time, place, people, and event elements.
+- Each sub-cluster must reflect a coherent theme that helps retrieval.
+- Each sub-cluster should have 2–10 items. Discard singletons.
+- Each item ID must appear in exactly one sub-cluster.
+- Return strictly valid JSON only.
+
+Example: If you have items about a project across multiple phases, group them by milestone, team, or event.
 
 Return valid JSON:
 {{
@@ -52,4 +54,84 @@ Return valid JSON:
 
 Memory items:
 {joined_scene}
+"""
+
+PAIRWISE_RELATION_PROMPT = """
+You are a reasoning assistant.
+
+Given two memory units:
+- Node 1: "{node1}"
+- Node 2: "{node2}"
+
+Your task:
+- Determine their relationship ONLY if it reveals NEW usable reasoning or retrieval knowledge that is NOT already explicit in either unit.
+- Focus on whether combining them adds new temporal, causal, conditional, or conflict information.
+
+Valid options:
+- CAUSE: One clearly leads to the other.
+- CONDITION: One happens only if the other condition holds.
+- RELATE_TO: They are semantically related by shared people, time, place, or event, but neither causes the other.
+- CONFLICT: They logically contradict each other.
+- NONE: No clear useful connection.
+
+Example:
+- Node 1: "The marketing campaign ended in June."
+- Node 2: "Product sales dropped in July."
+Answer: CAUSE
+
+Another Example:
+- Node 1: "The conference was postponed to August due to the venue being unavailable."
+- Node 2: "The venue was booked for a wedding in August."
+Answer: CONFLICT
+
+Always respond with ONE word: [CAUSE | CONDITION | RELATE_TO | CONFLICT | NONE]
+"""
+
+INFER_FACT_PROMPT = """
+You are an inference expert.
+
+Source Memory: "{source}"
+Target Memory: "{target}"
+
+They are connected by a {relation_type} relation.
+Derive ONE new factual statement that clearly combines them in a way that is NOT a trivial restatement.
+
+Requirements:
+- Include relevant time, place, people, and event details if available.
+- If the inference is a logical guess, explicitly use phrases like "It can be inferred that...".
+
+Example:
+Source: "John missed the team meeting on Monday."
+Target: "Important project deadlines were discussed in that meeting."
+Relation: CAUSE
+Inference: "It can be inferred that John may not know the new project deadlines."
+
+If there is NO new useful fact that combines them, reply exactly: "None"
+"""
+
+AGGREGATE_PROMPT = """
+You are a concept summarization assistant.
+
+Below is a list of memory items:
+{joined}
+
+Your task:
+- Identify if they can be meaningfully grouped under a new, higher-level concept that clarifies their shared time, place, people, or event context.
+- Do NOT aggregate if the overlap is trivial or obvious from each unit alone.
+- If the summary involves any plausible interpretation, explicitly note it (e.g., "This suggests...").
+
+Example:
+Input Memories:
+- "Mary organized the 2023 sustainability summit in Berlin."
+- "Mary presented a keynote on renewable energy at the same summit."
+
+Good Aggregate:
+{{
+  "key": "Mary's Sustainability Summit Role",
+  "value": "Mary organized and spoke at the 2023 sustainability summit in Berlin, highlighting renewable energy initiatives.",
+  "tags": ["Mary", "summit", "Berlin", "2023"],
+  "background": "Combined from multiple memories about Mary's activities at the summit."
+}}
+
+If you find NO useful higher-level concept, reply exactly: "None".
 """

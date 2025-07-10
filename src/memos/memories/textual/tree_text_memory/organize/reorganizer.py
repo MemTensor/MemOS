@@ -3,6 +3,7 @@ import threading
 import time
 import traceback
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import PriorityQueue
 from typing import Literal
 
@@ -20,6 +21,9 @@ from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.conflict import (
     ConflictDetector,
     ConflictResolver,
+)
+from memos.memories.textual.tree_text_memory.organize.relation_reason_detector import (
+    RelationAndReasoningDetector,
 )
 from memos.templates.tree_reorganize_prompts import LOCAL_SUBCLUSTER_PROMPT, REORGANIZE_PROMPT
 
@@ -62,6 +66,9 @@ class GraphStructureReorganizer:
         self.conflict_detector = ConflictDetector(graph_store=graph_store, llm=llm)
         self.conflict_resolver = ConflictResolver(
             graph_store=graph_store, llm=llm, embedder=embedder
+        )
+        self.relation_detector = RelationAndReasoningDetector(
+            self.graph_store, self.llm, self.embedder
         )
         self.is_reorganize = is_reorganize
         if self.is_reorganize:
@@ -133,7 +140,7 @@ class GraphStructureReorganizer:
 
         self.add_message(None)
         self.thread.join()
-        logger.info("Reorganizer thread stopped.")
+        logger.info("Reorganize thread stopped.")
         self._stop_scheduler = True
         self.structure_optimizer_thread.join()
         logger.info("Structure optimizer stopped.")
@@ -183,7 +190,13 @@ class GraphStructureReorganizer:
         )
         logger.debug(f"Merged memory: {after_node.memory}")
 
-    def optimize_structure(self, scope: str = "LongTermMemory", local_tree_threshold: int = 10):
+    def optimize_structure(
+        self,
+        scope: str = "LongTermMemory",
+        local_tree_threshold: int = 10,
+        min_cluster_size: int = 3,
+        min_group_size: int = 10,
+    ):
         """
         Periodically reorganize the graph:
         1. Weakly partition nodes into clusters.
@@ -195,66 +208,161 @@ class GraphStructureReorganizer:
             return
 
         if self.graph_store.count_nodes(scope) == 0:
-            logger.debug(f"[GraphStructureReorganizer] No nodes for scope={scope}. Skip.")
+            logger.debug(f"[GraphStructureReorganize] No nodes for scope={scope}. Skip.")
             return
 
         self._is_optimizing[scope] = True
         try:
-            logger.info(
-                f"[GraphStructureReorganizer] 🔍 Starting structure optimization for scope: {scope}"
+            logger.debug(
+                f"[GraphStructureReorganize] 🔍 Starting structure optimization for scope: {scope}"
             )
 
+            logger.debug(
+                f"Num of scope in self.graph_store is {self.graph_store.get_memory_count(scope)}"
+            )
             # Load candidate nodes
             raw_nodes = self.graph_store.get_structure_optimization_candidates(scope)
             nodes = [GraphDBNode(**n) for n in raw_nodes]
 
             if not nodes:
-                logger.info("[GraphStructureReorganizer] No nodes to optimize. Skipping.")
+                logger.info("[GraphStructureReorganize] No nodes to optimize. Skipping.")
                 return
 
-            logger.info(f"[GraphStructureReorganizer] Loaded {len(nodes)} nodes.")
+            if len(nodes) < min_group_size:
+                logger.info(
+                    f"[GraphStructureReorganize] Only {len(nodes)} candidate nodes found. Not enough to reorganize. Skipping."
+                )
+                return
+
+            for node in nodes:
+                num_children = self.graph_store.count_children(node.id)
+                logger.debug(
+                    f"[GraphStructureReorganize] Node ID: {node.id}, "
+                    f"Memory: {node.memory}, "
+                    f"Children count: {num_children}"
+                )
+
+            logger.info(f"[GraphStructureReorganize] Loaded {len(nodes)} nodes.")
 
             # Step 2: Partition nodes
             partitioned_groups = self._partition(nodes)
 
             logger.info(
-                f"[GraphStructureReorganizer] Partitioned into {len(partitioned_groups)} clusters."
+                f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )
 
-            # For each cluster ➜ summarize, create parent, link children
-            for _cid, cluster_nodes in enumerate(partitioned_groups):
-                if len(cluster_nodes) <= local_tree_threshold:
-                    # Small cluster ➜ single parent
-                    parent_node = self._summarize_cluster(cluster_nodes, scope)
-                    self._create_parent_node(parent_node)
-                    self._link_cluster_nodes(parent_node, cluster_nodes)
-                else:
-                    # Large cluster ➜ local sub-clustering
-                    sub_clusters = self._local_subcluster(cluster_nodes)
-                    sub_parents = []
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = []
+                for cluster_nodes in partitioned_groups:
+                    futures.append(
+                        executor.submit(
+                            self._process_cluster_and_write,
+                            cluster_nodes,
+                            scope,
+                            local_tree_threshold,
+                            min_cluster_size,
+                        )
+                    )
 
-                    for _sub_id, sub_nodes in enumerate(sub_clusters):
-                        if len(sub_nodes) < 2:
-                            continue  # Skip tiny noise
-                        sub_parent_node = self._summarize_cluster(sub_nodes, scope)
-                        self._create_parent_node(sub_parent_node)
-                        self._link_cluster_nodes(sub_parent_node, sub_nodes)
-                        sub_parents.append(sub_parent_node)
-
-                    if sub_parents:
-                        # Create a top-level cluster parent for all sub parents
-                        cluster_parent_node = self._summarize_cluster(cluster_nodes, scope)
-                        self._create_parent_node(cluster_parent_node)
-
-                        for sub_parent in sub_parents:
-                            self.graph_store.add_edge(
-                                cluster_parent_node.id, sub_parent.id, "PARENT"
-                            )
-
-            logger.info("[GraphStructure Reorganizer] Structure optimization finished.")
+                for f in as_completed(futures):
+                    try:
+                        f.result()
+                    except Exception as e:
+                        logger.warning(f"[Reorganize] Cluster processing failed: {e}")
+                logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
         finally:
             self._is_optimizing[scope] = False
+            logger.info("[GraphStructureReorganize] Structure optimization finished.")
+
+    def _process_cluster_and_write(
+        self,
+        cluster_nodes: list[GraphDBNode],
+        scope: str,
+        local_tree_threshold: int,
+        min_cluster_size: int,
+    ):
+        if len(cluster_nodes) <= min_cluster_size:
+            return
+
+        if len(cluster_nodes) <= local_tree_threshold:
+            # Small cluster ➜ single parent
+            parent_node = self._summarize_cluster(cluster_nodes, scope)
+            self._create_parent_node(parent_node)
+            self._link_cluster_nodes(parent_node, cluster_nodes)
+        else:
+            # Large cluster ➜ local sub-clustering
+            sub_clusters = self._local_subcluster(cluster_nodes)
+            sub_parents = []
+
+            for sub_nodes in sub_clusters:
+                if len(sub_nodes) < min_cluster_size:
+                    continue  # Skip tiny noise
+                sub_parent_node = self._summarize_cluster(sub_nodes, scope)
+                self._create_parent_node(sub_parent_node)
+                self._link_cluster_nodes(sub_parent_node, sub_nodes)
+                sub_parents.append(sub_parent_node)
+
+            if sub_parents:
+                cluster_parent_node = self._summarize_cluster(cluster_nodes, scope)
+                self._create_parent_node(cluster_parent_node)
+                for sub_parent in sub_parents:
+                    self.graph_store.add_edge(cluster_parent_node.id, sub_parent.id, "PARENT")
+
+        logger.info("Adding relations/reasons")
+        nodes_to_check = cluster_nodes
+        exclude_ids = [n.id for n in nodes_to_check]
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = []
+            for node in nodes_to_check:
+                futures.append(
+                    executor.submit(
+                        self.relation_detector.process_node,
+                        node,
+                        exclude_ids,
+                        10,  # top_k
+                    )
+                )
+
+            for f in as_completed(futures):
+                results = f.result()
+
+                # 1) Add pairwise relations
+                for rel in results["relations"]:
+                    if not self.graph_store.edge_exists(
+                        rel["source_id"], rel["target_id"], rel["relation_type"]
+                    ):
+                        self.graph_store.add_edge(
+                            rel["source_id"], rel["target_id"], rel["relation_type"]
+                        )
+
+                # 2) Add inferred nodes and link to sources
+                for inf_node in results["inferred_nodes"]:
+                    self.graph_store.add_node(
+                        inf_node.id,
+                        inf_node.memory,
+                        inf_node.metadata.model_dump(exclude_none=True),
+                    )
+                    for src_id in inf_node.metadata.sources:
+                        self.graph_store.add_edge(src_id, inf_node.id, "INFERS")
+
+                # 3) Add sequence links
+                for seq in results["sequence_links"]:
+                    if not self.graph_store.edge_exists(seq["from_id"], seq["to_id"], "FOLLOWS"):
+                        self.graph_store.add_edge(seq["from_id"], seq["to_id"], "FOLLOWS")
+
+                # 4) Add aggregate concept nodes
+                for agg_node in results["aggregate_nodes"]:
+                    self.graph_store.add_node(
+                        agg_node.id,
+                        agg_node.memory,
+                        agg_node.metadata.model_dump(exclude_none=True),
+                    )
+                    for child_id in agg_node.metadata.sources:
+                        self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATES")
+
+            logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
     def _local_subcluster(self, cluster_nodes: list[GraphDBNode]) -> list[list[GraphDBNode]]:
         """
@@ -274,7 +382,7 @@ class GraphStructureReorganizer:
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
-        response_json = self.parse_json_result(response_text)
+        response_json = self._parse_json_result(response_text)
         assigned_ids = set()
         result_subclusters = []
 
@@ -291,7 +399,7 @@ class GraphStructureReorganizer:
         return result_subclusters
 
     def _partition(
-        self, nodes: list[GraphDBNode], min_cluster_size: int = 5
+        self, nodes: list[GraphDBNode], min_cluster_size: int = 3
     ) -> list[list[GraphDBNode]]:
         """
         Partition nodes by:
@@ -411,7 +519,7 @@ class GraphStructureReorganizer:
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
-        response_json = self.parse_json_result(response_text)
+        response_json = self._parse_json_result(response_text)
 
         # Extract fields
         parent_key = response_json.get("key", "").strip()
@@ -440,7 +548,7 @@ class GraphStructureReorganizer:
         )
         return parent_node
 
-    def parse_json_result(self, response_text):
+    def _parse_json_result(self, response_text):
         try:
             response_text = response_text.replace("```", "").replace("json", "")
             response_json = json.loads(response_text)
