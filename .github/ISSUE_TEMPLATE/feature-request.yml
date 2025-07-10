@@ -1,0 +1,35 @@
+name: "\U0001F680 Feature request"
+description: Submit a request for a new feature
+labels: ["enhancement", "pending"]
+body:
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues and this feature hasn't been requested before | 我已搜索现有问题，确认此功能尚未被请求
+          required: true
+        - label: I have read the project documentation and confirmed this feature doesn't already exist | 我已阅读项目文档并确认此功能尚未存在
+          required: true
+        - label: This feature request is specific to MemOS and not a general software issue | 该功能请求是针对 MemOS 的，而不是一般软件问题
+          required: true
+
+  - type: textarea
+    id: problem
+    validations:
+      required: true
+    attributes:
+      label: Problem Statement
+      placeholder: |
+        Describe the problem you're trying to solve...
+        Example: "As a developer using MemOS, I find it difficult to..."
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Implementation Contribution
+      options:
+        - label: I'm willing to implement this feature myself | 我愿意自己实现此功能
+          required: false
+        - label: I would like someone else to implement this | 我希望其他人来实现此功能
+          required: false

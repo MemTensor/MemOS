@@ -1,39 +1,28 @@
 ## Description
 
-Please include a summary of the change and which issue is fixed. Please also include relevant motivation and context. List any dependencies that are required for this change.
+<!--
+Please include a summary of the changes below;
+Fill in the issue number that this PR addresses (if applicable);
+Mention the person who will review this PR (if you know who it is);
+Replace (summary), (issue), and (reviewer) with the appropriate information (No parentheses).
 
-Fixes # (issue)
+请在下方填写更改的摘要；
+填写此 PR 解决的问题编号（如果适用）；
+提及将审查此 PR 的人（如果您知道是谁）；
+替换 (summary)、(issue) 和 (reviewer) 为适当的信息（不带括号）。
+-->
 
-## Type of change
+Summary: (summary)
 
-Please delete options that are not relevant.
+Fix: #(issue)
 
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Refactor (does not change functionality, e.g. code style improvements, linting)
-- [ ] Documentation update
-
-## How Has This Been Tested?
-
-Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce. Please also list any relevant details for your test configuration
-
-Please delete options that are not relevant.
-
-- [ ] Unit Test
-- [ ] Test Script (please provide)
+Reviewer: @(reviewer)
 
 ## Checklist:
 
-- [ ] My code follows the style guidelines of this project
-- [ ] I have performed a self-review of my own code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] My changes generate no new warnings
-- [ ] I have added tests that prove my fix is effective or that my feature works
-- [ ] New and existing unit tests pass locally with my changes
-- [ ] I have checked my code and corrected any misspellings
-
-## Maintainer Checklist
-
-- [ ] closes #xxxx (Replace xxxx with the GitHub issue number)
-- [ ] Made sure Checks passed
+- [ ] I have performed a self-review of my own code | 我已自行检查了自己的代码
+- [ ] I have commented my code in hard-to-understand areas | 我已在难以理解的地方对代码进行了注释
+- [ ] I have added tests that prove my fix is effective or that my feature works | 我已添加测试以证明我的修复有效或功能正常
+- [ ] I have added necessary documentation (if applicable) | 我已添加必要的文档（如果适用）
+- [ ] I have linked the issue to this PR (if applicable) | 我已将 issue 链接到此 PR（如果适用）
+- [ ] I have mentioned the person who will review this PR | 我已提及将审查此 PR 的人
