@@ -657,9 +657,12 @@ class MOSProduct(MOSCore):
         self._load_user_cubes(user_id)
 
         time_start = time.time()
-        memories_list = super().search(
+        memories_list = []
+        memories_result = super().search(
             query, user_id, install_cube_ids=[cube_id] if cube_id else None
-        )["text_mem"][0]["memories"]
+        )["text_mem"]
+        if memories_result:
+            memories_list = memories_result[0]["memories"]
 
         # Build custom system prompt with relevant memories
         system_prompt = self._build_system_prompt(user_id, memories_list)
@@ -745,6 +748,16 @@ class MOSProduct(MOSCore):
         self.chat_history_manager[user_id] = chat_history
 
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
+        self.add(
+            user_id=user_id,
+            messages=[
+                {"role": "user", "content": query},
+                {"role": "assistant", "content": response}
+            ],
+            mem_cube_id=cube_id
+        )
+        if len(self.chat_history_manager[user_id]) > 15:
+            self.chat_history_manager[user_id].chat_history.pop(0)
 
     def get_all(
         self,
