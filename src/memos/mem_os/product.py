@@ -744,6 +744,8 @@ class MOSProduct(MOSCore):
         # Use tiktoken for proper token-based chunking
         # for chunk in self._chunk_response_with_tiktoken(response, chunk_size=5):
         for chunk in response_stream:
+            if chunk in ["<think>", "</think>"]:
+                continue
             buffer += chunk
             full_response += chunk
 
