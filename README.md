@@ -1,12 +1,10 @@
 <div align="center">
   <a href="https://memos.openmem.net/">
-    <img src="docs/assets/banner_new.gif" alt="MemOS Banner">
+    <img src="https://statics.memtensor.com.cn/memos/memos-banner.gif" alt="MemOS Banner">
   </a>
 
-
-
 <h1 align="center">
-  <img src="docs/assets/memos_logo.png" alt="MemOS Logo" width="50"/> MemOS 1.0: 星河 (Stellar)  <img src="https://img.shields.io/badge/status-Preview-blue" alt="Preview Badge"/>
+  <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="50"/> MemOS 1.0: 星河 (Stellar)  <img src="https://img.shields.io/badge/status-Preview-blue" alt="Preview Badge"/>
 </h1>
 
   <p>
@@ -19,7 +17,7 @@
     <a href="https://pypi.org/project/MemoryOS">
       <img src="https://img.shields.io/pypi/pyversions/MemoryOS.svg" alt="Supported Python versions">
     </a>
-    <a href="https://memos.openmem.net/docs/home">
+    <a href="https://memos-docs.openmem.net/home/overview/">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>
     <a href="https://arxiv.org/abs/2507.03724">
@@ -31,7 +29,7 @@
     <a href="https://discord.gg/Txbx3gebZR">
       <img src="https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord" alt="Discord">
     </a>
-    <a href="docs/assets/qr_code.png">
+    <a href="https://statics.memtensor.com.cn/memos/qr-code.png">
       <img src="https://img.shields.io/badge/WeChat-Group-07C160.svg?logo=wechat" alt="WeChat Group">
     </a>
     <a href="https://opensource.org/license/apache-2-0/">
@@ -42,17 +40,14 @@
 
 ---
 
-  <a href="https://memos.openmem.net/">
-    <img src="docs/assets/sota_score.jpg" alt="SOTA SCORE">
-  </a>
-
+<img src="https://statics.memtensor.com.cn/memos/sota_score.jpg" alt="SOTA SCORE">
 
 **MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions.
 
-- **Website**: <a href="https://memos.openmem.net/" target="_blank">https://memos.openmem.net/</a>
-- **Documentation**: <a href="https://memos.openmem.net/docs/home" target="_blank">https://memos.openmem.net/docs/home</a>
-- **API Reference**: <a href="https://memos.openmem.net/docs/api/info" target="_blank">https://memos.openmem.net/docs/api/info</a>
-- **Source Code**: <a href="https://github.com/MemTensor/MemOS" target="_blank">https://github.com/MemTensor/MemOS</a>
+- **Website**: https://memos.openmem.net/
+- **Documentation**: https://memos-docs.openmem.net/home/overview/
+- **API Reference**: https://memos-docs.openmem.net/docs/api/info/
+- **Source Code**: https://github.com/MemTensor/MemOS
 
 ## 📈 Performance Benchmark
 
@@ -66,19 +61,12 @@ MemOS demonstrates significant improvements over baseline memory solutions in mu
 
 > 💡 **Temporal reasoning accuracy improved by 159% compared to the OpenAI baseline.**
 
-
-
 ### Details of End-to-End Evaluation on LOCOMO
 
 > [!NOTE]
 > Comparison of LLM Judge Scores across five major tasks in the LOCOMO benchmark. Each bar shows the mean evaluation score judged by LLMs for a given method-task pair, with standard deviation as error bars. MemOS-0630 consistently outperforms baseline methods (LangMem, Zep, OpenAI, Mem0) across all task types, especially in multi-hop and temporal reasoning scenarios.
 
-<a href="https://memos.openmem.net/">
-  <img src="docs/assets/score_all_end2end.jpg" alt="END2END SCORE">
-</a>
-
-
-
+<img src="https://statics.memtensor.com.cn/memos/score_all_end2end.jpg" alt="END2END SCORE">
 
 ## ✨ Key Features
 
@@ -196,7 +184,7 @@ Join our community to ask questions, share your projects, and connect with other
 - **Discord**: Join our <a href="https://discord.gg/Txbx3gebZR" target="_blank">Discord Server</a>.
 - **WeChat**: Scan the QR code to join our WeChat group.
 
-<img src="docs/assets/qr_code.png" alt="QR Code" width="600">
+<img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="600">
 
 ## 📜 Citation
 
@@ -239,7 +227,7 @@ url = {https://global-sci.com/article/91443/memory3-language-modeling-with-expli
 
 ## 🙌 Contributing
 
-We welcome contributions from the community! Please read our [contribution guidelines](https://memos.openmem.net/docs/contribution/overview) to get started.
+We welcome contributions from the community! Please read our [contribution guidelines](https://memos-docs.openmem.net/contribution/overview) to get started.
 
 ## 📄 License
 
