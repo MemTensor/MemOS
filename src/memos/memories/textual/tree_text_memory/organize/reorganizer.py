@@ -18,10 +18,8 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
-from memos.memories.textual.tree_text_memory.organize.conflict import (
-    ConflictDetector,
-    ConflictResolver,
-)
+from memos.memories.textual.tree_text_memory.organize.conflict import ConflictHandler
+from memos.memories.textual.tree_text_memory.organize.redundancy import RedundancyHandler
 from memos.memories.textual.tree_text_memory.organize.relation_reason_detector import (
     RelationAndReasoningDetector,
 )
@@ -63,19 +61,18 @@ class GraphStructureReorganizer:
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
-        self.conflict_detector = ConflictDetector(graph_store=graph_store, llm=llm)
-        self.conflict_resolver = ConflictResolver(
-            graph_store=graph_store, llm=llm, embedder=embedder
-        )
         self.relation_detector = RelationAndReasoningDetector(
             self.graph_store, self.llm, self.embedder
         )
+        self.conflict = ConflictHandler(graph_store=graph_store, llm=llm, embedder=embedder)
+        self.redundancy = RedundancyHandler(graph_store=graph_store, llm=llm, embedder=embedder)
+
         self.is_reorganize = is_reorganize
         if self.is_reorganize:
-            # start to listen to the queue in a separate thread
-            self.thread = threading.Thread(target=self.run)
+            # ____ 1. For queue message driven thread ___________
+            self.thread = threading.Thread(target=self._run_message_consumer_loop)
             self.thread.start()
-
+            # ____ 2. For periodic structure optimization _______
             self._stop_scheduler = False
             self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
             self.structure_optimizer_thread = threading.Thread(
@@ -102,10 +99,9 @@ class GraphStructureReorganizer:
         while any(self._is_optimizing.values()):
             logger.debug(f"Waiting for structure optimizer to finish... {self._is_optimizing}")
             time.sleep(1)
-
         logger.debug("Structure optimizer is now idle.")
 
-    def run(self):
+    def _run_message_consumer_loop(self):
         while True:
             message = self.queue.get()
             if message is None:
@@ -155,20 +151,24 @@ class GraphStructureReorganizer:
         logger.debug(f"message queue size: {self.queue.qsize()}")
 
     def handle_add(self, message: QueueMessage):
-        """
-        Handle adding a memory item to the graph.
-        """
         logger.debug(f"Handling add operation: {str(message)[:500]}")
         assert message.before_node is None and message.before_edge is None, (
             "Before node and edge should be None for `add` operation."
         )
-
+        # ———————— 1. check for conflicts ————————
         added_node = message.after_node[0]
-        conflicts = self.conflict_detector.detect(added_node, scope=added_node.metadata.memory_type)
+        conflicts = self.conflict.detect(added_node, scope=added_node.metadata.memory_type)
         if conflicts:
             for added_node, existing_node in conflicts:
-                self.conflict_resolver.resolve(added_node, existing_node)
+                self.conflict.resolve(added_node, existing_node)
                 logger.info(f"Resolved conflict between {added_node.id} and {existing_node.id}.")
+
+        # ———————— 2. check for redundancy ————————
+        redundancy = self.redundancy.detect(added_node, scope=added_node.metadata.memory_type)
+        if redundancy:
+            for added_node, existing_node in redundancy:
+                self.redundancy.resolve_two_nodes(added_node, existing_node)
+                logger.info(f"Resolved redundancy between {added_node.id} and {existing_node.id}.")
 
     def handle_remove(self, message: QueueMessage):
         logger.debug(f"Handling remove operation: {str(message)[:50]}")
@@ -176,19 +176,7 @@ class GraphStructureReorganizer:
     def handle_merge(self, message: QueueMessage):
         after_node = message.after_node[0]
         logger.debug(f"Handling merge operation: <{after_node.memory}>")
-        prompt = [
-            {
-                "role": "user",
-                "content": MERGE_PROMPT.format(merged_text=after_node.memory),
-            },
-        ]
-        response = self.llm.generate(prompt)
-        after_node.memory = response.strip()
-        self.graph_store.update_node(
-            after_node.id,
-            {"memory": after_node.memory, **after_node.metadata.model_dump(exclude_none=True)},
-        )
-        logger.debug(f"Merged memory: {after_node.memory}")
+        self.redundancy_resolver.resolve_one_node(after_node)
 
     def optimize_structure(
         self,
@@ -602,6 +590,3 @@ class GraphStructureReorganizer:
             else:
                 message.after_node[i] = GraphDBNode(**raw_node)
         return message
-
-
-MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""
