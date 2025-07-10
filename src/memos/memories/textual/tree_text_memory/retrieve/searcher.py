@@ -8,6 +8,7 @@ from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import OllamaLLM, OpenAILLM
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 
+from .internet_retriever_factory import InternetRetrieverFactory
 from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
 from .reranker import MemoryReranker
@@ -20,6 +21,7 @@ class Searcher:
         dispatcher_llm: OpenAILLM | OllamaLLM,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
+        internet_retriever: InternetRetrieverFactory | None = None,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -28,6 +30,9 @@ class Searcher:
         self.graph_retriever = GraphMemoryRetriever(self.graph_store, self.embedder)
         self.reranker = MemoryReranker(dispatcher_llm, self.embedder)
         self.reasoner = MemoryReasoner(dispatcher_llm)
+
+        # Create internet retriever from config if provided
+        self.internet_retriever = internet_retriever
 
     def search(
         self, query: str, top_k: int, info=None, mode: str = "fast", memory_type: str = "All"
@@ -50,7 +55,19 @@ class Searcher:
         """
 
         # Step 1: Parse task structure into topic, concept, and fact levels
-        parsed_goal = self.task_goal_parser.parse(query)
+        context = []
+        if mode == "fine":
+            query_embedding = self.embedder.embed([query])[0]
+            related_node_ids = self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
+            related_nodes = [
+                self.graph_store.get_node(related_node["id"]) for related_node in related_node_ids
+            ]
+
+            context = [related_node["memory"] for related_node in related_nodes]
+            context = list(set(context))
+
+        # Step 1a: Parse task structure into topic, concept, and fact levels
+        parsed_goal = self.task_goal_parser.parse(query, "\n".join(context))
 
         if parsed_goal.memories:
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
@@ -114,14 +131,39 @@ class Searcher:
             )
             return ranked_memories
 
-        # Step 3: Parallel execution of both paths
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        # Step 2c: Internet retrieval (Path C)
+        def retrieve_from_internet():
+            """
+            Retrieve information from the internet using Google Custom Search API.
+            """
+            if not self.internet_retriever:
+                return []
+            if memory_type not in ["All"]:
+                return []
+            internet_items = self.internet_retriever.retrieve_from_internet(
+                query=query, top_k=top_k, parsed_goal=parsed_goal
+            )
+
+            # Convert to the format expected by reranker
+            ranked_memories = self.reranker.rerank(
+                query=query,
+                query_embedding=query_embedding[0],
+                graph_results=internet_items,
+                top_k=top_k * 2,
+                parsed_goal=parsed_goal,
+            )
+            return ranked_memories
+
+        # Step 3: Parallel execution of all paths
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             future_working = executor.submit(retrieve_from_working_memory)
             future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
+            future_internet = executor.submit(retrieve_from_internet)
 
             working_results = future_working.result()
             hybrid_results = future_hybrid.result()
-            searched_res = working_results + hybrid_results
+            internet_results = future_internet.result()
+            searched_res = working_results + hybrid_results + internet_results
 
         # Deduplicate by item.memory, keep higher score
         deduped_result = {}

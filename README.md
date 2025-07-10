@@ -196,7 +196,7 @@ Join our community to ask questions, share your projects, and connect with other
 - **Discord**: Join our <a href="https://discord.gg/Txbx3gebZR" target="_blank">Discord Server</a>.
 - **WeChat**: Scan the QR code to join our WeChat group.
 
-<img src="docs/assets/qr-code.png" alt="QR Code" width="600">
+<img src="docs/assets/qr_code.png" alt="QR Code" width="600">
 
 ## 📜 Citation
 
