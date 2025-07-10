@@ -222,14 +222,6 @@ class GraphStructureReorganizer:
                 )
                 return
 
-            for node in nodes:
-                num_children = self.graph_store.count_children(node.id)
-                logger.debug(
-                    f"[GraphStructureReorganize] Node ID: {node.id}, "
-                    f"Memory: {node.memory}, "
-                    f"Children count: {num_children}"
-                )
-
             logger.info(f"[GraphStructureReorganize] Loaded {len(nodes)} nodes.")
 
             # Step 2: Partition nodes
