@@ -30,7 +30,7 @@ class RedundancyHandler:
         self, memory: TextualMemoryItem, top_k: int = 5, scope: str | None = None
     ) -> list[tuple[TextualMemoryItem, TextualMemoryItem]]:
         """
-        Detect redundancy by finding the most similar items in the graph database based on embedding, then use LLM to judge conflict.
+        Detect redundancy by finding the most similar items in the graph database based on embedding, then use LLM to judge redundancy.
         Args:
             memory: The memory item (should have an embedding attribute or field).
             top_k: Number of top similar nodes to retrieve.
@@ -49,7 +49,7 @@ class RedundancyHandler:
             for info in embedding_candidates_info
             if info["score"] >= self.EMBEDDING_THRESHOLD and info["id"] != memory.id
         ]
-        # 3. Judge conflicts using LLM
+        # 3. Judge redundancys using LLM
         embedding_candidates = self.graph_store.get_nodes(embedding_candidates_ids)
         redundant_pairs = []
         for embedding_candidate in embedding_candidates:
@@ -57,7 +57,7 @@ class RedundancyHandler:
             prompt = [
                 {
                     "role": "system",
-                    "content": "You are a conflict detector for memory items.",
+                    "content": "You are a redundancy detector for memory items.",
                 },
                 {
                     "role": "user",
@@ -71,12 +71,12 @@ class RedundancyHandler:
             if "yes" in result.lower():
                 redundant_pairs.append([memory, embedding_candidate])
         if len(redundant_pairs):
-            conflict_text = "\n".join(
+            redundant_text = "\n".join(
                 f'"{pair[0].memory!s}" <==REDUNDANCY==> "{pair[1].memory!s}"'
                 for pair in redundant_pairs
             )
             logger.warning(
-                f"Detected {len(redundant_pairs)} redundancies for memory {memory.id}\n {conflict_text}"
+                f"Detected {len(redundant_pairs)} redundancies for memory {memory.id}\n {redundant_text}"
             )
         return redundant_pairs
 
@@ -84,8 +84,8 @@ class RedundancyHandler:
         """
         Resolve detected redundancies between two memory items using LLM fusion.
         Args:
-            memory_a: The first conflicting memory item.
-            memory_b: The second conflicting memory item.
+            memory_a: The first redundant memory item.
+            memory_b: The second redundant memory item.
         Returns:
             A fused TextualMemoryItem representing the resolved memory.
         """
@@ -115,18 +115,10 @@ class RedundancyHandler:
         try:
             answer = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
             answer = answer.group(1).strip()
-            # —————— 2.1 Can't resolve conflict, hard update by comparing timestamp ————
-            if len(answer) <= 10 and "no" in answer.lower():
-                logger.warning(
-                    f"Conflict between {memory_a.id} and {memory_b.id} could not be resolved. "
-                )
-                self._hard_update(memory_a, memory_b)
-            # —————— 2.2 Conflict resolved, update metadata and memory ————
-            else:
-                fixed_metadata = self._merge_metadata(answer, memory_a.metadata, memory_b.metadata)
-                merged_memory = TextualMemoryItem(memory=answer, metadata=fixed_metadata)
-                logger.info(f"Resolved result: {merged_memory}")
-                self._resolve_in_graph(memory_a, memory_b, merged_memory)
+            fixed_metadata = self._merge_metadata(answer, memory_a.metadata, memory_b.metadata)
+            merged_memory = TextualMemoryItem(memory=answer, metadata=fixed_metadata)
+            logger.info(f"Resolved result: {merged_memory}")
+            self._resolve_in_graph(memory_a, memory_b, merged_memory)
         except json.decoder.JSONDecodeError:
             logger.error(f"Failed to parse LLM response: {response}")
 
@@ -145,29 +137,14 @@ class RedundancyHandler:
         )
         logger.debug(f"Merged memory: {memory.memory}")
 
-    def _hard_update(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem):
-        """
-        Hard update: compare updated_at, keep the newer one, overwrite the older one's metadata.
-        """
-        time_a = datetime.fromisoformat(memory_a.metadata.updated_at)
-        time_b = datetime.fromisoformat(memory_b.metadata.updated_at)
-
-        newer_mem = memory_a if time_a >= time_b else memory_b
-        older_mem = memory_b if time_a >= time_b else memory_a
-
-        self.graph_store.delete_node(older_mem.id)
-        logger.warning(
-            f"Delete older memory {older_mem.id}: <{older_mem.memory}> due to conflict with {newer_mem.id}: <{newer_mem.memory}>"
-        )
-
     def _resolve_in_graph(
         self,
-        conflict_a: TextualMemoryItem,
-        conflict_b: TextualMemoryItem,
+        redundant_a: TextualMemoryItem,
+        redundant_b: TextualMemoryItem,
         merged: TextualMemoryItem,
     ):
-        edges_a = self.graph_store.get_edges(conflict_a.id, type="ANY", direction="ANY")
-        edges_b = self.graph_store.get_edges(conflict_b.id, type="ANY", direction="ANY")
+        edges_a = self.graph_store.get_edges(redundant_a.id, type="ANY", direction="ANY")
+        edges_b = self.graph_store.get_edges(redundant_b.id, type="ANY", direction="ANY")
         all_edges = edges_a + edges_b
 
         self.graph_store.add_node(
@@ -175,18 +152,22 @@ class RedundancyHandler:
         )
 
         for edge in all_edges:
-            new_from = merged.id if edge["from"] in (conflict_a.id, conflict_b.id) else edge["from"]
-            new_to = merged.id if edge["to"] in (conflict_a.id, conflict_b.id) else edge["to"]
+            new_from = (
+                merged.id if edge["from"] in (redundant_a.id, redundant_b.id) else edge["from"]
+            )
+            new_to = merged.id if edge["to"] in (redundant_a.id, redundant_b.id) else edge["to"]
             if new_from == new_to:
                 continue
             # Check if the edge already exists before adding
             if not self.graph_store.edge_exists(new_from, new_to, edge["type"], direction="ANY"):
                 self.graph_store.add_edge(new_from, new_to, edge["type"])
 
-        self.graph_store.delete_node(conflict_a.id)
-        self.graph_store.delete_node(conflict_b.id)
+        self.graph_store.update_node(redundant_a.id, {"status": "archived"})
+        self.graph_store.update_node(redundant_b.id, {"status": "archived"})
+        self.graph_store.add_edge(redundant_a.id, merged.id, type="MERGED_TO")
+        self.graph_store.add_edge(redundant_b.id, merged.id, type="MERGED_TO")
         logger.debug(
-            f"Remove {conflict_a.id} and {conflict_b.id}, and inherit their edges to {merged.id}."
+            f"Archive {redundant_a.id} and {redundant_b.id}, and inherit their edges to {merged.id}."
         )
 
     def _merge_metadata(
