@@ -5,6 +5,7 @@ from pydantic import Field, field_validator, model_validator
 from memos.configs.base import BaseConfig
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
+from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
@@ -133,7 +134,7 @@ class GeneralTextMemoryConfig(BaseTextMemoryConfig):
 
 
 class TreeTextMemoryConfig(BaseTextMemoryConfig):
-    """General memory configuration class."""
+    """Tree text memory configuration class."""
 
     extractor_llm: LLMConfigFactory = Field(
         ...,
@@ -154,6 +155,15 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ...,
         default_factory=GraphDBConfigFactory,
         description="Graph database configuration for the tree-memory storage",
+    )
+    internet_retriever: InternetRetrieverConfigFactory | None = Field(
+        None,
+        description="Internet retriever configuration (optional)",
+    )
+
+    reorganize: bool | None = Field(
+        False,
+        description="Optional description for this memory configuration.",
     )
 
 

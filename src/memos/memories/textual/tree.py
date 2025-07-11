@@ -15,6 +15,9 @@ from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
+    InternetRetrieverFactory,
+)
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.types import MessageList
 
@@ -32,7 +35,23 @@ class TreeTextMemory(BaseTextMemory):
         self.dispatcher_llm: OpenAILLM | OllamaLLM = LLMFactory.from_config(config.dispatcher_llm)
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
-        self.memory_manager: MemoryManager = MemoryManager(self.graph_store, self.embedder)
+        self.is_reorganize = config.reorganize
+
+        self.memory_manager: MemoryManager = MemoryManager(
+            self.graph_store, self.embedder, self.extractor_llm, is_reorganize=self.is_reorganize
+        )
+
+        # Create internet retriever if configured
+        self.internet_retriever = None
+        if config.internet_retriever is not None:
+            self.internet_retriever = InternetRetrieverFactory.from_config(
+                config.internet_retriever, self.embedder
+            )
+            logger.info(
+                f"Internet retriever initialized with backend: {config.internet_retriever.backend}"
+            )
+        else:
+            logger.info("No internet retriever configured")
 
     def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> None:
         """Add memories.
@@ -66,7 +85,13 @@ class TreeTextMemory(BaseTextMemory):
         return self.memory_manager.get_current_memory_size()
 
     def search(
-        self, query: str, top_k: int, info=None, mode: str = "fast", memory_type: str = "All"
+        self,
+        query: str,
+        top_k: int,
+        info=None,
+        mode: str = "fast",
+        memory_type: str = "All",
+        manual_close_internet: bool = False,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -80,10 +105,21 @@ class TreeTextMemory(BaseTextMemory):
             - 'fine': Uses a more detailed search process, invoking large models for higher precision, but slower performance.
             memory_type (str): Type restriction for search.
             ['All', 'WorkingMemory', 'LongTermMemory', 'UserMemory']
+            manual_close_internet (bool): If True, the internet retriever will be closed by this search, it high priority than config.
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        searcher = Searcher(self.dispatcher_llm, self.graph_store, self.embedder)
+        if (self.internet_retriever is not None) and manual_close_internet:
+            logger.warning(
+                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
+            )
+            self.internet_retriever = None
+        searcher = Searcher(
+            self.dispatcher_llm,
+            self.graph_store,
+            self.embedder,
+            internet_retriever=self.internet_retriever,
+        )
         return searcher.search(query, top_k, info, mode, memory_type)
 
     def get_relevant_subgraph(

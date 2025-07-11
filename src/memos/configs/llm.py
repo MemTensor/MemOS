@@ -43,6 +43,12 @@ class HFLLMConfig(BaseLLMConfig):
         description="Apply generation template for the conversation",
     )
 
+class VLLMLLMConfig(BaseLLMConfig):
+    api_key: str = Field(default="", description="API key for vLLM (optional for local server)")
+    api_base: str = Field(
+        default="http://localhost:8088",
+        description="Base URL for vLLM API",
+    )
 
 class LLMConfigFactory(BaseConfig):
     """Factory class for creating LLM configurations."""
@@ -54,6 +60,7 @@ class LLMConfigFactory(BaseConfig):
         "openai": OpenAILLMConfig,
         "ollama": OllamaLLMConfig,
         "huggingface": HFLLMConfig,
+        "vllm": VLLMLLMConfig,
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
     }
 
