@@ -22,6 +22,7 @@ class OpenAILLM(BaseLLM):
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
             messages=messages,
+            extra_body=self.config.extra_body,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             top_p=self.config.top_p,

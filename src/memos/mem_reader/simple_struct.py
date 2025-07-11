@@ -1,7 +1,7 @@
 import concurrent.futures
 import copy
 import json
-
+import re
 from abc import ABC
 from typing import Any
 
@@ -17,6 +17,7 @@ from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT,
+    SIMPLE_STRUCT_MEM_READER_EXAMPLE,
 )
 
 
@@ -39,11 +40,11 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     def _process_chat_data(self, scene_data_info, info):
-        prompt = (
-            SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${user_a}", "user")
-            .replace("${user_b}", "assistant")
-            .replace("${conversation}", "\n".join(scene_data_info))
+        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace(
+            "${conversation}", "\n".join(scene_data_info)
         )
+        if self.config.remove_prompt_example:
+            prompt = prompt.replace(SIMPLE_STRUCT_MEM_READER_EXAMPLE, "")
 
         messages = [{"role": "user", "content": prompt}]
 
@@ -228,7 +229,11 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def parse_json_result(self, response_text):
         try:
-            response_text = response_text.replace("```", "").replace("json", "")
+            json_start = response_text.find("{")
+            response_text = response_text[json_start:]
+            response_text = response_text.replace("```", "").strip()
+            if response_text[-1] != "}":
+                response_text += "}"
             response_json = json.loads(response_text)
             return response_json
         except json.JSONDecodeError as e:
