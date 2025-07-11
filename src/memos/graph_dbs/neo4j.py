@@ -60,7 +60,9 @@ class Neo4jGraphDB(BaseGraphDB):
         self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
         self.db_name = config.db_name
 
-        if config.auto_create:
+        self.system_db_name = "system" if config.use_multi_db else config.db_name
+
+        if config.auto_create and config.use_multi_db:
             self._ensure_database_exists()
 
         # Create only if not exists
@@ -669,13 +671,14 @@ class Neo4jGraphDB(BaseGraphDB):
         Clear the entire graph if the target database exists.
         """
         try:
-            # Step 1: Check if the database exists
-            with self.driver.session(database="system") as session:
-                result = session.run("SHOW DATABASES YIELD name RETURN name")
-                db_names = [record["name"] for record in result]
-                if self.db_name not in db_names:
-                    logger.info(f"[Skip] Database '{self.db_name}' does not exist.")
-                    return
+            if self.config.use_multi_db:
+                # Step 1: Check if the database exists
+                with self.driver.session(database=self.system_db_name) as session:
+                    result = session.run("SHOW DATABASES YIELD name RETURN name")
+                    db_names = [record["name"] for record in result]
+                    if self.db_name not in db_names:
+                        logger.info(f"[Skip] Database '{self.db_name}' does not exist.")
+                        return
 
             # Step 2: Clear the graph in that database
             with self.driver.session(database=self.db_name) as session:
@@ -802,20 +805,21 @@ class Neo4jGraphDB(BaseGraphDB):
         Permanently delete the entire database this instance is using.
         WARNING: This operation is destructive and cannot be undone.
         """
-        if self.db_name in ("system", "neo4j"):
-            raise ValueError(f"Refusing to drop protected database: {self.db_name}")
+        if self.config.use_multi_db:
+            if self.db_name in ("system", "neo4j"):
+                raise ValueError(f"Refusing to drop protected database: {self.db_name}")
 
-        with self.driver.session(database="system") as session:
-            session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
-            print(f"Database '{self.db_name}' has been dropped.")
+            with self.driver.session(database=self.system_db_name) as session:
+                session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
+                print(f"Database '{self.db_name}' has been dropped.")
 
     def _ensure_database_exists(self):
-        with self.driver.session(database="system") as session:
-            session.run(f"CREATE DATABASE {self.db_name} IF NOT EXISTS")
+        with self.driver.session(database=self.system_db_name) as session:
+            session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
 
         # Wait until the database is available
         for _ in range(10):
-            with self.driver.session(database="system") as session:
+            with self.driver.session(database=self.system_db_name) as session:
                 result = session.run(
                     "SHOW DATABASES YIELD name, currentStatus RETURN name, currentStatus"
                 )
