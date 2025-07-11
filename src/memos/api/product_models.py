@@ -150,3 +150,10 @@ class SearchRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Search query")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+
+
+class SuggestionRequest(BaseRequest):
+    """Request model for getting suggestion queries."""
+
+    user_id: str = Field(..., description="User ID")
+    language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
