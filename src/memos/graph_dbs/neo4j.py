@@ -81,7 +81,7 @@ class Neo4jGraphDB(BaseGraphDB):
         self.user_name = config.user_name
 
         self.system_db_name = "system" if config.use_multi_db else config.db_name
-        if config.auto_create and config.use_multi_db:
+        if config.auto_create:
             self._ensure_database_exists()
 
         # Create only if not exists
@@ -778,7 +778,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
 
         with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, params or {})
+            result = session.run(query, final_params)
             return [
                 {**{field: record[field] for field in group_fields}, "count": record["count"]}
                 for record in result
@@ -990,7 +990,7 @@ class Neo4jGraphDB(BaseGraphDB):
             )
 
     def _ensure_database_exists(self):
-        with self.driver.session(database=self.system_db_name) as session:
+        with self.driver.session(database="system") as session:
             session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
 
         # Wait until the database is available

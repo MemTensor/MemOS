@@ -273,6 +273,7 @@ def example_shared_db(db_name: str = "shared-traval-group"):
                 "password": "12345678",
                 "db_name": db_name,
                 "user_name": user_name,
+                "use_multi_db": False,
                 "auto_create": True,
                 "embedding_dimension": 768,
             },
@@ -280,10 +281,7 @@ def example_shared_db(db_name: str = "shared-traval-group"):
         # Step 2: Instantiate graph store
         graph = GraphStoreFactory.from_config(config)
         print(f"\n[INFO] Working in shared DB: {db_name}, for user: {user_name}")
-
-        # Optional: Only for demo. Normally you'd never clear the shared DB!
-        # [careful! do not clear the shared db unless you really
-        # need to do that! ] graph.clear()
+        graph.clear()
 
         # Step 3: Create topic node
         topic = TextualMemoryItem(
@@ -354,4 +352,4 @@ if __name__ == "__main__":
     example_multi_db(db_name="paper")
 
     print("\n=== Example: Single-DB ===")
-    example_shared_db(db_name="shared-traval-group")
+    example_shared_db(db_name="shared-traval-group11")

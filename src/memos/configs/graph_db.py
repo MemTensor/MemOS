@@ -69,12 +69,14 @@ class Neo4jGraphDBConfig(BaseGraphDBConfig):
 
     embedding_dimension: int = Field(default=768, description="Dimension of vector embedding")
 
+    @model_validator(mode="after")
     def validate_config(self):
         """Validate logical constraints to avoid misconfiguration."""
         if not self.use_multi_db and not self.user_name:
             raise ValueError(
                 "In single-database mode (use_multi_db=False), `user_name` must be provided for logical isolation."
             )
+        return self
 
 
 class GraphDBConfigFactory(BaseModel):
