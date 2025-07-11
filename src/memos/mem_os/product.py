@@ -694,7 +694,7 @@ class MOSProduct(MOSCore):
         time_start = time.time()
         memories_list = []
         memories_result = super().search(
-            query, user_id, install_cube_ids=[cube_id] if cube_id else None
+            query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=10
         )["text_mem"]
         if memories_result:
             memories_list = memories_result[0]["memories"]
