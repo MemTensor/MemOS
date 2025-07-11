@@ -157,7 +157,7 @@ class MOSProduct(MOSCore):
                                 cube.cube_path, 
                                 cube.cube_id, 
                                 user_id, 
-                                memory_types=["act_mem"]
+                                memory_types=["act_mem"] if self.config.enable_activation_memory else []
                             )
                             logger.info(f"Pre-loaded cube {cube.cube_id} for user {user_id}")
                         else:
