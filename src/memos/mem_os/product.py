@@ -716,6 +716,7 @@ class MOSProduct(MOSCore):
 
         # Generate response with custom prompt
         past_key_values = None
+        response_stream = None
         if self.config.enable_activation_memory:
             # Handle activation memory (copy MOSCore logic)
             for mem_cube_id, mem_cube in self.mem_cubes.items():
@@ -729,9 +730,13 @@ class MOSProduct(MOSCore):
                     else:
                         logger.info("past_key_values is None will not apply to chat")
                     break
-            response_stream = self.chat_llm.generate_stream(current_messages, past_key_values=past_key_values)
+            if self.config.chat_model.backend == "huggingface":
+                response_stream = self.chat_llm.generate_stream(current_messages, past_key_values=past_key_values)
         else:
-            response_stream = self.chat_llm.generate_stream(current_messages)
+            if self.config.chat_model.backend == "huggingface":
+                response_stream = self.chat_llm.generate_stream(current_messages)
+            else:
+                response_stream = self.chat_llm.generate(current_messages)
 
         time_end = time.time()
 
@@ -742,7 +747,14 @@ class MOSProduct(MOSCore):
         full_response = ""
 
         # Use tiktoken for proper token-based chunking
-        # for chunk in self._chunk_response_with_tiktoken(response, chunk_size=5):
+        if self.config.chat_model.backend != "huggingface":
+            # For non-huggingface backends, we need to collect the full response first
+            full_response_text = ""
+            for chunk in response_stream:
+                if chunk in ["<think>", "</think>"]:
+                    continue
+                full_response_text += chunk
+            response_stream = self._chunk_response_with_tiktoken(full_response_text, chunk_size=5)
         for chunk in response_stream:
             if chunk in ["<think>", "</think>"]:
                 continue
