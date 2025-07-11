@@ -176,7 +176,7 @@ class GraphStructureReorganizer:
     def handle_merge(self, message: QueueMessage):
         after_node = message.after_node[0]
         logger.debug(f"Handling merge operation: <{after_node.memory}>")
-        self.redundancy_resolver.resolve_one_node(after_node)
+        self.redundancy.resolve_one_node(after_node)
 
     def optimize_structure(
         self,
