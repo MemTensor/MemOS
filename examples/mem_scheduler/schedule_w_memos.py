@@ -103,6 +103,12 @@ def run_with_automatic_scheduler_init():
     if Path(mem_cube_name_or_path).exists():
         shutil.rmtree(mem_cube_name_or_path)
         print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
+
+    # default local graphdb uri
+    if AuthConfig.default_config_exists():
+        auth_config = AuthConfig.from_local_yaml()
+        config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
+
     mem_cube = GeneralMemCube(config)
     mem_cube.dump(mem_cube_name_or_path)
     mos.register_mem_cube(
@@ -140,10 +146,12 @@ def run_with_manual_scheduler_init():
     if Path(mem_cube_name_or_path).exists():
         shutil.rmtree(mem_cube_name_or_path)
         print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
+
     # default local graphdb uri
     if AuthConfig.default_config_exists():
         auth_config = AuthConfig.from_local_yaml()
         config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
+
     mem_cube = GeneralMemCube(config)
     mem_cube.dump(mem_cube_name_or_path)
     mos.register_mem_cube(

@@ -8,19 +8,22 @@ Your tasks are:
 
 Determine whether the user is satisfied with the existing answer;
 
-If the user is satisfied, explain the reason and return:
+If the user is satisfied, return
+{{
+"trigger_retrieval": false,
+"missing_evidence": []
+}}
 
-"trigger_retrieval": false
 If the user is not satisfied, meaning the system's answer did not meet their actual needs, please return:
+"trigger_retrieval": true,
+"missing_evidence": A list of missing information you think is needed, like specific personal experiences, health records, etc.
 
-"trigger_retrieval": true
-"missing_evidence": ["Information you infer is missing and needs to be supplemented, such as specific experiences of someone, health records, etc."]
 Please return strictly according to the following JSON format:
-
 {{
   "trigger_retrieval": true or false,
-  "missing_evidence": ["The missing evidence needed for the next step of retrieval and completion"]
+  "missing_evidences": The list of missing evidences needed for the next step of retrieval and completion
 }}
+
 The user's question list is:
 {q_list}
 

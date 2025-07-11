@@ -1,10 +1,11 @@
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import ClassVar, TypeVar, List, Optional
+from typing import ClassVar, TypeVar, List, Optional, NewType
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, computed_field
+from rope.contrib.autoimport.parse import logger
 from typing_extensions import TypedDict
 
 from memos.mem_cube.general import GeneralMemCube
@@ -35,6 +36,14 @@ WORKING_MEMORY_TYPE = "WorkingMemory"
 TEXT_MEMORY_TYPE = "TextMemory"
 ACTIVATION_MEMORY_TYPE = "ActivationMemory"
 
+# Backends
+ACTIVATION_MEMORY_VLLM_BACKEND = "VLLMForActivationMemory"
+ACTIVATION_MEMORY_HF_BACKEND = "HugggingaceForActivationMemory"
+
+# new types
+UserID = NewType('UserID', str)
+MemCubeID = NewType('CubeID', str)
+
 # ************************* Public *************************
 class DictConversionMixin:
     def to_dict(self) -> dict:
@@ -50,6 +59,21 @@ class DictConversionMixin:
         if "timestamp" in data:
             data["timestamp"] = datetime.fromisoformat(data["timestamp"])
         return cls(**data)
+
+    def __str__(self) -> str:
+        """Convert the instance to a JSON string with indentation of 4 spaces.
+        This will be used when str() or print() is called on the instance.
+
+        Returns:
+            str: A JSON string representation of the instance with 4-space indentation.
+        """
+        return json.dumps(
+            self.to_dict(),
+            indent=4,
+            ensure_ascii=False,
+            default=str  # 处理无法序列化的对象
+        )
+
 
     class Config:
         json_encoders: ClassVar[dict[type, object]] = {datetime: lambda v: v.isoformat()}
@@ -186,6 +210,11 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
         min_length=1,
         max_length=10000  # Prevent excessively large memory texts
     )
+    importance_score: float = Field(
+        default=0.0,
+        description="Numerical score representing the memory's importance",
+        ge=0.0  # Minimum value of 0
+    )
     recording_count: int = Field(
         default=1,
         description="How many times this memory has been recorded",
@@ -193,6 +222,16 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
     )
 
 class MemoryMonitorManager(BaseModel, DictConversionMixin):
+    user_id: str = Field(
+        ...,
+        description="Required user identifier",
+        min_length=1
+    )
+    mem_cube_id: str = Field(
+        ...,
+        description="Required memory cube identifier",
+        min_length=1
+    )
     memories: List[MemoryMonitorItem] = Field(
         default_factory=list,
         description="Collection of memory items"
@@ -209,29 +248,85 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
         """Automatically calculated count of memory items."""
         return len(self.memories)
 
-    def add_memory(self, memory_text: str) -> MemoryMonitorItem:
-        """Add a new memory or increment count if it already exists."""
-        if self.max_capacity is not None and self.memory_size >= self.max_capacity:
-            raise ValueError(f"Memory capacity reached (max {self.max_capacity})")
+    def update_memories(
+            self,
+            text_working_memories: List[str],
+            partial_retention_number: int
+    ) -> MemoryMonitorItem:
+        """
+        Update memories based on text_working_memory.
 
-        memory_text = memory_text.strip()
-        for item in self.memories:
-            if item.memory_text.lower() == memory_text.lower():
-                item.increment_count()
-                return item
+        Args:
+            text_working_memory: List of memory texts to update
+            partial_retention_number: Number of top memories to keep by recording count
 
-        new_item = MemoryMonitorItem(memory_text=memory_text)
-        self.memories.append(new_item)
-        return new_item
+        Returns:
+            List of added or updated MemoryMonitorItem instances
+        """
 
-    def get_memory(self, item_id: str) -> Optional[MemoryMonitorItem]:
-        """Retrieve a memory by its ID."""
-        return next((item for item in self.memories if item.item_id == item_id), None)
+        # Validate partial_retention_number
+        if partial_retention_number < 0:
+            raise ValueError("partial_retention_number must be non-negative")
 
-    def remove_memory(self, item_id: str) -> bool:
-        """Remove a memory by its ID, returns True if found and removed."""
-        for i, item in enumerate(self.memories):
-            if item.item_id == item_id:
-                self.memories.pop(i)
-                return True
-        return False
+        # Create text lookup set
+        working_memory_set = set(text_working_memory)
+
+        # Step 1: Update existing memories or add new ones
+        added_or_updated = []
+        memory_text_map = {item.memory_text: item for item in self.memories}
+
+        for text in text_working_memory:
+            if text in memory_text_map:
+                # Update existing memory
+                memory = memory_text_map[text]
+                memory.recording_count += 1
+                added_or_updated.append(memory)
+            else:
+                # Add new memory
+                new_memory = MemoryMonitorItem(
+                    memory_text=text,
+                    recording_count=1
+                )
+                self.memories.append(new_memory)
+                added_or_updated.append(new_memory)
+
+        # Step 2: Identify memories to remove
+        # Sort memories by recording_count in descending order
+        sorted_memories = sorted(
+            self.memories,
+            key=lambda item: item.recording_count,
+            reverse=True
+        )
+
+        # Keep the top N memories by recording_count
+        records_to_keep = set(memory.memory_text for memory in sorted_memories[:partial_retention_number])
+
+        # Collect memories to remove: not in current working memory and not in top N
+        memories_to_remove = [
+            memory
+            for memory in self.memories
+            if memory.memory_text not in working_memory_set and memory.memory_text not in records_to_keep
+        ]
+
+        # Step 3: Remove identified memories
+        for memory in memories_to_remove:
+            self.memories.remove(memory)
+
+        # Step 4: Enforce max_capacity if set
+        if self.max_capacity is not None and len(self.memories) > self.max_capacity:
+            # Sort by importance and then recording count
+            sorted_memories = sorted(
+                self.memories,
+                key=lambda item: (item.importance_score, item.recording_count),
+                reverse=True
+            )
+            # Keep only the top max_capacity memories
+            self.memories = sorted_memories[:self.max_capacity]
+
+        # Log the update result
+        logger.info(f"Updated monitor manager for user {self.user_id}, mem_cube {self.mem_cube_id}: "
+                    f"Total memories: {len(self.memories)}, "
+                    f"Added/Updated: {len(added_or_updated)}, "
+                    f"Removed: {len(memories_to_remove)} (excluding top {partial_retention_number} by recording_count)")
+
+        return added_or_updated

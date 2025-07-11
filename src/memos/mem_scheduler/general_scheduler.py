@@ -21,12 +21,9 @@ from memos.mem_scheduler.modules.schemas import (
     NOT_INITIALIZED,
     ScheduleLogForWebItem,
     ScheduleMessageItem,
-    TextMemory_SEARCH_METHOD,
-    TreeTextMemory_SEARCH_METHOD,
 )
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
-
 
 logger = get_logger(__name__)
 
@@ -35,17 +32,6 @@ class GeneralScheduler(BaseScheduler):
     def __init__(self, config: GeneralSchedulerConfig):
         """Initialize the scheduler with the given configuration."""
         super().__init__(config)
-        self.top_k = self.config.get("top_k", 10)
-        self.act_mem_update_interval = self.config.get("act_mem_update_interval", 300)
-        self.context_window_size = self.config.get("context_window_size", 5)
-        self.activation_mem_size = self.config.get(
-            "activation_mem_size", DEFAULT_ACTIVATION_MEM_SIZE
-        )
-        self.enable_act_memory_update = self.config.get("enable_act_memory_update", False)
-        self.act_mem_dump_path = self.config.get("act_mem_dump_path", DEFAULT_ACT_MEM_DUMP_PATH)
-        self.search_method = TextMemory_SEARCH_METHOD
-        self._last_activation_mem_update_time = 0.0
-        self.query_list = []
 
         # register handlers
         handlers = {
@@ -53,26 +39,6 @@ class GeneralScheduler(BaseScheduler):
             ANSWER_LABEL: self._answer_message_consume,
         }
         self.dispatcher.register_handlers(handlers)
-
-    def initialize_modules(self, chat_llm: BaseLLM):
-        self.chat_llm = chat_llm
-        self.monitor = SchedulerMonitor(
-            chat_llm=self.chat_llm, activation_mem_size=self.activation_mem_size
-        )
-        self.retriever = SchedulerRetriever(chat_llm=self.chat_llm)
-        if self.auth_config_path is not None and Path(self.auth_config_path).exists():
-            self.auth_config = AuthConfig.from_local_yaml(config_path=self.auth_config_path)
-        elif AuthConfig.default_config_exists():
-            self.auth_config = AuthConfig.from_local_yaml()
-        else:
-            self.auth_config = None
-
-        # using auth_cofig
-        if self.auth_config is not None:
-            self.rabbitmq_config = self.auth_config.rabbitmq
-            self.initialize_rabbitmq(config=self.rabbitmq_config)
-
-        logger.debug("GeneralScheduler has been initialized")
 
 
     def _answer_message_consume(self, messages: list[ScheduleMessageItem]) -> None:
@@ -87,9 +53,13 @@ class GeneralScheduler(BaseScheduler):
         for msg in messages:
             if not self._validate_message(msg, ANSWER_LABEL):
                 continue
+
+            # for status update
             self._set_current_context_from_message(msg)
 
+            mem_cube = msg.mem_cube
             answer = msg.content
+
             if not self.enable_act_memory_update:
                 logger.info("Activation memory updates are disabled - skipping processing")
                 return
@@ -102,7 +72,7 @@ class GeneralScheduler(BaseScheduler):
 
             # Update memory frequencies based on the answer
             # TODO: not implemented
-            text_mem_base = self.mem_cube.text_mem
+            text_mem_base = mem_cube.text_mem
             if isinstance(text_mem_base, TreeTextMemory):
                 working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
             else:
@@ -121,7 +91,10 @@ class GeneralScheduler(BaseScheduler):
                 seconds=self.act_mem_update_interval
             ):
                 # TODO: not implemented
-                self.update_activation_memory(current_activation_mem)
+                self.update_activation_memory(
+                    new_memories=current_activation_mem,
+                    mem_cube=mem_cube
+                )
                 self._last_activation_mem_update_time = now
 
 
@@ -137,19 +110,35 @@ class GeneralScheduler(BaseScheduler):
             if not self._validate_message(msg, QUERY_LABEL):
                 continue
             # Process the query in a session turn
+
+            # for status update
             self._set_current_context_from_message(msg)
 
-            self.process_session_turn(query=msg.content, top_k=self.top_k)
+            self.process_session_turn(
+                query=msg.content,
+                user_id=msg.user_id,
+                mem_cube_id=msg.mem_cube_id,
+                mem_cube=msg.mem_cube,
+                top_k=self.top_k
+            )
 
-    def process_session_turn(self, query: str, top_k: int = 10) -> None:
+    def process_session_turn(self, query: str,
+                             user_id: str,
+                             mem_cube_id:str,
+                             mem_cube: GeneralMemCube,
+                             top_k: int = 10,
+                             query_history: List[str]|None = None) -> None:
         """
         Process a dialog turn:
         - If q_list reaches window size, trigger retrieval;
         - Immediately switch to the new memory if retrieval is triggered.
         """
-        q_list = [query]
-        self.query_list.append(query)
-        text_mem_base = self.mem_cube.text_mem
+        if query_history is None:
+            query_history = [query]
+        else:
+            query_history.append(query)
+
+        text_mem_base = mem_cube.text_mem
         if not isinstance(text_mem_base, TreeTextMemory):
             logger.error("Not implemented!")
             return
@@ -157,29 +146,34 @@ class GeneralScheduler(BaseScheduler):
         working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
         text_working_memory: list[str] = [w_m.memory for w_m in working_memory]
         intent_result = self.monitor.detect_intent(
-            q_list=q_list,
+            q_list=query_history,
             text_working_memory=text_working_memory
         )
 
         if intent_result["trigger_retrieval"]:
-            missing_evidence = intent_result["missing_evidence"]
-            num_evidence = len(missing_evidence)
+            missing_evidences = intent_result["missing_evidences"]
+            num_evidence = len(missing_evidences)
             k_per_evidence = max(1, top_k // max(1, num_evidence))
             new_candidates = []
-            for item in missing_evidence:
-                logger.debug(f"missing_evidence: {item}")
-                results = self.search(query=item,
-                                      top_k=k_per_evidence,
-                                      method=self.search_method)
-                logger.debug(f"search results for {missing_evidence}: {results}")
+            for item in missing_evidences:
+                logger.debug(f"missing_evidences: {item}")
+                results = self.retriever.search(query=item,
+                                                mem_cube=mem_cube,
+                                                top_k=k_per_evidence,
+                                                method=self.search_method)
+                logger.debug(f"search results for {missing_evidences}: {results}")
                 new_candidates.extend(results)
 
-            new_order_working_memory = self.replace_working_memory(
-                original_memory=working_memory, new_memory=new_candidates, top_k=top_k
+            new_order_working_memory = self.retriever.replace_working_memory(
+                query=query,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+                original_memory=working_memory,
+                new_memory=new_candidates,
+                top_k=top_k
             )
             logger.debug(f"size of new_order_working_memory: {len(new_order_working_memory)}")
-
-
 
 
 

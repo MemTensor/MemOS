@@ -176,8 +176,11 @@ class Searcher:
         for item, score in sorted(deduped_result.values(), key=lambda pair: pair[1], reverse=True)[
             :top_k
         ]:
+            meta_data = item.metadata.model_dump()
+            if "relativity" not in meta_data:
+                meta_data["relativity"] = score
             new_meta = SearchedTreeNodeTextualMemoryMetadata(
-                **item.metadata.model_dump(), relativity=score
+                **meta_data
             )
             searched_res.append(
                 TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)

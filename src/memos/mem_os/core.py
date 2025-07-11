@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal
+from typing import Any, Literal, List
 
 from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory
@@ -55,7 +55,7 @@ class MOSCore:
         # Lazy initialization marker
         self._mem_scheduler_lock = Lock()
         self.enable_mem_scheduler = self.config.get("enable_mem_scheduler", False)
-        self._mem_scheduler = None
+        self._mem_scheduler: GeneralScheduler = None
         logger.info(f"MOS initialized for user: {self.user_id}")
 
     @property
@@ -63,6 +63,7 @@ class MOSCore:
         """Lazy-loaded property for memory scheduler."""
         if self.enable_mem_scheduler and self._mem_scheduler is None:
             self._initialize_mem_scheduler()
+        self._mem_scheduler.mem_cubes = self.mem_cubes
         return self._mem_scheduler
 
     @mem_scheduler.setter
@@ -79,6 +80,7 @@ class MOSCore:
                 raise TypeError(f"Expected GeneralScheduler or None, got {type(value)}")
 
             self._mem_scheduler = value
+            self._mem_scheduler.mem_cubes = self.mem_cubes
 
             if value:
                 logger.info("Memory scheduler manually set")
@@ -97,7 +99,21 @@ class MOSCore:
             logger.info("Initializing memory scheduler...")
             scheduler_config = self.config.mem_scheduler
             self._mem_scheduler = SchedulerFactory.from_config(scheduler_config)
-            self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
+            # Validate required components
+            if not hasattr(self.mem_reader, "llm"):
+                raise AttributeError(
+                    f"Memory reader of type {type(self.mem_reader).__name__} "
+                    "missing required 'llm' attribute"
+                )
+                self._mem_scheduler.initialize_modules(
+                    chat_llm=self.chat_llm
+                )
+            else:
+                # Configure scheduler modules
+                self._mem_scheduler.initialize_modules(
+                    chat_llm=self.chat_llm,
+                    process_llm=self.mem_reader.llm
+                )
             self._mem_scheduler.start()
 
     def mem_scheduler_on(self) -> bool:
@@ -282,7 +298,7 @@ class MOSCore:
 
         return response
 
-    def _build_system_prompt(self, memories: list | None = None) -> str:
+    def _build_system_prompt(self, memories: List[TextualMemoryItem] | List[str] | None = None) -> str:
         """Build system prompt with optional memories context."""
         base_prompt = (
             "You are a knowledgeable and helpful AI assistant. "
@@ -294,7 +310,13 @@ class MOSCore:
         if memories:
             memory_context = "\n\n## Memories:\n"
             for i, memory in enumerate(memories, 1):
-                memory_context += f"{i}. {memory.memory}\n"
+                if isinstance(memory, TextualMemoryItem):
+                    text_memory = memory.memory
+                else:
+                    if not isinstance(memory, str):
+                        logger.error("Unexpected memory type.")
+                    text_memory = memory
+                memory_context += f"{i}. {text_memory}\n"
             return base_prompt + memory_context
         return base_prompt
 

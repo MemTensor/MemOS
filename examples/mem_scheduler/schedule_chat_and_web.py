@@ -6,12 +6,11 @@ from typing import TYPE_CHECKING
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
-from memos.log import get_logger
+from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler as MOS
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_os.main import MOS
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.utils import parse_yaml
 from memos.configs.mem_scheduler import AuthConfig
+from memos.log import get_logger
 
 if TYPE_CHECKING:
     from memos.mem_scheduler.modules.schemas import (
@@ -115,33 +114,43 @@ def show_web_logs(mem_scheduler: GeneralScheduler):
     print(f"\nTotal {log_count} web log entries displayed.")
     print("=" * 110 + "\n")
 
-    print(f"rabbitmq queue length: {mem_scheduler.get_rabbitmq_queue_size()}")
-
 if __name__ == "__main__":
+    # set up data
     conversations, questions = init_task()
-    config = parse_yaml(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml"
+
+    # set configs
+    mos_config = MOSConfig.from_yaml_file(
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler_and_openai.yaml"
     )
 
-    mos_config = MOSConfig(**config)
+    mem_cube_config = GeneralMemCubeConfig.from_yaml_file(
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
+    )
+
+    # default local graphdb uri
+    if AuthConfig.default_config_exists():
+        auth_config = AuthConfig.from_local_yaml()
+
+        mos_config.mem_reader.config.llm.config.api_key = auth_config.openai.api_key
+        mos_config.mem_reader.config.llm.config.api_base = auth_config.openai.base_url
+
+        mem_cube_config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
+
+    # Initialization
     mos = MOS(mos_config)
 
     user_id = "user_1"
     mos.create_user(user_id)
 
-    config = GeneralMemCubeConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
-    )
+
     mem_cube_id = "mem_cube_5"
     mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
+
     if Path(mem_cube_name_or_path).exists():
         shutil.rmtree(mem_cube_name_or_path)
         print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
-    # default local graphdb uri
-    if AuthConfig.default_config_exists():
-        auth_config = AuthConfig.from_local_yaml()
-        config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
-    mem_cube = GeneralMemCube(config)
+
+    mem_cube = GeneralMemCube(mem_cube_config)
     mem_cube.dump(mem_cube_name_or_path)
     mos.register_mem_cube(
         mem_cube_name_or_path=mem_cube_name_or_path, mem_cube_id=mem_cube_id, user_id=user_id
@@ -151,6 +160,7 @@ if __name__ == "__main__":
 
     for item in questions:
         query = item["question"]
+
         response = mos.chat(query, user_id=user_id)
         print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
