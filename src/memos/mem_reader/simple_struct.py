@@ -229,8 +229,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def parse_json_result(self, response_text):
         try:
-            response_text = response_text.replace("```", "").replace("json", "")
-            response_text = re.sub(r"<think>.*?</think>", "", response_text).strip()
+            json_start = response_text.find("{")
+            response_text = response_text[json_start:]
+            response_text = response_text.replace("```", "").strip()
             if response_text[-1] != "}":
                 response_text += "}"
             response_json = json.loads(response_text)
