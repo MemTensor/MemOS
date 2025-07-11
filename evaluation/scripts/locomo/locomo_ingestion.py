@@ -15,10 +15,8 @@ from zep_cloud.client import Zep
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
-from memos.configs.memory import MemoryConfigFactory
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.memories.factory import MemoryFactory
 
 
 custom_instructions = """
@@ -61,29 +59,10 @@ def get_client(frame: str, user_id: str | None = None, version: str = "default")
         return mem0
 
     elif frame == "memos":
-        config_path = "configs/text_memos_config.json"
-        with open(config_path) as f:
-            config_data = json.load(f)
-        config_data["config"]["extractor_llm"]["config"]["model_name_or_path"] = os.getenv("MODEL")
-        config_data["config"]["extractor_llm"]["config"]["api_key"] = os.getenv("OPENAI_API_KEY")
-        config_data["config"]["extractor_llm"]["config"]["api_base"] = os.getenv("OPENAI_BASE_URL")
-        config_data["config"]["vector_db"]["config"]["path"] = (
-            f"results/locomo/memos-{version}/storages/{user_id}/qdrant"
-        )
-        config_data["config"]["embedder"]["config"]["model_name_or_path"] = os.getenv(
-            "EMBEDDING_MODEL"
-        )
-
-        config = MemoryConfigFactory.model_validate(config_data)
-
-        m = MemoryFactory.from_config(config)
-        m.load(f"results/locomo/memos-{version}/storages/{user_id}")
-        return m
-
-    elif frame == "memos_mos":
         mos_config_path = "configs/mos_memos_config.json"
         with open(mos_config_path) as f:
             mos_config_data = json.load(f)
+        mos_config_data["top_k"] = 20
         mos_config = MOSConfig(**mos_config_data)
         mos = MOS(mos_config)
         mos.create_user(user_id=user_id)
@@ -147,20 +126,6 @@ def ingest_session(client, session, frame, metadata, revised_client=None):
             )
 
     elif frame == "memos":
-        for chat in tqdm(session, desc=f"{metadata['session_key']}"):
-            data = chat.get("speaker") + ": " + chat.get("text")
-            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
-            msg = [{"role": "user", "content": data}]
-
-            try:
-                memories = client.extract(msg)
-            except Exception as ex:
-                print(f"Error extracting message {msg}: {ex}")
-                memories = []
-            print(memories)
-            client.add(memories)
-
-    elif frame == "memos_mos":
         messages = []
         messages_reverse = []
 
@@ -277,13 +242,10 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
             client.delete_all(user_id=f"{conversation.get('speaker_b')}_{conv_idx}")
         elif frame == "memos":
             conv_id = "locomo_exp_user_" + str(conv_idx)
-            client = get_client("memos", conv_id, version)
-        elif frame == "memos_mos":
-            conv_id = "locomo_exp_user_" + str(conv_idx)
             speaker_a_user_id = conv_id + "_speaker_a"
             speaker_b_user_id = conv_id + "_speaker_b"
-            client = get_client("memos_mos", speaker_a_user_id, version)
-            revised_client = get_client("memos_mos", speaker_b_user_id, version)
+            client = get_client("memos", speaker_a_user_id, version)
+            revised_client = get_client("memos", speaker_b_user_id, version)
 
         sessions_to_process = []
         for session_idx in range(max_session_count):
@@ -323,11 +285,6 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
                     print(f"User {conv_idx}, {session_key} processed in {session_time} seconds")
                 except Exception as e:
                     print(f"Error processing user {conv_idx}, session {session_key}: {e!s}")
-
-        if frame == "memos":
-            conv_id = "locomo_exp_user_" + str(conv_idx)
-            client.dump(f"results/locomo/memos-{version}/storages/{conv_id}")
-            del client
 
         end_time = time.time()
         elapsed_time = round(end_time - start_time, 2)
@@ -383,8 +340,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "memos_mos"],
-        help="Specify the memory framework (zep or memos or mem0 or mem0_graph or memos_mos)",
+        choices=["zep", "memos", "mem0", "mem0_graph"],
+        help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
     )
     parser.add_argument(
         "--version",

@@ -5,8 +5,13 @@ from datetime import datetime
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.llms.factory import OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.tree_text_memory.organize.reorganizer import (
+    GraphStructureReorganizer,
+    QueueMessage,
+)
 
 
 logger = get_logger(__name__)
@@ -17,9 +22,11 @@ class MemoryManager:
         self,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
+        llm: OpenAILLM | OllamaLLM,
         memory_size: dict | None = None,
         threshold: float | None = 0.80,
         merged_threshold: float | None = 0.92,
+        is_reorganize: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -36,6 +43,10 @@ class MemoryManager:
                 "UserMemory": 10000,
             }
         self._threshold = threshold
+        self.is_reorganize = is_reorganize
+        self.reorganizer = GraphStructureReorganizer(
+            graph_store, llm, embedder, is_reorganize=is_reorganize
+        )
         self._merged_threshold = merged_threshold
 
     def add(self, memories: list[TextualMemoryItem]) -> None:
@@ -155,14 +166,12 @@ class MemoryManager:
             self.graph_store.add_node(
                 node_id, memory.memory, memory.metadata.model_dump(exclude_none=True)
             )
-
-            # Step 3: Optionally link to a summary node based on topic
-            if memory.metadata.tags:
-                parent_id = self._ensure_structure_path(
-                    memory_type=memory_type, metadata=memory.metadata
+            self.reorganizer.add_message(
+                QueueMessage(
+                    op="add",
+                    after_node=[node_id],
                 )
-                if parent_id:
-                    self.graph_store.add_edge(parent_id, node_id, "PARENT")
+            )
 
     def _merge(self, source_node: TextualMemoryItem, similar_nodes: list[dict]) -> None:
         """
@@ -230,6 +239,18 @@ class MemoryManager:
             ):
                 self.graph_store.add_edge(merged_id, related_node["id"], type="RELATE")
 
+        # log to reorganizer before updating the graph
+        self.reorganizer.add_message(
+            QueueMessage(
+                op="merge",
+                before_node=[
+                    original_id,
+                    source_node.id,
+                ],
+                after_node=[merged_id],
+            )
+        )
+
     def _inherit_edges(self, from_id: str, to_id: str) -> None:
         """
         Migrate all non-lineage edges from `from_id` to `to_id`,
@@ -293,13 +314,33 @@ class MemoryManager:
                     background="",
                 ),
             )
-
             self.graph_store.add_node(
                 id=new_node.id,
                 memory=new_node.memory,
                 metadata=new_node.metadata.model_dump(exclude_none=True),
             )
+            self.reorganizer.add_message(
+                QueueMessage(
+                    op="add",
+                    after_node=[new_node.id],
+                )
+            )
+
             node_id = new_node.id
 
         # Step 3: Return this structure node ID as the parent_id
         return node_id
+
+    def wait_reorganizer(self):
+        """
+        Wait for the reorganizer to finish processing all messages.
+        """
+        logger.debug("Waiting for reorganizer to finish processing messages...")
+        self.reorganizer.wait_until_current_task_done()
+
+    def close(self):
+        self.wait_reorganizer()
+        self.reorganizer.stop()
+
+    def __del__(self):
+        self.close()
