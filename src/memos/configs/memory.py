@@ -161,6 +161,11 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         description="Internet retriever configuration (optional)",
     )
 
+    reorganize: bool | None = Field(
+        False,
+        description="Optional description for this memory configuration.",
+    )
+
 
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 

@@ -25,10 +25,12 @@ This repository provides tools and scripts for evaluating the LoCoMo dataset usi
 ## Evaluation Scripts
 
 ### LoCoMo Evaluation
-To evaluate the **LoCoMo** dataset using one of the supported memory frameworks — `memos`, `mem0`, or `zep` — run the following command:
+⚙️ To evaluate the **LoCoMo** dataset using one of the supported memory frameworks — `memos`, `mem0`, or `zep` — run the following [script](./scripts/run_locomo_eval.sh):
 
 ```bash
 # Edit the configuration in ./scripts/run_locomo_eval.sh
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
 ./scripts/run_locomo_eval.sh
 ```
+
+✍️ For evaluating OpenAI's native memory feature with the LoCoMo dataset, please refer to the detailed guide: [OpenAI Memory on LoCoMo - Evaluation Guide](./scripts/locomo/openai_memory_locomo_eval_guide.md).

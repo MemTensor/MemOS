@@ -27,7 +27,9 @@ class TextualMemoryMetadata(BaseModel):
         default="activated",
         description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
     )
-    type: Literal["procedure", "fact", "event", "opinion", "topic"] | None = Field(default=None)
+    type: Literal["procedure", "fact", "event", "opinion", "topic", "reasoning"] | None = Field(
+        default=None
+    )
     memory_time: str | None = Field(
         default=None,
         description='The time the memory occurred or refers to. Must be in standard `YYYY-MM-DD` format. Relative expressions such as "yesterday" or "tomorrow" are not allowed.',

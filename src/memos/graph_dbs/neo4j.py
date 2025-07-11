@@ -92,6 +92,16 @@ class Neo4jGraphDB(BaseGraphDB):
             result = session.run(query, memory_type=memory_type)
             return result.single()["count"]
 
+    def count_nodes(self, scope: str) -> int:
+        query = """
+        MATCH (n:Memory)
+        WHERE n.memory_type = $scope
+        RETURN count(n) AS count
+        """
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, {"scope": scope}).single()
+            return result["count"]
+
     def remove_oldest_memory(self, memory_type: str, keep_latest: int) -> None:
         """
         Remove all WorkingMemory nodes except the latest `keep_latest` entries.
@@ -336,6 +346,49 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         raise NotImplementedError
 
+    def get_neighbors_by_tag(
+        self,
+        tags: list[str],
+        exclude_ids: list[str],
+        top_k: int = 5,
+        min_overlap: int = 1,
+    ) -> list[dict[str, Any]]:
+        """
+        Find top-K neighbor nodes with maximum tag overlap.
+
+        Args:
+            tags: The list of tags to match.
+            exclude_ids: Node IDs to exclude (e.g., local cluster).
+            top_k: Max number of neighbors to return.
+            min_overlap: Minimum number of overlapping tags required.
+
+        Returns:
+            List of dicts with node details and overlap count.
+        """
+        query = """
+            MATCH (n:Memory)
+            WHERE NOT n.id IN $exclude_ids
+            AND n.status = 'activated'
+            AND n.type <> 'reasoning'
+            AND n.memory_type <> 'WorkingMemory'
+            WITH n, [tag IN n.tags WHERE tag IN $tags] AS overlap_tags
+            WHERE size(overlap_tags) >= $min_overlap
+            RETURN n, size(overlap_tags) AS overlap_count
+            ORDER BY overlap_count DESC
+            LIMIT $top_k
+        """
+
+        params = {
+            "tags": tags,
+            "exclude_ids": exclude_ids,
+            "min_overlap": min_overlap,
+            "top_k": top_k,
+        }
+
+        with self.driver.session(database=self.db_name) as session:
+            result = session.run(query, params)
+            return [_parse_node(dict(record["n"])) for record in result]
+
     def get_children_with_embeddings(self, id: str) -> list[str]:
         query = """
         MATCH (p:Memory)-[:PARENT]->(c:Memory)
@@ -386,14 +439,10 @@ class Neo4jGraphDB(BaseGraphDB):
             record = session.run(query, {"center_id": center_id}).single()
 
             if not record:
-                logger.warning(
-                    f"No active node found for center_id={center_id} with status={center_status}"
-                )
                 return {"core_node": None, "neighbors": [], "edges": []}
 
             centers = record["centers"]
             if not centers or centers[0] is None:
-                logger.warning(f"Center node not found or inactive for id={center_id}")
                 return {"core_node": None, "neighbors": [], "edges": []}
 
             core_node = _parse_node(dict(centers[0]))
@@ -729,6 +778,24 @@ class Neo4jGraphDB(BaseGraphDB):
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, {"scope": scope})
             return [_parse_node(dict(record["n"])) for record in results]
+
+    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+        """
+        Find nodes that are likely candidates for structure optimization:
+        - Isolated nodes, nodes with empty background, or nodes with exactly one child.
+        - Plus: the child of any parent node that has exactly one child.
+        """
+        query = """
+                MATCH (n:Memory)
+                WHERE n.memory_type = $scope
+                  AND n.status = 'activated'
+                  AND NOT ( (n)-[:PARENT]->() OR ()-[:PARENT]->(n) )
+                RETURN n.id AS id, n AS node
+                """
+
+        with self.driver.session(database=self.db_name) as session:
+            results = session.run(query, {"scope": scope})
+            return [_parse_node({"id": record["id"], **dict(record["node"])}) for record in results]
 
     def drop_database(self) -> None:
         """
