@@ -15,6 +15,7 @@ from memos.api.product_models import (
     SearchRequest,
     SearchResponse,
     SimpleResponse,
+    SuggestionRequest,
     SuggestionResponse,
     UserRegisterRequest,
     UserRegisterResponse,
@@ -86,7 +87,6 @@ async def register_user(user_req: UserRegisterRequest):
         logger.error(f"Failed to register user: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
-
 @router.get(
     "/suggestions/{user_id}", summary="Get suggestion queries", response_model=SuggestionResponse
 )
@@ -95,6 +95,25 @@ async def get_suggestion_queries(user_id: str):
     try:
         mos_product = get_mos_product_instance()
         suggestions = mos_product.get_suggestion_query(user_id)
+        return SuggestionResponse(
+            message="Suggestions retrieved successfully", data={"query": suggestions}
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+    except Exception as err:
+        logger.error(f"Failed to get suggestions: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+
+@router.post("/suggestions", summary="Get suggestion queries with language", response_model=SuggestionResponse)
+async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
+    """Get suggestion queries for a specific user with language preference."""
+    try:
+        mos_product = get_mos_product_instance()
+        suggestions = mos_product.get_suggestion_query(
+            user_id=suggestion_req.user_id, 
+            language=suggestion_req.language
+        )
         return SuggestionResponse(
             message="Suggestions retrieved successfully", data={"query": suggestions}
         )

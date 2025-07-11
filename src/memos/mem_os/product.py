@@ -579,29 +579,46 @@ class MOSProduct(MOSCore):
         except Exception as e:
             return {"status": "error", "message": f"Failed to register user: {e!s}"}
 
-    def get_suggestion_query(self, user_id: str) -> list[str]:
+    def get_suggestion_query(self, user_id: str, language: str = "zh") -> list[str]:
         """Get suggestion query from LLM.
         Args:
             user_id (str): User ID.
+            language (str): Language for suggestions ("zh" or "en").
 
         Returns:
             list[str]: The suggestion query list.
         """
 
-        suggestion_prompt = """
-        You are a helpful assistant that can help users to generate suggestion query
-        I will get some user recently memories,
-        you should generate some suggestion query  , the query should be user what to query,
-        user recently memories is :
-        {memories}
-        please generate 3 suggestion query,
-        output should be a json format, the key is "query", the value is a list of suggestion query.
+        if language == "zh":
+            suggestion_prompt = """
+            你是一个有用的助手，可以帮助用户生成建议查询。
+            我将获取用户最近的一些记忆，
+            你应该生成一些建议查询，这些查询应该是用户想要查询的内容，
+            用户最近的记忆是：
+            {memories}
+            请生成3个建议查询用中文，
+            输出应该是json格式，键是"query"，值是一个建议查询列表。
 
-        example:
-        {{
-            "query": ["query1", "query2", "query3"]
-        }}
-        """
+            示例：
+            {{
+                "query": ["查询1", "查询2", "查询3"]
+            }}
+            """
+        else:  # English
+            suggestion_prompt = """
+            You are a helpful assistant that can help users to generate suggestion query.
+            I will get some user recently memories,
+            you should generate some suggestion query, the query should be user what to query,
+            user recently memories is:
+            {memories}
+            please generate 3 suggestion query in English,
+            output should be a json format, the key is "query", the value is a list of suggestion query.
+
+            example:
+            {{
+                "query": ["query1", "query2", "query3"]
+            }}
+            """
         text_mem_result = super().search("my recently memories", user_id=user_id, top_k=10)["text_mem"]
         if text_mem_result:
             memories = "\n".join(
@@ -842,7 +859,7 @@ class MOSProduct(MOSCore):
                     "LongTermMemory": 0.40,
                     "UserMemory": 0.40,
                 }
-                tree_result = convert_graph_to_tree_forworkmem(
+                tree_result, node_type_count = convert_graph_to_tree_forworkmem(
                     memories, target_node_count=150, type_ratios=custom_type_ratios
                 )
                 memories_filtered = filter_nodes_by_tree_ids(tree_result, memories)
@@ -851,7 +868,7 @@ class MOSProduct(MOSCore):
                 tree_result["children"] = children_sort
                 memories_filtered["tree_structure"] = tree_result
                 reformat_memory_list.append(
-                    {"cube_id": memory["cube_id"], "memories": [memories_filtered]}
+                    {"cube_id": memory["cube_id"], "memories": [memories_filtered], "memory_statistics": node_type_count}
                 )
         elif memory_type == "act_mem":
             reformat_memory_list.append(
@@ -915,7 +932,7 @@ class MOSProduct(MOSCore):
         for memory in memory_list:
             memories = remove_embedding_recursive(memory["memories"])
             custom_type_ratios = {"WorkingMemory": 0.20, "LongTermMemory": 0.40, "UserMemory": 0.4}
-            tree_result = convert_graph_to_tree_forworkmem(
+            tree_result, node_type_count = convert_graph_to_tree_forworkmem(
                 memories, target_node_count=150, type_ratios=custom_type_ratios
             )
             memories_filtered = filter_nodes_by_tree_ids(tree_result, memories)
@@ -924,7 +941,7 @@ class MOSProduct(MOSCore):
             tree_result["children"] = children_sort
             memories_filtered["tree_structure"] = tree_result
             reformat_memory_list.append(
-                {"cube_id": memory["cube_id"], "memories": [memories_filtered]}
+                {"cube_id": memory["cube_id"], "memories": [memories_filtered], "memory_statistics": node_type_count}
             )
 
         return reformat_memory_list
