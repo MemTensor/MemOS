@@ -545,7 +545,7 @@ class MOSProduct(MOSCore):
             user_config = self._create_user_config(user_id, user_config)
 
             # Create a default cube for the user using MOSCore's methods
-            default_cube_name = f"{user_name}_default_cube"
+            default_cube_name = f"{user_name}_{user_id}_default_cube"
             mem_cube_name_or_path = f"{CUBE_PATH}/{default_cube_name}"
             default_cube_id = self.create_cube_for_user(
                 cube_name=default_cube_name, owner_id=user_id, cube_path=mem_cube_name_or_path
@@ -562,7 +562,7 @@ class MOSProduct(MOSCore):
                 mem_cube_name_or_path_or_object=default_mem_cube, 
                 mem_cube_id=default_cube_id, 
                 user_id=user_id,
-                memory_types=["act_mem"]
+                memory_types=["act_mem"] if self.config.enable_activation_memory else []
             )
 
             # Add interests to the default cube if provided
