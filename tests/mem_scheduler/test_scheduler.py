@@ -29,6 +29,7 @@ sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
 
 class TestGeneralScheduler(unittest.TestCase):
     def setUp(self):
+        """Initialize test environment with mock objects and test scheduler instance."""
         example_scheduler_config_path = (
             f"{BASE_DIR}/examples/data/config/mem_scheduler/general_scheduler_config.yaml"
         )
@@ -43,16 +44,17 @@ class TestGeneralScheduler(unittest.TestCase):
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
 
-        # 初始化模块
+        # Initialize modules with mock LLM
         self.scheduler.initialize_modules(self.llm)
         self.scheduler.mem_cube = self.mem_cube
 
-        # 设置当前用户和内存立方体ID
+        # Set current user and memory cube ID for testing
         self.scheduler._current_user_id = "test_user"
         self.scheduler._current_mem_cube_id = "test_cube"
 
     def test_initialization(self):
-        # 测试初始化参数
+        """Test that scheduler initializes with correct default values and handlers."""
+        # Verify initialization parameters
         self.assertEqual(self.scheduler.top_k, 10)
         self.assertEqual(self.scheduler.top_n, 5)
         self.assertEqual(self.scheduler.act_mem_update_interval, 300)
@@ -63,12 +65,12 @@ class TestGeneralScheduler(unittest.TestCase):
         self.assertEqual(self.scheduler._last_activation_mem_update_time, 0.0)
         self.assertEqual(self.scheduler.query_list, [])
 
-        # 测试处理程序注册
+        # Verify handler registration
         self.assertTrue(QUERY_LABEL in self.scheduler.dispatcher.handlers)
         self.assertTrue(ANSWER_LABEL in self.scheduler.dispatcher.handlers)
 
     def test_initialize_modules(self):
-        # 测试模块初始化
+        """Test module initialization with proper component assignments."""
         self.assertEqual(self.scheduler.chat_llm, self.llm)
         self.assertIsInstance(self.scheduler.monitor, SchedulerMonitor)
         self.assertIsInstance(self.scheduler.retriever, SchedulerRetriever)
@@ -178,7 +180,7 @@ class TestGeneralScheduler(unittest.TestCase):
 
         # Empty the queue by consuming all elements
         while not self.scheduler._web_log_message_queue.empty():
-            self.scheduler._web_log_message_queue.get_nowait()
+            self.scheduler._web_log_message_queue.get()
 
         # Submit the log message
         self.scheduler._submit_web_logs(messages=log_message)
@@ -259,5 +261,8 @@ class TestGeneralScheduler(unittest.TestCase):
             mock_answer.assert_called_once_with([answer_message])
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+
+
+
+

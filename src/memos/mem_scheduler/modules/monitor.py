@@ -1,6 +1,5 @@
 import json
-
-from typing import Any
+from typing import Any, List
 
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -41,6 +40,7 @@ class SchedulerMonitor(BaseSchedulerModule):
 
         return mem_cube_info
 
+
     def detect_intent(
         self,
         q_list: list[str],
@@ -62,6 +62,7 @@ class SchedulerMonitor(BaseSchedulerModule):
     def update_freq(
         self,
         answer: str,
+        text_working_memory: list[str],
         activation_memory_freq_list: list[dict],
         prompt_name="freq_detecting",
     ) -> list[dict]:
@@ -72,6 +73,7 @@ class SchedulerMonitor(BaseSchedulerModule):
         prompt = self.build_prompt(
             template_name=prompt_name,
             answer=answer,
+            working_memory_list=text_working_memory,
             activation_memory_freq_list=activation_memory_freq_list,
         )
         response = self._chat_llm.generate([{"role": "user", "content": prompt}])

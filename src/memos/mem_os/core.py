@@ -30,7 +30,7 @@ class MOSCore:
     MOSCore acts as an operating system layer for handling and orchestrating MemCube instances.
     """
 
-    def __init__(self, config: MOSConfig):
+    def __init__(self, config: MOSConfig, user_manager: UserManager | None = None):
         self.config = config
         self.user_id = config.user_id
         self.session_id = config.session_id
@@ -39,7 +39,12 @@ class MOSCore:
         self.mem_reader = MemReaderFactory.from_config(config.mem_reader)
         self.chat_history_manager: dict[str, ChatHistory] = {}
         self._register_chat_history()
-        self.user_manager = UserManager(user_id=self.user_id if self.user_id else "root")
+
+        # Use provided user_manager or create a new one
+        if user_manager is not None:
+            self.user_manager = user_manager
+        else:
+            self.user_manager = UserManager(user_id=self.user_id if self.user_id else "root")
 
         # Validate user exists
         if not self.user_manager.validate_user(self.user_id):
@@ -261,8 +266,8 @@ class MOSCore:
         self.chat_history_manager[user_id] = chat_history
 
         # submit message to scheduler
-        if len(accessible_cubes) == 1:
-            mem_cube_id = accessible_cubes[0].cube_id
+        for accessible_mem_cube in accessible_cubes:
+            mem_cube_id = accessible_mem_cube.cube_id
             mem_cube = self.mem_cubes[mem_cube_id]
             if self.enable_mem_scheduler and self.mem_scheduler is not None:
                 message_item = ScheduleMessageItem(
@@ -427,7 +432,11 @@ class MOSCore:
             raise ValueError(f"MemCube with ID {mem_cube_id} does not exist.")
 
     def search(
-        self, query: str, user_id: str | None = None, install_cube_ids: list[str] | None = None
+        self,
+        query: str,
+        user_id: str | None = None,
+        install_cube_ids: list[str] | None = None,
+        top_k: int | None = None,
     ) -> MOSSearchResult:
         """
         Search for textual memories across all registered MemCubes.
@@ -464,18 +473,10 @@ class MOSCore:
                 and (mem_cube.text_mem is not None)
                 and self.config.enable_textual_memory
             ):
-                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
-                result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
-                logger.info(
-                    f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                memories = mem_cube.text_mem.search(
+                    query, top_k=top_k if top_k else self.config.top_k
                 )
-            if (
-                (mem_cube_id in install_cube_ids)
-                and (mem_cube.act_mem is not None)
-                and self.config.enable_activation_memory
-            ):
-                memories = mem_cube.act_mem.extract(query)
-                result["act_mem"].append({"cube_id": mem_cube_id, "memories": [memories]})
+                result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
                     f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
                 )

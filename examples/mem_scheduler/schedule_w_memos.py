@@ -1,10 +1,11 @@
 import shutil
 import sys
-
+from typing import TYPE_CHECKING
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
 
+from memos.configs.mem_scheduler import AuthConfig
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.configs.mem_scheduler import SchedulerConfigFactory
@@ -20,6 +21,15 @@ from memos.mem_scheduler.modules.schemas import (
 )
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.utils import parse_yaml
+
+
+
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.modules.schemas import (
+        ScheduleLogForWebItem,
+    )
+
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -71,42 +81,6 @@ def init_task():
     ]
     return conversations, questions
 
-
-def show_web_logs(mem_scheduler: GeneralScheduler):
-    """Display all web log entries from the scheduler's log queue.
-
-    Args:
-        mem_scheduler: The scheduler instance containing web logs to display
-    """
-    if mem_scheduler._web_log_message_queue.empty():
-        print("Web log queue is currently empty.")
-        return
-
-    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
-
-    # Create a temporary queue to preserve the original queue contents
-    temp_queue = Queue()
-    log_count = 0
-
-    while not mem_scheduler._web_log_message_queue.empty():
-        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
-        temp_queue.put(log_item)
-        log_count += 1
-
-        # Print log entry details
-        print(f"\nLog Entry #{log_count}:")
-        print(f"- log: {log_item}")
-
-        print("-" * 50)
-
-    # Restore items back to the original queue
-    while not temp_queue.empty():
-        mem_scheduler._web_log_message_queue.put(temp_queue.get())
-
-    print(f"\nTotal {log_count} web log entries displayed.")
-    print("=" * 110 + "\n")
-
-
 def run_with_automatic_scheduler_init():
     print("==== run_with_automatic_scheduler_init ====")
     conversations, questions = init_task()
@@ -141,7 +115,6 @@ def run_with_automatic_scheduler_init():
         response = mos.chat(query, user_id=user_id)
         print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
-    show_web_logs(mos.mem_scheduler)
     mos.mem_scheduler.stop()
 
 
@@ -167,6 +140,10 @@ def run_with_manual_scheduler_init():
     if Path(mem_cube_name_or_path).exists():
         shutil.rmtree(mem_cube_name_or_path)
         print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
+    # default local graphdb uri
+    if AuthConfig.default_config_exists():
+        auth_config = AuthConfig.from_local_yaml()
+        config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
     mem_cube = GeneralMemCube(config)
     mem_cube.dump(mem_cube_name_or_path)
     mos.register_mem_cube(
@@ -211,7 +188,6 @@ def run_with_manual_scheduler_init():
         mos.mem_scheduler.submit_messages(messages=message_item)
         print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
-    show_web_logs(mos.mem_scheduler)
     mos.mem_scheduler.stop()
 
 
