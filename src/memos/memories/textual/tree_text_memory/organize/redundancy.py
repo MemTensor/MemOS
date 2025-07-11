@@ -89,7 +89,7 @@ class RedundancyHandler:
         Returns:
             A fused TextualMemoryItem representing the resolved memory.
         """
-
+        return  # waiting for implementation
         # ———————————— 1. LLM generate fused memory ————————————
         metadata_for_resolve = ["key", "background", "confidence", "updated_at"]
         metadata_1 = memory_a.metadata.model_dump_json(include=metadata_for_resolve)
