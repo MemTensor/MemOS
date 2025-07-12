@@ -9,12 +9,12 @@ class BaseGraphDB(ABC):
 
     # Node (Memory) Management
     @abstractmethod
-    def add_node(self, id: str, content: str, metadata: dict[str, Any]) -> None:
+    def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
         """
         Add a memory node to the graph.
         Args:
             id: Unique identifier for the memory node.
-            content: Raw memory content (e.g., text).
+            memory: Raw memory content (e.g., text).
             metadata: Dictionary of metadata (e.g., timestamp, tags, source).
         """
 
