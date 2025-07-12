@@ -2,7 +2,7 @@
 
 [tool.poetry]
 name = "MemoryOS"
-version = "0.1.12"
+version = "0.2.0"
 description = "Intelligence Begins with Memory"
 license = "Apache-2.0"
 authors = ["MemTensor <lizy@memtensor.cn>"]
@@ -26,6 +26,7 @@ fastapi = {extras = ["all"], version = "^0.115.12"}
 sentence-transformers = "^4.1.0"
 sqlalchemy = "^2.0.41"
 redis = "^6.2.0"
+schedule = "^1.2.2"
 
 [tool.poetry.group.dev]
 optional = false

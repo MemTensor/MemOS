@@ -1,4 +1,4 @@
-__version__ = "0.1.12"
+__version__ = "0.2.0"
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig

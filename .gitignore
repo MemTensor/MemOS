@@ -11,6 +11,7 @@ evaluation/*tmp/
 evaluation/results
 evaluation/.env
 evaluation/configs/*
+**tree_textual_memory_locomo**
 .env
 
 # Byte-compiled / optimized / DLL files
@@ -165,6 +166,7 @@ venv.bak/
 *.xlsx
 *.json
 *.pkl
+*.html
 
 # but do not ignore docs/openapi.json
 !docs/openapi.json
