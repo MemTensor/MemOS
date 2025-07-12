@@ -47,6 +47,7 @@ def test_openai_llm_config():
             "top_k",
             "api_base",
             "remove_think_prefix",
+            "extra_body",
         ],
     )
 

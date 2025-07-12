@@ -811,7 +811,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
     def _ensure_database_exists(self):
         with self.driver.session(database="system") as session:
-            session.run(f"CREATE DATABASE {self.db_name} IF NOT EXISTS")
+            session.run(f"CREATE DATABASE $db_name IF NOT EXISTS", db_name=self.db_name)
 
         # Wait until the database is available
         for _ in range(10):

@@ -164,9 +164,9 @@ class GraphStructureReorganizer:
                 logger.info(f"Resolved conflict between {added_node.id} and {existing_node.id}.")
 
         # ———————— 2. check for redundancy ————————
-        redundancy = self.redundancy.detect(added_node, scope=added_node.metadata.memory_type)
-        if redundancy:
-            for added_node, existing_node in redundancy:
+        redundancies = self.redundancy.detect(added_node, scope=added_node.metadata.memory_type)
+        if redundancies:
+            for added_node, existing_node in redundancies:
                 self.redundancy.resolve_two_nodes(added_node, existing_node)
                 logger.info(f"Resolved redundancy between {added_node.id} and {existing_node.id}.")
 
@@ -176,7 +176,7 @@ class GraphStructureReorganizer:
     def handle_merge(self, message: QueueMessage):
         after_node = message.after_node[0]
         logger.debug(f"Handling merge operation: <{after_node.memory}>")
-        self.redundancy_resolver.resolve_one_node(after_node)
+        self.redundancy.resolve_one_node(after_node)
 
     def optimize_structure(
         self,
