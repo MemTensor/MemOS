@@ -57,7 +57,7 @@ echo "Mem0 rag files have been generated!"
 echo "Running mem0_eval.py..."
 python scripts/locomo/mem0_eval.py
 if [ $? -ne 0 ]; then
-    echo "Error running mem0_evla.py"
+    echo "Error running mem0_eval.py"
     exit 1
 fi
 
@@ -66,7 +66,7 @@ echo "Mem0 eval files have been generated!"
 echo "Running locomo_eval.py..."
 python scripts/locomo/locomo_eval.py --lib mem0
 if [ $? -ne 0 ]; then
-    echo "Error running mem0_evla.py"
+    echo "Error running locomo_eval.py"
     exit 1
 fi
 

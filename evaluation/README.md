@@ -32,3 +32,14 @@ To evaluate the **LoCoMo** dataset using one of the supported memory frameworks 
 # Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
 ./scripts/run_locomo_eval.sh
 ```
+
+### mem0 rag and full-context Evaluation
++ Step 1: You should generate the rag files of mem0 project.
++ Step 2: Generating the mem0 evaluation files
++ Step 3: Using locomo framework to generate evalution files(It is different with step2)
++ Step 4: Evaluation score generation under mem0 framework
+
+For detailed execution steps, please refer to File:
+```bash
+./scripts/run_locomo_eval.sh
+```
