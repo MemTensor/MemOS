@@ -48,6 +48,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
     user_id: str = Field(..., description="user id")
     mem_cube_id: str = Field(..., description="memcube id")
+    message_id: str = Field(default=str(uuid4()), description="message id")
     label: str = Field(..., description="Label of the schedule message")
     mem_cube: GeneralMemCube | str = Field(..., description="memcube for schedule")
     content: str = Field(..., description="Content of the schedule message")
@@ -67,10 +68,10 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         return {
             "item_id": self.item_id,
             "user_id": self.user_id,
-            "cube_id": self.mem_cube_id,
+            "mem_cube_id": self.mem_cube_id,
             "message_id": self.message_id,
             "label": self.label,
-            "cube": "Not Applicable",  # Custom cube serialization
+            "mem_cube": "Not Applicable",  # Custom cube serialization
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
         }
@@ -81,10 +82,10 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         return cls(
             item_id=data.get("item_id", str(uuid4())),
             user_id=data["user_id"],
-            cube_id=data["cube_id"],
+            mem_cube_id=data["mem_cube_id"],
             message_id=data.get("message_id", str(uuid4())),
             label=data["label"],
-            cube="Not Applicable",  # Custom cube deserialization
+            mem_cube="Not Applicable",  # Custom cube deserialization
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
         )
