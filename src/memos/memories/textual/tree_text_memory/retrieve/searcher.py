@@ -176,8 +176,12 @@ class Searcher:
         for item, score in sorted(deduped_result.values(), key=lambda pair: pair[1], reverse=True)[
             :top_k
         ]:
+            # Get metadata dict and remove relativity if it exists to avoid duplicate
+            meta_dict = item.metadata.model_dump()
+            meta_dict.pop('relativity', None)  # Remove if exists to avoid duplicate
+            
             new_meta = SearchedTreeNodeTextualMemoryMetadata(
-                **item.metadata.model_dump(), relativity=score
+                **meta_dict, relativity=score
             )
             searched_res.append(
                 TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)

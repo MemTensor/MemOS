@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from transformers import AutoTokenizer
-
+from dotenv import load_dotenv
 from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -29,7 +29,9 @@ from memos.types import MessageList
 
 logger = get_logger(__name__)
 
-CUBE_PATH = "/tmp/data"
+load_dotenv()
+
+CUBE_PATH = os.getenv("MOS_CUBE_PATH", "/tmp/data/")
 with open("./tmp/fake_data.json") as f:
     MOCK_DATA = json.loads(f.read())
 
