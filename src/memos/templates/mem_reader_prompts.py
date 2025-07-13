@@ -1,10 +1,10 @@
 SIMPLE_STRUCT_MEM_READER_PROMPT = """
 You are a memory extraction expert.
 
-Your task is to extract memories from the perspective of ${user_a}, based on a conversation between ${user_a} and ${user_b}. This means identifying what ${user_a} would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as ${user_b}) that impacted or were acknowledged by ${user_a}.
+Your task is to extract memories from the perspective of user, based on a conversation between user and assistant. This means identifying what user would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as assistant) that impacted or were acknowledged by user.
 
 Please perform:
-1. Identify information that reflects ${user_a}'s experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from ${user_b} that ${user_a} acknowledged or responded to.
+1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
 2. Resolve all time, person, and event references clearly:
    - Convert relative time expressions (e.g., “yesterday,” “next Friday”) into absolute dates using the message timestamp if possible.
    - Clearly distinguish between event time and message time.
@@ -12,33 +12,36 @@ Please perform:
    - Include specific locations if mentioned.
    - Resolve all pronouns, aliases, and ambiguous references into full names or identities.
    - Disambiguate people with the same name if applicable.
-3. Always write from a third-person perspective, referring to ${user_a} as
+3. Always write from a third-person perspective, referring to user as
 "The user" or by name if name mentioned, rather than using first-person ("I", "me", "my").
 For example, write "The user felt exhausted..." instead of "I felt exhausted...".
-4. Do not omit any information that ${user_a} is likely to remember.
+4. Do not omit any information that user is likely to remember.
    - Include all key experiences, thoughts, emotional responses, and plans — even if they seem minor.
    - Prioritize completeness and fidelity over conciseness.
-   - Do not generalize or skip details that could be personally meaningful to ${user_a}.
+   - Do not generalize or skip details that could be personally meaningful to user.
 
 Return a single valid JSON object with the following structure:
 
 {
   "memory list": [
     {
-      "key": <string, a unique, concise memory title in English>,
+      "key": <string, a unique, concise memory title>,
       "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
-      "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input conversation is in English, or in Chinese if the conversation is in Chinese>,
-      "tags": <A list of relevant English thematic keywords (e.g.,
-      ["deadline", "team", "planning"])>
+      "value": <A detailed, self-contained, and unambiguous memory statement
+      — written in English if the input conversation is in English,
+      or in Chinese if the conversation is in Chinese, or any language which
+      align with the conversation language>,
+      "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>
     },
     ...
   ],
-  "summary": <a natural paragraph summarizing the above memories from ${user_a}'s perspective, 120–200 words, same language as the input>
+  "summary": <a natural paragraph summarizing the above memories from user's
+  perspective, 120–200 words, **same language** as the input>
 }
 
 Language rules:
-- The `value` fields and `summary` must match the language of the input conversation.
-- All metadata fields (`key`, `memory_type`, `tags`) must be in English.
+- The `key`, `value`, `tags`, `summary` fields must match the language of the input conversation.
+- Keep `memory_type` in English.
 
 Example:
 Conversation:
@@ -78,6 +81,9 @@ SIMPLE_STRUCT_DOC_READER_PROMPT = """
 You are an expert text analyst for a search and retrieval system. Your task is to process a document chunk and generate a single, structured JSON object.
 The input is a single piece of text: `[DOCUMENT_CHUNK]`.
 You must generate a single JSON object with two top-level keys: `summary` and `tags`.
+Written in English if the input conversation is in English, or in Chinese if
+the conversation is in Chinese, or any language which align with the conversation language.
+
 1. `summary`:
    - A dense, searchable summary of the ENTIRE `[DOCUMENT_CHUNK]`.
    - The purpose is for semantic search embedding.
