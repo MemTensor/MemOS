@@ -17,6 +17,9 @@ Your task:
 - Provide a list of 5–10 relevant English `tags`.
 - Write a short `background` note (50–100 words) covering any extra context, sources, or traceability info.
 
+Language rules:
+- The `key`, `value`, `tags`, `background` fields must match the language of the input conversation.
+
 Return valid JSON:
 {{
   "key": "<concise topic>",
@@ -40,6 +43,9 @@ Instructions:
 - Return strictly valid JSON only.
 
 Example: If you have items about a project across multiple phases, group them by milestone, team, or event.
+
+Language rules:
+- The `theme` fields must match the language of the input conversation.
 
 Return valid JSON:
 {{
@@ -84,7 +90,7 @@ Another Example:
 - Node 2: "The venue was booked for a wedding in August."
 Answer: CONFLICT
 
-Always respond with ONE word: [CAUSE | CONDITION | RELATE_TO | CONFLICT | NONE]
+Always respond with ONE word, no matter what language is for the input nodes: [CAUSE | CONDITION | RELATE_TO | CONFLICT | NONE]
 """
 
 INFER_FACT_PROMPT = """
@@ -124,6 +130,9 @@ Example:
 Input Memories:
 - "Mary organized the 2023 sustainability summit in Berlin."
 - "Mary presented a keynote on renewable energy at the same summit."
+
+Language rules:
+- The `key`, `value`, `tags`, `background` fields must match the language of the input.
 
 Good Aggregate:
 {{
