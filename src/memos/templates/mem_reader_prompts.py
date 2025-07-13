@@ -1,10 +1,9 @@
 SIMPLE_STRUCT_MEM_READER_PROMPT = """
 You are a memory extraction expert.
 
-Your task is to extract memories from the perspective of user, based on a conversation between user and assistant. This means identifying what user would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as assistant) that impacted or were acknowledged by user.
-
+Your task is to extract memories from the perspective of ${user_a}, based on a conversation between ${user_a} and ${user_b}. This means identifying what ${user_a} would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as ${user_b}) that impacted or were acknowledged by ${user_a}.
 Please perform:
-1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
+1. Identify information that reflects ${user_a}'s experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from ${user_b} that ${user_a} acknowledged or responded to.
 2. Resolve all time, person, and event references clearly:
    - Convert relative time expressions (e.g., “yesterday,” “next Friday”) into absolute dates using the message timestamp if possible.
    - Clearly distinguish between event time and message time.
@@ -12,13 +11,13 @@ Please perform:
    - Include specific locations if mentioned.
    - Resolve all pronouns, aliases, and ambiguous references into full names or identities.
    - Disambiguate people with the same name if applicable.
-3. Always write from a third-person perspective, referring to user as
+3. Always write from a third-person perspective, referring to ${user_a} as
 "The user" or by name if name mentioned, rather than using first-person ("I", "me", "my").
 For example, write "The user felt exhausted..." instead of "I felt exhausted...".
-4. Do not omit any information that user is likely to remember.
+4. Do not omit any information that ${user_a} is likely to remember.
    - Include all key experiences, thoughts, emotional responses, and plans — even if they seem minor.
    - Prioritize completeness and fidelity over conciseness.
-   - Do not generalize or skip details that could be personally meaningful to user.
+   - Do not generalize or skip details that could be personally meaningful to ${user_a}.
 
 Return a single valid JSON object with the following structure:
 
