@@ -1,68 +1,114 @@
-INTENT_RECOGNIZING_PROMPT = """You are a user intent recognizer, and your task is to determine whether the user's current question has been satisfactorily answered.
+INTENT_RECOGNIZING_PROMPT = """
+# User Intent Recognition Task
 
-You will receive the following information:
+## Role
+You are an advanced intent analysis system that evaluates answer satisfaction and identifies information gaps.
 
-The user’s current question list (q_list), arranged in chronological order (currently contains only one question);
-The memory information currently present in the system’s workspace (working_memory_list), i.e., the currently known contextual clues.
-Your tasks are:
+## Input Analysis
+You will receive:
+1. User's question list (chronological order)
+2. Current system knowledge (working memory)
 
-Determine whether the user is satisfied with the existing answer;
+## Evaluation Criteria
+Consider these satisfaction factors:
+1. Answer completeness (covers all aspects of the question)
+2. Evidence relevance (directly supports the answer)
+3. Detail specificity (contains necessary granularity)
+4. Personalization (tailored to user's context)
 
-If the user is satisfied, return
+## Decision Framework
+1. Mark as satisfied ONLY if:
+   - All question aspects are addressed
+   - Supporting evidence exists in working memory
+   - No apparent gaps in information
+
+2. Mark as unsatisfied if:
+   - Any question aspect remains unanswered
+   - Evidence is generic/non-specific
+   - Personal context is missing
+
+## Output Specification
+Return JSON with:
+- "trigger_retrieval": Boolean (true if more evidence needed)
+- "missing_evidences": List of specific evidence types required
+
+## Response Format
 {{
-"trigger_retrieval": false,
-"missing_evidence": []
+  "trigger_retrieval": <boolean>,
+  "missing_evidences": [
+    "<evidence_type_1>",
+    "<evidence_type_2>"
+  ]
 }}
 
-If the user is not satisfied, meaning the system's answer did not meet their actual needs, please return:
-"trigger_retrieval": true,
-"missing_evidence": A list of missing information you think is needed, like specific personal experiences, health records, etc.
+## Evidence Type Examples
+- Personal medical history
+- Recent activity logs
+- Specific measurement data
+- Contextual details about [topic]
+- Temporal information (when something occurred)
 
-Please return strictly according to the following JSON format:
-{{
-  "trigger_retrieval": true or false,
-  "missing_evidences": The list of missing evidences needed for the next step of retrieval and completion
-}}
-
-The user's question list is:
+## Current Task
+User Questions:
 {q_list}
 
-The memory information currently present in the system’s workspace is:
+Working Memory Contents:
 {working_memory_list}
+
+## Required Output
+Please provide your analysis in the specified JSON format:
 """
 
-MEMORY_RERANKEING_PROMPT = """You are a memory sorter. Your task is to reorder the evidence according to the user's question, placing the evidence that best supports the user's query as close to the front as possible.
+MEMORY_RERANKING_PROMPT = """
+# Memory Reranking Task
 
-Please return the newly reordered memory sequence according to the query in the following format, which must be in JSON:
+## Role
+You are an intelligent memory reorganization system. Your primary function is to analyze and optimize the ordering of memory evidence based on relevance to recent user queries.
 
+## Task Description
+Reorganize the provided memory evidence list by:
+1. Analyzing the semantic relationship between each evidence item and the user's queries
+2. Calculating relevance scores
+3. Sorting evidence in descending order of relevance
+4. Maintaining all original items (no additions or deletions)
+
+## Input Format
+- Queries: Recent user questions/requests (list)
+- Current Order: Existing memory sequence (list)
+
+## Output Requirements
+Return a JSON object with:
+- "new_order": The reordered list (maintaining all original items)
+- "reasoning": Brief explanation of your ranking logic (1-2 sentences)
+
+## Processing Guidelines
+1. Prioritize evidence that:
+   - Directly answers query questions
+   - Contains exact keyword matches
+   - Provides contextual support
+   - Shows temporal relevance (newer > older)
+2. For ambiguous cases, maintain original relative ordering
+
+## Example
+Input queries: ["python threading best practices"]
+Input order: ["basic python syntax", "thread safety patterns", "data structures"]
+
+Output:
 {{
-"new_order": [...]
+  "new_order": ["thread safety patterns", "data structures", "basic python syntax"],
+  "reasoning": "Prioritized threading-related content while maintaining general python references"
 }}
-Now the user's question is:
-{query}
 
-The current order is:
-{current_order}"""
+## Current Task
+Queries: {queries}
+Current order: {current_order}
 
-FREQ_DETECTING_PROMPT = """You are a memory frequency monitor. Your task is to check which memories in the activation memory list appear in the given answer, and increment their count by 1 for each occurrence.
-
-Please return strictly according to the following JSON format:
-
-[
-  {{"memory": ..., "count": ...}}, {{"memory": ..., "count": ...}}, ...
-]
-
-The answer is:
-{answer}
-
-The activation memory list is:
-{activation_memory_freq_list}
+Please provide your reorganization:
 """
 
 PROMPT_MAPPING = {
     "intent_recognizing": INTENT_RECOGNIZING_PROMPT,
-    "memory_reranking": MEMORY_RERANKEING_PROMPT,
-    "freq_detecting": FREQ_DETECTING_PROMPT,
+    "memory_reranking": MEMORY_RERANKING_PROMPT,
 }
 
 MEMORY_ASSEMBLY_TEMPLATE = """The retrieved memories are listed as follows:\n\n {memory_text}"""

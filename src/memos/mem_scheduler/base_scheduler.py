@@ -53,7 +53,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
 
         # hyper-parameters
         self.top_k = self.config.get("top_k", 5)
-        self.act_mem_update_interval = self.config.get("act_mem_update_interval", 300)
         self.context_window_size = self.config.get("context_window_size", 5)
         self.activation_mem_size = self.config.get(
             "activation_mem_size", DEFAULT_ACTIVATION_MEM_SIZE
@@ -61,7 +60,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         self.enable_act_memory_update = self.config.get("enable_act_memory_update", False)
         self.act_mem_dump_path = self.config.get("act_mem_dump_path", DEFAULT_ACT_MEM_DUMP_PATH)
         self.search_method = TreeTextMemory_SEARCH_METHOD
-        self._last_activation_mem_update_time = 0.0
 
         self.enable_parallel_dispatch = self.config.get("enable_parallel_dispatch", False)
         self.max_workers = self.config.get(
@@ -142,6 +140,22 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             self._current_user_id = msg.user_id
             self._current_mem_cube_id = msg.mem_cube_id
             self._current_mem_cube = msg.mem_cube
+
+    def _validate_messages(self, messages: list[ScheduleMessageItem], label: str):
+        """Validate if all messages match the expected label.
+
+        Args:
+            messages: List of message items to validate.
+            label: Expected message label (e.g., QUERY_LABEL/ANSWER_LABEL).
+
+        Returns:
+            bool: True if all messages passed validation, False if any failed.
+        """
+        for message in messages:
+            if not self._validate_message(message, label):
+                return False
+                logger.error("Message batch contains invalid labels, aborting processing")
+        return True
 
     def _validate_message(self, message: ScheduleMessageItem, label: str):
         """Validate if the message matches the expected label.
@@ -270,62 +284,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             logger.info(f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
                         f"transformed to {WORKING_MEMORY_TYPE} memories.")
 
-    def update_activation_memory(
-            self,
-            new_memories: list[str | TextualMemoryItem],
-            mem_cube: GeneralMemCube,
-    ) -> None:
-        """
-        Update activation memory by extracting KVCacheItems from new_memory (list of str),
-        add them to a KVCacheMemory instance, and dump to disk.
-        """
-        if len(new_memories) == 0:
-            logger.error("update_activation_memory: new_memory is empty.")
-            return
-        if isinstance(new_memories[0], TextualMemoryItem):
-            new_text_memories = [mem.memory for mem in new_memories]
-        elif isinstance(new_memories[0], str):
-            new_text_memories = new_memories
-        else:
-            logger.error("Not Implemented.")
-
-        try:
-            assert isinstance(mem_cube.act_mem, KVCacheMemory)
-            act_mem: KVCacheMemory = mem_cube.act_mem
-
-            text_memory = MEMORY_ASSEMBLY_TEMPLATE.format(
-                memory_text="".join(
-                    [
-                        f"{i + 1}. {sentence.strip()}\n"
-                        for i, sentence in enumerate(new_text_memories)
-                        if sentence.strip()  # Skip empty strings
-                    ]
-                )
-            )
-            if self.act_mem_backend == ACTIVATION_MEMORY_HF_BACKEND :
-                # huggingface kv cache
-                original_cache_items: List[KVCacheItem] = act_mem.get_all()
-                pre_cache_item: KVCacheItem = origin_cache_items[-1]
-                original_text_memories = pre_cache_item.records.text_memories
-                act_mem.delete_all()
-                cache_item: KVCacheItem = act_mem.extract(text_memory)
-                cache_item.records.text_memories = new_text_memories
-
-                act_mem.add(cache_item)
-                act_mem.dump(self.act_mem_dump_path)
-
-            elif self.act_mem_backend == ACTIVATION_MEMORY_VLLM_BACKEND :
-                # vllm kv cache
-                self.log_activation_memory_update(original_text_memories=original_text_memories,
-                                                  new_text_memories=new_text_memories,
-                                                  user_id=user_id,
-                                                  mem_cube_id=mem_cube_id,
-                                                  mem_cube=mem_cube)
-            else:
-                raise NotImplementedError(self.act_mem_backend)
-
-        except Exception as e:
-            logger.warning(f"MOS-based activation memory update failed: {e}")
 
     def create_autofilled_log_item(
         self,
@@ -421,32 +379,72 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
 
     def start(self) -> None:
         """
-        Start the message consumer thread.
+        Start the message consumer thread and initialize dispatcher resources.
 
-        Initializes and starts a daemon thread that will periodically
-        check for and process messages from the queue.
+        Initializes and starts:
+        1. Message consumer thread
+        2. Dispatcher thread pool (if parallel dispatch enabled)
         """
-        if self._consumer_thread is not None and self._consumer_thread.is_alive():
-            logger.warning("Memory Scheduler thread is already running")
+        if self._running:
+            logger.warning("Memory Scheduler is already running")
             return
 
+        # Initialize dispatcher resources
+        if self.enable_parallel_dispatch:
+            logger.info(f"Initializing dispatcher thread pool with {self.max_workers} workers")
+
+        # Start consumer thread
         self._running = True
         self._consumer_thread = threading.Thread(
             target=self._message_consumer,
-            daemon=True,  # Allows program to exit even if thread is running
+            daemon=True,
             name="MessageConsumerThread",
         )
         self._consumer_thread.start()
         logger.info("Message consumer thread started")
 
     def stop(self) -> None:
-        """Stop the consumer thread and clean up resources."""
-        if self._consumer_thread is None or not self._running:
-            logger.warning("Memory Scheduler thread is not running")
+        """Stop all scheduler components gracefully.
+
+        1. Stops message consumer thread
+        2. Shuts down dispatcher thread pool
+        3. Cleans up resources
+        """
+        if not self._running:
+            logger.warning("Memory Scheduler is not running")
             return
+
+        # Signal consumer thread to stop
         self._running = False
-        if self._consumer_thread.is_alive():
-            self._consumer_thread.join(timeout=5.0)  # Wait up to 5 seconds
+
+        # Wait for consumer thread
+        if self._consumer_thread and self._consumer_thread.is_alive():
+            self._consumer_thread.join(timeout=5.0)
             if self._consumer_thread.is_alive():
-                logger.warning("Memory Scheduler thread did not stop gracefully")
-        logger.info("Memory Scheduler thread stopped")
+                logger.warning("Consumer thread did not stop gracefully")
+            else:
+                logger.info("Consumer thread stopped")
+
+        # Shutdown dispatcher
+        if hasattr(self, 'dispatcher') and self.dispatcher:
+            logger.info("Shutting down dispatcher...")
+            self.dispatcher.shutdown()
+
+        # Clean up queues
+        self._cleanup_queues()
+        logger.info("Memory Scheduler stopped completely")
+
+    def _cleanup_queues(self) -> None:
+        """Ensure all queues are emptied and marked as closed."""
+        try:
+            while not self.memos_message_queue.empty():
+                self.memos_message_queue.get_nowait()
+                self.memos_message_queue.task_done()
+        except queue.Empty:
+            pass
+
+        try:
+            while not self._web_log_message_queue.empty():
+                self._web_log_message_queue.get_nowait()
+        except queue.Empty:
+            pass

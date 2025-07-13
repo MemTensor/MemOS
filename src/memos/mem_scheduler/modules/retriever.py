@@ -84,7 +84,7 @@ class SchedulerRetriever(BaseSchedulerModule):
 
     def replace_working_memory(
             self,
-            query: str,
+            queries: List[str],
             user_id: str,
             mem_cube_id: str,
             mem_cube: GeneralMemCube,
@@ -108,7 +108,7 @@ class SchedulerRetriever(BaseSchedulerModule):
             try:
                 prompt = self.build_prompt(
                     "memory_reranking",
-                    query=query,
+                    queries=queries,
                     current_order=unique_memory,
                     staging_buffer=[],
                 )

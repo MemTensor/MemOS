@@ -1,15 +1,16 @@
 import os
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
-from typing import ClassVar, TypeVar, List, Optional, NewType
-from uuid import uuid4
-
-from pydantic import BaseModel, Field, computed_field
-from rope.contrib.autoimport.parse import logger
 from typing_extensions import TypedDict
+from typing import ClassVar, TypeVar, List, Optional, NewType
+from pydantic import BaseModel, Field, computed_field
 
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.utils import parse_yaml
+from memos.log import get_logger
+
+logger = get_logger(__name__)
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -17,6 +18,7 @@ BASE_DIR = FILE_PATH.parent.parent.parent.parent.parent
 
 QUERY_LABEL = "query"
 ANSWER_LABEL = "answer"
+ADD_LABEL = "add"
 
 TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
 TextMemory_SEARCH_METHOD = "text_memory_search"
@@ -35,6 +37,10 @@ USER_MEMORY_TYPE = "UserMemory"
 WORKING_MEMORY_TYPE = "WorkingMemory"
 TEXT_MEMORY_TYPE = "TextMemory"
 ACTIVATION_MEMORY_TYPE = "ActivationMemory"
+
+# monitors
+MONITOR_WORKING_MEMORY_TYPE = "MonitorWorkingMemoryType"
+MONITOR_ACTIVATION_MEMORY_TYPE = "MonitorActivationMemoryType"
 
 # Backends
 ACTIVATION_MEMORY_VLLM_BACKEND = "VLLMForActivationMemory"
@@ -254,10 +260,10 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
             partial_retention_number: int
     ) -> MemoryMonitorItem:
         """
-        Update memories based on text_working_memory.
+        Update memories based on text_working_memories.
 
         Args:
-            text_working_memory: List of memory texts to update
+            text_working_memories: List of memory texts to update
             partial_retention_number: Number of top memories to keep by recording count
 
         Returns:
@@ -269,13 +275,13 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
             raise ValueError("partial_retention_number must be non-negative")
 
         # Create text lookup set
-        working_memory_set = set(text_working_memory)
+        working_memory_set = set(text_working_memories)
 
         # Step 1: Update existing memories or add new ones
         added_or_updated = []
         memory_text_map = {item.memory_text: item for item in self.memories}
 
-        for text in text_working_memory:
+        for text in text_working_memories:
             if text in memory_text_map:
                 # Update existing memory
                 memory = memory_text_map[text]
