@@ -46,7 +46,7 @@ class HFLLMConfig(BaseLLMConfig):
 class VLLMLLMConfig(BaseLLMConfig):
     api_key: str = Field(default="", description="API key for vLLM (optional for local server)")
     api_base: str = Field(
-        default="http://localhost:8088",
+        default="http://localhost:8088/v1",
         description="Base URL for vLLM API",
     )
 
