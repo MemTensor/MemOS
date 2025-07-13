@@ -15,6 +15,7 @@ from memos.api.product_models import (
     SearchRequest,
     SearchResponse,
     SimpleResponse,
+    SuggestionRequest,
     SuggestionResponse,
     UserRegisterRequest,
     UserRegisterResponse,
@@ -36,6 +37,7 @@ def get_mos_product_instance():
     global MOS_PRODUCT_INSTANCE
     if MOS_PRODUCT_INSTANCE is None:
         default_config = APIConfig.get_product_default_config()
+        print(default_config)
         from memos.configs.mem_os import MOSConfig
 
         mos_config = MOSConfig(**default_config)
@@ -85,7 +87,6 @@ async def register_user(user_req: UserRegisterRequest):
         logger.error(f"Failed to register user: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
-
 @router.get(
     "/suggestions/{user_id}", summary="Get suggestion queries", response_model=SuggestionResponse
 )
@@ -94,6 +95,25 @@ async def get_suggestion_queries(user_id: str):
     try:
         mos_product = get_mos_product_instance()
         suggestions = mos_product.get_suggestion_query(user_id)
+        return SuggestionResponse(
+            message="Suggestions retrieved successfully", data={"query": suggestions}
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+    except Exception as err:
+        logger.error(f"Failed to get suggestions: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+
+@router.post("/suggestions", summary="Get suggestion queries with language", response_model=SuggestionResponse)
+async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
+    """Get suggestion queries for a specific user with language preference."""
+    try:
+        mos_product = get_mos_product_instance()
+        suggestions = mos_product.get_suggestion_query(
+            user_id=suggestion_req.user_id, 
+            language=suggestion_req.language
+        )
         return SuggestionResponse(
             message="Suggestions retrieved successfully", data={"query": suggestions}
         )
@@ -177,15 +197,19 @@ async def chat(chat_req: ChatRequest):
     try:
         mos_product = get_mos_product_instance()
 
-        def generate_chat_response():
+        async def generate_chat_response():
             """Generate chat response as SSE stream."""
             try:
-                yield from mos_product.chat_with_references(
+                import asyncio
+                
+                for chunk in mos_product.chat_with_references(
                     query=chat_req.query,
                     user_id=chat_req.user_id,
                     cube_id=chat_req.mem_cube_id,
                     history=chat_req.history,
-                )
+                ):
+                    yield chunk
+                    await asyncio.sleep(0.05)  # 50ms delay between chunks
             except Exception as e:
                 logger.error(f"Error in chat stream: {e}")
                 error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"

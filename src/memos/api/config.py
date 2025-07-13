@@ -264,7 +264,7 @@ class APIConfig:
                                 "user": neo4j_config["user"],
                                 "password": neo4j_config["password"],
                                 "db_name": os.getenv(
-                                    "NEO4J_DB_NAME", f"db{user_id.replace('-', '')}"
+                                    "NEO4J_DB_NAME", f"memos{user_id.replace('-', '')}"
                                 ),  # , replace with
                                 "auto_create": neo4j_config["auto_create"],
                             },

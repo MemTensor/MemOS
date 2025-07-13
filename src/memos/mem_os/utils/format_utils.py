@@ -508,6 +508,10 @@ def convert_graph_to_tree_forworkmem(
     for original_edge in original_edges:
         if original_edge["type"] == "PARENT":
             filter_original_edges.append(original_edge)
+    node_type_count = {}
+    for node in original_nodes:
+        node_type = node.get("metadata", {}).get("memory_type", "Unknown")
+        node_type_count[node_type] = node_type_count.get(node_type, 0) + 1
     original_edges = filter_original_edges
     # Use enhanced type-balanced sampling
     if len(original_nodes) > target_node_count:
@@ -524,11 +528,15 @@ def convert_graph_to_tree_forworkmem(
     node_map = {}
     for node in nodes:
         memory = node.get("memory", "")
+        node_name = extract_node_name(memory)
+        memory_key = node.get("metadata", {}).get("key", node_name)
+        usage = node.get("metadata", {}).get("usage",[])
+        frequency  = len(usage)
         node_map[node["id"]] = {
             "id": node["id"],
             "value": memory,
-            "frequency": random.randint(1, 100),
-            "node_name": extract_node_name(memory),
+            "frequency": frequency,
+            "node_name": memory_key,
             "memory_type": node.get("metadata", {}).get("memory_type", "Unknown"),
             "children": [],
         }
@@ -621,7 +629,7 @@ def convert_graph_to_tree_forworkmem(
         "frequency": 0,
     }
 
-    return result
+    return result, node_type_count
 
 
 def print_tree_structure(node: dict[str, Any], level: int = 0, max_level: int = 5):

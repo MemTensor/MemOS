@@ -1,5 +1,5 @@
 import os
-
+import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -539,7 +539,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id},
+                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
                 )
                 for mem in memories:
                     self.mem_cubes[mem_cube_id].text_mem.add(mem)
@@ -568,7 +568,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id},
+                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
                 )
                 for mem in memories:
                     self.mem_cubes[mem_cube_id].text_mem.add(mem)
@@ -581,7 +581,7 @@ class MOSCore:
             doc_memory = self.mem_reader.get_memory(
                 documents,
                 type="doc",
-                info={"user_id": target_user_id, "session_id": self.session_id},
+                info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
             )
             for mem in doc_memory:
                 self.mem_cubes[mem_cube_id].text_mem.add(mem)
