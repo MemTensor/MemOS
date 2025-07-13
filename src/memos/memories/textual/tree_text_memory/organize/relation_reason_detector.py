@@ -80,7 +80,7 @@ class RelationAndReasoningDetector:
         Vector/tag search ➜ For each candidate, use LLM to decide:
         - CAUSE
         - CONDITION
-        - RELATE_TO
+        - RELATE
         - CONFLICT
         """
         results = {"relations": []}
@@ -205,14 +205,6 @@ class RelationAndReasoningDetector:
             logger.warning(f"[LLM Error] {e}")
             return ""
 
-    def _parse_relation_result(self, response_text: str) -> str:
-        relation = response_text.strip().upper()
-        valid = {"CAUSE", "CONDITION", "RELATE_TO", "CONFLICT", "NONE"}
-        if relation not in valid:
-            logger.warning(f"[RelationDetector] Unexpected relation: {relation}. Fallback NONE.")
-            return "NONE"
-        return relation
-
     def _parse_json_result(self, response_text):
         try:
             response_text = response_text.replace("```", "").replace("json", "")
@@ -226,7 +218,7 @@ class RelationAndReasoningDetector:
         Normalize and validate the LLM relation type output.
         """
         relation = response_text.strip().upper()
-        valid = {"CAUSE", "CONDITION", "RELATE_TO", "CONFLICT", "NONE"}
+        valid = {"CAUSE", "CONDITION", "RELATE", "CONFLICT", "NONE"}
         if relation not in valid:
             logger.warning(
                 f"[RelationDetector] Unexpected relation type: {relation}. Fallback to NONE."
