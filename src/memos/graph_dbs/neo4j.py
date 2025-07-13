@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ClientError
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.graph_dbs.base import BaseGraphDB
@@ -990,8 +991,14 @@ class Neo4jGraphDB(BaseGraphDB):
             )
 
     def _ensure_database_exists(self):
-        with self.driver.session(database="system") as session:
-            session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
+        try:
+            with self.driver.session(database="system") as session:
+                session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
+        except ClientError as e:
+            if "ExistingDatabaseFound" in str(e):
+                pass  # Ignore, database already exists
+            else:
+                raise
 
         # Wait until the database is available
         for _ in range(10):
