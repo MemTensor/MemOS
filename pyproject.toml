@@ -27,6 +27,7 @@ sentence-transformers = "^4.1.0"
 sqlalchemy = "^2.0.41"
 redis = "^6.2.0"
 schedule = "^1.2.2"
+volcengine-python-sdk = "^4.0.4"
 
 [tool.poetry.group.dev]
 optional = false

@@ -1,6 +1,7 @@
 from typing import Any, ClassVar
 
 from memos.configs.embedder import EmbedderConfigFactory
+from memos.embedders.ark import ArkEmbedder
 from memos.embedders.base import BaseEmbedder
 from memos.embedders.ollama import OllamaEmbedder
 from memos.embedders.sentence_transformer import SenTranEmbedder
@@ -12,6 +13,7 @@ class EmbedderFactory(BaseEmbedder):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "ollama": OllamaEmbedder,
         "sentence_transformer": SenTranEmbedder,
+        "ark": ArkEmbedder,
     }
 
     @classmethod
