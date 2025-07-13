@@ -825,8 +825,10 @@ class MOSProduct(MOSCore):
             ],
             mem_cube_id=cube_id
         )
+        # Keep chat history under 30 messages by removing oldest conversation pair
         if len(self.chat_history_manager[user_id].chat_history) > 30:
-            self.chat_history_manager[user_id].chat_history.pop(0)
+            self.chat_history_manager[user_id].chat_history.pop(0)  # Remove oldest user message
+            self.chat_history_manager[user_id].chat_history.pop(0)  # Remove oldest assistant response
 
     def get_all(
         self,
