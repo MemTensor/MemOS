@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from transformers import AutoTokenizer
-
+from dotenv import load_dotenv
 from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -29,7 +29,9 @@ from memos.types import MessageList
 
 logger = get_logger(__name__)
 
-CUBE_PATH = "/tmp/data"
+load_dotenv()
+
+CUBE_PATH = os.getenv("MOS_CUBE_PATH", "/tmp/data/")
 with open("./tmp/fake_data.json") as f:
     MOCK_DATA = json.loads(f.read())
 
@@ -820,13 +822,15 @@ class MOSProduct(MOSCore):
         self.add(
             user_id=user_id,
             messages=[
-                {"role": "user", "content": query},
-                {"role": "assistant", "content": full_response}
+                {"role": "user", "content": query, "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))},
+                {"role": "assistant", "content": full_response, "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}
             ],
             mem_cube_id=cube_id
         )
+        # Keep chat history under 30 messages by removing oldest conversation pair
         if len(self.chat_history_manager[user_id].chat_history) > 30:
-            self.chat_history_manager[user_id].chat_history.pop(0)
+            self.chat_history_manager[user_id].chat_history.pop(0)  # Remove oldest user message
+            self.chat_history_manager[user_id].chat_history.pop(0)  # Remove oldest assistant response
 
     def get_all(
         self,

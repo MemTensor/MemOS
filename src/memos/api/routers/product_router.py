@@ -65,6 +65,8 @@ async def register_user(user_req: UserRegisterRequest):
         user_config, default_mem_cube = APIConfig.create_user_config(
             user_name=user_req.user_id, user_id=user_req.user_id
         )
+        logger.info(f"user_config: {user_config.model_dump(mode='json')}")
+        logger.info(f"default_mem_cube: {default_mem_cube.config.model_dump(mode='json')}")
         mos_product = get_mos_product_instance()
         # Register user with default config and mem cube
         result = mos_product.user_register(
