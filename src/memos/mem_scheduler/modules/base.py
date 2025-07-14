@@ -16,6 +16,7 @@ class BaseSchedulerModule:
         self.base_dir = Path(BASE_DIR)
 
         self._chat_llm = None
+        self._process_llm = None
         self._current_mem_cube_id: str | None = None
         self._current_mem_cube: GeneralMemCube | None = None
         self.mem_cubes: dict[str, GeneralMemCube] = {}
@@ -62,6 +63,15 @@ class BaseSchedulerModule:
     def chat_llm(self, value: BaseLLM) -> None:
         """The memory cube associated with this MemChat."""
         self._chat_llm = value
+
+
+    @property
+    def process_llm(self) -> BaseLLM:
+        return self._process_llm
+
+    @process_llm.setter
+    def process_llm(self, value: BaseLLM) -> None:
+        self._process_llm = value
 
     @property
     def mem_cube(self) -> GeneralMemCube:

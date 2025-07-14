@@ -1,4 +1,5 @@
 import os
+from typing import Literal, Optional
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.utils import get_json_file_model_schema
@@ -37,10 +38,17 @@ class GeneralMemCube(BaseMemCube):
             else None
         )
 
-    def load(self, dir: str) -> None:
+    def load(
+        self, 
+        dir: str, 
+        memory_types: Optional[list[Literal["text_mem", "act_mem", "para_mem"]]] = None
+    ) -> None:
         """Load memories.
         Args:
             dir (str): The directory containing the memory files.
+            memory_types (list[str], optional): List of memory types to load. 
+                If None, loads all available memory types.
+                Options: ["text_mem", "act_mem", "para_mem"]
         """
         loaded_schema = get_json_file_model_schema(os.path.join(dir, self.config.config_filename))
         if loaded_schema != self.config.model_schema:
@@ -48,35 +56,76 @@ class GeneralMemCube(BaseMemCube):
                 f"Configuration schema mismatch. Expected {self.config.model_schema}, "
                 f"but found {loaded_schema}."
             )
-        self.text_mem.load(dir) if self.text_mem else None
-        self.act_mem.load(dir) if self.act_mem else None
-        self.para_mem.load(dir) if self.para_mem else None
+        
+        # If no specific memory types specified, load all
+        if memory_types is None:
+            memory_types = ["text_mem", "act_mem", "para_mem"]
+        
+        # Load specified memory types
+        if "text_mem" in memory_types and self.text_mem:
+            self.text_mem.load(dir)
+            logger.debug(f"Loaded text_mem from {dir}")
+            
+        if "act_mem" in memory_types and self.act_mem:
+            self.act_mem.load(dir)
+            logger.info(f"Loaded act_mem from {dir}")
+            
+        if "para_mem" in memory_types and self.para_mem:
+            self.para_mem.load(dir)
+            logger.info(f"Loaded para_mem from {dir}")
 
-        logger.info(f"MemCube loaded successfully from {dir}")
+        logger.info(f"MemCube loaded successfully from {dir} (types: {memory_types})")
 
-    def dump(self, dir: str) -> None:
+    def dump(
+        self, 
+        dir: str, 
+        memory_types: Optional[list[Literal["text_mem", "act_mem", "para_mem"]]] = None
+    ) -> None:
         """Dump memories.
         Args:
             dir (str): The directory where the memory files will be saved.
+            memory_types (list[str], optional): List of memory types to dump. 
+                If None, dumps all available memory types.
+                Options: ["text_mem", "act_mem", "para_mem"]
         """
         if os.path.exists(dir) and os.listdir(dir):
             raise MemCubeError(
                 f"Directory {dir} is not empty. Please provide an empty directory for dumping."
             )
 
+        # Always dump config
         self.config.to_json_file(os.path.join(dir, self.config.config_filename))
-        self.text_mem.dump(dir) if self.text_mem else None
-        self.act_mem.dump(dir) if self.act_mem else None
-        self.para_mem.dump(dir) if self.para_mem else None
+        
+        # If no specific memory types specified, dump all
+        if memory_types is None:
+            memory_types = ["text_mem", "act_mem", "para_mem"]
+        
+        # Dump specified memory types
+        if "text_mem" in memory_types and self.text_mem:
+            self.text_mem.dump(dir)
+            logger.info(f"Dumped text_mem to {dir}")
+            
+        if "act_mem" in memory_types and self.act_mem:
+            self.act_mem.dump(dir)
+            logger.info(f"Dumped act_mem to {dir}")
+            
+        if "para_mem" in memory_types and self.para_mem:
+            self.para_mem.dump(dir)
+            logger.info(f"Dumped para_mem to {dir}")
 
-        logger.info(f"MemCube dumped successfully to {dir}")
+        logger.info(f"MemCube dumped successfully to {dir} (types: {memory_types})")
 
     @staticmethod
-    def init_from_dir(dir: str) -> "GeneralMemCube":
+    def init_from_dir(
+        dir: str, 
+        memory_types: Optional[list[Literal["text_mem", "act_mem", "para_mem"]]] = None
+    ) -> "GeneralMemCube":
         """Create a MemCube instance from a MemCube directory.
 
         Args:
             dir (str): The directory containing the memory files.
+            memory_types (list[str], optional): List of memory types to load. 
+                If None, loads all available memory types.
 
         Returns:
             MemCube: An instance of MemCube loaded with memories from the specified directory.
@@ -84,24 +133,28 @@ class GeneralMemCube(BaseMemCube):
         config_path = os.path.join(dir, "config.json")
         config = GeneralMemCubeConfig.from_json_file(config_path)
         mem_cube = GeneralMemCube(config)
-        mem_cube.load(dir)
+        mem_cube.load(dir, memory_types)
         return mem_cube
 
     @staticmethod
     def init_from_remote_repo(
-        cube_id: str, base_url: str = "https://huggingface.co/datasets"
+        cube_id: str, 
+        base_url: str = "https://huggingface.co/datasets",
+        memory_types: Optional[list[Literal["text_mem", "act_mem", "para_mem"]]] = None
     ) -> "GeneralMemCube":
         """Create a MemCube instance from a remote repository.
 
         Args:
-            repo (str): The repository name.
+            cube_id (str): The repository name.
             base_url (str): The base URL of the remote repository.
+            memory_types (list[str], optional): List of memory types to load. 
+                If None, loads all available memory types.
 
         Returns:
             MemCube: An instance of MemCube loaded with memories from the specified remote repository.
         """
         dir = download_repo(cube_id, base_url)
-        return GeneralMemCube.init_from_dir(dir)
+        return GeneralMemCube.init_from_dir(dir, memory_types)
 
     @property
     def text_mem(self) -> "BaseTextMemory | None":

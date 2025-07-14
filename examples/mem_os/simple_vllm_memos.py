@@ -2,6 +2,8 @@
 """
 Simple example demonstrating how to use VLLMLLM with an existing vLLM server.
 Requires a vLLM server to be running.
+Simple example demonstrating how to use VLLMLLM with an existing vLLM server.
+Requires a vLLM server to be running.
 """
 
 from memos.configs.llm import VLLMLLMConfig
@@ -14,7 +16,9 @@ def main():
     # Configuration for connecting to existing vLLM server
     config = VLLMLLMConfig(
         model_name_or_path="/mnt/afs/models/hf_models/Qwen2.5-7B",  # MUST MATCH the --model arg of vLLM server
+        model_name_or_path="/mnt/afs/models/hf_models/Qwen2.5-7B",  # MUST MATCH the --model arg of vLLM server
         api_key="",  # Not needed for local server
+        api_base="http://localhost:8088/v1",  # vLLM server address with /v1
         api_base="http://localhost:8088/v1",  # vLLM server address with /v1
         temperature=0.7,
         max_tokens=512,
@@ -34,6 +38,7 @@ def main():
     ]
     try:
         prompt = llm.build_vllm_kv_cache(system_messages)
+        print(f"✓ KV cache built successfully for prompt: '{prompt[:100]}...'")
         print(f"✓ KV cache built successfully for prompt: '{prompt[:100]}...'")
     except Exception as e:
         print(f"✗ Failed to build KV cache: {e}")

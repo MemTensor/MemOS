@@ -61,6 +61,7 @@ class LLMConfigFactory(BaseConfig):
         "ollama": OllamaLLMConfig,
         "huggingface": HFLLMConfig,
         "vllm": VLLMLLMConfig,
+        "huggingface_singleton": HFLLMConfig,  # Add singleton support
     }
 
     @field_validator("backend")

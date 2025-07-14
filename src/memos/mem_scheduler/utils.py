@@ -7,10 +7,10 @@ import yaml
 
 def extract_json_dict(text: str):
     text = text.strip()
-    patterns_to_remove = ["json'''", "latex'''", "'''"]
+    patterns_to_remove = ["json```", "```json", "latex```", "```latex", "```"]
     for pattern in patterns_to_remove:
         text = text.replace(pattern, "")
-    res = json.loads(text)
+    res = json.loads(text.strip())
     return res
 
 

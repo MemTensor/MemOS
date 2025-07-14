@@ -33,7 +33,17 @@ class VLLMLLM(BaseLLM):
             api_key=api_key, 
             base_url=getattr(self.config, "api_base", "http://localhost:8088/v1")
         )
+        api_key = getattr(self.config, "api_key", "dummy")
+        if not api_key:
+            api_key = "dummy"
+
+        import openai
+        self.client = openai.Client(
+            api_key=api_key, 
+            base_url=getattr(self.config, "api_base", "http://localhost:8088/v1")
+        )
     
+    def build_vllm_kv_cache(self, messages: Any) -> str:
     def build_vllm_kv_cache(self, messages: Any) -> str:
         """
         Build a KV cache from chat messages via one vLLM request.
@@ -57,7 +67,12 @@ class VLLMLLM(BaseLLM):
         
         if not prompt.strip():
             raise ValueError("Prompt is empty, cannot build KV cache.")
+            raise ValueError("Prompt is empty, cannot build KV cache.")
         
+        # 3. Send request to vLLM server to preload the KV cache
+        if self.client:
+            try:
+                # Use the processed messages for the API call
         # 3. Send request to vLLM server to preload the KV cache
         if self.client:
             try:
@@ -67,8 +82,14 @@ class VLLMLLM(BaseLLM):
                     "messages": processed_messages,
                     "max_tokens": 2,
                     "temperature": 0.0,
+                    "model": self.config.model_name_or_path,
+                    "messages": processed_messages,
+                    "max_tokens": 2,
+                    "temperature": 0.0,
                     "top_p": 1.0,
                 }
+                self.client.chat.completions.create(**prefill_kwargs)
+                logger.info(f"vLLM KV cache prefill completed for prompt: '{prompt[:100]}...'")
                 self.client.chat.completions.create(**prefill_kwargs)
                 logger.info(f"vLLM KV cache prefill completed for prompt: '{prompt[:100]}...'")
             except Exception as e:
@@ -81,6 +102,7 @@ class VLLMLLM(BaseLLM):
         Generate a response from the model.
         """
         if self.client:
+        if self.client:
             return self._generate_with_api_client(messages)
         else:
             raise RuntimeError("API client is not available")
@@ -90,7 +112,10 @@ class VLLMLLM(BaseLLM):
         Generate response using vLLM API client.
         """
         if self.client:
+        if self.client:
             completion_kwargs = {
+                "model": self.config.model_name_or_path,
+                "messages": messages,
                 "model": self.config.model_name_or_path,
                 "messages": messages,
                 "temperature": float(getattr(self.config, "temperature", 0.8)),
@@ -99,6 +124,9 @@ class VLLMLLM(BaseLLM):
             }
             
             response = self.client.chat.completions.create(**completion_kwargs)
+            response_text = response.choices[0].message.content or ""
+            logger.info(f"VLLM API response: {response_text}")
+            return remove_thinking_tags(response_text) if getattr(self.config, "remove_think_prefix", False) else response_text
             response_text = response.choices[0].message.content or ""
             logger.info(f"VLLM API response: {response_text}")
             return remove_thinking_tags(response_text) if getattr(self.config, "remove_think_prefix", False) else response_text
@@ -113,6 +141,7 @@ class VLLMLLM(BaseLLM):
         for msg in messages:
             role = msg["role"]
             content = msg["content"]
+            prompt_parts.append(f"{role.capitalize()}: {content}")
             prompt_parts.append(f"{role.capitalize()}: {content}")
         return "\n".join(prompt_parts)
     
