@@ -6,7 +6,7 @@ Requires a vLLM server to be running.
 
 from memos.configs.llm import VLLMLLMConfig
 from memos.llms.vllm import VLLMLLM
-from memos.types import MessageList
+from memos.types import MessageDict
 
 def main():
     """Main function demonstrating VLLMLLM usage."""
@@ -28,7 +28,7 @@ def main():
     
     # Test messages for KV cache building
     print("\nBuilding KV cache for system messages...")
-    system_messages: MessageList = [
+    system_messages: list[MessageDict] = [
         {"role": "system", "content": "You are a helpful AI assistant."},
         {"role": "user", "content": "Hello! Can you tell me about vLLM?"}
     ]
@@ -40,8 +40,8 @@ def main():
     
     # Test with different messages for generation
     print("\nGenerating response...")
-    user_messages: MessageList = [
-        {"role": "system", "content": "You are a helpful AI assistant."},
+    user_messages: list[MessageDict] = [
+        {"role": "system", "content": "You are a helpful AI assistant. Please Introduce yourself "},
         {"role": "user", "content": "What are the benefits of using vLLM?"}
     ]
     try:
