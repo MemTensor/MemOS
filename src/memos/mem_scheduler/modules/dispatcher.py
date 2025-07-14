@@ -1,3 +1,4 @@
+from typing import List, Dict, Optional
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -73,6 +74,40 @@ class SchedulerDispatcher(BaseSchedulerModule):
     def _default_message_handler(self, messages: list[ScheduleMessageItem]) -> None:
         logger.debug(f"Using _default_message_handler to deal with messages: {messages}")
 
+    def group_messages_by_user_and_cube(
+            self, messages: list[ScheduleMessageItem]
+    ) -> dict[str, dict[str, list[ScheduleMessageItem]]]:
+        """
+        Groups messages into a nested dictionary structure first by user_id, then by mem_cube_id.
+
+        Args:
+            messages: List of ScheduleMessageItem objects to be grouped
+
+        Returns:
+            A nested dictionary with the structure:
+            {
+                "user_id_1": {
+                    "mem_cube_id_1": [msg1, msg2, ...],
+                    "mem_cube_id_2": [msg3, msg4, ...],
+                    ...
+                },
+                "user_id_2": {
+                    ...
+                },
+                ...
+            }
+            Where each msg is the original ScheduleMessageItem object
+        """
+        grouped_dict = defaultdict(lambda: defaultdict(list))
+
+        for msg in messages:
+            grouped_dict[msg.user_id][msg.mem_cube_id].append(msg)
+
+        # Convert defaultdict to regular dict for cleaner output
+        return {user_id: dict(cube_groups)
+                for user_id, cube_groups in grouped_dict.items()}
+
+
     def dispatch(self, msg_list: list[ScheduleMessageItem]):
         """
         Dispatch a list of messages to their respective handlers.
@@ -98,6 +133,38 @@ class SchedulerDispatcher(BaseSchedulerModule):
             # dispatch to different handler
             logger.debug(f"Dispatch {len(msgs)} messages to {label} handler.")
             if self.enable_parallel_dispatch and self.dispatcher_executor is not None:
-                self.dispatcher_executor.submit(handler, msgs)
+                future = self.dispatcher_executor.submit(lambda: handler(msgs))
+                logger.debug(f"Dispatched {len(msgs)} messages as future task")
+                return future
             else:
-                handler(msgs)  # Direct serial execution
+                handler(msgs)
+                return None
+
+    def join(self, timeout: Optional[float] = None) -> bool:
+        """Wait for all dispatched tasks to complete.
+
+        Args:
+            timeout: Maximum time to wait in seconds. None means wait forever.
+
+        Returns:
+            bool: True if all tasks completed, False if timeout occurred.
+        """
+        if not self.enable_parallel_dispatch or self.dispatcher_executor is None:
+            return True  # 串行模式无需等待
+
+        self.dispatcher_executor.shutdown(wait=True, timeout=timeout)
+        return True
+
+    def shutdown(self) -> None:
+        """Gracefully shutdown the dispatcher."""
+        if self.dispatcher_executor is not None:
+            self.dispatcher_executor.shutdown(wait=True)
+        self._running = False
+        logger.info("Dispatcher has been shutdown")
+
+    def __enter__(self):
+        self._running = True
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()

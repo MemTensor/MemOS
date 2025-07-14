@@ -236,7 +236,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             on_message_callback=self.on_rabbitmq_message,
             auto_ack=False
         )
-        logger.info("Started consuming messages")
+        logger.info("Started rabbitmq consuming messages")
 
     def rabbitmq_publish_message(self, message: dict):
         """
