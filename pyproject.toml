@@ -28,7 +28,6 @@ sqlalchemy = "^2.0.41"
 redis = "^6.2.0"
 pika = "^1.3.2"
 schedule = "^1.2.2"
-pika = "^1.3.2"
 
 [tool.poetry.group.dev]
 optional = false
