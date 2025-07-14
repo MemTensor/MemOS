@@ -822,8 +822,8 @@ class MOSProduct(MOSCore):
         self.add(
             user_id=user_id,
             messages=[
-                {"role": "user", "content": query},
-                {"role": "assistant", "content": full_response}
+                {"role": "user", "content": query, "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))},
+                {"role": "assistant", "content": full_response, "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}
             ],
             mem_cube_id=cube_id
         )
