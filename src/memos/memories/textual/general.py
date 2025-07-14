@@ -7,7 +7,7 @@ from typing import Any
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from memos.configs.memory import GeneralTextMemoryConfig
-from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
+from memos.embedders.factory import ArkEmbedder, EmbedderFactory, OllamaEmbedder
 from memos.llms.factory import LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
@@ -28,7 +28,7 @@ class GeneralTextMemory(BaseTextMemory):
         self.config: GeneralTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM = LLMFactory.from_config(config.extractor_llm)
         self.vector_db: QdrantVecDB = VecDBFactory.from_config(config.vector_db)
-        self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
+        self.embedder: OllamaEmbedder | ArkEmbedder = EmbedderFactory.from_config(config.embedder)
 
     @retry(
         stop=stop_after_attempt(3),
