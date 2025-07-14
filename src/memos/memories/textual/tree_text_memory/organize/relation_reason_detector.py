@@ -54,20 +54,26 @@ class RelationAndReasoningDetector:
         )
         nearest = [GraphDBNode(**cand_data) for cand_data in nearest]
 
+        """
         # 1) Pairwise relations (including CAUSE/CONDITION/CONFLICT)
         pairwise = self._detect_pairwise_causal_condition_relations(node, nearest)
         results["relations"].extend(pairwise["relations"])
+        """
 
+        """
         # 2) Inferred nodes (from causal/condition)
         inferred = self._infer_fact_nodes_from_relations(pairwise)
         results["inferred_nodes"].extend(inferred)
+        """
 
-        # 3) Sequence (optional, if you have timestamps)
+        """
+        3) Sequence (optional, if you have timestamps)
         seq = self._detect_sequence_links(node, nearest)
         results["sequence_links"].extend(seq)
+        """
 
         # 4) Aggregate
-        agg = self._detect_aggregate_node_for_group(node, nearest, min_group_size=3)
+        agg = self._detect_aggregate_node_for_group(node, nearest, min_group_size=5)
         if agg:
             results["aggregate_nodes"].append(agg)
 
