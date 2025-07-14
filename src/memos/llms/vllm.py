@@ -1,14 +1,11 @@
 import asyncio
-from typing import Optional, Dict, Any
-
-import torch
-from transformers.cache_utils import DynamicCache
+from typing import Optional, Any, cast
 
 from memos.configs.llm import VLLMLLMConfig
 from memos.llms.base import BaseLLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
-from memos.types import MessageList
+from memos.types import MessageDict
 
 
 logger = get_logger(__name__)
@@ -27,179 +24,119 @@ class VLLMLLM(BaseLLM):
         
         # Initialize OpenAI client for API calls
         self.client = None
-        if hasattr(self.config, "api_key") and self.config.api_key:
-            import openai
-            self.client = openai.Client(
-                api_key=self.config.api_key, 
-                base_url=getattr(self.config, "api_base", "http://localhost:8088")
-            )
-        else:
-            # Create client without API key for local servers
-            import openai
-            self.client = openai.Client(
-                api_key="dummy",  # vLLM local server doesn't require real API key
-                base_url=getattr(self.config, "api_base", "http://localhost:8088")
-            )
+        api_key = getattr(self.config, "api_key", "dummy")
+        if not api_key:
+            api_key = "dummy"
+
+        import openai
+        self.client = openai.Client(
+            api_key=api_key, 
+            base_url=getattr(self.config, "api_base", "http://localhost:8088/v1")
+        )
     
-    def build_vllm_kv_cache(self, messages) -> str:
+    def build_vllm_kv_cache(self, messages: Any) -> str:
         """
         Build a KV cache from chat messages via one vLLM request.
-        Supports the following input types:
-            - str: Used as a system prompt.
-            - list[str]: Concatenated and used as a system prompt.
-            - list[dict]: Used directly as chat messages.
-        The messages are always converted to a standard chat template.
-        Raises:
-            ValueError: If the resulting prompt is empty after template processing.
-        Returns:
-            str: The constructed prompt string for vLLM KV cache building.
+        Handles str, list[str], and MessageList formats.
         """
-        # Accept multiple input types and convert to standard chat messages
+        # 1. Normalize input to a MessageList
+        processed_messages: list[MessageDict] = []
         if isinstance(messages, str):
-            messages = [
-                {
-                    "role": "system",
-                    "content": f"Below is some information about the user.\n{messages}",
-                }
-            ]
-        elif isinstance(messages, list) and messages and isinstance(messages[0], str):
-            # Handle list of strings
-            str_messages = [str(msg) for msg in messages]
-            messages = [
-                {
-                    "role": "system",
-                    "content": f"Below is some information about the user.\n{' '.join(str_messages)}",
-                }
-            ]
-        
-        # Convert messages to prompt string using the same logic as HFLLM
-        # Convert to MessageList format for _messages_to_prompt
-        if isinstance(messages, str):
-            message_list = [{"role": "system", "content": messages}]
-        elif isinstance(messages, list) and messages and isinstance(messages[0], str):
-            str_messages = [str(msg) for msg in messages]
-            message_list = [{"role": "system", "content": " ".join(str_messages)}]
-        else:
-            message_list = messages  # Assume it's already in MessageList format
-        
-        # Convert to proper MessageList type
-        from memos.types import MessageList
-        typed_message_list: MessageList = []
-        for msg in message_list:
-            if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                typed_message_list.append({
-                    "role": str(msg["role"]),
-                    "content": str(msg["content"])
-                })
-        
-        prompt = self._messages_to_prompt(typed_message_list)
+            processed_messages = [{"role": "system", "content": f"Below is some information about the user.\n{messages}"}]
+        elif isinstance(messages, list):
+            if not messages:
+                pass # Empty list
+            elif isinstance(messages[0], str):
+                str_content = " ".join(str(msg) for msg in messages)
+                processed_messages = [{"role": "system", "content": f"Below is some information about the user.\n{str_content}"}]
+            elif isinstance(messages[0], dict):
+                 processed_messages = cast(list[MessageDict], messages)
+
+        # 2. Convert to prompt for logging/return value.
+        prompt = self._messages_to_prompt(processed_messages)
         
         if not prompt.strip():
-            raise ValueError(
-                "Prompt after chat template is empty, cannot build KV cache. Check your messages input."
-            )
+            raise ValueError("Prompt is empty, cannot build KV cache.")
         
-        # Send a request to vLLM server to preload the KV cache
-        # This is done by sending a completion request with max_tokens=0
-        # which will cause vLLM to process the input but not generate any output
-        if self.client is not None:
-            # Convert messages to OpenAI format
-            openai_messages = []
-            for msg in messages:
-                openai_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-            
-            # Send prefill request to vLLM
+        # 3. Send request to vLLM server to preload the KV cache
+        if self.client:
             try:
+                # Use the processed messages for the API call
                 prefill_kwargs = {
-                    "model": "default",  # vLLM uses "default" as model name
-                    "messages": openai_messages,
-                    "max_tokens": 2,  # Don't generate any tokens, just prefill
-                    "temperature": 0.0,  # Use deterministic sampling for prefill
+                    "model": self.config.model_name_or_path,
+                    "messages": processed_messages,
+                    "max_tokens": 2,
+                    "temperature": 0.0,
                     "top_p": 1.0,
-                    "top_k": 1,
                 }
-                prefill_response = self.client.chat.completions.create(**prefill_kwargs)
-                logger.info(f"vLLM KV cache prefill completed for prompt length: {len(prompt)}")
+                self.client.chat.completions.create(**prefill_kwargs)
+                logger.info(f"vLLM KV cache prefill completed for prompt: '{prompt[:100]}...'")
             except Exception as e:
                 logger.warning(f"Failed to prefill vLLM KV cache: {e}")
-                # Continue anyway, as this is not critical for functionality
         
         return prompt 
     
-    def generate(self, messages: MessageList, past_key_values: Optional[DynamicCache] = None) -> str:
+    def generate(self, messages: list[MessageDict]) -> str:
         """
         Generate a response from the model.
-        Args:
-            messages (MessageList): Chat messages for prompt construction.
-        Returns:
-            str: Model response.
         """
-        if self.client is not None:
+        if self.client:
             return self._generate_with_api_client(messages)
         else:
             raise RuntimeError("API client is not available")
     
-    def _generate_with_api_client(self, messages: MessageList) -> str:
+    def _generate_with_api_client(self, messages: list[MessageDict]) -> str:
         """
         Generate response using vLLM API client.
         """
-        # Convert messages to OpenAI format
-        openai_messages = []
-        for msg in messages:
-            openai_messages.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
-        
-        # Generate response
-        if self.client is not None:
-            # Create completion request with proper parameter types
+        if self.client:
             completion_kwargs = {
-                "model": "default",  # vLLM uses "default" as model name
-                "messages": openai_messages,
+                "model": self.config.model_name_or_path,
+                "messages": messages,
                 "temperature": float(getattr(self.config, "temperature", 0.8)),
                 "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
                 "top_p": float(getattr(self.config, "top_p", 0.9)),
             }
             
-            # Add top_k only if it's greater than 0
-            top_k = getattr(self.config, "top_k", 50)
-            if top_k > 0:
-                completion_kwargs["top_k"] = int(top_k)
-            
             response = self.client.chat.completions.create(**completion_kwargs)
+            response_text = response.choices[0].message.content or ""
+            logger.info(f"VLLM API response: {response_text}")
+            return remove_thinking_tags(response_text) if getattr(self.config, "remove_think_prefix", False) else response_text
         else:
             raise RuntimeError("API client is not available")
-        
-        response_text = response.choices[0].message.content or ""
-        logger.info(f"VLLM API response: {response_text}")
-        
-        return (
-            remove_thinking_tags(response_text)
-            if getattr(self.config, "remove_think_prefix", False)
-            else response_text
-        )
     
-    def _messages_to_prompt(self, messages: MessageList) -> str:
+    def _messages_to_prompt(self, messages: list[MessageDict]) -> str:
         """
         Convert messages to prompt string.
         """
-        # Simple conversion - can be enhanced with proper chat template
         prompt_parts = []
         for msg in messages:
             role = msg["role"]
             content = msg["content"]
-            
-            if role == "system":
-                prompt_parts.append(f"System: {content}")
-            elif role == "user":
-                prompt_parts.append(f"User: {content}")
-            elif role == "assistant":
-                prompt_parts.append(f"Assistant: {content}")
-        
+            prompt_parts.append(f"{role.capitalize()}: {content}")
         return "\n".join(prompt_parts)
+    
+    def generate_stream(self, messages: list[MessageDict]):
+        """
+        Generate a response from the model using streaming.
+        Yields content chunks as they are received.
+        """
+        if self.client:
+            completion_kwargs = {
+                "model": self.config.model_name_or_path,
+                "messages": messages,
+                "temperature": float(getattr(self.config, "temperature", 0.8)),
+                "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
+                "top_p": float(getattr(self.config, "top_p", 0.9)),
+                "stream": True,  # Enable streaming
+            }
+            
+            stream = self.client.chat.completions.create(**completion_kwargs)
+            for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+        else:
+            raise RuntimeError("API client is not available")
     
     
