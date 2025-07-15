@@ -5023,6 +5023,26 @@ docs = ["furo (>=2023.7.26)", "proselint (>=0.13)", "sphinx (>=7.1.2,!=7.3)", "s
 test = ["covdefaults (>=2.3)", "coverage (>=7.2.7)", "coverage-enable-subprocess (>=1)", "flaky (>=3.7)", "packaging (>=23.1)", "pytest (>=7.4)", "pytest-env (>=0.8.2)", "pytest-freezer (>=0.4.8) ; platform_python_implementation == \"PyPy\" or platform_python_implementation == \"GraalVM\" or platform_python_implementation == \"CPython\" and sys_platform == \"win32\" and python_version >= \"3.13\"", "pytest-mock (>=3.11.1)", "pytest-randomly (>=3.12)", "pytest-timeout (>=2.1)", "setuptools (>=68)", "time-machine (>=2.10) ; platform_python_implementation == \"CPython\""]
 
 [[package]]
+name = "volcengine-python-sdk"
+version = "4.0.5"
+description = "Volcengine SDK for Python"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "volcengine-python-sdk-4.0.5.tar.gz", hash = "sha256:303e19437d0517e4043a97edb8a1e496782e73afbc13d09a1cb6756538d3b732"},
+]
+
+[package.dependencies]
+certifi = ">=2017.4.17"
+python-dateutil = ">=2.1"
+six = ">=1.10"
+urllib3 = ">=1.23"
+
+[package.extras]
+ark = ["anyio (>=3.5.0,<5)", "cached-property ; python_version < \"3.8\"", "cryptography (>=42.0.0)", "httpx (>=0.23.0,<1)", "pydantic (>=1.9.0,<3)"]
+
+[[package]]
 name = "watchfiles"
 version = "1.1.0"
 description = "Simple, modern and high performance file watching and code reload in python."
@@ -5515,4 +5535,4 @@ cffi = ["cffi (>=1.11)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "b56786e7bcdae03bbe0f031e2fe0bee284fef76534a3d3bfb24d6f70a44f4f0d"
+content-hash = "558e8a7a9293537be027d0a84beea695809de12b869e3739a25d4c59535a5e1b"
