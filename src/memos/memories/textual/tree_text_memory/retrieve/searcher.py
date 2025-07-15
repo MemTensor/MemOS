@@ -5,7 +5,7 @@ from datetime import datetime
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
-from memos.llms.factory import OllamaLLM, OpenAILLM
+from memos.llms.factory import OllamaLLM, OpenAILLM, AzureLLM
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 
 from .internet_retriever_factory import InternetRetrieverFactory
@@ -18,7 +18,7 @@ from .task_goal_parser import TaskGoalParser
 class Searcher:
     def __init__(
         self,
-        dispatcher_llm: OpenAILLM | OllamaLLM,
+        dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         internet_retriever: InternetRetrieverFactory | None = None,
