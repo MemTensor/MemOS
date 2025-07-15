@@ -24,4 +24,4 @@ serve:
 	poetry run uvicorn memos.api.start_api:app
 
 openapi:
-	memos export_openapi --output docs/openapi.json
+	poetry run memos export_openapi --output docs/openapi.json
