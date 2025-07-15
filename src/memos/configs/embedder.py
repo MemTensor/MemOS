@@ -47,10 +47,7 @@ class UniversalAPIEmbedderConfig(BaseEmbedderConfig):
         default=None, description="Optional base URL for custom or proxied endpoint"
     )
 
-    # Optional: support for extra params
-    extra_params: dict[str, Any] | None = Field(
-        default=None, description="Additional parameters for the API call if needed"
-    )
+# Removed the `extra_params` field as it is unused.
 
 
 class EmbedderConfigFactory(BaseConfig):
