@@ -52,7 +52,7 @@ class KVCacheMemoryConfig(BaseActMemoryConfig):
     @classmethod
     def validate_extractor_llm(cls, extractor_llm: LLMConfigFactory) -> LLMConfigFactory:
         """Validate the extractor_llm field."""
-        if extractor_llm.backend not in ["huggingface", "huggingface_singleton"]:
+        if extractor_llm.backend not in ["huggingface", "huggingface_singleton", "vllm"]:
             raise ConfigurationError(
                 f"KVCacheMemoryConfig requires extractor_llm backend to be 'huggingface' or 'huggingface_singleton', got '{extractor_llm.backend}'"
             )

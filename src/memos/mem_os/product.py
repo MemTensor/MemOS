@@ -751,8 +751,10 @@ class MOSProduct(MOSCore):
                     break
             if self.config.chat_model.backend == "huggingface":
                 response_stream = self.chat_llm.generate_stream(current_messages, past_key_values=past_key_values)
+            elif self.config.chat_model.backend == "vllm":
+                response_stream = self.chat_llm.generate_stream(current_messages)
         else:
-            if self.config.chat_model.backend == "huggingface":
+            if self.config.chat_model.backend in ["huggingface", "vllm"]:
                 response_stream = self.chat_llm.generate_stream(current_messages)
             else:
                 response_stream = self.chat_llm.generate(current_messages)
@@ -766,7 +768,7 @@ class MOSProduct(MOSCore):
         full_response = ""
 
         # Use tiktoken for proper token-based chunking
-        if self.config.chat_model.backend != "huggingface":
+        if self.config.chat_model.backend not in ["huggingface", "vllm"]:
             # For non-huggingface backends, we need to collect the full response first
             full_response_text = ""
             for chunk in response_stream:
@@ -882,8 +884,8 @@ class MOSProduct(MOSCore):
                 }
             )
         elif memory_type == "para_mem":
-            cache_item = self.mem_cubes[mem_cube_ids[0]].act_mem.extract("这是一个小问题哈哈哈哈")
-            self.mem_cubes[mem_cube_ids[0]].act_mem.add([cache_item])
+            # cache_item = self.mem_cubes[mem_cube_ids[0]].act_mem.extract("这是一个小问题哈哈哈哈")
+            # self.mem_cubes[mem_cube_ids[0]].act_mem.add([cache_item])
             act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
             # Convert activation memory to serializable format
             serializable_act_mem = convert_activation_memory_to_serializable(act_mem_params)

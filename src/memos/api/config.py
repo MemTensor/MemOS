@@ -41,6 +41,19 @@ class APIConfig:
         }
 
     @staticmethod
+    def vllm_config() -> dict[str, Any]:
+        """Get Qwen configuration."""
+        return {
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "Qwen/Qwen3-1.7B"),
+            "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
+            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "4096")),
+            "remove_think_prefix": True,
+            "api_key": os.getenv("VLLM_API_KEY", ""),
+            "api_base": os.getenv("VLLM_API_BASE", "http://localhost:8088/v1"),
+            "model_schema": os.getenv("MOS_MODEL_SCHEMA", "memos.configs.llm.VLLMLLMConfig")
+        }
+
+    @staticmethod
     def get_activation_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
@@ -58,6 +71,20 @@ class APIConfig:
                         "add_generation_prompt": True,
                         "remove_think_prefix": False,
                     },
+                },
+            },
+        }
+
+    @staticmethod
+    def get_activation_vllm_config() -> dict[str, Any]:
+        """Get Ollama configuration."""
+        return {
+            "backend": "kv_cache",
+            "config": {
+                "memory_filename": "activation_memory.pickle",
+                "extractor_llm": {
+                    "backend": "vllm",
+                    "config": APIConfig.vllm_config(),
                 },
             },
         }
@@ -108,13 +135,18 @@ class APIConfig:
         """Get default configuration for Product API."""
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
+        vllm_config = APIConfig.vllm_config()
+        backend_model = {
+            "openai": openai_config,
+            "huggingface": qwen_config,
+            "vllm": vllm_config,
+        }
+        backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         config = {
             "user_id": os.getenv("MOS_USER_ID", "root"),
             "chat_model": {
-                "backend": os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai"),
-                "config": openai_config
-                if os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai") == "openai"
-                else qwen_config,
+                "backend": backend,
+                "config": backend_model[backend]
             },
             "mem_reader": {
                 "backend": "simple_struct",
@@ -197,14 +229,19 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         neo4j_config = APIConfig.get_neo4j_config()
         qwen_config = APIConfig.qwen_config()
+        vllm_config = APIConfig.vllm_config()
+        backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
+        backend_model = {
+            "openai": openai_config,
+            "huggingface": qwen_config,
+            "vllm": vllm_config,
+        }
         # Create MOSConfig
         config_dict = {
             "user_id": user_id,
             "chat_model": {
-                "backend": os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai"),
-                "config": openai_config
-                if os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai") == "openai"
-                else qwen_config,
+                "backend": backend,
+                "config": backend_model[backend],
             },
             "mem_reader": {
                 "backend": "simple_struct",
@@ -280,7 +317,7 @@ class APIConfig:
                 },
                 "act_mem": {}
                 if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                else APIConfig.get_activation_config(),
+                else APIConfig.get_activation_vllm_config(),
                 "para_mem": {},
             }
         )
