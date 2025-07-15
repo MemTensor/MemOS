@@ -5,7 +5,7 @@ from memos.llms.base import BaseLLM
 from memos.llms.hf import HFLLM
 from memos.llms.hf_singleton import HFSingletonLLM
 from memos.llms.ollama import OllamaLLM
-from memos.llms.openai import OpenAILLM
+from memos.llms.openai import AzureLLM, OpenAILLM
 from memos.llms.vllm import VLLMLLM
 
 
@@ -14,6 +14,7 @@ class LLMFactory(BaseLLM):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "openai": OpenAILLM,
+        "azure": AzureLLM,
         "ollama": OllamaLLM,
         "huggingface": HFLLM,
         "huggingface_singleton": HFSingletonLLM,  # Add singleton version

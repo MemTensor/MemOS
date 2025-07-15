@@ -10,7 +10,7 @@ from typing import Any
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
-from memos.llms.factory import LLMFactory, OllamaLLM, OpenAILLM
+from memos.llms.factory import LLMFactory, OllamaLLM, OpenAILLM, AzureLLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -31,8 +31,12 @@ class TreeTextMemory(BaseTextMemory):
     def __init__(self, config: TreeTextMemoryConfig):
         """Initialize memory with the given configuration."""
         self.config: TreeTextMemoryConfig = config
-        self.extractor_llm: OpenAILLM | OllamaLLM = LLMFactory.from_config(config.extractor_llm)
-        self.dispatcher_llm: OpenAILLM | OllamaLLM = LLMFactory.from_config(config.dispatcher_llm)
+        self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
+            config.extractor_llm
+        )
+        self.dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
+            config.dispatcher_llm
+        )
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
         self.is_reorganize = config.reorganize
