@@ -5,6 +5,7 @@ from memos.embedders.ark import ArkEmbedder
 from memos.embedders.base import BaseEmbedder
 from memos.embedders.ollama import OllamaEmbedder
 from memos.embedders.sentence_transformer import SenTranEmbedder
+from memos.embedders.universal_api import UniversalAPIEmbedder
 
 
 class EmbedderFactory(BaseEmbedder):
@@ -14,6 +15,7 @@ class EmbedderFactory(BaseEmbedder):
         "ollama": OllamaEmbedder,
         "sentence_transformer": SenTranEmbedder,
         "ark": ArkEmbedder,
+        "universal_api": UniversalAPIEmbedder,
     }
 
     @classmethod

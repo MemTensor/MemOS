@@ -35,6 +35,19 @@ class SenTranEmbedderConfig(BaseEmbedderConfig):
     )
 
 
+class UniversalAPIEmbedderConfig(BaseEmbedderConfig):
+    """
+    Configuration class for universal API embedding providers, e.g.,
+    OpenAI, etc.
+    """
+
+    provider: str = Field(..., description="Provider name, e.g., 'openai'")
+    api_key: str = Field(..., description="API key for the embedding provider")
+    base_url: str | None = Field(
+        default=None, description="Optional base URL for custom or proxied endpoint"
+    )
+
+
 class EmbedderConfigFactory(BaseConfig):
     """Factory class for creating embedder configurations."""
 
@@ -45,6 +58,7 @@ class EmbedderConfigFactory(BaseConfig):
         "ollama": OllamaEmbedderConfig,
         "sentence_transformer": SenTranEmbedderConfig,
         "ark": ArkEmbedderConfig,
+        "universal_api": UniversalAPIEmbedderConfig,
     }
 
     @field_validator("backend")
