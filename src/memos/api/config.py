@@ -79,7 +79,7 @@ class APIConfig:
     def get_activation_vllm_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
-            "backend": "kv_cache",
+            "backend": "vllm_kv_cache",
             "config": {
                 "memory_filename": "activation_memory.pickle",
                 "extractor_llm": {
@@ -121,6 +121,7 @@ class APIConfig:
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"
                 ).lower()
                 == "true",
+                "enable_act_memory_update": True,
             },
         }
 
