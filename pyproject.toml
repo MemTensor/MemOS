@@ -58,6 +58,9 @@ python-dotenv = "^1.1.1"
 langgraph = "^0.5.1"
 langmem = "^0.0.27"
 
+[tool.poetry.scripts]
+memos = "memos.cli:main"
+
 [[tool.poetry.source]]
 name = "mirrors"
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
