@@ -30,6 +30,7 @@
       "user": "neo4j",
       "password": "12345678",
       "db_name": "shared-tree-textual-memory",
+      "user_name": "alice",
       "auto_create": true,
       "use_multi_db": false,
       "embedding_dimension": 768

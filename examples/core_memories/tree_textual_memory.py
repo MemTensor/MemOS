@@ -1,4 +1,3 @@
-import json
 import time
 
 from memos import log
@@ -28,12 +27,9 @@ def embed_memory_item(memory: str) -> list[float]:
     return embedder.embed([memory])[0]
 
 
-with open("examples/data/config/tree_config_shared_database.json", encoding="utf-8") as f:
-    data = json.load(f)
-# must set user_name when using shared database multi tenant mode.
-data["graph_db"]["config"]["user_name"] = "alice"
-tree_config = TreeTextMemoryConfig(**data)
-
+tree_config = TreeTextMemoryConfig.from_json_file(
+    "examples/data/config/tree_config_shared_database.json"
+)
 my_tree_textual_memory = TreeTextMemory(tree_config)
 my_tree_textual_memory.delete_all()
 
