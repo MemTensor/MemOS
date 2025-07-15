@@ -151,6 +151,16 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 pip install MemoryOS
 ```
 
+### Development Install
+
+To contribute to MemOS, clone the repository and install it in editable mode:
+
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+make install
+```
+
 ### Optional Dependencies
 
 #### Ollama Support
