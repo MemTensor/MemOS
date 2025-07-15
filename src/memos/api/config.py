@@ -360,6 +360,7 @@ class APIConfig:
                                 "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
                             },
                         },
+                        "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower() == "true",
                     },
                 },
                 "act_mem": {}
