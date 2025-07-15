@@ -39,7 +39,7 @@ my_tree_textual_memory.delete_all()
 
 # Create a memory reader instance
 reader_config = SimpleStructMemReaderConfig.from_json_file(
-    "examples/data/config/simple_struct_reader_config1.json"
+    "examples/data/config/simple_struct_reader_config.json"
 )
 reader = SimpleStructMemReader(reader_config)
 
