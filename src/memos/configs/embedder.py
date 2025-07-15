@@ -47,6 +47,7 @@ class UniversalAPIEmbedderConfig(BaseEmbedderConfig):
         default=None, description="Optional base URL for custom or proxied endpoint"
     )
 
+
 # Removed the `extra_params` field as it is unused.
 
 
