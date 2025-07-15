@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 
 from collections.abc import Generator
@@ -931,10 +932,25 @@ class MOSProduct(MOSCore):
                     }
                 )
         elif memory_type == "act_mem":
+            memories_list = []
+            act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
+            if act_mem_params:
+                memories_data = act_mem_params[0].model_dump()
+                records = memories_data.get("records", [])
+                for record in records["text_memories"]:
+                    memories_list.append(
+                        {
+                            "id": memories_data["id"],
+                            "text": record,
+                            "create_time": records["timestamp"],
+                            "size": random.randint(1, 20),
+                            "modify_times": 1,
+                        }
+                    )
             reformat_memory_list.append(
                 {
                     "cube_id": "xxxxxxxxxxxxxxxx" if not mem_cube_ids else mem_cube_ids[0],
-                    "memories": MOCK_DATA,
+                    "memories": memories_list,
                 }
             )
         elif memory_type == "para_mem":

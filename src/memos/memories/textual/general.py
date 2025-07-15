@@ -8,7 +8,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from memos.configs.memory import GeneralTextMemoryConfig
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
-from memos.llms.factory import LLMFactory, OllamaLLM, OpenAILLM, AzureLLM
+from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem
