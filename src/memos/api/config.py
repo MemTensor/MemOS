@@ -131,6 +131,11 @@ class APIConfig:
         return os.getenv("MOS_ENABLE_SCHEDULER", "false").lower() == "true"
 
     @staticmethod
+    def is_default_cube_config_enabled() -> bool:
+        """Check if default cube config is enabled via environment variable."""
+        return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "false").lower() == "true"
+
+    @staticmethod
     def get_product_default_config() -> dict[str, Any]:
         """Get default configuration for Product API."""
         openai_config = APIConfig.get_openai_config()
@@ -321,3 +326,45 @@ class APIConfig:
 
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
+
+    @staticmethod
+    def get_default_cube_config() -> GeneralMemCubeConfig | None:
+        """Get default cube configuration for product initialization.
+
+        Returns:
+            GeneralMemCubeConfig | None: Default cube configuration if enabled, None otherwise.
+        """
+        if not APIConfig.is_default_cube_config_enabled():
+            return None
+
+        openai_config = APIConfig.get_openai_config()
+        neo4j_config = APIConfig.get_neo4j_config()
+
+        return GeneralMemCubeConfig.model_validate(
+            {
+                "user_id": "default",
+                "cube_id": "default_cube",
+                "text_mem": {
+                    "backend": "tree_text",
+                    "config": {
+                        "extractor_llm": {"backend": "openai", "config": openai_config},
+                        "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                        "graph_db": {
+                            "backend": "neo4j",
+                            "config": neo4j_config,
+                        },
+                        "embedder": {
+                            "backend": "ollama",
+                            "config": {
+                                "model_name_or_path": "nomic-embed-text:latest",
+                                "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
+                            },
+                        },
+                    },
+                },
+                "act_mem": {}
+                if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
+                else APIConfig.get_activation_vllm_config(),
+                "para_mem": {},
+            }
+        )
