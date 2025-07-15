@@ -202,7 +202,7 @@ class GeneralTextMemory(BaseTextMemory):
 
     def _embed_one_sentence(self, sentence: str) -> list[float]:
         """Embed a single sentence."""
-        return self.embedder.embed(sentence)[0]
+        return self.embedder.embed([sentence])[0]
 
 
 EXTRACTION_PROMPT_PART_1 = f"""You are a memory extractor. Your task is to extract memories from the given messages.
