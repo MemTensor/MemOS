@@ -108,33 +108,11 @@ class SchedulerRetriever(BaseSchedulerModule):
                             f"Kept: '{text_memories[kept_idx][:100]}...' | "
                             f"Removed: '{text_memories[current_idx][:100]}...'"
                         )
+                        logger.info(removal_reasons)
                         break
 
                 if not is_duplicate:
                     to_keep.append(current_idx)
-
-            # Step 4: Log filtering results
-            # Log individual removal reasons
-            for idx, reason in removal_reasons.items():
-                logging.info(f"Removed memory #{idx}: {reason}")
-
-            # Log summary statistics
-            removed_count = len(text_memories) - len(to_keep)
-            removal_percentage = (removed_count / len(text_memories)) * 100
-
-            logging.info(
-                f"Memory filtering complete. "
-                f"Original: {len(text_memories)} | "
-                f"Kept: {len(to_keep)} | "
-                f"Removed: {removed_count} ({removal_percentage:.1f}%)"
-            )
-
-            # Log some examples of kept memories
-            sample_size = min(3, len(to_keep))
-            for i in range(sample_size):
-                logging.debug(
-                    f"Sample kept memory #{i + 1}: '{text_memories[to_keep[i]][:200]}...'"
-                )
 
             # Return filtered memories
             return [text_memories[i] for i in sorted(to_keep)]

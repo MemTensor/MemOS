@@ -40,19 +40,24 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.retriever = self.scheduler.retriever
 
         # Mock logging to verify messages
-        self.logging_patch = patch("logging.info")
-        self.mock_logging = self.logging_patch.start()
+        self.logging_warning_patch = patch("logging.warning")
+        self.mock_logging_warning = self.logging_warning_patch.start()
+
+        self.logger_info_patch = patch("memos.mem_scheduler.modules.retriever.logger.info")
+        self.mock_logger_info = self.logger_info_patch.start()
 
     def tearDown(self):
         """Clean up patches."""
-        self.logging_patch.stop()
+        self.logging_warning_patch.stop()
+        self.logger_info_patch.stop()
 
     def test_filter_similar_memories_empty_input(self):
         """Test filter_similar_memories with empty input list."""
         result = self.retriever.filter_similar_memories([])
         self.assertEqual(result, [])
-        # The actual implementation uses logging.warning, not logging.info
-        # So we don't need to assert the logging call
+        self.mock_logging_warning.assert_called_with(
+            "Received empty memories list - nothing to filter"
+        )
 
     def test_filter_similar_memories_no_duplicates(self):
         """Test filter_similar_memories with no duplicate memories."""
@@ -77,10 +82,11 @@ class TestSchedulerRetriever(unittest.TestCase):
         ]
 
         result = self.retriever.filter_similar_memories(memories, similarity_threshold=0.8)
-        # The current implementation has a bug with variable names, so we just test it doesn't crash
-        # and returns a list of the same length as input (due to error handling)
-        self.assertEqual(len(result), len(memories))
-        # Don't assert logging calls since the implementation has issues
+        self.assertLess(len(result), len(memories))
+        self.assertIn("This is a completely different memory", result)
+
+        # Verify logging was called for removed items
+        self.assertGreater(self.mock_logger_info.call_count, 0)
 
     def test_filter_similar_memories_error_handling(self):
         """Test filter_similar_memories error handling."""
@@ -121,9 +127,6 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.assertEqual(len(result), 3)
         self.assertNotIn("Too short", result)
         self.assertNotIn("Nope", result)
-
-        # Verify logging was called for removed items
-        self.mock_logging.assert_called_once()
 
     def test_filter_too_short_memories_edge_case(self):
         """Test filter_too_short_memories with edge case length."""
