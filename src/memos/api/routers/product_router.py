@@ -89,6 +89,7 @@ async def register_user(user_req: UserRegisterRequest):
         logger.error(f"Failed to register user: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
+
 @router.get(
     "/suggestions/{user_id}", summary="Get suggestion queries", response_model=SuggestionResponse
 )
@@ -107,14 +108,17 @@ async def get_suggestion_queries(user_id: str):
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
 
-@router.post("/suggestions", summary="Get suggestion queries with language", response_model=SuggestionResponse)
+@router.post(
+    "/suggestions",
+    summary="Get suggestion queries with language",
+    response_model=SuggestionResponse,
+)
 async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
     """Get suggestion queries for a specific user with language preference."""
     try:
         mos_product = get_mos_product_instance()
         suggestions = mos_product.get_suggestion_query(
-            user_id=suggestion_req.user_id, 
-            language=suggestion_req.language
+            user_id=suggestion_req.user_id, language=suggestion_req.language
         )
         return SuggestionResponse(
             message="Suggestions retrieved successfully", data={"query": suggestions}
@@ -203,7 +207,7 @@ async def chat(chat_req: ChatRequest):
             """Generate chat response as SSE stream."""
             try:
                 import asyncio
-                
+
                 for chunk in mos_product.chat_with_references(
                     query=chat_req.query,
                     user_id=chat_req.user_id,

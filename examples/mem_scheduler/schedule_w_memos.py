@@ -1,35 +1,22 @@
 import shutil
 import sys
-from typing import TYPE_CHECKING
+
 from datetime import datetime
 from pathlib import Path
-from queue import Queue
 
-from memos.configs.mem_scheduler import AuthConfig
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
-from memos.configs.mem_scheduler import SchedulerConfigFactory
+from memos.configs.mem_scheduler import AuthConfig, SchedulerConfigFactory
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.modules.schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    ScheduleLogForWebItem,
     ScheduleMessageItem,
 )
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.utils import parse_yaml
-
-
-
-
-if TYPE_CHECKING:
-    from memos.mem_scheduler.modules.schemas import (
-        ScheduleLogForWebItem,
-    )
-
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -80,6 +67,7 @@ def init_task():
         {"question": "What food should I avoid due to allergy?", "category": "Allergy"},
     ]
     return conversations, questions
+
 
 def run_with_automatic_scheduler_init():
     print("==== run_with_automatic_scheduler_init ====")

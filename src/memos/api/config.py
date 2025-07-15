@@ -50,7 +50,7 @@ class APIConfig:
             "remove_think_prefix": True,
             "api_key": os.getenv("VLLM_API_KEY", ""),
             "api_base": os.getenv("VLLM_API_BASE", "http://localhost:8088/v1"),
-            "model_schema": os.getenv("MOS_MODEL_SCHEMA", "memos.configs.llm.VLLMLLMConfig")
+            "model_schema": os.getenv("MOS_MODEL_SCHEMA", "memos.configs.llm.VLLMLLMConfig"),
         }
 
     @staticmethod
@@ -143,10 +143,7 @@ class APIConfig:
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         config = {
             "user_id": os.getenv("MOS_USER_ID", "root"),
-            "chat_model": {
-                "backend": backend,
-                "config": backend_model[backend]
-            },
+            "chat_model": {"backend": backend, "config": backend_model[backend]},
             "mem_reader": {
                 "backend": "simple_struct",
                 "config": {

@@ -1,10 +1,9 @@
-import json
 import sys
-from datetime import datetime
 import unittest
-from unittest.mock import ANY
+
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.llms.base import BaseLLM
@@ -13,7 +12,6 @@ from memos.mem_scheduler.modules.monitor import SchedulerMonitor
 from memos.mem_scheduler.modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.modules.schemas import (
     ANSWER_LABEL,
-    DEFAULT_ACT_MEM_DUMP_PATH,
     QUERY_LABEL,
     ScheduleLogForWebItem,
     ScheduleMessageItem,
@@ -76,10 +74,7 @@ class TestGeneralScheduler(unittest.TestCase):
         )
 
         # Mock the detect_intent method to return a valid result
-        mock_intent_result = {
-            "trigger_retrieval": False,
-            "missing_evidences": []
-        }
+        mock_intent_result = {"trigger_retrieval": False, "missing_evidences": []}
 
         # Mock the process_session_turn method
         with (
@@ -143,37 +138,25 @@ class TestGeneralScheduler(unittest.TestCase):
                 user_id="test_user",
                 mem_cube_id="test_cube",
                 mem_cube=mem_cube,
-                top_k=10
+                top_k=10,
             )
 
             # Verify method calls
             mock_detect.assert_called_once_with(
-                q_list=["Test query"],
-                text_working_memory=["Memory 1", "Memory 2"]
+                q_list=["Test query"], text_working_memory=["Memory 1", "Memory 2"]
             )
 
             # Verify search calls - using ANY for the method since we can't predict the exact value
             mock_search.assert_has_calls(
                 [
-                    call(
-                        query="Evidence 1",
-                        mem_cube=mem_cube,
-                        top_k=5,
-                        method=ANY
-                    ),
-                    call(
-                        query="Evidence 2",
-                        mem_cube=mem_cube,
-                        top_k=5,
-                        method=ANY
-                    ),
+                    call(query="Evidence 1", mem_cube=mem_cube, top_k=5, method=ANY),
+                    call(query="Evidence 2", mem_cube=mem_cube, top_k=5, method=ANY),
                 ],
-                any_order=True
+                any_order=True,
             )
 
             # Verify replace call - we'll check the structure but not the exact memory items
             self.assertEqual(mock_replace.call_count, 1)
-
 
     def test_submit_web_logs(self):
         """Test submission of web logs with updated data structure."""
@@ -247,15 +230,12 @@ class TestGeneralScheduler(unittest.TestCase):
         # Setup mock search results for both memory types
         self.tree_text_memory.search.side_effect = [
             [],  # results_long_term
-            []  # results_user
+            [],  # results_user
         ]
 
         # Test search
         results = self.scheduler.retriever.search(
-            query="Test query",
-            mem_cube=mock_mem_cube,
-            top_k=5,
-            method=TreeTextMemory_SEARCH_METHOD
+            query="Test query", mem_cube=mock_mem_cube, top_k=5, method=TreeTextMemory_SEARCH_METHOD
         )
 
         # Verify results
@@ -264,17 +244,8 @@ class TestGeneralScheduler(unittest.TestCase):
         # Verify search was called twice (for LongTermMemory and UserMemory)
         self.assertEqual(self.tree_text_memory.search.call_count, 2)
         self.tree_text_memory.search.assert_any_call(
-            query="Test query",
-            top_k=5,
-            memory_type="LongTermMemory"
+            query="Test query", top_k=5, memory_type="LongTermMemory"
         )
         self.tree_text_memory.search.assert_any_call(
-            query="Test query",
-            top_k=5,
-            memory_type="UserMemory"
+            query="Test query", top_k=5, memory_type="UserMemory"
         )
-
-
-
-
-

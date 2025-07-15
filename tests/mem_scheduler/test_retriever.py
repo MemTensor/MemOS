@@ -1,26 +1,14 @@
-import json
 import sys
-from datetime import datetime
 import unittest
-from unittest.mock import ANY
+
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.monitor import SchedulerMonitor
-from memos.mem_scheduler.modules.retriever import SchedulerRetriever
-from memos.mem_scheduler.modules.schemas import (
-    ANSWER_LABEL,
-    DEFAULT_ACT_MEM_DUMP_PATH,
-    QUERY_LABEL,
-    ScheduleLogForWebItem,
-    ScheduleMessageItem,
-    TreeTextMemory_SEARCH_METHOD,
-)
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.memories.textual.tree import TreeTextMemory
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -52,7 +40,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.retriever = self.scheduler.retriever
 
         # Mock logging to verify messages
-        self.logging_patch = patch('logging.info')
+        self.logging_patch = patch("logging.info")
         self.mock_logging = self.logging_patch.start()
 
     def tearDown(self):
@@ -71,7 +59,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         memories = [
             "This is a completely unique first memory",
             "This second memory is also totally unique",
-            "And this third one has nothing in common with the others"
+            "And this third one has nothing in common with the others",
         ]
 
         result = self.retriever.filter_similar_memories(memories)
@@ -85,7 +73,7 @@ class TestSchedulerRetriever(unittest.TestCase):
             "This is a memory about dogs and cats and birds",
             "This is a completely different memory",
             "This is a memory about dogs and cats",  # Exact duplicate
-            "This is a memory about DOGS and CATS"  # Near duplicate with different case
+            "This is a memory about DOGS and CATS",  # Near duplicate with different case
         ]
 
         result = self.retriever.filter_similar_memories(memories, similarity_threshold=0.8)
@@ -111,7 +99,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         memories = [
             "This memory is definitely long enough to be kept",
             "This one is also sufficiently lengthy to pass the filter",
-            "And this third memory meets the minimum length requirements too"
+            "And this third memory meets the minimum length requirements too",
         ]
 
         result = self.retriever.filter_too_short_memories(memories, min_length_threshold=5)
@@ -125,7 +113,7 @@ class TestSchedulerRetriever(unittest.TestCase):
             "Too short",  # 2 words
             "This one passes",  # 3 words (assuming threshold is 3)
             "Nope",  # 1 word
-            "This is also acceptable"  # 4 words
+            "This is also acceptable",  # 4 words
         ]
 
         # Test with word count threshold of 3
@@ -139,16 +127,13 @@ class TestSchedulerRetriever(unittest.TestCase):
 
     def test_filter_too_short_memories_edge_case(self):
         """Test filter_too_short_memories with edge case length."""
-        memories = [
-            "Exactly three words here",
-            "Two words only",
-            "One",
-            "Four words right here"
-        ]
+        memories = ["Exactly three words here", "Two words only", "One", "Four words right here"]
 
         # Test with threshold exactly matching some memories
         # The implementation uses word count, not character count
         result = self.retriever.filter_too_short_memories(memories, min_length_threshold=3)
-        self.assertEqual(len(result), 3)  # "Exactly three words here", "Two words only", "Four words right here"
+        self.assertEqual(
+            len(result), 3
+        )  # "Exactly three words here", "Two words only", "Four words right here"
         self.assertIn("Exactly three words here", result)
         self.assertIn("Four words right here", result)

@@ -179,9 +179,7 @@ class Searcher:
             meta_data = item.metadata.model_dump()
             if "relativity" not in meta_data:
                 meta_data["relativity"] = score
-            new_meta = SearchedTreeNodeTextualMemoryMetadata(
-                **meta_data
-            )
+            new_meta = SearchedTreeNodeTextualMemoryMetadata(**meta_data)
             searched_res.append(
                 TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)
             )

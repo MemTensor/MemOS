@@ -1,16 +1,18 @@
 import shutil
 import sys
+
 from pathlib import Path
 from queue import Queue
 from typing import TYPE_CHECKING
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
-from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler as MOS
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
+from memos.mem_cube.general import GeneralMemCube
+from memos.mem_scheduler.general_scheduler import GeneralScheduler
+from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
+
 
 if TYPE_CHECKING:
     from memos.mem_scheduler.modules.schemas import (
@@ -27,11 +29,23 @@ logger = get_logger(__name__)
 
 def init_task():
     conversations = [
-        {"role": "user", "content": "I have two dogs - Max (golden retriever) and Bella (pug). We live in Seattle."},
+        {
+            "role": "user",
+            "content": "I have two dogs - Max (golden retriever) and Bella (pug). We live in Seattle.",
+        },
         {"role": "assistant", "content": "Great! Any special care for them?"},
-        {"role": "user", "content": "Max needs joint supplements. Actually, we're moving to Chicago next month."},
-        {"role": "user", "content": "Correction: Bella is 6, not 5. And she's allergic to chicken."},
-        {"role": "user", "content": "My partner's cat Whiskers visits weekends. Bella chases her sometimes."},
+        {
+            "role": "user",
+            "content": "Max needs joint supplements. Actually, we're moving to Chicago next month.",
+        },
+        {
+            "role": "user",
+            "content": "Correction: Bella is 6, not 5. And she's allergic to chicken.",
+        },
+        {
+            "role": "user",
+            "content": "My partner's cat Whiskers visits weekends. Bella chases her sometimes.",
+        },
     ]
 
     questions = [
@@ -40,42 +54,38 @@ def init_task():
             "question": "What breed is Max?",
             "category": "Pet",
             "expected": "golden retriever",
-            "difficulty": "easy"
+            "difficulty": "easy",
         },
-
         # 2. Temporal context (medium)
         {
             "question": "Where will I live next month?",
             "category": "Location",
             "expected": "Chicago",
-            "difficulty": "medium"
+            "difficulty": "medium",
         },
-
         # 3. Information correction (hard)
         {
             "question": "How old is Bella really?",
             "category": "Pet",
             "expected": "6",
             "difficulty": "hard",
-            "hint": "User corrected the age later"
+            "hint": "User corrected the age later",
         },
-
         # 4. Relationship inference (harder)
         {
             "question": "Why might Whiskers be nervous around my pets?",
             "category": "Behavior",
             "expected": "Bella chases her sometimes",
-            "difficulty": "harder"
+            "difficulty": "harder",
         },
-
         # 5. Combined medical info (hardest)
         {
             "question": "Which pets have health considerations?",
             "category": "Health",
             "expected": "Max needs joint supplements, Bella is allergic to chicken",
             "difficulty": "hardest",
-            "requires": ["combining multiple facts", "ignoring outdated info"]
-        }
+            "requires": ["combining multiple facts", "ignoring outdated info"],
+        },
     ]
     return conversations, questions
 
@@ -114,6 +124,7 @@ def show_web_logs(mem_scheduler: GeneralScheduler):
     print(f"\nTotal {log_count} web log entries displayed.")
     print("=" * 110 + "\n")
 
+
 if __name__ == "__main__":
     # set up data
     conversations, questions = init_task()
@@ -137,11 +148,10 @@ if __name__ == "__main__":
         mem_cube_config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
 
     # Initialization
-    mos = MOS(mos_config)
+    mos = MOSForTestScheduler(mos_config)
 
     user_id = "user_1"
     mos.create_user(user_id)
-
 
     mem_cube_id = "mem_cube_5"
     mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
@@ -167,11 +177,8 @@ if __name__ == "__main__":
             mem_cube_id=mem_cube_id,
             mem_cube=mem_cube,
             top_k=10,
-            query_history=None
+            query_history=None,
         )
-
-        # response = mos.chat(query, user_id=user_id)
-        # print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
     show_web_logs(mos.mem_scheduler)
 

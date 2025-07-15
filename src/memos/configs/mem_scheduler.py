@@ -1,15 +1,17 @@
-from typing import Any, ClassVar
+import os
+
 from pathlib import Path
+from typing import Any, ClassVar
+
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
-from memos.mem_scheduler.utils import parse_yaml
 from memos.mem_scheduler.modules.schemas import (
     BASE_DIR,
-    DictConversionMixin,
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_THREAD__POOL_MAX_WORKERS,
+    DictConversionMixin,
 )
 
 
@@ -83,9 +85,10 @@ class SchedulerConfigFactory(BaseConfig):
         return self
 
 
-
 # ************************* Auth *************************
-class RabbitMQConfig(BaseConfig, ):
+class RabbitMQConfig(
+    BaseConfig,
+):
     host_name: str = Field(default="", description="Endpoint for RabbitMQ instance access")
     user_name: str = Field(default="", description="Static username for RabbitMQ instance")
     password: str = Field(default="", description="Password for the static username")
@@ -100,8 +103,10 @@ class RabbitMQConfig(BaseConfig, ):
         le=65535,  # Port must be <= 65535
     )
 
+
 class GraphDBAuthConfig(BaseConfig):
     uri: str = Field(default="localhost", description="URI for graph database access")
+
 
 class OpenAIConfig(BaseConfig):
     api_key: str = Field(default="", description="API key for OpenAI service")

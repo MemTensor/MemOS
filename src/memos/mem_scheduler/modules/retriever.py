@@ -1,47 +1,25 @@
-import json
 import logging
-from typing import Any, List, Dict
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-from click import style
-from memos.mem_scheduler.modules.misc import AutoDroppingQueue as Queue
-from memos.log import get_logger
+from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
-from memos.configs.mem_scheduler import BaseSchedulerConfig
-from memos.mem_scheduler.utils import extract_json_dict
-from memos.memories.textual.tree import TreeTextMemory
-from memos.mem_scheduler.utils import normalize_name
 from memos.mem_scheduler.modules.schemas import (
-    MemoryMonitorManager,
-    UserID,
-    MemCubeID,
-    USER_MEMORY_TYPE,
-    DEFAULT_CONSUME_INTERVAL_SECONDS,
-    DEFAULT_THREAD__POOL_MAX_WORKERS,
-    QUERY_LABEL,
-    ANSWER_LABEL,
-    ACTIVATION_MEMORY_TYPE,
-    LONG_TERM_MEMORY_TYPE,
-    WORKING_MEMORY_TYPE,
-    DEFAULT_ACT_MEM_DUMP_PATH,
-    NOT_INITIALIZED,
-    ScheduleLogForWebItem,
-    ScheduleMessageItem,
-    TextMemory_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
 )
+from memos.mem_scheduler.utils import extract_json_dict, normalize_name
+from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+
 
 logger = get_logger(__name__)
 
 
-
 class SchedulerRetriever(BaseSchedulerModule):
-    def __init__(self, process_llm: BaseLLM,
-                 config: BaseSchedulerConfig):
+    def __init__(self, process_llm: BaseLLM, config: BaseSchedulerConfig):
         super().__init__()
 
         self.config: BaseSchedulerConfig = config
@@ -54,11 +32,9 @@ class SchedulerRetriever(BaseSchedulerModule):
         # log function callbacks
         self.log_working_memory_replacement = None
 
-
-    def search(self, query: str,
-               mem_cube: GeneralMemCube,
-               top_k: int,
-               method=TreeTextMemory_SEARCH_METHOD):
+    def search(
+        self, query: str, mem_cube: GeneralMemCube, top_k: int, method=TreeTextMemory_SEARCH_METHOD
+    ):
         """Search in text memory with the given query.
 
         Args:
@@ -74,13 +50,11 @@ class SchedulerRetriever(BaseSchedulerModule):
             if method == TreeTextMemory_SEARCH_METHOD:
                 assert isinstance(text_mem_base, TreeTextMemory)
                 results_long_term = text_mem_base.search(
-                    query=query,
-                    top_k=top_k,
-                    memory_type="LongTermMemory"
+                    query=query, top_k=top_k, memory_type="LongTermMemory"
                 )
-                results_user = text_mem_base.search(query=query,
-                                                    top_k=top_k,
-                                                    memory_type="UserMemory")
+                results_user = text_mem_base.search(
+                    query=query, top_k=top_k, memory_type="UserMemory"
+                )
                 results = results_long_term + results_user
             else:
                 raise NotImplementedError(str(type(text_mem_base)))
@@ -90,10 +64,8 @@ class SchedulerRetriever(BaseSchedulerModule):
         return results
 
     def filter_similar_memories(
-            self,
-            text_memories: List[str],
-            similarity_threshold: float = 0.75
-        ) -> List[str]:
+        self, text_memories: list[str], similarity_threshold: float = 0.75
+    ) -> list[str]:
         """
         Filters out low-quality or duplicate memories based on text similarity.
 
@@ -147,30 +119,33 @@ class SchedulerRetriever(BaseSchedulerModule):
                 logging.info(f"Removed memory #{idx}: {reason}")
 
             # Log summary statistics
-            removed_count = len(original_memories) - len(kept_indices)
-            removal_percentage = (removed_count / len(original_memories)) * 100
+            removed_count = len(text_memories) - len(to_keep)
+            removal_percentage = (removed_count / len(text_memories)) * 100
 
             logging.info(
                 f"Memory filtering complete. "
-                f"Original: {len(original_memories)} | "
-                f"Kept: {len(kept_indices)} | "
+                f"Original: {len(text_memories)} | "
+                f"Kept: {len(to_keep)} | "
                 f"Removed: {removed_count} ({removal_percentage:.1f}%)"
             )
 
             # Log some examples of kept memories
-            sample_size = min(3, len(kept_indices))
+            sample_size = min(3, len(to_keep))
             for i in range(sample_size):
-                logging.debug(f"Sample kept memory #{i + 1}: '{original_memories[kept_indices[i]][:200]}...'")
+                logging.debug(
+                    f"Sample kept memory #{i + 1}: '{text_memories[to_keep[i]][:200]}...'"
+                )
 
             # Return filtered memories
             return [text_memories[i] for i in sorted(to_keep)]
 
         except Exception as e:
-            logging.error(f"Error filtering memories: {str(e)}")
+            logging.error(f"Error filtering memories: {e!s}")
             return text_memories  # Return original list if error occurs
 
-    def filter_too_short_memories(self, text_memories: List[str],
-                                  min_length_threshold: int = 20) -> List[str]:
+    def filter_too_short_memories(
+        self, text_memories: list[str], min_length_threshold: int = 20
+    ) -> list[str]:
         """
         Filters out memories that are too short to be meaningful.
 
@@ -203,29 +178,29 @@ class SchedulerRetriever(BaseSchedulerModule):
 
         return filtered_memories
 
-
     def replace_working_memory(
-            self,
-            queries: List[str],
-            user_id: str,
-            mem_cube_id: str,
-            mem_cube: GeneralMemCube,
-            original_memory: List[TextualMemoryItem],
-            new_memory: List[TextualMemoryItem],
-            top_k: int = 10,
+        self,
+        queries: list[str],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        original_memory: list[TextualMemoryItem],
+        new_memory: list[TextualMemoryItem],
+        top_k: int = 10,
     ) -> None | list[TextualMemoryItem]:
-        """Replace working memory with new memories after reranking.
-        """
+        """Replace working memory with new memories after reranking."""
         memories_with_new_order = None
         text_mem_base = mem_cube.text_mem
         if isinstance(text_mem_base, TreeTextMemory):
             text_mem_base: TreeTextMemory = text_mem_base
             combined_memory = original_memory + new_memory
-            memory_map = {normalize_name(text=mem_obj.memory): mem_obj for mem_obj in combined_memory}
+            memory_map = {
+                normalize_name(text=mem_obj.memory): mem_obj for mem_obj in combined_memory
+            }
             combined_text_memory = [normalize_name(text=m.memory) for m in combined_memory]
 
             # apply filters
-            # TODO：需要验证一下
+            # TODO: need to verify
             """
             Log Entry #8:
 - log: item_id='7b92fffa-7cb8-403e-9396-78f1d11e4f6e' user_id='user_1' mem_cube_id='mem_cube_5' label='query' from_memory_type='UserMemory' to_memory_type='WorkingMemory' log_content='The user is planning to move to Chicago next month, although the exact date of the move is unclear.' current_memory_sizes={'long_term_memory_size': 209, 'user_memory_size': 605, 'working_memory_size': 20, 'transformed_act_memory_size': -1} memory_capacities={'long_term_memory_capacity': 10000, 'user_memory_capacity': 10000, 'working_memory_capacity': 20, 'transformed_act_memory_capacity': -1} timestamp=datetime.datetime(2025, 7, 14, 21, 28, 0, 496940)
@@ -242,12 +217,12 @@ Log Entry #10:
             """
             filtered_combined_text_memory = self.filter_similar_memories(
                 text_memories=combined_text_memory,
-                similarity_threshold = self.filter_similarity_threshold
+                similarity_threshold=self.filter_similarity_threshold,
             )
 
             filtered_combined_text_memory = self.filter_too_short_memories(
                 text_memories=filtered_combined_text_memory,
-                min_length_threshold=self.filter_min_length_threshold
+                min_length_threshold=self.filter_min_length_threshold,
             )
 
             unique_memory = list(dict.fromkeys(filtered_combined_text_memory))
@@ -281,11 +256,13 @@ Log Entry #10:
             logger.info(
                 f"The working memory has been replaced with {len(memories_with_new_order)} new memories."
             )
-            self.log_working_memory_replacement(original_memory=original_memory,
-                                                user_id=user_id,
-                                                mem_cube_id=mem_cube_id,
-                                                new_memory=new_memory,
-                                                mem_cube=mem_cube)
+            self.log_working_memory_replacement(
+                original_memory=original_memory,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                new_memory=new_memory,
+                mem_cube=mem_cube,
+            )
         else:
             logger.error("memory_base is not supported")
 
