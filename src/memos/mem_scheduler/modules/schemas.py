@@ -1,14 +1,16 @@
-import os
-from uuid import uuid4
+import json
+
 from datetime import datetime
 from pathlib import Path
-from typing_extensions import TypedDict
-from typing import ClassVar, TypeVar, List, Optional, NewType
-from pydantic import BaseModel, Field, computed_field
+from typing import ClassVar, NewType, TypeVar
+from uuid import uuid4
 
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.utils import parse_yaml
+from pydantic import BaseModel, Field, computed_field
+from typing_extensions import TypedDict
+
 from memos.log import get_logger
+from memos.mem_cube.general import GeneralMemCube
+
 
 logger = get_logger(__name__)
 
@@ -50,8 +52,9 @@ ACTIVATION_MEMORY_VLLM_BACKEND = "VLLMForActivationMemory"
 ACTIVATION_MEMORY_HF_BACKEND = "HugggingaceForActivationMemory"
 
 # new types
-UserID = NewType('UserID', str)
-MemCubeID = NewType('CubeID', str)
+UserID = NewType("UserID", str)
+MemCubeID = NewType("CubeID", str)
+
 
 # ************************* Public *************************
 class DictConversionMixin:
@@ -80,9 +83,8 @@ class DictConversionMixin:
             self.to_dict(),
             indent=4,
             ensure_ascii=False,
-            default=str  # 处理无法序列化的对象
+            default=str,  # 处理无法序列化的对象
         )
-
 
     class Config:
         json_encoders: ClassVar[dict[type, object]] = {datetime: lambda v: v.isoformat()}
@@ -166,33 +168,16 @@ DEFAULT_MEMORY_CAPACITIES = {
 
 class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
-        description="Unique identifier for the log entry",
-        default_factory=lambda: str(uuid4())
+        description="Unique identifier for the log entry", default_factory=lambda: str(uuid4())
     )
-    user_id: str = Field(
-        ...,
-        description="Identifier for the user associated with the log"
-    )
+    user_id: str = Field(..., description="Identifier for the user associated with the log")
     mem_cube_id: str = Field(
-        ...,
-        description="Identifier for the memcube associated with this log entry"
+        ..., description="Identifier for the memcube associated with this log entry"
     )
-    label: str = Field(
-        ...,
-        description="Label categorizing the type of log"
-    )
-    from_memory_type: str = Field(
-        ...,
-        description="Source memory type"
-    )
-    to_memory_type: str = Field(
-        ...,
-        description="Destination memory type"
-    )
-    log_content: str = Field(
-        ...,
-        description="Detailed content of the log entry"
-    )
+    label: str = Field(..., description="Label categorizing the type of log")
+    from_memory_type: str = Field(..., description="Source memory type")
+    to_memory_type: str = Field(..., description="Destination memory type")
+    log_content: str = Field(..., description="Detailed content of the log entry")
     current_memory_sizes: MemorySizes = Field(
         default_factory=lambda: dict(DEFAULT_MEMORY_SIZES),
         description="Current utilization of memory partitions",
@@ -210,24 +195,23 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
 # ************************* Monitor *************************
 class MemoryMonitorItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
-        description="Unique identifier for the memory item",
-        default_factory=lambda: str(uuid4())
+        description="Unique identifier for the memory item", default_factory=lambda: str(uuid4())
     )
     memory_text: str = Field(
         ...,
         description="The actual content of the memory",
         min_length=1,
-        max_length=10000  # Prevent excessively large memory texts
+        max_length=10000,  # Prevent excessively large memory texts
     )
     importance_score: float = Field(
         default=NOT_INITIALIZED,
         description="Numerical score representing the memory's importance",
-        ge=NOT_INITIALIZED  # Minimum value of 0
+        ge=NOT_INITIALIZED,  # Minimum value of 0
     )
     recording_count: int = Field(
         default=1,
         description="How many times this memory has been recorded",
-        ge=1  # Greater than or equal to 1
+        ge=1,  # Greater than or equal to 1
     )
 
     def get_score(self) -> float:
@@ -251,24 +235,13 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
 
 
 class MemoryMonitorManager(BaseModel, DictConversionMixin):
-    user_id: str = Field(
-        ...,
-        description="Required user identifier",
-        min_length=1
+    user_id: str = Field(..., description="Required user identifier", min_length=1)
+    mem_cube_id: str = Field(..., description="Required memory cube identifier", min_length=1)
+    memories: list[MemoryMonitorItem] = Field(
+        default_factory=list, description="Collection of memory items"
     )
-    mem_cube_id: str = Field(
-        ...,
-        description="Required memory cube identifier",
-        min_length=1
-    )
-    memories: List[MemoryMonitorItem] = Field(
-        default_factory=list,
-        description="Collection of memory items"
-    )
-    max_capacity: Optional[int] = Field(
-        default=None,
-        description="Maximum number of memories allowed (None for unlimited)",
-        ge=1
+    max_capacity: int | None = Field(
+        default=None, description="Maximum number of memories allowed (None for unlimited)", ge=1
     )
 
     @computed_field
@@ -278,9 +251,7 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
         return len(self.memories)
 
     def update_memories(
-            self,
-            text_working_memories: List[str],
-            partial_retention_number: int
+        self, text_working_memories: list[str], partial_retention_number: int
     ) -> MemoryMonitorItem:
         """
         Update memories based on text_working_memories.
@@ -312,29 +283,25 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
                 added_or_updated.append(memory)
             else:
                 # Add new memory
-                new_memory = MemoryMonitorItem(
-                    memory_text=text,
-                    recording_count=1
-                )
+                new_memory = MemoryMonitorItem(memory_text=text, recording_count=1)
                 self.memories.append(new_memory)
                 added_or_updated.append(new_memory)
 
         # Step 2: Identify memories to remove
         # Sort memories by recording_count in descending order
-        sorted_memories = sorted(
-            self.memories,
-            key=lambda item: item.recording_count,
-            reverse=True
-        )
+        sorted_memories = sorted(self.memories, key=lambda item: item.recording_count, reverse=True)
 
         # Keep the top N memories by recording_count
-        records_to_keep = set(memory.memory_text for memory in sorted_memories[:partial_retention_number])
+        records_to_keep = {
+            memory.memory_text for memory in sorted_memories[:partial_retention_number]
+        }
 
         # Collect memories to remove: not in current working memory and not in top N
         memories_to_remove = [
             memory
             for memory in self.memories
-            if memory.memory_text not in working_memory_set and memory.memory_text not in records_to_keep
+            if memory.memory_text not in working_memory_set
+            and memory.memory_text not in records_to_keep
         ]
 
         # Step 3: Remove identified memories
@@ -347,15 +314,17 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
             sorted_memories = sorted(
                 self.memories,
                 key=lambda item: (item.importance_score, item.recording_count),
-                reverse=True
+                reverse=True,
             )
             # Keep only the top max_capacity memories
-            self.memories = sorted_memories[:self.max_capacity]
+            self.memories = sorted_memories[: self.max_capacity]
 
         # Log the update result
-        logger.info(f"Updated monitor manager for user {self.user_id}, mem_cube {self.mem_cube_id}: "
-                    f"Total memories: {len(self.memories)}, "
-                    f"Added/Updated: {len(added_or_updated)}, "
-                    f"Removed: {len(memories_to_remove)} (excluding top {partial_retention_number} by recording_count)")
+        logger.info(
+            f"Updated monitor manager for user {self.user_id}, mem_cube {self.mem_cube_id}: "
+            f"Total memories: {len(self.memories)}, "
+            f"Added/Updated: {len(added_or_updated)}, "
+            f"Removed: {len(memories_to_remove)} (excluding top {partial_retention_number} by recording_count)"
+        )
 
         return added_or_updated

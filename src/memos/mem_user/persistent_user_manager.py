@@ -13,7 +13,7 @@ from sqlalchemy import Column, String, Text
 
 from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
-from memos.mem_user.user_manager import Base, UserManager, UserRole
+from memos.mem_user.user_manager import Base, UserManager
 
 
 logger = get_logger(__name__)

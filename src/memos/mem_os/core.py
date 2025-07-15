@@ -1,10 +1,11 @@
 import json
 import os
 import uuid
+
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal, List
+from typing import Any, Literal
 
 from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory
@@ -12,7 +13,11 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ADD_LABEL, ScheduleMessageItem
+from memos.mem_scheduler.modules.schemas import (
+    ADD_LABEL,
+    ANSWER_LABEL,
+    ScheduleMessageItem,
+)
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
@@ -106,14 +111,11 @@ class MOSCore:
                     f"Memory reader of type {type(self.mem_reader).__name__} "
                     "missing required 'llm' attribute"
                 )
-                self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm
-                )
+                self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
             else:
                 # Configure scheduler modules
                 self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm,
-                    process_llm=self.mem_reader.llm
+                    chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
                 )
             self._mem_scheduler.start()
 
@@ -299,7 +301,9 @@ class MOSCore:
 
         return response
 
-    def _build_system_prompt(self, memories: List[TextualMemoryItem] | List[str] | None = None) -> str:
+    def _build_system_prompt(
+        self, memories: list[TextualMemoryItem] | list[str] | None = None
+    ) -> str:
         """Build system prompt with optional memories context."""
         base_prompt = (
             "You are a knowledgeable and helpful AI assistant. "

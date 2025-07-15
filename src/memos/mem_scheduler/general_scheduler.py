@@ -1,32 +1,17 @@
 import json
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import List
 
-from memos.configs.mem_scheduler import GeneralSchedulerConfig, AuthConfig
-from memos.llms.base import BaseLLM
+from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.base_scheduler import BaseScheduler
-from memos.mem_scheduler.modules.monitor import SchedulerMonitor
-from memos.mem_scheduler.modules.retriever import SchedulerRetriever
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
-from memos.mem_scheduler.utils import normalize_name
 from memos.mem_scheduler.modules.schemas import (
-    QUERY_LABEL,
-    ANSWER_LABEL,
     ADD_LABEL,
-    ACTIVATION_MEMORY_TYPE,
-    LONG_TERM_MEMORY_TYPE,
-    WORKING_MEMORY_TYPE,
-    DEFAULT_ACT_MEM_DUMP_PATH,
-    NOT_INITIALIZED,
-    ScheduleLogForWebItem,
+    ANSWER_LABEL,
+    QUERY_LABEL,
     ScheduleMessageItem,
-    MONITOR_WORKING_MEMORY_TYPE,
-    MONITOR_ACTIVATION_MEMORY_TYPE,
 )
+from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+
 
 logger = get_logger(__name__)
 
@@ -72,9 +57,8 @@ class GeneralScheduler(BaseScheduler):
                     user_id=user_id,
                     mem_cube_id=mem_cube_id,
                     mem_cube=messages[0].mem_cube,
-                    top_k=self.top_k
+                    top_k=self.top_k,
                 )
-
 
     def _answer_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
@@ -104,7 +88,6 @@ class GeneralScheduler(BaseScheduler):
                         mem_cube_id=mem_cube_id,
                         mem_cube=messages[0].mem_cube,
                     )
-
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.debug(f"Messages {messages} assigned to {ADD_LABEL} handler.")
@@ -139,12 +122,15 @@ class GeneralScheduler(BaseScheduler):
                         mem_cube=msg.mem_cube,
                     )
 
-    def process_session_turn(self, queries: str|List[str],
-                             user_id: str,
-                             mem_cube_id:str,
-                             mem_cube: GeneralMemCube,
-                             top_k: int = 10,
-                             query_history: List[str]|None = None) -> None:
+    def process_session_turn(
+        self,
+        queries: str | list[str],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        top_k: int = 10,
+        query_history: list[str] | None = None,
+    ) -> None:
         """
         Process a dialog turn:
         - If q_list reaches window size, trigger retrieval;
@@ -166,8 +152,7 @@ class GeneralScheduler(BaseScheduler):
         working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
         text_working_memory: list[str] = [w_m.memory for w_m in working_memory]
         intent_result = self.monitor.detect_intent(
-            q_list=query_history,
-            text_working_memory=text_working_memory
+            q_list=query_history, text_working_memory=text_working_memory
         )
 
         if intent_result["trigger_retrieval"]:
@@ -177,10 +162,9 @@ class GeneralScheduler(BaseScheduler):
             new_candidates = []
             for item in missing_evidences:
                 logger.debug(f"missing_evidences: {item}")
-                results = self.retriever.search(query=item,
-                                                mem_cube=mem_cube,
-                                                top_k=k_per_evidence,
-                                                method=self.search_method)
+                results = self.retriever.search(
+                    query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
+                )
                 logger.debug(f"search results for {missing_evidences}: {results}")
                 new_candidates.extend(results)
 
@@ -191,10 +175,6 @@ class GeneralScheduler(BaseScheduler):
                 mem_cube=mem_cube,
                 original_memory=working_memory,
                 new_memory=new_candidates,
-                top_k=top_k
+                top_k=top_k,
             )
             logger.debug(f"size of new_order_working_memory: {len(new_order_working_memory)}")
-
-
-
-

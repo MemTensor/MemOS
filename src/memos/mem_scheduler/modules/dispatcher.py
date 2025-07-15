@@ -1,4 +1,3 @@
-from typing import List, Dict, Optional
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -75,7 +74,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         logger.debug(f"Using _default_message_handler to deal with messages: {messages}")
 
     def group_messages_by_user_and_cube(
-            self, messages: list[ScheduleMessageItem]
+        self, messages: list[ScheduleMessageItem]
     ) -> dict[str, dict[str, list[ScheduleMessageItem]]]:
         """
         Groups messages into a nested dictionary structure first by user_id, then by mem_cube_id.
@@ -104,9 +103,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
             grouped_dict[msg.user_id][msg.mem_cube_id].append(msg)
 
         # Convert defaultdict to regular dict for cleaner output
-        return {user_id: dict(cube_groups)
-                for user_id, cube_groups in grouped_dict.items()}
-
+        return {user_id: dict(cube_groups) for user_id, cube_groups in grouped_dict.items()}
 
     def dispatch(self, msg_list: list[ScheduleMessageItem]):
         """
@@ -133,14 +130,16 @@ class SchedulerDispatcher(BaseSchedulerModule):
             # dispatch to different handler
             logger.debug(f"Dispatch {len(msgs)} messages to {label} handler.")
             if self.enable_parallel_dispatch and self.dispatcher_executor is not None:
-                future = self.dispatcher_executor.submit(lambda: handler(msgs))
+                # Capture variables in lambda to avoid loop variable issues
+                # TODO check this
+                future = self.dispatcher_executor.submit(handler, msgs)
                 logger.debug(f"Dispatched {len(msgs)} messages as future task")
                 return future
             else:
                 handler(msgs)
                 return None
 
-    def join(self, timeout: Optional[float] = None) -> bool:
+    def join(self, timeout: float | None = None) -> bool:
         """Wait for all dispatched tasks to complete.
 
         Args:

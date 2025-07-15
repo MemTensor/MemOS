@@ -1,16 +1,20 @@
 import json
-import time
 import ssl
 import threading
+import time
+
 from pathlib import Path
 from queue import Queue
+
 import pika
+
 from pika.adapters.select_connection import SelectConnection
 
+from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.log import get_logger
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
-from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.mem_scheduler.modules.schemas import DIRECT_EXCHANGE_TYPE, FANOUT_EXCHANGE_TYPE
+
 
 logger = get_logger(__name__)
 
@@ -40,18 +44,21 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         self.rabbitmq_conn_sleep_seconds = 1
 
         # Thread management
-        self._rabbitmq_io_loop_thread = None      # For IOLoop execution
-        self._rabbitmq_stop_flag = False           # Graceful shutdown flag
-        self._rabbitmq_lock = threading.Lock()    # Ensure thread safety
+        self._rabbitmq_io_loop_thread = None  # For IOLoop execution
+        self._rabbitmq_stop_flag = False  # Graceful shutdown flag
+        self._rabbitmq_lock = threading.Lock()  # Ensure thread safety
 
     def is_rabbitmq_connected(self) -> bool:
         """Check if RabbitMQ connection is alive"""
-        return (self.rabbitmq_connection and self.rabbitmq_connection.is_open and
-                self.rabbitmq_channel and self.rabbitmq_channel.is_open)
+        return (
+            self.rabbitmq_connection
+            and self.rabbitmq_connection.is_open
+            and self.rabbitmq_channel
+            and self.rabbitmq_channel.is_open
+        )
 
     def initialize_rabbitmq(
-        self, config: dict | None | RabbitMQConfig = None,
-            config_path: str | Path | None = None
+        self, config: dict | None | RabbitMQConfig = None, config_path: str | Path | None = None
     ):
         """
         Establish connection to RabbitMQ using pika.
@@ -78,13 +85,12 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             parameters,
             on_open_callback=self.on_rabbitmq_connection_open,
             on_open_error_callback=self.on_rabbitmq_connection_error,
-            on_close_callback=self.on_rabbitmq_connection_closed
+            on_close_callback=self.on_rabbitmq_connection_closed,
         )
 
         # Start IOLoop in dedicated thread
         self._io_loop_thread = threading.Thread(
-            target=self.rabbitmq_connection.ioloop.start,
-            daemon=True
+            target=self.rabbitmq_connection.ioloop.start, daemon=True
         )
         self._io_loop_thread.start()
         logger.info("RabbitMQ connection process started")
@@ -136,7 +142,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 ssl_options=pika.SSLOptions(context),
                 connection_attempts=self.rabbitmq_connection_attempts,
                 retry_delay=self.rabbitmq_retry_delay,
-                heartbeat=self.rabbitmq_heartbeat
+                heartbeat=self.rabbitmq_heartbeat,
             )
         else:
             return pika.ConnectionParameters(
@@ -146,7 +152,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 credentials=credentials,
                 connection_attempts=self.rabbitmq_connection_attempts,
                 retry_delay=self.rabbitmq_retry_delay,
-                heartbeat=self.rabbitmq_heartbeat
+                heartbeat=self.rabbitmq_heartbeat,
             )
 
     # Connection lifecycle callbacks
@@ -177,15 +183,13 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             exchange=self.rabbitmq_exchange_name,
             exchange_type=self.rabbitmq_exchange_type,
             durable=True,
-            callback=self.on_rabbitmq_exchange_declared
+            callback=self.on_rabbitmq_exchange_declared,
         )
 
     def on_rabbitmq_exchange_declared(self, frame):
         """Called when exchange is ready."""
         self.rabbitmq_channel.queue_declare(
-            queue=self.rabbit_queue_name,
-            durable=True,
-            callback=self.on_rabbitmq_queue_declared
+            queue=self.rabbit_queue_name, durable=True, callback=self.on_rabbitmq_queue_declared
         )
 
     def on_rabbitmq_queue_declared(self, frame):
@@ -194,29 +198,24 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             exchange=self.rabbitmq_exchange_name,
             queue=self.rabbit_queue_name,
             routing_key=self.rabbit_queue_name,
-            callback=self.on_rabbitmq_bind_ok
+            callback=self.on_rabbitmq_bind_ok,
         )
 
     def on_rabbitmq_bind_ok(self, frame):
         """Final setup step when bind is complete."""
         logger.info("RabbitMQ setup completed")
 
-
     def on_rabbitmq_message(self, channel, method, properties, body):
         """Handle incoming messages. Only for test."""
         try:
             print(f"Received message: {body.decode()}")
-            self.rabbitmq_message_cache.put_nowait({
-                "properties": properties,
-                "body": body
-            })
+            self.rabbitmq_message_cache.put_nowait({"properties": properties, "body": body})
             print(f"message delivery_tag: {method.delivery_tag}")
             channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as e:
             logger.error(f"Message handling failed: {e}")
 
     def wait_for_connection_ready(self):
-
         start_time = time.time()
         while not self.is_rabbitmq_connected():
             delta_time = time.time() - start_time
@@ -234,7 +233,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         self.rabbitmq_channel.basic_consume(
             queue=self.rabbit_queue_name,
             on_message_callback=self.on_rabbitmq_message,
-            auto_ack=False
+            auto_ack=False,
         )
         logger.info("Started rabbitmq consuming messages")
 
@@ -255,7 +254,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                     properties=pika.BasicProperties(
                         delivery_mode=2,  # Persistent
                     ),
-                    mandatory=True
+                    mandatory=True,
                 )
                 logger.debug(f"Published message: {message}")
                 return True

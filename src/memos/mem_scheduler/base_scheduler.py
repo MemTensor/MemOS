@@ -1,46 +1,42 @@
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING, List
 
-from memos.mem_scheduler.modules.misc import AutoDroppingQueue as Queue
-from memos.configs.mem_scheduler import BaseSchedulerConfig
+from datetime import datetime
+from pathlib import Path
+
+from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.utils import extract_json_dict, normalize_name
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.memories.activation.kv import KVCacheMemory, KVCacheItem
-from memos.configs.mem_scheduler import AuthConfig
 from memos.mem_scheduler.modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.modules.misc import AutoDroppingQueue as Queue
+from memos.mem_scheduler.modules.monitor import SchedulerMonitor
 from memos.mem_scheduler.modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.modules.redis_service import RedisSchedulerModule
-from memos.mem_scheduler.modules.monitor import SchedulerMonitor
 from memos.mem_scheduler.modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.modules.schemas import (
+    ACTIVATION_MEMORY_HF_BACKEND,
+    ACTIVATION_MEMORY_TYPE,
+    ACTIVATION_MEMORY_VLLM_BACKEND,
+    ADD_LABEL,
+    DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_THREAD__POOL_MAX_WORKERS,
-    QUERY_LABEL,
-    ANSWER_LABEL,
-    ADD_LABEL,
-    USER_INPUT_TYPE,
-    TEXT_MEMORY_TYPE,
-    ACTIVATION_MEMORY_TYPE,
     LONG_TERM_MEMORY_TYPE,
-    WORKING_MEMORY_TYPE,
-    DEFAULT_ACT_MEM_DUMP_PATH,
     NOT_INITIALIZED,
-    ACTIVATION_MEMORY_VLLM_BACKEND,
-    ACTIVATION_MEMORY_HF_BACKEND,
+    QUERY_LABEL,
+    TEXT_MEMORY_TYPE,
+    USER_INPUT_TYPE,
+    WORKING_MEMORY_TYPE,
     ScheduleLogForWebItem,
     ScheduleMessageItem,
-    TextMemory_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
-
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from memos.mem_scheduler.utils import normalize_name
+from memos.memories.activation.kv import KVCacheItem, KVCacheMemory
+from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 
 
 logger = get_logger(__name__)
@@ -66,9 +62,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             "thread_pool_max_workers", DEFAULT_THREAD__POOL_MAX_WORKERS
         )
 
-
-        self.retriever: SchedulerRetriever|None = None
-        self.monitor: SchedulerMonitor|None = None
+        self.retriever: SchedulerRetriever | None = None
+        self.monitor: SchedulerMonitor | None = None
 
         self.dispatcher = SchedulerDispatcher(
             max_workers=self.max_workers, enable_parallel_dispatch=self.enable_parallel_dispatch
@@ -76,8 +71,12 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
 
         # internal message queue
         self.max_internal_messae_queue_size = 100
-        self.memos_message_queue: Queue[ScheduleMessageItem] = Queue(maxsize=self.max_internal_messae_queue_size)
-        self._web_log_message_queue: Queue[ScheduleLogForWebItem] = Queue(maxsize=self.max_internal_messae_queue_size)
+        self.memos_message_queue: Queue[ScheduleMessageItem] = Queue(
+            maxsize=self.max_internal_messae_queue_size
+        )
+        self._web_log_message_queue: Queue[ScheduleLogForWebItem] = Queue(
+            maxsize=self.max_internal_messae_queue_size
+        )
         self._consumer_thread = None  # Reference to our consumer thread
         self._running = False
         self._consume_interval = self.config.get(
@@ -92,21 +91,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         self.rabbitmq_config = None
         self.act_mem_backend = ACTIVATION_MEMORY_VLLM_BACKEND
 
-    def initialize_modules(self, chat_llm: BaseLLM, process_llm: BaseLLM|None = None):
+    def initialize_modules(self, chat_llm: BaseLLM, process_llm: BaseLLM | None = None):
         if process_llm is None:
             process_llm = chat_llm
 
         # initialize submodules
         self.chat_llm = chat_llm
         self.process_llm = process_llm
-        self.monitor = SchedulerMonitor(
-            process_llm=self.process_llm,
-            config=self.config
-        )
-        self.retriever = SchedulerRetriever(
-            process_llm=self.process_llm,
-            config=self.config
-        )
+        self.monitor = SchedulerMonitor(process_llm=self.process_llm, config=self.config)
+        self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
         self.retriever.log_working_memory_replacement = self.log_working_memory_replacement
 
         # initialize with auth_cofig
@@ -173,9 +166,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         return True
 
     def update_activation_memory(
-            self,
-            new_memories: list[str | TextualMemoryItem],
-            mem_cube: GeneralMemCube,
+        self,
+        new_memories: list[str | TextualMemoryItem],
+        mem_cube: GeneralMemCube,
+        user_id: str | None = None,
+        mem_cube_id: str | None = None,
     ) -> None:
         """
         Update activation memory by extracting KVCacheItems from new_memory (list of str),
@@ -204,10 +199,10 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                     ]
                 )
             )
-            if self.act_mem_backend == ACTIVATION_MEMORY_HF_BACKEND :
+            if self.act_mem_backend == ACTIVATION_MEMORY_HF_BACKEND:
                 # huggingface kv cache
-                original_cache_items: List[KVCacheItem] = act_mem.get_all()
-                pre_cache_item: KVCacheItem = origin_cache_items[-1]
+                original_cache_items: list[KVCacheItem] = act_mem.get_all()
+                pre_cache_item: KVCacheItem = original_cache_items[-1]
                 original_text_memories = pre_cache_item.records.text_memories
                 act_mem.delete_all()
                 cache_item: KVCacheItem = act_mem.extract(text_memory)
@@ -216,13 +211,17 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                 act_mem.add(cache_item)
                 act_mem.dump(self.act_mem_dump_path)
 
-            elif self.act_mem_backend == ACTIVATION_MEMORY_VLLM_BACKEND :
+            elif self.act_mem_backend == ACTIVATION_MEMORY_VLLM_BACKEND:
                 # vllm kv cache
-                self.log_activation_memory_update(original_text_memories=original_text_memories,
-                                                  new_text_memories=new_text_memories,
-                                                  user_id=user_id,
-                                                  mem_cube_id=mem_cube_id,
-                                                  mem_cube=mem_cube)
+                #  original_text_memories is empty
+                original_text_memories = []
+                self.log_activation_memory_update(
+                    original_text_memories=original_text_memories,
+                    new_text_memories=new_text_memories,
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    mem_cube=mem_cube,
+                )
             else:
                 raise NotImplementedError(self.act_mem_backend)
 
@@ -230,32 +229,27 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             logger.warning(f"MOS-based activation memory update failed: {e}")
 
     def update_activation_memory_periodically(
-            self,
-            user_id: str,
-            mem_cube_id: str,
-            mem_cube: GeneralMemCube,
+        self,
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
     ):
         new_activation_memories = []
 
         if self.monitor.timed_trigger(
-                self.monitor._last_activation_mem_update_time,
-                self.monitor.act_mem_update_interval
+            self.monitor._last_activation_mem_update_time, self.monitor.act_mem_update_interval
         ):
             self.monitor.update_memory_monitors(
-                user_id=user_id,
-                mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube
+                user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
             )
 
-            new_activation_memories = [m.memory_text for m in self.monitor.activation_memory_monitors[user_id][mem_cube_id]]
+            new_activation_memories = [
+                m.memory_text for m in self.monitor.activation_memory_monitors[user_id][mem_cube_id]
+            ]
 
-            self.update_activation_memory(
-                new_memories=new_activation_memories,
-                mem_cube=mem_cube
-            )
+            self.update_activation_memory(new_memories=new_activation_memories, mem_cube=mem_cube)
 
             self.monitor._last_activation_mem_update_time = datetime.now()
-
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit multiple messages to the message queue."""
@@ -277,26 +271,21 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
 
         for message in messages:
             self._web_log_message_queue.put(message)
-            logger.info(
-                f"Submitted Scheduling log for web: {message.log_content}"
-            )
-            logger.info(
-                f"Submitted Scheduling log for web: {message.log_content}"
-            )
+            logger.info(f"Submitted Scheduling log for web: {message.log_content}")
+            logger.info(f"Submitted Scheduling log for web: {message.log_content}")
             if self.is_rabbitmq_connected():
                 logger.info("Submitted Scheduling log to rabbitmq")
                 self.rabbitmq_publish_message(message=message.to_dict())
         logger.debug(f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue.")
 
-
     def log_activation_memory_update(
-            self,
-            original_text_memories: List[str],
-            new_text_memories: List[str],
-            user_id: str,
-            mem_cube_id: str,
-            mem_cube: GeneralMemCube
-       ):
+        self,
+        original_text_memories: list[str],
+        new_text_memories: list[str],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+    ):
         """Log changes when activation memory is updated.
 
         Args:
@@ -321,21 +310,24 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                 mem_cube=mem_cube,
             )
             self._submit_web_logs(messages=log_message)
-            logger.info(f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
-                        f"transformed to {WORKING_MEMORY_TYPE} memories.")
+            logger.info(
+                f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
+                f"transformed to {WORKING_MEMORY_TYPE} memories."
+            )
 
     def log_working_memory_replacement(
-            self,
-            original_memory: List[TextualMemoryItem],
-            new_memory: List[TextualMemoryItem],
-            user_id: str,
-            mem_cube_id: str,
-            mem_cube: GeneralMemCube,
+        self,
+        original_memory: list[TextualMemoryItem],
+        new_memory: list[TextualMemoryItem],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
     ):
-        """Log changes when working memory is replaced.
-        """
-        memory_type_map = {normalize_name(text=m.memory): m.metadata.memory_type
-                           for m in original_memory + new_memory}
+        """Log changes when working memory is replaced."""
+        memory_type_map = {
+            normalize_name(text=m.memory): m.metadata.memory_type
+            for m in original_memory + new_memory
+        }
 
         original_text_memories = [m.memory for m in original_memory]
         new_text_memories = [m.memory for m in new_memory]
@@ -347,17 +339,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         # Identify changes
         added_memories = list(new_set - original_set)  # Present in new but not original
 
-
         # recording messages
         for mem in added_memories:
             normalized_mem = normalize_name(text=mem)
             if normalized_mem not in memory_type_map:
-                logger.error(f"Memory text not found in type mapping: {memory_text[:50]}...")
+                logger.error(f"Memory text not found in type mapping: {mem[:50]}...")
             # Get the memory type from the map, default to LONG_TERM_MEMORY_TYPE if not found
             mem_type = memory_type_map.get(normalized_mem, LONG_TERM_MEMORY_TYPE)
 
             if mem_type == WORKING_MEMORY_TYPE:
-                logger.warning(f"Memory already in working memory: {memory_text[:50]}...")
+                logger.warning(f"Memory already in working memory: {mem[:50]}...")
                 continue
 
             log_message = self.create_autofilled_log_item(
@@ -367,21 +358,22 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                 to_memory_type=WORKING_MEMORY_TYPE,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube
+                mem_cube=mem_cube,
             )
             self._submit_web_logs(messages=log_message)
-            logger.info(f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
-                        f"transformed to {WORKING_MEMORY_TYPE} memories.")
+            logger.info(
+                f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
+                f"transformed to {WORKING_MEMORY_TYPE} memories."
+            )
 
     def log_adding_user_inputs(
-            self,
-            user_inputs: List[str],
-            user_id: str,
-            mem_cube_id: str,
-            mem_cube: GeneralMemCube,
+        self,
+        user_inputs: list[str],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
     ):
-        """Log changes when working memory is replaced.
-        """
+        """Log changes when working memory is replaced."""
 
         # recording messages
         for input_str in user_inputs:
@@ -392,12 +384,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                 to_memory_type=TEXT_MEMORY_TYPE,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube
+                mem_cube=mem_cube,
             )
             self._submit_web_logs(messages=log_message)
-            logger.info(f"{len(user_inputs)} {USER_INPUT_TYPE} memorie(s) "
-                        f"transformed to {TEXT_MEMORY_TYPE} memories.")
-
+            logger.info(
+                f"{len(user_inputs)} {USER_INPUT_TYPE} memorie(s) "
+                f"transformed to {TEXT_MEMORY_TYPE} memories."
+            )
 
     def create_autofilled_log_item(
         self,
@@ -437,7 +430,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             memory_capacities=memory_capacities,
         )
         return log_message
-
 
     def get_web_log_messages(self) -> list[dict]:
         """
@@ -540,7 +532,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                 logger.info("Consumer thread stopped")
 
         # Shutdown dispatcher
-        if hasattr(self, 'dispatcher') and self.dispatcher:
+        if hasattr(self, "dispatcher") and self.dispatcher:
             logger.info("Shutting down dispatcher...")
             self.dispatcher.shutdown()
 

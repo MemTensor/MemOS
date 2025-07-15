@@ -1,8 +1,10 @@
-from queue import Queue, Full, Empty
-from typing import Optional, TypeVar
 import threading
 
-T = TypeVar('T')
+from queue import Empty, Full, Queue
+from typing import TypeVar
+
+
+T = TypeVar("T")
 
 
 class AutoDroppingQueue(Queue[T]):
@@ -12,7 +14,7 @@ class AutoDroppingQueue(Queue[T]):
         super().__init__(maxsize=maxsize)
         self._lock = threading.Lock()  # Additional lock to prevent race conditions
 
-    def put(self, item: T, block: bool = True, timeout: Optional[float] = None) -> None:
+    def put(self, item: T, block: bool = True, timeout: float | None = None) -> None:
         """Put an item into the queue.
 
         If the queue is full, the oldest item will be automatically removed to make space.
@@ -29,9 +31,9 @@ class AutoDroppingQueue(Queue[T]):
                 super().put(item, block=False)
             except Full:
                 # If queue is full, remove the oldest item
-                try:
+                from contextlib import suppress
+
+                with suppress(Empty):
                     self.get_nowait()  # Remove oldest item
-                except Empty:
-                    pass  # Queue became empty, skip insertion
                 # Retry putting the new item
                 super().put(item, block=False)
