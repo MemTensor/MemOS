@@ -11,7 +11,12 @@ from memos.mem_scheduler.modules.base import BaseSchedulerModule
 from memos.mem_scheduler.modules.schemas import (
     TreeTextMemory_SEARCH_METHOD,
 )
-from memos.mem_scheduler.utils import extract_json_dict, normalize_name
+from memos.mem_scheduler.utils import (
+    extract_json_dict,
+    is_all_chinese,
+    is_all_english,
+    transform_name_to_key,
+)
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 
@@ -133,34 +138,51 @@ class SchedulerRetriever(BaseSchedulerModule):
         self, text_memories: list[str], min_length_threshold: int = 20
     ) -> list[str]:
         """
-        Filters out memories that are too short to be meaningful.
+        Filters out text memories that fall below the minimum length requirement.
+        Handles both English (word count) and Chinese (character count) differently.
 
         Args:
-            text_memories: List of text memories to filter
-            min_length: Minimum character length required to keep a memory
+            text_memories: List of text memories to be filtered
+            min_length_threshold: Minimum length required to keep a memory.
+                                For English: word count, for Chinese: character count.
 
         Returns:
-            List of memories with short entries removed
+            List of filtered memories meeting the length requirement
         """
-        # TODO: Chinese
         if not text_memories:
-            logging.debug("Received empty memories list in short memory filter")
+            logging.debug("Empty memories list received in short memory filter")
             return []
 
         filtered_memories = []
-        removal_indices = []
+        removed_count = 0
 
-        for idx, memory in enumerate(text_memories):
-            if len(memory.strip().split()) >= min_length_threshold:
+        for memory in text_memories:
+            stripped_memory = memory.strip()
+            if not stripped_memory:  # Skip empty/whitespace memories
+                removed_count += 1
+                continue
+
+            # Determine measurement method based on language
+            if is_all_english(stripped_memory):
+                length = len(stripped_memory.split())  # Word count for English
+            elif is_all_chinese(stripped_memory):
+                length = len(stripped_memory)  # Character count for Chinese
+            else:
+                logger.debug(
+                    f"Mixed-language memory, using character count: {stripped_memory[:50]}..."
+                )
+                length = len(stripped_memory)  # Default to character count
+
+            if length >= min_length_threshold:
                 filtered_memories.append(memory)
             else:
-                removal_indices.append(idx)
+                removed_count += 1
 
-        if removal_indices:
-            logger.warning(
-                f"Removed {len(removal_indices)} short memories "
-                f"(shorter than {min_length_threshold} characters). "
-                f"Sample removed: {text_memories[removal_indices[0]][:50]}..."
+        if removed_count > 0:
+            logger.info(
+                f"Filtered out {removed_count} short memories "
+                f"(below {min_length_threshold} units). "
+                f"Total remaining: {len(filtered_memories)}"
             )
 
         return filtered_memories
@@ -182,9 +204,9 @@ class SchedulerRetriever(BaseSchedulerModule):
             text_mem_base: TreeTextMemory = text_mem_base
             combined_memory = original_memory + new_memory
             memory_map = {
-                normalize_name(text=mem_obj.memory): mem_obj for mem_obj in combined_memory
+                transform_name_to_key(name=mem_obj.memory): mem_obj for mem_obj in combined_memory
             }
-            combined_text_memory = [normalize_name(text=m.memory) for m in combined_memory]
+            combined_text_memory = [transform_name_to_key(name=m.memory) for m in combined_memory]
 
             # apply filters
             filtered_combined_text_memory = self.filter_similar_memories(
@@ -215,7 +237,7 @@ class SchedulerRetriever(BaseSchedulerModule):
 
             memories_with_new_order = []
             for text in text_memories_with_new_order:
-                normalized_text = normalize_name(text=text)
+                normalized_text = transform_name_to_key(name=text)
                 if text in memory_map:
                     memories_with_new_order.append(memory_map[normalized_text])
                 else:
