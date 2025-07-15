@@ -148,13 +148,13 @@ class SchedulerMonitor(BaseSchedulerModule):
         # === update activation memory monitors ===
         # Sort by importance_score in descending order and take top k
         top_k_memories = sorted(
-            self.working_memory_monitors[user_id][mem_cube_id],
+            self.working_memory_monitors[user_id][mem_cube_id].memories,
             key=lambda m: m.get_score(),
             reverse=True,
         )[: self.activation_mem_monitor_capacity]
 
         # Extract just the text from these memories
-        text_top_k_memories = [m.memory for m in top_k_memories]
+        text_top_k_memories = [m.memory_text for m in top_k_memories]
 
         # Update the activation memory monitors with these important memories
         self.activation_memory_monitors[user_id][mem_cube_id].update_memories(
