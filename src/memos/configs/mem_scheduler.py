@@ -8,7 +8,6 @@ from memos.mem_scheduler.modules.schemas import (
     BASE_DIR,
     DictConversionMixin,
     DEFAULT_ACT_MEM_DUMP_PATH,
-    DEFAULT_ACTIVATION_MEM_SIZE,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_THREAD__POOL_MAX_WORKERS,
 )
@@ -48,10 +47,6 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
     )
     context_window_size: int | None = Field(
         default=5, description="Size of the context window for conversation history"
-    )
-    activation_mem_size: int | None = Field(
-        default=DEFAULT_ACTIVATION_MEM_SIZE,  # Assuming DEFAULT_ACTIVATION_MEM_SIZE is 1000
-        description="Maximum size of the activation memory",
     )
     act_mem_dump_path: str | None = Field(
         default=DEFAULT_ACT_MEM_DUMP_PATH,  # Replace with DEFAULT_ACT_MEM_DUMP_PATH

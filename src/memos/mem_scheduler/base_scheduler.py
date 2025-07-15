@@ -8,7 +8,7 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.utils import extract_json_dict
+from memos.mem_scheduler.utils import extract_json_dict, normalize_name
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.memories.activation.kv import KVCacheMemory, KVCacheItem
 from memos.configs.mem_scheduler import AuthConfig
@@ -22,11 +22,13 @@ from memos.mem_scheduler.modules.schemas import (
     DEFAULT_THREAD__POOL_MAX_WORKERS,
     QUERY_LABEL,
     ANSWER_LABEL,
+    ADD_LABEL,
+    USER_INPUT_TYPE,
+    TEXT_MEMORY_TYPE,
     ACTIVATION_MEMORY_TYPE,
     LONG_TERM_MEMORY_TYPE,
     WORKING_MEMORY_TYPE,
     DEFAULT_ACT_MEM_DUMP_PATH,
-    DEFAULT_ACTIVATION_MEM_SIZE,
     NOT_INITIALIZED,
     ACTIVATION_MEMORY_VLLM_BACKEND,
     ACTIVATION_MEMORY_HF_BACKEND,
@@ -34,6 +36,7 @@ from memos.mem_scheduler.modules.schemas import (
     ScheduleMessageItem,
     TextMemory_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
+
 )
 
 if TYPE_CHECKING:
@@ -54,9 +57,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         # hyper-parameters
         self.top_k = self.config.get("top_k", 5)
         self.context_window_size = self.config.get("context_window_size", 5)
-        self.activation_mem_size = self.config.get(
-            "activation_mem_size", DEFAULT_ACTIVATION_MEM_SIZE
-        )
         self.enable_act_memory_update = self.config.get("enable_act_memory_update", False)
         self.act_mem_dump_path = self.config.get("act_mem_dump_path", DEFAULT_ACT_MEM_DUMP_PATH)
         self.search_method = TreeTextMemory_SEARCH_METHOD
@@ -172,6 +172,91 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             return False
         return True
 
+    def update_activation_memory(
+            self,
+            new_memories: list[str | TextualMemoryItem],
+            mem_cube: GeneralMemCube,
+    ) -> None:
+        """
+        Update activation memory by extracting KVCacheItems from new_memory (list of str),
+        add them to a KVCacheMemory instance, and dump to disk.
+        """
+        if len(new_memories) == 0:
+            logger.error("update_activation_memory: new_memory is empty.")
+            return
+        if isinstance(new_memories[0], TextualMemoryItem):
+            new_text_memories = [mem.memory for mem in new_memories]
+        elif isinstance(new_memories[0], str):
+            new_text_memories = new_memories
+        else:
+            logger.error("Not Implemented.")
+
+        try:
+            assert isinstance(mem_cube.act_mem, KVCacheMemory)
+            act_mem: KVCacheMemory = mem_cube.act_mem
+
+            text_memory = MEMORY_ASSEMBLY_TEMPLATE.format(
+                memory_text="".join(
+                    [
+                        f"{i + 1}. {sentence.strip()}\n"
+                        for i, sentence in enumerate(new_text_memories)
+                        if sentence.strip()  # Skip empty strings
+                    ]
+                )
+            )
+            if self.act_mem_backend == ACTIVATION_MEMORY_HF_BACKEND :
+                # huggingface kv cache
+                original_cache_items: List[KVCacheItem] = act_mem.get_all()
+                pre_cache_item: KVCacheItem = origin_cache_items[-1]
+                original_text_memories = pre_cache_item.records.text_memories
+                act_mem.delete_all()
+                cache_item: KVCacheItem = act_mem.extract(text_memory)
+                cache_item.records.text_memories = new_text_memories
+
+                act_mem.add(cache_item)
+                act_mem.dump(self.act_mem_dump_path)
+
+            elif self.act_mem_backend == ACTIVATION_MEMORY_VLLM_BACKEND :
+                # vllm kv cache
+                self.log_activation_memory_update(original_text_memories=original_text_memories,
+                                                  new_text_memories=new_text_memories,
+                                                  user_id=user_id,
+                                                  mem_cube_id=mem_cube_id,
+                                                  mem_cube=mem_cube)
+            else:
+                raise NotImplementedError(self.act_mem_backend)
+
+        except Exception as e:
+            logger.warning(f"MOS-based activation memory update failed: {e}")
+
+    def update_activation_memory_periodically(
+            self,
+            user_id: str,
+            mem_cube_id: str,
+            mem_cube: GeneralMemCube,
+    ):
+        new_activation_memories = []
+
+        if self.monitor.timed_trigger(
+                self.monitor._last_activation_mem_update_time,
+                self.monitor.act_mem_update_interval
+        ):
+            self.monitor.update_memory_monitors(
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube
+            )
+
+            new_activation_memories = [m.memory_text for m in self.monitor.activation_memory_monitors[user_id][mem_cube_id]]
+
+            self.update_activation_memory(
+                new_memories=new_activation_memories,
+                mem_cube=mem_cube
+            )
+
+            self.monitor._last_activation_mem_update_time = datetime.now()
+
+
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit multiple messages to the message queue."""
         if isinstance(messages, ScheduleMessageItem):
@@ -195,7 +280,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             logger.info(
                 f"Submitted Scheduling log for web: {message.log_content}"
             )
-
+            logger.info(
+                f"Submitted Scheduling log for web: {message.log_content}"
+            )
             if self.is_rabbitmq_connected():
                 logger.info("Submitted Scheduling log to rabbitmq")
                 self.rabbitmq_publish_message(message=message.to_dict())
@@ -247,11 +334,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
     ):
         """Log changes when working memory is replaced.
         """
-        memory_type_map = {m.memory: m.metadata.memory_type for m in original_memory+new_memory}
+        memory_type_map = {normalize_name(text=m.memory): m.metadata.memory_type
+                           for m in original_memory + new_memory}
 
         original_text_memories = [m.memory for m in original_memory]
         new_text_memories = [m.memory for m in new_memory]
-
 
         # Convert to sets for efficient difference operations
         original_set = set(original_text_memories)
@@ -260,12 +347,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         # Identify changes
         added_memories = list(new_set - original_set)  # Present in new but not original
 
+
         # recording messages
         for mem in added_memories:
-            if mem not in memory_type_map:
+            normalized_mem = normalize_name(text=mem)
+            if normalized_mem not in memory_type_map:
                 logger.error(f"Memory text not found in type mapping: {memory_text[:50]}...")
             # Get the memory type from the map, default to LONG_TERM_MEMORY_TYPE if not found
-            mem_type = memory_type_map.get(mem, LONG_TERM_MEMORY_TYPE)
+            mem_type = memory_type_map.get(normalized_mem, LONG_TERM_MEMORY_TYPE)
 
             if mem_type == WORKING_MEMORY_TYPE:
                 logger.warning(f"Memory already in working memory: {memory_text[:50]}...")
@@ -283,6 +372,31 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             self._submit_web_logs(messages=log_message)
             logger.info(f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
                         f"transformed to {WORKING_MEMORY_TYPE} memories.")
+
+    def log_adding_user_inputs(
+            self,
+            user_inputs: List[str],
+            user_id: str,
+            mem_cube_id: str,
+            mem_cube: GeneralMemCube,
+    ):
+        """Log changes when working memory is replaced.
+        """
+
+        # recording messages
+        for input_str in user_inputs:
+            log_message = self.create_autofilled_log_item(
+                log_content=input_str,
+                label=ADD_LABEL,
+                from_memory_type=USER_INPUT_TYPE,
+                to_memory_type=TEXT_MEMORY_TYPE,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube
+            )
+            self._submit_web_logs(messages=log_message)
+            logger.info(f"{len(user_inputs)} {USER_INPUT_TYPE} memorie(s) "
+                        f"transformed to {TEXT_MEMORY_TYPE} memories.")
 
 
     def create_autofilled_log_item(

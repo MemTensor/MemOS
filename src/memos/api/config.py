@@ -84,7 +84,6 @@ class APIConfig:
                     os.getenv("MOS_SCHEDULER_ACT_MEM_UPDATE_INTERVAL", "300")
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
-                "activation_mem_size": int(os.getenv("MOS_SCHEDULER_ACTIVATION_MEM_SIZE", "1000")),
                 "thread_pool_max_workers": int(
                     os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
                 ),

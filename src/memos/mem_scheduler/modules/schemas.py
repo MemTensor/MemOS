@@ -24,19 +24,22 @@ TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
 TextMemory_SEARCH_METHOD = "text_memory_search"
 DIRECT_EXCHANGE_TYPE = "direct"
 FANOUT_EXCHANGE_TYPE = "fanout"
-DEFAULT_ACTIVATION_MEM_SIZE = 5
+DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT = 20
+DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT = 20
 DEFAULT_ACT_MEM_DUMP_PATH = f"{BASE_DIR}/outputs/mem_scheduler/mem_cube_scheduler_test.kv_cache"
 DEFAULT_THREAD__POOL_MAX_WORKERS = 5
 DEFAULT_CONSUME_INTERVAL_SECONDS = 3
 NOT_INITIALIZED = -1
 BaseModelType = TypeVar("T", bound="BaseModel")
 
-# memory types
+# web log
 LONG_TERM_MEMORY_TYPE = "LongTermMemory"
 USER_MEMORY_TYPE = "UserMemory"
 WORKING_MEMORY_TYPE = "WorkingMemory"
 TEXT_MEMORY_TYPE = "TextMemory"
 ACTIVATION_MEMORY_TYPE = "ActivationMemory"
+USER_INPUT_TYPE = "UserInput"
+NotAvailabel = "NotAvailabel"
 
 # monitors
 MONITOR_WORKING_MEMORY_TYPE = "MonitorWorkingMemoryType"
@@ -217,15 +220,35 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
         max_length=10000  # Prevent excessively large memory texts
     )
     importance_score: float = Field(
-        default=0.0,
+        default=NOT_INITIALIZED,
         description="Numerical score representing the memory's importance",
-        ge=0.0  # Minimum value of 0
+        ge=NOT_INITIALIZED  # Minimum value of 0
     )
     recording_count: int = Field(
         default=1,
         description="How many times this memory has been recorded",
         ge=1  # Greater than or equal to 1
     )
+
+    def get_score(self) -> float:
+        """
+        Calculate the effective score for the memory item.
+
+        Returns:
+            float: The importance_score if it has been initialized (>=0),
+                   otherwise the recording_count converted to float.
+
+        Note:
+            This method provides a unified way to retrieve a comparable score
+            for memory items, regardless of whether their importance has been explicitly set.
+        """
+        if self.importance_score == NOT_INITIALIZED:
+            # Return recording_count as float when importance_score is not initialized
+            return float(self.recording_count)
+        else:
+            # Return the initialized importance_score
+            return self.importance_score
+
 
 class MemoryMonitorManager(BaseModel, DictConversionMixin):
     user_id: str = Field(
