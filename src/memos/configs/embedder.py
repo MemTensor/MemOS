@@ -48,9 +48,6 @@ class UniversalAPIEmbedderConfig(BaseEmbedderConfig):
     )
 
 
-# Removed the `extra_params` field as it is unused.
-
-
 class EmbedderConfigFactory(BaseConfig):
     """Factory class for creating embedder configurations."""
 
