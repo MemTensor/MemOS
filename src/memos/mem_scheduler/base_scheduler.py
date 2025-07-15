@@ -17,7 +17,6 @@ from memos.mem_scheduler.modules.redis_service import RedisSchedulerModule
 from memos.mem_scheduler.modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.modules.schemas import (
     ACTIVATION_MEMORY_TYPE,
-    ACTIVATION_MEMORY_VLLM_BACKEND,
     ADD_LABEL,
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
@@ -33,7 +32,8 @@ from memos.mem_scheduler.modules.schemas import (
     TreeTextMemory_SEARCH_METHOD,
 )
 from memos.mem_scheduler.utils import normalize_name
-from memos.memories.activation.kv import KVCacheItem, KVCacheMemory
+from memos.memories.activation.kv import KVCacheMemory
+from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 
@@ -88,7 +88,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
-        self.act_mem_backend = ACTIVATION_MEMORY_VLLM_BACKEND
 
     def initialize_modules(self, chat_llm: BaseLLM, process_llm: BaseLLM | None = None):
         if process_llm is None:
@@ -186,8 +185,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             logger.error("Not Implemented.")
 
         try:
-            assert isinstance(mem_cube.act_mem, KVCacheMemory)
-            act_mem: KVCacheMemory = mem_cube.act_mem
+            if isinstance(mem_cube.act_mem, VLLMKVCacheMemory):
+                act_mem: VLLMKVCacheMemory = mem_cube.act_mem
+            elif isinstance(mem_cube.act_mem, KVCacheMemory):
+                act_mem: KVCacheMemory = mem_cube.act_mem
+            else:
+                logger.error("Not Implemented.")
+                return
 
             text_memory = MEMORY_ASSEMBLY_TEMPLATE.format(
                 memory_text="".join(
@@ -200,14 +204,17 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             )
 
             # huggingface or vllm kv cache
-            original_cache_items: list[KVCacheItem] = act_mem.get_all()
-            pre_cache_item: KVCacheItem = original_cache_items[-1]
-            original_text_memories = pre_cache_item.records.text_memories
-            act_mem.delete_all()
-            cache_item: KVCacheItem = act_mem.extract(text_memory)
+            original_cache_items: list[VLLMKVCacheItem] = act_mem.get_all()
+            original_text_memories = []
+            if len(original_cache_items) > 0:
+                pre_cache_item: VLLMKVCacheItem = original_cache_items[-1]
+                original_text_memories = pre_cache_item.records.text_memories
+                act_mem.delete_all()
+
+            cache_item = act_mem.extract(text_memory)
             cache_item.records.text_memories = new_text_memories
 
-            act_mem.add(cache_item)
+            act_mem.add([cache_item])
             act_mem.dump(self.act_mem_dump_path)
 
             self.log_activation_memory_update(
@@ -219,10 +226,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
             )
 
         except Exception as e:
-            logger.warning(f"MOS-based activation memory update failed: {e}")
+            logger.warning(f"MOS-based activation memory update failed: {e}", exc_info=True)
 
     def update_activation_memory_periodically(
         self,
+        interval_seconds: int,
         user_id: str,
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
@@ -231,8 +239,10 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
 
         if self.monitor.timed_trigger(
             last_time=self.monitor._last_activation_mem_update_time,
-            interval_seconds=self.monitor.act_mem_update_interval,
+            interval_seconds=interval_seconds,
         ):
+            logger.info(f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}")
+
             self.monitor.update_memory_monitors(
                 user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
             )
@@ -241,9 +251,23 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                 m.memory_text for m in self.monitor.activation_memory_monitors[user_id][mem_cube_id]
             ]
 
+            logger.info(
+                f"Collected {len(new_activation_memories)} new memory entries for processing"
+            )
+
             self.update_activation_memory(new_memories=new_activation_memories, mem_cube=mem_cube)
 
             self.monitor._last_activation_mem_update_time = datetime.now()
+
+            logger.debug(
+                f"Activation memory update completed at {self.monitor._last_activation_mem_update_time}"
+            )
+        else:
+            logger.info(
+                f"Skipping update - {interval_seconds} second interval not yet reached. "
+                f"Last update time is {self.monitor._last_activation_mem_update_time} and now is"
+                f"{datetime.now()}"
+            )
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit multiple messages to the message queue."""

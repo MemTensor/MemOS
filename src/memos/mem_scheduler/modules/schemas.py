@@ -47,9 +47,6 @@ USER_INPUT_TYPE = "UserInput"
 MONITOR_WORKING_MEMORY_TYPE = "MonitorWorkingMemoryType"
 MONITOR_ACTIVATION_MEMORY_TYPE = "MonitorActivationMemoryType"
 
-# Backends
-ACTIVATION_MEMORY_VLLM_BACKEND = "VLLMForActivationMemory"
-ACTIVATION_MEMORY_HF_BACKEND = "HugggingaceForActivationMemory"
 
 # new types
 UserID = NewType("UserID", str)

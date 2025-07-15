@@ -59,7 +59,7 @@ class SchedulerRetriever(BaseSchedulerModule):
             else:
                 raise NotImplementedError(str(type(text_mem_base)))
         except Exception as e:
-            logger.error(f"Fail to search. The exeption is {e}.")
+            logger.error(f"Fail to search. The exeption is {e}.", exc_info=True)
             results = []
         return results
 
@@ -142,6 +142,7 @@ class SchedulerRetriever(BaseSchedulerModule):
         Returns:
             List of memories with short entries removed
         """
+        # TODO: Chinese
         if not text_memories:
             logging.debug("Received empty memories list in short memory filter")
             return []
@@ -209,7 +210,7 @@ class SchedulerRetriever(BaseSchedulerModule):
                 response = extract_json_dict(response)
                 text_memories_with_new_order = response.get("new_order", [])[:top_k]
             except Exception as e:
-                logger.error(f"Fail to rerank with LLM, Exeption: {e}.")
+                logger.error(f"Fail to rerank with LLM, Exeption: {e}.", exc_info=True)
                 text_memories_with_new_order = unique_memory[:top_k]
 
             memories_with_new_order = []

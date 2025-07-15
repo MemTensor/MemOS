@@ -82,8 +82,10 @@ class GeneralScheduler(BaseScheduler):
                 # for status update
                 self._set_current_context_from_message(msg=messages[0])
 
+                # update acivation memories
                 if self.enable_act_memory_update:
                     self.update_activation_memory_periodically(
+                        interval_seconds=self.monitor.act_mem_update_interval,
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=messages[0].mem_cube,
@@ -105,13 +107,6 @@ class GeneralScheduler(BaseScheduler):
                 # for status update
                 self._set_current_context_from_message(msg=messages[0])
 
-                if self.enable_act_memory_update:
-                    self.update_activation_memory_periodically(
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=messages[0].mem_cube,
-                    )
-
                 # submit logs
                 for msg in messages:
                     user_inputs = json.loads(msg.content)
@@ -120,6 +115,15 @@ class GeneralScheduler(BaseScheduler):
                         user_id=msg.user_id,
                         mem_cube_id=msg.mem_cube_id,
                         mem_cube=msg.mem_cube,
+                    )
+
+                # update acivation memories
+                if self.enable_act_memory_update:
+                    self.update_activation_memory_periodically(
+                        interval_seconds=self.monitor.act_mem_update_interval,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=messages[0].mem_cube,
                     )
 
     def process_session_turn(
@@ -146,7 +150,7 @@ class GeneralScheduler(BaseScheduler):
 
         text_mem_base = mem_cube.text_mem
         if not isinstance(text_mem_base, TreeTextMemory):
-            logger.error("Not implemented!")
+            logger.error("Not implemented!", exc_info=True)
             return
 
         working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
