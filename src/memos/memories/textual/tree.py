@@ -10,7 +10,7 @@ from typing import Any
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
-from memos.llms.factory import LLMFactory, OllamaLLM, OpenAILLM, AzureLLM
+from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata

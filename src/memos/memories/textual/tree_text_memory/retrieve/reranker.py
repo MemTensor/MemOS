@@ -1,7 +1,7 @@
 import numpy as np
 
 from memos.embedders.factory import OllamaEmbedder
-from memos.llms.factory import OllamaLLM, OpenAILLM, AzureLLM
+from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
 

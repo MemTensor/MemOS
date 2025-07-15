@@ -7,7 +7,7 @@ from memos.configs.utils import get_json_file_model_schema
 from memos.exceptions import ConfigurationError, MemCubeError
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
-from memos.mem_cube.utils import download_repo
+from memos.mem_cube.utils import download_repo, merge_config_with_default
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.factory import MemoryFactory
 from memos.memories.parametric.base import BaseParaMemory
@@ -114,7 +114,9 @@ class GeneralMemCube(BaseMemCube):
 
     @staticmethod
     def init_from_dir(
-        dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None
+        dir: str,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
+        default_config: GeneralMemCubeConfig | None = None,
     ) -> "GeneralMemCube":
         """Create a MemCube instance from a MemCube directory.
 
@@ -122,12 +124,20 @@ class GeneralMemCube(BaseMemCube):
             dir (str): The directory containing the memory files.
             memory_types (list[str], optional): List of memory types to load.
                 If None, loads all available memory types.
+            default_config (GeneralMemCubeConfig, optional): Default configuration to merge with existing config.
+                If provided, will merge general settings while preserving critical user-specific fields.
 
         Returns:
             MemCube: An instance of MemCube loaded with memories from the specified directory.
         """
         config_path = os.path.join(dir, "config.json")
         config = GeneralMemCubeConfig.from_json_file(config_path)
+
+        # Merge with default config if provided
+        if default_config is not None:
+            config = merge_config_with_default(config, default_config)
+            logger.info(f"Applied default config to cube {config.cube_id}")
+
         mem_cube = GeneralMemCube(config)
         mem_cube.load(dir, memory_types)
         return mem_cube
@@ -137,6 +147,7 @@ class GeneralMemCube(BaseMemCube):
         cube_id: str,
         base_url: str = "https://huggingface.co/datasets",
         memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
+        default_config: GeneralMemCubeConfig | None = None,
     ) -> "GeneralMemCube":
         """Create a MemCube instance from a remote repository.
 
@@ -145,12 +156,13 @@ class GeneralMemCube(BaseMemCube):
             base_url (str): The base URL of the remote repository.
             memory_types (list[str], optional): List of memory types to load.
                 If None, loads all available memory types.
+            default_config (GeneralMemCubeConfig, optional): Default configuration to merge with existing config.
 
         Returns:
             MemCube: An instance of MemCube loaded with memories from the specified remote repository.
         """
         dir = download_repo(cube_id, base_url)
-        return GeneralMemCube.init_from_dir(dir, memory_types)
+        return GeneralMemCube.init_from_dir(dir, memory_types, default_config)
 
     @property
     def text_mem(self) -> "BaseTextMemory | None":
