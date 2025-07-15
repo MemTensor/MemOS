@@ -17,7 +17,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self.provider == "openai":
             response = self.client.embeddings.create(
-                model=self.config.get("model_name_or_path", "text-embedding-3-large"),
+                model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
                 input=texts,
             )
             return [r.embedding for r in response.data]
