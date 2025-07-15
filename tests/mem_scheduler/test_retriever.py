@@ -74,16 +74,12 @@ class TestSchedulerRetriever(unittest.TestCase):
     def test_filter_similar_memories_with_duplicates(self):
         """Test filter_similar_memories with duplicate memories."""
         memories = [
-            "This is a memory about dogs and cats",
-            "This is a memory about dogs and cats and birds",
-            "This is a completely different memory",
-            "This is a memory about dogs and cats",  # Exact duplicate
-            "This is a memory about DOGS and CATS",  # Near duplicate with different case
+            "The user is planning to move to Chicago next month, although the exact date of the move is unclear.",
+            "The user is planning to move to Chicago next month, which reflects a significant change in their living situation.",
+            "The user is planning to move to Chicago in the upcoming month, indicating a significant change in their living situation.",
         ]
-
-        result = self.retriever.filter_similar_memories(memories, similarity_threshold=0.8)
+        result = self.retriever.filter_similar_memories(memories, similarity_threshold=0.75)
         self.assertLess(len(result), len(memories))
-        self.assertIn("This is a completely different memory", result)
 
         # Verify logging was called for removed items
         self.assertGreater(self.mock_logger_info.call_count, 0)

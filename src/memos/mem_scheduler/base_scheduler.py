@@ -16,7 +16,6 @@ from memos.mem_scheduler.modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.modules.redis_service import RedisSchedulerModule
 from memos.mem_scheduler.modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.modules.schemas import (
-    ACTIVATION_MEMORY_HF_BACKEND,
     ACTIVATION_MEMORY_TYPE,
     ACTIVATION_MEMORY_VLLM_BACKEND,
     ADD_LABEL,
@@ -199,31 +198,25 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
                     ]
                 )
             )
-            if self.act_mem_backend == ACTIVATION_MEMORY_HF_BACKEND:
-                # huggingface kv cache
-                original_cache_items: list[KVCacheItem] = act_mem.get_all()
-                pre_cache_item: KVCacheItem = original_cache_items[-1]
-                original_text_memories = pre_cache_item.records.text_memories
-                act_mem.delete_all()
-                cache_item: KVCacheItem = act_mem.extract(text_memory)
-                cache_item.records.text_memories = new_text_memories
 
-                act_mem.add(cache_item)
-                act_mem.dump(self.act_mem_dump_path)
+            # huggingface or vllm kv cache
+            original_cache_items: list[KVCacheItem] = act_mem.get_all()
+            pre_cache_item: KVCacheItem = original_cache_items[-1]
+            original_text_memories = pre_cache_item.records.text_memories
+            act_mem.delete_all()
+            cache_item: KVCacheItem = act_mem.extract(text_memory)
+            cache_item.records.text_memories = new_text_memories
 
-            elif self.act_mem_backend == ACTIVATION_MEMORY_VLLM_BACKEND:
-                # vllm kv cache
-                #  original_text_memories is empty
-                original_text_memories = []
-                self.log_activation_memory_update(
-                    original_text_memories=original_text_memories,
-                    new_text_memories=new_text_memories,
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                )
-            else:
-                raise NotImplementedError(self.act_mem_backend)
+            act_mem.add(cache_item)
+            act_mem.dump(self.act_mem_dump_path)
+
+            self.log_activation_memory_update(
+                original_text_memories=original_text_memories,
+                new_text_memories=new_text_memories,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+            )
 
         except Exception as e:
             logger.warning(f"MOS-based activation memory update failed: {e}")

@@ -38,6 +38,8 @@ def normalize_name(text):
     # Optional: Collapse multiple whitespaces into single space
     normalized = " ".join(normalized.split())
 
+    normalized = normalized.lower()
+
     return normalized
 
 

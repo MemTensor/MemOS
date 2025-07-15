@@ -27,7 +27,7 @@ class SchedulerRetriever(BaseSchedulerModule):
 
         # hyper-parameters
         self.filter_similarity_threshold = 0.75
-        self.filter_min_length_threshold = 5
+        self.filter_min_length_threshold = 6
 
         # log function callbacks
         self.log_working_memory_replacement = None
@@ -80,6 +80,14 @@ class SchedulerRetriever(BaseSchedulerModule):
         if not text_memories:
             logging.warning("Received empty memories list - nothing to filter")
             return []
+
+        for idx in range(len(text_memories)):
+            if not isinstance(text_memories[idx], str):
+                logger.error(
+                    f"{text_memories[idx]} in memories is not a string,"
+                    f" and now has been transformed to be a string."
+                )
+                text_memories[idx] = str(text_memories[idx])
 
         try:
             # Step 1: Vectorize texts using TF-IDF
@@ -148,7 +156,7 @@ class SchedulerRetriever(BaseSchedulerModule):
                 removal_indices.append(idx)
 
         if removal_indices:
-            logging.info(
+            logger.warning(
                 f"Removed {len(removal_indices)} short memories "
                 f"(shorter than {min_length_threshold} characters). "
                 f"Sample removed: {text_memories[removal_indices[0]][:50]}..."
@@ -178,21 +186,6 @@ class SchedulerRetriever(BaseSchedulerModule):
             combined_text_memory = [normalize_name(text=m.memory) for m in combined_memory]
 
             # apply filters
-            # TODO: need to verify
-            """
-            Log Entry #8:
-- log: item_id='7b92fffa-7cb8-403e-9396-78f1d11e4f6e' user_id='user_1' mem_cube_id='mem_cube_5' label='query' from_memory_type='UserMemory' to_memory_type='WorkingMemory' log_content='The user is planning to move to Chicago next month, although the exact date of the move is unclear.' current_memory_sizes={'long_term_memory_size': 209, 'user_memory_size': 605, 'working_memory_size': 20, 'transformed_act_memory_size': -1} memory_capacities={'long_term_memory_capacity': 10000, 'user_memory_capacity': 10000, 'working_memory_capacity': 20, 'transformed_act_memory_capacity': -1} timestamp=datetime.datetime(2025, 7, 14, 21, 28, 0, 496940)
---------------------------------------------------
-
-Log Entry #9:
-- log: item_id='33acc8a6-9a77-4d9d-a7a0-970e5b74b3df' user_id='user_1' mem_cube_id='mem_cube_5' label='query' from_memory_type='UserMemory' to_memory_type='WorkingMemory' log_content='The user is planning to move to Chicago next month, which reflects a significant change in their living situation.' current_memory_sizes={'long_term_memory_size': 209, 'user_memory_size': 605, 'working_memory_size': 20, 'transformed_act_memory_size': -1} memory_capacities={'long_term_memory_capacity': 10000, 'user_memory_capacity': 10000, 'working_memory_capacity': 20, 'transformed_act_memory_capacity': -1} timestamp=datetime.datetime(2025, 7, 14, 21, 28, 0, 497328)
---------------------------------------------------
-
-Log Entry #10:
-- log: item_id='fa63eed9-e113-4a55-bb3f-4c2064d62d9d' user_id='user_1' mem_cube_id='mem_cube_5' label='query' from_memory_type='UserMemory' to_memory_type='WorkingMemory' log_content='The user is planning to move to Chicago in the upcoming month, indicating a significant change in their living situation.' current_memory_sizes={'long_term_memory_size': 209, 'user_memory_size': 605, 'working_memory_size': 20, 'transformed_act_memory_size': -1} memory_capacities={'long_term_memory_capacity': 10000, 'user_memory_capacity': 10000, 'working_memory_capacity': 20, 'transformed_act_memory_capacity': -1} timestamp=datetime.datetime(2025, 7, 14, 21, 28, 0, 497694)
---------------------------------------------------
-
-            """
             filtered_combined_text_memory = self.filter_similar_memories(
                 text_memories=combined_text_memory,
                 similarity_threshold=self.filter_similarity_threshold,
@@ -221,24 +214,23 @@ Log Entry #10:
 
             memories_with_new_order = []
             for text in text_memories_with_new_order:
-                text = normalize_name(text=text)
+                normalized_text = normalize_name(text=text)
                 if text in memory_map:
-                    memories_with_new_order.append(memory_map[text])
+                    memories_with_new_order.append(memory_map[normalized_text])
                 else:
                     logger.warning(
                         f"Memory text not found in memory map. text: {text}; keys of memory_map: {memory_map.keys()}"
                     )
 
-            text_mem_base.replace_working_memory(memories_with_new_order[:top_k])
-            memories_with_new_order = memories_with_new_order[:top_k]
+            text_mem_base.replace_working_memory(memories_with_new_order)
             logger.info(
                 f"The working memory has been replaced with {len(memories_with_new_order)} new memories."
             )
             self.log_working_memory_replacement(
                 original_memory=original_memory,
+                new_memory=memories_with_new_order,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                new_memory=new_memory,
                 mem_cube=mem_cube,
             )
         else:

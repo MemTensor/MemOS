@@ -40,8 +40,8 @@ USER_MEMORY_TYPE = "UserMemory"
 WORKING_MEMORY_TYPE = "WorkingMemory"
 TEXT_MEMORY_TYPE = "TextMemory"
 ACTIVATION_MEMORY_TYPE = "ActivationMemory"
+PARAMETER_MEMORY_TYPE = "ParameterMemory"
 USER_INPUT_TYPE = "UserInput"
-NotAvailabel = "NotAvailabel"
 
 # monitors
 MONITOR_WORKING_MEMORY_TYPE = "MonitorWorkingMemoryType"

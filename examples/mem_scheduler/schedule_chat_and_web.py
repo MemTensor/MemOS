@@ -171,14 +171,8 @@ if __name__ == "__main__":
     for item in questions:
         query = item["question"]
 
-        mos.mem_scheduler.process_session_turn(
-            queries=[query],
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-            top_k=10,
-            query_history=None,
-        )
+        response = mos.chat(query=query, user_id=user_id)
+        print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
     show_web_logs(mos.mem_scheduler)
 
