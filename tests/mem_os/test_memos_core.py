@@ -453,11 +453,13 @@ class TestMOSChat:
 
         mos = MOSCore(MOSConfig(**mock_config))
         mos.mem_cubes["test_cube_1"] = mock_mem_cube
+        mos.mem_cubes["test_cube_2"] = mock_mem_cube  # Add the second cube to avoid KeyError
 
         response = mos.chat("What do I like?")
 
-        # Verify memory search was called
-        mock_mem_cube.text_mem.search.assert_called_once_with("What do I like?", top_k=5)
+        # Verify memory search was called (called twice because we have two cubes)
+        assert mock_mem_cube.text_mem.search.call_count == 2
+        mock_mem_cube.text_mem.search.assert_any_call("What do I like?", top_k=5)
 
         # Verify LLM was called
         mock_llm.generate.assert_called_once()
@@ -494,6 +496,8 @@ class TestMOSChat:
         config_dict["enable_textual_memory"] = False
 
         mos = MOSCore(MOSConfig(**config_dict))
+        mos.mem_cubes["test_cube_1"] = MagicMock()  # Add the cube to avoid KeyError
+        mos.mem_cubes["test_cube_2"] = MagicMock()  # Add the second cube to avoid KeyError
 
         response = mos.chat("Hello")
 
