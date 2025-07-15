@@ -544,20 +544,23 @@ class Neo4jGraphDB(BaseGraphDB):
             }
         """
         with self.driver.session(database=self.db_name) as session:
-            user_clause = ""
             params = {"center_id": center_id}
+            center_user_clause = ""
+            neighbor_user_clause = ""
+
             if not self.config.use_multi_db and self.config.user_name:
-                user_clause = (
-                    " AND center.user_name = $user_name AND neighbor.user_name = $user_name"
-                )
+                center_user_clause = " AND center.user_name = $user_name"
+                neighbor_user_clause = " WHERE neighbor.user_name = $user_name"
                 params["user_name"] = self.config.user_name
             status_clause = f" AND center.status = '{center_status}'" if center_status else ""
 
             query = f"""
                 MATCH (center:Memory)
-                WHERE center.id = $center_id{status_clause}{user_clause}
+                WHERE center.id = $center_id{status_clause}{center_user_clause}
+
                 OPTIONAL MATCH (center)-[r*1..{depth}]-(neighbor:Memory)
-                WHERE neighbor IS NULL OR neighbor.user_name = $user_name
+                {neighbor_user_clause}
+
                 WITH collect(DISTINCT center) AS centers,
                      collect(DISTINCT neighbor) AS neighbors,
                      collect(DISTINCT r) AS rels

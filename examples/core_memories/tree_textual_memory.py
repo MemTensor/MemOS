@@ -1,3 +1,4 @@
+import json
 import time
 
 from memos import log
@@ -27,13 +28,18 @@ def embed_memory_item(memory: str) -> list[float]:
     return embedder.embed([memory])[0]
 
 
-tree_config = TreeTextMemoryConfig.from_json_file("../../examples/data/config/tree_config1.json")
+with open("examples/data/config/tree_config_shared_database.json", encoding="utf-8") as f:
+    data = json.load(f)
+# must set user_name when using shared database multi tenant mode.
+data["graph_db"]["config"]["user_name"] = "alice"
+tree_config = TreeTextMemoryConfig(**data)
+
 my_tree_textual_memory = TreeTextMemory(tree_config)
 my_tree_textual_memory.delete_all()
 
 # Create a memory reader instance
 reader_config = SimpleStructMemReaderConfig.from_json_file(
-    "../../examples/data/config/simple_struct_reader_config1.json"
+    "examples/data/config/simple_struct_reader_config1.json"
 )
 reader = SimpleStructMemReader(reader_config)
 
@@ -187,6 +193,8 @@ for m_list in memory:
     my_tree_textual_memory.add(m_list)
     my_tree_textual_memory.memory_manager.wait_reorganizer()
 
+time.sleep(60)
+
 results = my_tree_textual_memory.search(
     "Talk about the user's childhood story?",
     top_k=10,
@@ -215,8 +223,6 @@ doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "sessi
 for m_list in doc_memory:
     my_tree_textual_memory.add(m_list)
     my_tree_textual_memory.memory_manager.wait_reorganizer()
-
-time.sleep(30)
 
 results = my_tree_textual_memory.search(
     "Tell me about what memos consist of?",

@@ -29,11 +29,11 @@
       "uri": "bolt://localhost:7687",
       "user": "neo4j",
       "password": "12345678",
-      "db_name": "share-0715",
+      "db_name": "shared-tree-textual-memory",
       "auto_create": true,
       "use_multi_db": false,
       "embedding_dimension": 768
     }
   },
-  "reorganize": false
+  "reorganize": true
 }
