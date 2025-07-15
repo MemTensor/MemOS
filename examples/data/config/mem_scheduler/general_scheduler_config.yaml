@@ -2,7 +2,7 @@ backend: general_scheduler
 config:
   top_k: 10
   top_n: 5
-  act_mem_update_interval: 300
+  act_mem_update_interval: 30
   context_window_size: 5
   thread_pool_max_workers: 5
   consume_interval_seconds: 3

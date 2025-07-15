@@ -230,7 +230,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule):
         new_activation_memories = []
 
         if self.monitor.timed_trigger(
-            self.monitor._last_activation_mem_update_time, self.monitor.act_mem_update_interval
+            last_time=self.monitor._last_activation_mem_update_time,
+            interval_seconds=self.monitor.act_mem_update_interval,
         ):
             self.monitor.update_memory_monitors(
                 user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
