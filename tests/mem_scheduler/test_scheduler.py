@@ -46,7 +46,7 @@ class TestGeneralScheduler(unittest.TestCase):
         self.mem_cube.act_mem = MagicMock()
 
         # Initialize modules with mock LLM
-        self.scheduler.initialize_modules(self.llm)
+        self.scheduler.initialize_modules(chat_llm=self.llm, process_llm=self.llm)
         self.scheduler.mem_cube = self.mem_cube
 
         # Set current user and memory cube ID for testing

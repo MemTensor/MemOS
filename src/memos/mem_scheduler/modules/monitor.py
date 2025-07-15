@@ -11,7 +11,8 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.mem_scheduler.utils import extract_json_dict
 from memos.memories.textual.tree import TreeTextMemory
 from memos.mem_scheduler.modules.schemas import (
-    DEFAULT_ACTIVATION_MEM_SIZE,
+    DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
+    DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
     MemoryMonitorManager,
     MemoryMonitorItem,
     UserID,
@@ -37,14 +38,11 @@ class SchedulerMonitor(BaseSchedulerModule):
         self.act_mem_update_interval = self.config.get(
             "act_mem_update_interval", 300
         )
-        self.activation_mem_size = self.config.get(
-            "activation_mem_size", DEFAULT_ACTIVATION_MEM_SIZE
-        )
 
         # Partial Retention Strategy
-        self.partial_retention_number = 3
-        self.loose_max_working_memory_capacity = 20
-        self.loose_max_activation_memory_capacity = self.activation_mem_size
+        self.partial_retention_number = 2
+        self.working_mem_monitor_capacity = DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT
+        self.activation_mem_monitor_capacity = DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT
 
         # attributes
         self.query_history = Queue(maxsize=self.config.context_window_size)
@@ -57,42 +55,126 @@ class SchedulerMonitor(BaseSchedulerModule):
 
         self._process_llm = process_llm
 
-    def update_mem_cube_info(self,
-                             user_id: str,
-                             mem_cube_id: str,
-                             mem_cube: GeneralMemCube):
+    def register_memory_manager_if_not_exists(
+            self,
+            user_id: str,
+            mem_cube_id: str,
+            memory_monitors: Dict[UserID, Dict[MemCubeID, MemoryMonitorManager]],
+            max_capacity: int,
+    ) -> None:
+        """
+        Register a new MemoryMonitorManager for the given user and memory cube if it doesn't exist.
+
+        Checks if a MemoryMonitorManager already exists for the specified user_id and mem_cube_id.
+        If not, creates a new MemoryMonitorManager with appropriate capacity settings and registers it.
+
+        Args:
+            user_id: The ID of the user to associate with the memory manager
+            mem_cube_id: The ID of the memory cube to monitor
+
+        Note:
+            This function will update the loose_max_working_memory_capacity based on the current
+            WorkingMemory size plus partial retention number before creating a new manager.
+        """
+        # Check if a MemoryMonitorManager already exists for the current user_id and mem_cube_id
+        # If doesn't exist, create and register a new one
+        if (user_id not in memory_monitors) or (mem_cube_id not in memory_monitors[user_id]):
+            # Initialize MemoryMonitorManager with user ID, memory cube ID, and max capacity
+            monitor_manager = MemoryMonitorManager(
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                max_capacity=max_capacity
+            )
+
+            # Safely register the new manager in the nested dictionary structure
+            memory_monitors.setdefault(user_id, {})[mem_cube_id] = monitor_manager
+            logger.info(
+                f"Registered new MemoryMonitorManager for user_id={user_id},"
+                f" mem_cube_id={mem_cube_id} with max_capacity={max_capacity}")
+        else:
+            logger.info(
+                f"MemoryMonitorManager already exists for user_id={user_id}, "
+                f"mem_cube_id={mem_cube_id} in the provided memory_monitors dictionary")
+
+    def update_memory_monitors(self,
+                               user_id: str,
+                               mem_cube_id: str,
+                               mem_cube: GeneralMemCube):
         text_mem_base: TreeTextMemory = mem_cube.text_mem
 
         if not isinstance(text_mem_base, TreeTextMemory):
             logger.error("Not Implemented")
             return
 
-        # Check if a MemoryMonitorManager already exists for the current user_id and mem_cube_id
-        # If exists, reuse it directly; otherwise, create a new one
-        if user_id in self.working_memory_monitors and mem_cube_id in self.working_memory_monitors[user_id]:
-            monitor_manager = self.working_memory_monitors[user_id][mem_cube_id]
-        else:
+        self.working_mem_monitor_capacity = min(
+            DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
+            (text_mem_base.memory_manager.memory_size["WorkingMemory"] + self.partial_retention_number)
+        )
 
-            self.loose_max_working_memory_capacity = min(self.loose_max_working_memory_capacity,
-                                                         (text_mem_base.memory_manager.memory_size["WorkingMemory"] +
-                                            self.partial_retention_number))
-            # Initialize MemoryMonitorManager with user ID, memory cube ID, and max capacity (from WorkingMemory size)
-            monitor_manager = MemoryMonitorManager(
-                user_id=user_id,
-                mem_cube_id=mem_cube_id,
-                max_capacity=self.loose_max_working_memory_capacity
-            )
-            # Use setdefault to safely get or create the nested dict for user_id,
-            # then assign the monitor_manager to the mem_cube_id key
-            # (No side effects if the user_id dict already exists)
-            self.working_memory_monitors.setdefault(user_id, {})[mem_cube_id] = monitor_manager
+        self.update_working_memory_monitors(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube
+        )
 
+        self.update_activation_memory_monitors(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube
+        )
+
+    def update_working_memory_monitors(self,
+                               user_id: str,
+                               mem_cube_id: str,
+                               mem_cube: GeneralMemCube):
+        # register monitors
+        self.register_memory_manager_if_not_exists(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            memory_monitors=self.working_memory_monitors,
+            max_capacity=self.working_mem_monitor_capacity,
+        )
+
+        # === update working memory monitors ===
         # Retrieve current working memory content
         working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
         text_working_memory: list[str] = [w_m.memory for w_m in working_memory]
 
-        monitor_manager.update_memories(text_working_memories=text_working_memory,
-                                        partial_retention_number=self.partial_retention_number)
+        self.working_memory_monitors[user_id][mem_cube_id].update_memories(
+            text_working_memories=text_working_memory,
+            partial_retention_number=self.partial_retention_number
+        )
+
+    def update_activation_memory_monitors(self,
+                               user_id: str,
+                               mem_cube_id: str,
+                               mem_cube: GeneralMemCube):
+
+        self.register_memory_manager_if_not_exists(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            memory_monitors=self.activation_memory_monitors,
+            max_capacity=self.activation_mem_monitor_capacity,
+        )
+
+
+        # === update activation memory monitors ===
+        # Sort by importance_score in descending order and take top k
+        top_k_memories = sorted(
+            self.working_memory_monitors[user_id][mem_cube_id],
+            key=lambda m: m.get_score(),
+            reverse=True
+        )[:self.activation_mem_monitor_capacity]
+
+        # Extract just the text from these memories
+        text_top_k_memories = [m.memory for m in top_k_memories]
+
+        # Update the activation memory monitors with these important memories
+        self.activation_memory_monitors[user_id][mem_cube_id].update_memories(
+            text_working_memories=text_top_k_memories,
+            partial_retention_number=self.partial_retention_number
+        )
+
 
     def timed_trigger(self, last_time: datetime, interval_seconds: float) -> bool:
         now = datetime.now()
@@ -148,36 +230,25 @@ class SchedulerMonitor(BaseSchedulerModule):
         sorted_text_memories = [m.memory_text for m in sorted_memories[:top_k]]
         return sorted_text_memories
 
-    def get_mem_cube_info(self, user_id: str, mem_cube_id: str) -> Dict[str, Any]:
+    def get_monitors_info(self, user_id: str, mem_cube_id: str) -> Dict[str, Any]:
         """Retrieves monitoring information for a specific memory cube.
-
-        Args:
-            user_id: Unique identifier of the user associated with the memory cube
-            mem_cube: GeneralMemCube instance to retrieve information for
-
-        Returns:
-            Dictionary containing comprehensive memory cube metrics, including:
-            - user_id: Associated user identifier
-            - mem_cube_id: Memory cube identifier
-            - memory_count: Current number of stored memories
-            - max_capacity: Maximum allowed memories (or None for unlimited)
-            - top_memory: Top 1 memory
-            Returns empty dictionary if no monitoring data exists.
         """
         if user_id not in self.working_memory_monitors or mem_cube_id not in self.working_memory_monitors[user_id]:
             logger.warning(f"MemoryMonitorManager not found for user {user_id}, mem_cube {mem_cube_id}")
             return {}
 
-        manager = self.working_memory_monitors[user_id][mem_cube_id]
+        info_dict = {}
+        for manager in [self.working_memory_monitors[user_id][mem_cube_id],
+                        self.activation_memory_monitors[user_id][mem_cube_id]]:
 
-        return {
-            "user_id": user_id,
-            "mem_cube_id": mem_cube_id,
-            "memory_count": manager.memory_size,
-            "max_capacity": manager.max_capacity,
-            "top_memories": self.get_scheduler_working_memories(user_id, mem_cube_id, top_k=1),
-        }
-
+            info_dict[str(type(manager))] =  {
+                "user_id": user_id,
+                "mem_cube_id": mem_cube_id,
+                "memory_count": manager.memory_size,
+                "max_capacity": manager.max_capacity,
+                "top_memories": self.get_scheduler_working_memories(user_id, mem_cube_id, top_k=1),
+            }
+        return info_dict
 
     def detect_intent(
         self,
@@ -202,29 +273,3 @@ class SchedulerMonitor(BaseSchedulerModule):
             response = {"trigger_retrieval": False, "missing_evidences": q_list}
         return response
 
-
-    def update_freq(
-        self,
-        answer: str,
-        text_working_memory: list[str],
-        activation_memory_freq_list: list[dict],
-        prompt_name="freq_detecting",
-    ) -> list[dict]:
-        """
-        Use LLM to detect which memories in activation_memory_freq_list appear in the answer,
-        increment their count by 1, and return the updated list.
-        """
-        # TODO: This is not implemented yet
-        prompt = self.build_prompt(
-            template_name=prompt_name,
-            answer=answer,
-            working_memory_list=text_working_memory,
-            activation_memory_freq_list=activation_memory_freq_list,
-        )
-        response = self._process_llm.generate([{"role": "user", "content": prompt}])
-        try:
-            result = json.loads(response)
-        except Exception as e:
-            logger.error(e)
-            result = activation_memory_freq_list
-        return result

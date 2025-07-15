@@ -38,7 +38,6 @@ mem_scheduler:
     top_n: 5
     act_mem_update_interval: 300
     context_window_size: 5
-    activation_mem_size: 10
     thread_pool_max_workers: 10
     consume_interval_seconds: 3
     enable_parallel_dispatch: true

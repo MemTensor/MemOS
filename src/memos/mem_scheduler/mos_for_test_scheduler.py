@@ -80,9 +80,13 @@ class MOSForTestScheduler(MOS):
                         timestamp=datetime.now(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
-                    self.mem_scheduler.monitor.update_mem_cube_info(user_id=user_id,
-                                                                    mem_cube_id=mem_cube_id,
-                                                                    mem_cube=mem_cube)
+
+                self.mem_scheduler.monitor.register_memory_manager_if_not_exists(
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    memory_monitors=self.mem_scheduler.monitor.working_memory_monitors,
+                    max_capacity=self.mem_scheduler.monitor.working_mem_monitor_capacity,
+                )
 
                 # from scheduler
                 scheduler_memories = self.mem_scheduler.monitor.get_monitor_memories(

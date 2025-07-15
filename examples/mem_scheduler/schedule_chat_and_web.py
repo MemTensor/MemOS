@@ -103,7 +103,7 @@ def show_web_logs(mem_scheduler: GeneralScheduler):
 
         # Print log entry details
         print(f"\nLog Entry #{log_count}:")
-        print(f"- log: {log_item}")
+        print(f'- "{log_item.label}" log: {log_item}')
 
         print("-" * 50)
 
@@ -161,8 +161,18 @@ if __name__ == "__main__":
     for item in questions:
         query = item["question"]
 
-        response = mos.chat(query, user_id=user_id)
-        print(f"Query:\n {query}\n\nAnswer:\n {response}")
+        mos.mem_scheduler.process_session_turn(
+            queries=[query],
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+            top_k=10,
+            query_history=None
+        )
+
+        # response = mos.chat(query, user_id=user_id)
+        # print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
     show_web_logs(mos.mem_scheduler)
+
     mos.mem_scheduler.stop()

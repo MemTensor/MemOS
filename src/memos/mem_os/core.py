@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from datetime import datetime
@@ -11,7 +12,7 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
+from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ADD_LABEL, ScheduleMessageItem
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
@@ -239,7 +240,7 @@ class MOSCore:
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=mem_cube,
-                        label=QUERY_LABEL,
+                        label=ADD_LABEL,
                         content=query,
                         timestamp=datetime.now(),
                     )
@@ -565,6 +566,21 @@ class MOSCore:
                 )
                 for mem in memories:
                     self.mem_cubes[mem_cube_id].text_mem.add(mem)
+
+                # submit messages for scheduler
+                mem_cube = self.mem_cubes[mem_cube_id]
+                if self.enable_mem_scheduler and self.mem_scheduler is not None:
+                    text_messages = [message["content"] for message in messages]
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        label=ADD_LABEL,
+                        content=json.dumps(text_messages),
+                        timestamp=datetime.now(),
+                    )
+                    self.mem_scheduler.submit_messages(messages=[message_item])
+
         if (
             (memory_content is not None)
             and self.config.enable_textual_memory
