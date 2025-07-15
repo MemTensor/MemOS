@@ -5,6 +5,8 @@ from pathlib import Path
 from queue import Queue
 from typing import TYPE_CHECKING
 
+from tqdm import tqdm
+
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.configs.mem_scheduler import AuthConfig
@@ -169,7 +171,7 @@ if __name__ == "__main__":
 
     mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
 
-    for item in questions:
+    for item in tqdm(questions, desc="processing queries"):
         query = item["question"]
 
         # test process_session_turn

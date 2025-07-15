@@ -13,8 +13,8 @@ from memos.mem_scheduler.modules.schemas import (
 )
 from memos.mem_scheduler.utils import (
     extract_json_dict,
-    is_all_Chinese,
-    is_all_English,
+    is_all_chinese,
+    is_all_english,
     transform_name_to_key,
 )
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
@@ -163,9 +163,9 @@ class SchedulerRetriever(BaseSchedulerModule):
                 continue
 
             # Determine measurement method based on language
-            if is_all_English(stripped_memory):
+            if is_all_english(stripped_memory):
                 length = len(stripped_memory.split())  # Word count for English
-            elif is_all_Chinese(stripped_memory):
+            elif is_all_chinese(stripped_memory):
                 length = len(stripped_memory)  # Character count for Chinese
             else:
                 logger.debug(
