@@ -181,6 +181,7 @@ class MemoryConfigFactory(BaseConfig):
         "general_text": GeneralTextMemoryConfig,
         "tree_text": TreeTextMemoryConfig,
         "kv_cache": KVCacheMemoryConfig,
+        "vllm_kv_cache": KVCacheMemoryConfig,  # Use same config as kv_cache
         "lora": LoRAMemoryConfig,
         "uninitialized": UninitializedMemoryConfig,
     }

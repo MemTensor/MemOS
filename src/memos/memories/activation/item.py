@@ -35,3 +35,16 @@ class KVCacheItem(ActivationMemoryItem):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow DynamicCache as a field type
     records: KVCacheRecords = KVCacheRecords()
+
+
+class VLLMKVCacheItem(KVCacheItem):
+    """
+    VLLM KV Cache Item that stores prompt strings instead of DynamicCache objects.
+    This is because vLLM handles KV cache on the server side via preloading.
+    """
+
+    # Override memory field to store prompt string instead of DynamicCache
+    memory: str = Field(
+        default="",
+        description="Prompt string used to preload KV cache in vLLM server",
+    )

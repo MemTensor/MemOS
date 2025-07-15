@@ -14,7 +14,6 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
 from memos.mem_os.utils.format_utils import (
-    convert_activation_memory_to_serializable,
     convert_graph_to_tree_forworkmem,
     filter_nodes_by_tree_ids,
     remove_embedding_recursive,
@@ -903,12 +902,11 @@ class MOSProduct(MOSCore):
             )
         elif memory_type == "para_mem":
             act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
-            # Convert activation memory to serializable format
-            serializable_act_mem = convert_activation_memory_to_serializable(act_mem_params)
+            logger.info(f"act_mem_params: {act_mem_params}")
             reformat_memory_list.append(
                 {
                     "cube_id": "xxxxxxxxxxxxxxxx" if not mem_cube_ids else mem_cube_ids[0],
-                    "memories": serializable_act_mem,
+                    "memories": act_mem_params[0].model_dump(),
                 }
             )
         return reformat_memory_list
