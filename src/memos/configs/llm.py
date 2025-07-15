@@ -24,6 +24,7 @@ class OpenAILLMConfig(BaseLLMConfig):
     api_base: str = Field(
         default="https://api.openai.com/v1", description="Base URL for OpenAI API"
     )
+    extra_body: Any = Field(default=None, description="extra body")
 
 
 class AzureLLMConfig(BaseLLMConfig):

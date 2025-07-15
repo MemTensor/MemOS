@@ -76,7 +76,7 @@ Your task:
 Valid options:
 - CAUSE: One clearly leads to the other.
 - CONDITION: One happens only if the other condition holds.
-- RELATE_TO: They are semantically related by shared people, time, place, or event, but neither causes the other.
+- RELATE: They are semantically related by shared people, time, place, or event, but neither causes the other.
 - CONFLICT: They logically contradict each other.
 - NONE: No clear useful connection.
 

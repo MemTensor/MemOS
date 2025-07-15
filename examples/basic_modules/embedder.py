@@ -46,3 +46,23 @@ embedder_hf = EmbedderFactory.from_config(config_hf)
 text_hf = "This is a sample text for Hugging Face embedding generation."
 embedding_hf = embedder_hf.embed([text_hf])
 print("Scenario 3 HF embedding shape:", len(embedding_hf[0]))
+print("==" * 20)
+
+# === Scenario 4: Using UniversalAPIEmbedder ===
+
+config_api = EmbedderConfigFactory.model_validate(
+    {
+        "backend": "universal_api",
+        "config": {
+            "provider": "openai",
+            "api_key": "<YOUR_KEY>",
+            "model_name_or_path": "text-embedding-3-large",
+            "base_url": "https://api.myproxy.com/v1",
+        },
+    }
+)
+embedder_api = EmbedderFactory.from_config(config_api)
+text_api = "This is a sample text for embedding generation using OpenAI API."
+embedding_api = embedder_api.embed([text_api])
+print("Scenario 4: OpenAI API embedding vector length:", len(embedding_api[0]))
+print("Embedding preview:", embedding_api[0][:10])

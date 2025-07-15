@@ -1,0 +1,40 @@
+{
+  "extractor_llm": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "qwen3:0.6b",
+      "temperature": 0.0,
+      "remove_think_prefix": true,
+      "max_tokens": 8192
+    }
+  },
+  "dispatcher_llm": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "qwen3:0.6b",
+      "temperature": 0.0,
+      "remove_think_prefix": true,
+      "max_tokens": 8192
+    }
+  },
+  "embedder": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "nomic-embed-text:latest"
+    }
+  },
+  "graph_db": {
+    "backend": "neo4j",
+    "config": {
+      "uri": "bolt://localhost:7687",
+      "user": "neo4j",
+      "password": "12345678",
+      "db_name": "shared-tree-textual-memory",
+      "user_name": "alice",
+      "auto_create": true,
+      "use_multi_db": false,
+      "embedding_dimension": 768
+    }
+  },
+  "reorganize": true
+}

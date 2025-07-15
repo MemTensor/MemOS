@@ -98,7 +98,7 @@ class TestGeneralTextMemory(unittest.TestCase):
 
         embedding = self.memory._embed_one_sentence(sentence)
 
-        self.mock_embedder.embed.assert_called_once_with(sentence)
+        self.mock_embedder.embed.assert_called_once_with([sentence])
         self.assertEqual(embedding, expected_embedding)
 
     def test_extract(self):
@@ -206,7 +206,7 @@ class TestGeneralTextMemory(unittest.TestCase):
         self.memory.update(memory_id_to_update, new_memory_dict)
 
         self.mock_embedder.embed.assert_called_once_with(
-            "This is the updated memory content via dict."
+            ["This is the updated memory content via dict."]
         )
 
         args, _ = self.mock_vector_db.update.call_args
@@ -271,7 +271,7 @@ class TestGeneralTextMemory(unittest.TestCase):
 
         search_results = self.memory.search(query, top_k)
 
-        self.mock_embedder.embed.assert_called_once_with(query)
+        self.mock_embedder.embed.assert_called_once_with([query])
         self.mock_vector_db.search.assert_called_once_with(query_embedding, top_k)
 
         self.assertEqual(len(search_results), top_k)

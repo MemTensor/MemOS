@@ -167,10 +167,12 @@ class ConflictHandler:
             if not self.graph_store.edge_exists(new_from, new_to, edge["type"], direction="ANY"):
                 self.graph_store.add_edge(new_from, new_to, edge["type"])
 
-        self.graph_store.delete_node(conflict_a.id)
-        self.graph_store.delete_node(conflict_b.id)
+        self.graph_store.update_node(conflict_a.id, {"status": "archived"})
+        self.graph_store.update_node(conflict_b.id, {"status": "archived"})
+        self.graph_store.add_edge(conflict_a.id, merged.id, type="MERGED_TO")
+        self.graph_store.add_edge(conflict_b.id, merged.id, type="MERGED_TO")
         logger.debug(
-            f"Remove {conflict_a.id} and {conflict_b.id}, and inherit their edges to {merged.id}."
+            f"Archive {conflict_a.id} and {conflict_b.id}, and inherit their edges to {merged.id}."
         )
 
     def _merge_metadata(

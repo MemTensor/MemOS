@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ClientError
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.graph_dbs.base import BaseGraphDB
@@ -20,6 +21,7 @@ def _parse_node(node_data: dict[str, Any]) -> dict[str, Any]:
     for time_field in ("created_at", "updated_at"):
         if time_field in node and hasattr(node[time_field], "isoformat"):
             node[time_field] = node[time_field].isoformat()
+    node.pop("user_name", None)
 
     return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
 
@@ -56,10 +58,30 @@ class Neo4jGraphDB(BaseGraphDB):
     """Neo4j-based implementation of a graph memory store."""
 
     def __init__(self, config: Neo4jGraphDBConfig):
+        """Neo4j-based implementation of a graph memory store.
+
+        Tenant Modes:
+        - use_multi_db = True:
+            Dedicated Database Mode (Multi-Database Multi-Tenant).
+            Each tenant or logical scope uses a separate Neo4j database.
+            `db_name` is the specific tenant database.
+            `user_name` can be None (optional).
+
+        - use_multi_db = False:
+            Shared Database Multi-Tenant Mode.
+            All tenants share a single Neo4j database.
+            `db_name` is the shared database.
+            `user_name` is required to isolate each tenant's data at the node level.
+            All node queries will enforce `user_name` in WHERE conditions and store it in metadata,
+            but it will be removed automatically before returning to external consumers.
+        """
+
         self.config = config
         self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
         self.db_name = config.db_name
+        self.user_name = config.user_name
 
+        self.system_db_name = "system" if config.use_multi_db else config.db_name
         if config.auto_create:
             self._ensure_database_exists()
 
@@ -86,21 +108,38 @@ class Neo4jGraphDB(BaseGraphDB):
         query = """
         MATCH (n:Memory)
         WHERE n.memory_type = $memory_type
-        RETURN COUNT(n) AS count
         """
+        if not self.config.use_multi_db and self.config.user_name:
+            query += "\nAND n.user_name = $user_name"
+        query += "\nRETURN COUNT(n) AS count"
         with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, memory_type=memory_type)
+            result = session.run(
+                query,
+                {
+                    "memory_type": memory_type,
+                    "user_name": self.config.user_name if self.config.user_name else None,
+                },
+            )
             return result.single()["count"]
 
     def count_nodes(self, scope: str) -> int:
         query = """
         MATCH (n:Memory)
         WHERE n.memory_type = $scope
-        RETURN count(n) AS count
         """
+        if not self.config.use_multi_db and self.config.user_name:
+            query += "\nAND n.user_name = $user_name"
+        query += "\nRETURN count(n) AS count"
+
         with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, {"scope": scope}).single()
-            return result["count"]
+            result = session.run(
+                query,
+                {
+                    "scope": scope,
+                    "user_name": self.config.user_name if self.config.user_name else None,
+                },
+            )
+            return result.single()["count"]
 
     def remove_oldest_memory(self, memory_type: str, keep_latest: int) -> None:
         """
@@ -113,14 +152,22 @@ class Neo4jGraphDB(BaseGraphDB):
         query = f"""
         MATCH (n:Memory)
         WHERE n.memory_type = '{memory_type}'
-        WITH n ORDER BY n.updated_at DESC
-        SKIP {keep_latest}
-        DETACH DELETE n
+        """
+        if not self.config.use_multi_db and self.config.user_name:
+            query += f"\nAND n.user_name = '{self.config.user_name}'"
+
+        query += f"""
+            WITH n ORDER BY n.updated_at DESC
+            SKIP {keep_latest}
+            DETACH DELETE n
         """
         with self.driver.session(database=self.db_name) as session:
             session.run(query)
 
     def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
+        if not self.config.use_multi_db and self.config.user_name:
+            metadata["user_name"] = self.config.user_name
+
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
 
@@ -162,10 +209,14 @@ class Neo4jGraphDB(BaseGraphDB):
         set_clauses.append("n += $fields")  # Merge remaining fields
         set_clause_str = ",\n    ".join(set_clauses)
 
-        query = f"""
-        MATCH (n:Memory {{id: $id}})
-        SET {set_clause_str}
+        query = """
+        MATCH (n:Memory {id: $id})
         """
+        if not self.config.use_multi_db and self.config.user_name:
+            query += "\nWHERE n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query += f"\nSET {set_clause_str}"
 
         with self.driver.session(database=self.db_name) as session:
             session.run(query, **params)
@@ -176,8 +227,17 @@ class Neo4jGraphDB(BaseGraphDB):
         Args:
             id: Node identifier to delete.
         """
+        query = "MATCH (n:Memory {id: $id})"
+
+        params = {"id": id}
+        if not self.config.use_multi_db and self.config.user_name:
+            query += " WHERE n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query += " DETACH DELETE n"
+
         with self.driver.session(database=self.db_name) as session:
-            session.run("MATCH (n:Memory {id: $id}) DETACH DELETE n", id=id)
+            session.run(query, **params)
 
     # Edge (Relationship) Management
     def add_edge(self, source_id: str, target_id: str, type: str) -> None:
@@ -188,15 +248,21 @@ class Neo4jGraphDB(BaseGraphDB):
             target_id: ID of the target node.
             type: Relationship type (e.g., 'RELATE_TO', 'PARENT').
         """
+        query = """
+                MATCH (a:Memory {id: $source_id})
+                MATCH (b:Memory {id: $target_id})
+            """
+        params = {"source_id": source_id, "target_id": target_id}
+        if not self.config.use_multi_db and self.config.user_name:
+            query += """
+                    WHERE a.user_name = $user_name AND b.user_name = $user_name
+                """
+            params["user_name"] = self.config.user_name
+
+        query += f"\nMERGE (a)-[:{type}]->(b)"
+
         with self.driver.session(database=self.db_name) as session:
-            session.run(
-                f"""
-                MATCH (a:Memory {{id: $source_id}})
-                MATCH (b:Memory {{id: $target_id}})
-                MERGE (a)-[:{type}]->(b)
-                """,
-                {"source_id": source_id, "target_id": target_id},
-            )
+            session.run(query, params)
 
     def delete_edge(self, source_id: str, target_id: str, type: str) -> None:
         """
@@ -206,12 +272,21 @@ class Neo4jGraphDB(BaseGraphDB):
             target_id: ID of the target node.
             type: Relationship type to remove.
         """
+        query = f"""
+            MATCH (a:Memory {{id: $source}})
+            -[r:{type}]->
+            (b:Memory {{id: $target}})
+        """
+        params = {"source": source_id, "target": target_id}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            query += "\nWHERE a.user_name = $user_name AND b.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query += "\nDELETE r"
+
         with self.driver.session(database=self.db_name) as session:
-            session.run(
-                f"MATCH (a:Memory {{id: $source}})-[r:{type}]->(b:Memory {{id: $target}})\nDELETE r",
-                source=source_id,
-                target=target_id,
-            )
+            session.run(query, params)
 
     def edge_exists(
         self, source_id: str, target_id: str, type: str = "ANY", direction: str = "OUTGOING"
@@ -241,14 +316,18 @@ class Neo4jGraphDB(BaseGraphDB):
             raise ValueError(
                 f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
             )
+        query = f"MATCH {pattern}"
+        params = {"source": source_id, "target": target_id}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            query += "\nWHERE a.user_name = $user_name AND b.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query += "\nRETURN r"
 
         # Run the Cypher query
         with self.driver.session(database=self.db_name) as session:
-            result = session.run(
-                f"MATCH {pattern} RETURN r",
-                source=source_id,
-                target=target_id,
-            )
+            result = session.run(query, params)
             return result.single() is not None
 
     # Graph Query & Reasoning
@@ -260,9 +339,16 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             Dictionary of node fields, or None if not found.
         """
+        where_user = ""
+        params = {"id": id}
+        if not self.config.use_multi_db and self.config.user_name:
+            where_user = " AND n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query = f"MATCH (n:Memory) WHERE n.id = $id {where_user} RETURN n"
+
         with self.driver.session(database=self.db_name) as session:
-            result = session.run("MATCH (n:Memory {id: $id}) RETURN n", id=id)
-            record = result.single()
+            record = session.run(query, params).single()
             return _parse_node(dict(record["n"])) if record else None
 
     def get_nodes(self, ids: list[str]) -> list[dict[str, Any]]:
@@ -280,9 +366,17 @@ class Neo4jGraphDB(BaseGraphDB):
         if not ids:
             return []
 
-        query = "MATCH (n:Memory) WHERE n.id IN $ids RETURN n"
+        where_user = ""
+        params = {"ids": ids}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            where_user = " AND n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query = f"MATCH (n:Memory) WHERE n.id IN $ids{where_user} RETURN n"
+
         with self.driver.session(database=self.db_name) as session:
-            results = session.run(query, {"ids": ids})
+            results = session.run(query, params)
             return [_parse_node(dict(record["n"])) for record in results]
 
     def get_edges(self, id: str, type: str = "ANY", direction: str = "ANY") -> list[dict[str, str]]:
@@ -317,14 +411,20 @@ class Neo4jGraphDB(BaseGraphDB):
         else:
             raise ValueError("Invalid direction. Must be 'OUTGOING', 'INCOMING', or 'ANY'.")
 
+        params = {"id": id}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            where_clause += " AND a.user_name = $user_name AND b.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
         query = f"""
-        MATCH {pattern}
-        WHERE {where_clause}
-        RETURN a.id AS from_id, b.id AS to_id, type(r) AS type
-        """
+                MATCH {pattern}
+                WHERE {where_clause}
+                RETURN a.id AS from_id, b.id AS to_id, type(r) AS type
+            """
 
         with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, id=id)
+            result = session.run(query, params)
             edges = []
             for record in result:
                 edges.append(
@@ -365,19 +465,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             List of dicts with node details and overlap count.
         """
-        query = """
-            MATCH (n:Memory)
-            WHERE NOT n.id IN $exclude_ids
-            AND n.status = 'activated'
-            AND n.type <> 'reasoning'
-            AND n.memory_type <> 'WorkingMemory'
-            WITH n, [tag IN n.tags WHERE tag IN $tags] AS overlap_tags
-            WHERE size(overlap_tags) >= $min_overlap
-            RETURN n, size(overlap_tags) AS overlap_count
-            ORDER BY overlap_count DESC
-            LIMIT $top_k
-        """
-
+        where_user = ""
         params = {
             "tags": tags,
             "exclude_ids": exclude_ids,
@@ -385,18 +473,47 @@ class Neo4jGraphDB(BaseGraphDB):
             "top_k": top_k,
         }
 
+        if not self.config.use_multi_db and self.config.user_name:
+            where_user = "AND n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query = f"""
+                MATCH (n:Memory)
+                WHERE NOT n.id IN $exclude_ids
+                  AND n.status = 'activated'
+                  AND n.type <> 'reasoning'
+                  AND n.memory_type <> 'WorkingMemory'
+                  {where_user}
+                WITH n, [tag IN n.tags WHERE tag IN $tags] AS overlap_tags
+                WHERE size(overlap_tags) >= $min_overlap
+                RETURN n, size(overlap_tags) AS overlap_count
+                ORDER BY overlap_count DESC
+                LIMIT $top_k
+            """
+
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, params)
             return [_parse_node(dict(record["n"])) for record in result]
 
-    def get_children_with_embeddings(self, id: str) -> list[str]:
-        query = """
-        MATCH (p:Memory)-[:PARENT]->(c:Memory)
-        WHERE p.id = $id
-        RETURN c.id AS id, c.embedding AS embedding, c.memory AS memory
-        """
+    def get_children_with_embeddings(self, id: str) -> list[dict[str, Any]]:
+        where_user = ""
+        params = {"id": id}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            where_user = "AND p.user_name = $user_name AND c.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query = f"""
+                MATCH (p:Memory)-[:PARENT]->(c:Memory)
+                WHERE p.id = $id {where_user}
+                RETURN c.id AS id, c.embedding AS embedding, c.memory AS memory
+            """
+
         with self.driver.session(database=self.db_name) as session:
-            return list(session.run(query, id=id))
+            result = session.run(query, params)
+            return [
+                {"id": r["id"], "embedding": r["embedding"], "memory": r["memory"]} for r in result
+            ]
 
     def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
         """
@@ -427,16 +544,29 @@ class Neo4jGraphDB(BaseGraphDB):
             }
         """
         with self.driver.session(database=self.db_name) as session:
-            status_clause = f", status: '{center_status}'" if center_status else ""
+            params = {"center_id": center_id}
+            center_user_clause = ""
+            neighbor_user_clause = ""
+
+            if not self.config.use_multi_db and self.config.user_name:
+                center_user_clause = " AND center.user_name = $user_name"
+                neighbor_user_clause = " WHERE neighbor.user_name = $user_name"
+                params["user_name"] = self.config.user_name
+            status_clause = f" AND center.status = '{center_status}'" if center_status else ""
+
             query = f"""
-            MATCH (center:Memory {{id: $center_id{status_clause}}})
-            OPTIONAL MATCH (center)-[r*1..{depth}]-(neighbor:Memory)
-            WITH collect(DISTINCT center) AS centers,
-                 collect(DISTINCT neighbor) AS neighbors,
-                 collect(DISTINCT r) AS rels
-            RETURN centers, neighbors, rels
+                MATCH (center:Memory)
+                WHERE center.id = $center_id{status_clause}{center_user_clause}
+
+                OPTIONAL MATCH (center)-[r*1..{depth}]-(neighbor:Memory)
+                {neighbor_user_clause}
+
+                WITH collect(DISTINCT center) AS centers,
+                     collect(DISTINCT neighbor) AS neighbors,
+                     collect(DISTINCT r) AS rels
+                RETURN centers, neighbors, rels
             """
-            record = session.run(query, {"center_id": center_id}).single()
+            record = session.run(query, params).single()
 
             if not record:
                 return {"core_node": None, "neighbors": [], "edges": []}
@@ -508,6 +638,8 @@ class Neo4jGraphDB(BaseGraphDB):
             where_clauses.append("node.memory_type = $scope")
         if status:
             where_clauses.append("node.status = $status")
+        if not self.config.use_multi_db and self.config.user_name:
+            where_clauses.append("node.user_name = $user_name")
 
         where_clause = ""
         if where_clauses:
@@ -525,6 +657,8 @@ class Neo4jGraphDB(BaseGraphDB):
             parameters["scope"] = scope
         if status:
             parameters["status"] = status
+        if not self.config.use_multi_db and self.config.user_name:
+            parameters["user_name"] = self.config.user_name
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, parameters)
@@ -592,6 +726,10 @@ class Neo4jGraphDB(BaseGraphDB):
             else:
                 raise ValueError(f"Unsupported operator: {op}")
 
+        if not self.config.use_multi_db and self.config.user_name:
+            where_clauses.append("n.user_name = $user_name")
+            params["user_name"] = self.config.user_name
+
         where_str = " AND ".join(where_clauses)
         query = f"MATCH (n:Memory) WHERE {where_str} RETURN n.id AS id"
 
@@ -620,6 +758,20 @@ class Neo4jGraphDB(BaseGraphDB):
         if not group_fields:
             raise ValueError("group_fields cannot be empty")
 
+        final_params = params.copy() if params else {}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            user_clause = "n.user_name = $user_name"
+            final_params["user_name"] = self.config.user_name
+            if where_clause:
+                where_clause = where_clause.strip()
+                if where_clause.upper().startswith("WHERE"):
+                    where_clause += f" AND {user_clause}"
+                else:
+                    where_clause = f"WHERE {where_clause} AND {user_clause}"
+            else:
+                where_clause = f"WHERE {user_clause}"
+
         # Force RETURN field AS field to guarantee key match
         group_fields_cypher = ", ".join([f"n.{field} AS {field}" for field in group_fields])
 
@@ -630,7 +782,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
 
         with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, params or {})
+            result = session.run(query, final_params)
             return [
                 {**{field: record[field] for field in group_fields}, "count": record["count"]}
                 for record in result
@@ -669,17 +821,16 @@ class Neo4jGraphDB(BaseGraphDB):
         Clear the entire graph if the target database exists.
         """
         try:
-            # Step 1: Check if the database exists
-            with self.driver.session(database="system") as session:
-                result = session.run("SHOW DATABASES YIELD name RETURN name")
-                db_names = [record["name"] for record in result]
-                if self.db_name not in db_names:
-                    logger.info(f"[Skip] Database '{self.db_name}' does not exist.")
-                    return
+            if not self.config.use_multi_db and self.config.user_name:
+                query = "MATCH (n:Memory) WHERE n.user_name = $user_name DETACH DELETE n"
+                params = {"user_name": self.config.user_name}
+            else:
+                query = "MATCH (n) DETACH DELETE n"
+                params = {}
 
             # Step 2: Clear the graph in that database
             with self.driver.session(database=self.db_name) as session:
-                session.run("MATCH (n) DETACH DELETE n")
+                session.run(query, params)
                 logger.info(f"Cleared all nodes from database '{self.db_name}'.")
 
         except Exception as e:
@@ -698,14 +849,22 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         with self.driver.session(database=self.db_name) as session:
             # Export nodes
-            node_result = session.run("MATCH (n:Memory) RETURN n")
+            node_query = "MATCH (n:Memory)"
+            edge_query = "MATCH (a:Memory)-[r]->(b:Memory)"
+            params = {}
+
+            if not self.config.use_multi_db and self.config.user_name:
+                node_query += " WHERE n.user_name = $user_name"
+                edge_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
+                params["user_name"] = self.config.user_name
+
+            node_result = session.run(f"{node_query} RETURN n", params)
             nodes = [_parse_node(dict(record["n"])) for record in node_result]
 
             # Export edges
-            edge_result = session.run("""
-                MATCH (a:Memory)-[r]->(b:Memory)
-                RETURN a.id AS source, b.id AS target, type(r) AS type
-            """)
+            edge_result = session.run(
+                f"{edge_query} RETURN a.id AS source, b.id AS target, type(r) AS type", params
+            )
             edges = [
                 {"source": record["source"], "target": record["target"], "type": record["type"]}
                 for record in edge_result
@@ -723,6 +882,9 @@ class Neo4jGraphDB(BaseGraphDB):
         with self.driver.session(database=self.db_name) as session:
             for node in data.get("nodes", []):
                 id, memory, metadata = _compose_node(node)
+
+                if not self.config.use_multi_db and self.config.user_name:
+                    metadata["user_name"] = self.config.user_name
 
                 metadata = _prepare_node_metadata(metadata)
 
@@ -769,14 +931,21 @@ class Neo4jGraphDB(BaseGraphDB):
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
-        query = """
-        MATCH (n:Memory)
-        WHERE n.memory_type = $scope
-        RETURN n
-        """
+        where_clause = "WHERE n.memory_type = $scope"
+        params = {"scope": scope}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            where_clause += " AND n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query = f"""
+            MATCH (n:Memory)
+            {where_clause}
+            RETURN n
+            """
 
         with self.driver.session(database=self.db_name) as session:
-            results = session.run(query, {"scope": scope})
+            results = session.run(query, params)
             return [_parse_node(dict(record["n"])) for record in results]
 
     def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
@@ -785,16 +954,25 @@ class Neo4jGraphDB(BaseGraphDB):
         - Isolated nodes, nodes with empty background, or nodes with exactly one child.
         - Plus: the child of any parent node that has exactly one child.
         """
-        query = """
-                MATCH (n:Memory)
+        where_clause = """
                 WHERE n.memory_type = $scope
                   AND n.status = 'activated'
                   AND NOT ( (n)-[:PARENT]->() OR ()-[:PARENT]->(n) )
-                RETURN n.id AS id, n AS node
-                """
+            """
+        params = {"scope": scope}
+
+        if not self.config.use_multi_db and self.config.user_name:
+            where_clause += " AND n.user_name = $user_name"
+            params["user_name"] = self.config.user_name
+
+        query = f"""
+            MATCH (n:Memory)
+            {where_clause}
+            RETURN n.id AS id, n AS node
+            """
 
         with self.driver.session(database=self.db_name) as session:
-            results = session.run(query, {"scope": scope})
+            results = session.run(query, params)
             return [_parse_node({"id": record["id"], **dict(record["node"])}) for record in results]
 
     def drop_database(self) -> None:
@@ -802,20 +980,32 @@ class Neo4jGraphDB(BaseGraphDB):
         Permanently delete the entire database this instance is using.
         WARNING: This operation is destructive and cannot be undone.
         """
-        if self.db_name in ("system", "neo4j"):
-            raise ValueError(f"Refusing to drop protected database: {self.db_name}")
+        if self.config.use_multi_db:
+            if self.db_name in ("system", "neo4j"):
+                raise ValueError(f"Refusing to drop protected database: {self.db_name}")
 
-        with self.driver.session(database="system") as session:
-            session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
-            print(f"Database '{self.db_name}' has been dropped.")
+            with self.driver.session(database=self.system_db_name) as session:
+                session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
+                print(f"Database '{self.db_name}' has been dropped.")
+        else:
+            raise ValueError(
+                f"Refusing to drop protected database: {self.db_name} in "
+                f"Shared Database Multi-Tenant mode"
+            )
 
     def _ensure_database_exists(self):
-        with self.driver.session(database="system") as session:
-            session.run(f"CREATE DATABASE {self.db_name} IF NOT EXISTS")
+        try:
+            with self.driver.session(database="system") as session:
+                session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
+        except ClientError as e:
+            if "ExistingDatabaseFound" in str(e):
+                pass  # Ignore, database already exists
+            else:
+                raise
 
         # Wait until the database is available
         for _ in range(10):
-            with self.driver.session(database="system") as session:
+            with self.driver.session(database=self.system_db_name) as session:
                 result = session.run(
                     "SHOW DATABASES YIELD name, currentStatus RETURN name, currentStatus"
                 )
@@ -857,7 +1047,10 @@ class Neo4jGraphDB(BaseGraphDB):
 
     def _create_basic_property_indexes(self) -> None:
         """
-        Create standard B-tree indexes on memory_type, created_at, and updated_at fields.
+        Create standard B-tree indexes on memory_type, created_at,
+        and updated_at fields.
+        Create standard B-tree indexes on user_name when use Shared Database
+        Multi-Tenant Mode
         """
         try:
             with self.driver.session(database=self.db_name) as session:
@@ -878,6 +1071,15 @@ class Neo4jGraphDB(BaseGraphDB):
                     FOR (n:Memory) ON (n.updated_at)
                 """)
                 logger.debug("Index 'memory_updated_at_index' ensured.")
+
+                if not self.config.use_multi_db and self.config.user_name:
+                    session.run(
+                        """
+                        CREATE INDEX memory_user_name_index IF NOT EXISTS
+                        FOR (n:Memory) ON (n.user_name)
+                        """
+                    )
+                logger.debug("Index 'memory_user_name_index' ensured.")
         except Exception as e:
             logger.warning(f"Failed to create basic property indexes: {e}")
 

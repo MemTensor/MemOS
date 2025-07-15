@@ -8,12 +8,7 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 
 
 embedder_config = EmbedderConfigFactory.model_validate(
-    {
-        "backend": "sentence_transformer",
-        "config": {
-            "model_name_or_path": "nomic-ai/nomic-embed-text-v1.5",
-        },
-    }
+    {"backend": "ollama", "config": {"model_name_or_path": "nomic-embed-text:latest"}}
 )
 embedder = EmbedderFactory.from_config(embedder_config)
 
@@ -22,7 +17,7 @@ def embed_memory_item(memory: str) -> list[float]:
     return embedder.embed([memory])[0]
 
 
-def example_1_paper(db_name: str = "paper"):
+def example_multi_db(db_name: str = "paper"):
     # Step 1: Build factory config
     config = GraphDBConfigFactory(
         backend="neo4j",
@@ -33,6 +28,7 @@ def example_1_paper(db_name: str = "paper"):
             "db_name": db_name,
             "auto_create": True,
             "embedding_dimension": 768,
+            "use_multi_db": True,
         },
     )
 
@@ -68,7 +64,7 @@ def example_1_paper(db_name: str = "paper"):
     )
 
     graph.add_node(
-        id=topic.id, content=topic.memory, metadata=topic.metadata.model_dump(exclude_none=True)
+        id=topic.id, memory=topic.memory, metadata=topic.metadata.model_dump(exclude_none=True)
     )
 
     # Step 4: Define and write concept nodes
@@ -150,7 +146,7 @@ def example_1_paper(db_name: str = "paper"):
     for concept in concepts:
         graph.add_node(
             id=concept.id,
-            content=concept.memory,
+            memory=concept.memory,
             metadata=concept.metadata.model_dump(exclude_none=True),
         )
         graph.add_edge(source_id=concept.id, target_id=topic.id, type="RELATED")
@@ -259,113 +255,101 @@ def example_1_paper(db_name: str = "paper"):
         print(graph.get_node(node_i["id"]))
 
 
-def example_2_travel(db_name: str = "travel"):
-    # Step 1: Build factory config
-    config = GraphDBConfigFactory(
+def example_shared_db(db_name: str = "shared-traval-group"):
+    """
+    Example: Single(Shared)-DB multi-tenant (logical isolation)
+    Multiple users' data in the same Neo4j DB with user_name as a tag.
+    """
+    # users
+    user_list = ["travel_member_alice", "travel_member_bob"]
+
+    for user_name in user_list:
+        # Step 1: Build factory config
+        config = GraphDBConfigFactory(
+            backend="neo4j",
+            config={
+                "uri": "bolt://localhost:7687",
+                "user": "neo4j",
+                "password": "12345678",
+                "db_name": db_name,
+                "user_name": user_name,
+                "use_multi_db": False,
+                "auto_create": True,
+                "embedding_dimension": 768,
+            },
+        )
+        # Step 2: Instantiate graph store
+        graph = GraphStoreFactory.from_config(config)
+        print(f"\n[INFO] Working in shared DB: {db_name}, for user: {user_name}")
+        graph.clear()
+
+        # Step 3: Create topic node
+        topic = TextualMemoryItem(
+            memory=f"Travel notes for {user_name}",
+            metadata=TreeNodeTextualMemoryMetadata(
+                memory_type="LongTermMemory",
+                hierarchy_level="topic",
+                status="activated",
+                visibility="public",
+                embedding=embed_memory_item(f"Travel notes for {user_name}"),
+            ),
+        )
+
+        graph.add_node(
+            id=topic.id, memory=topic.memory, metadata=topic.metadata.model_dump(exclude_none=True)
+        )
+
+        # Step 4: Add a concept for each user
+        concept = TextualMemoryItem(
+            memory=f"Itinerary plan for {user_name}",
+            metadata=TreeNodeTextualMemoryMetadata(
+                memory_type="LongTermMemory",
+                hierarchy_level="concept",
+                status="activated",
+                visibility="public",
+                embedding=embed_memory_item(f"Itinerary plan for {user_name}"),
+            ),
+        )
+
+        graph.add_node(
+            id=concept.id,
+            memory=concept.memory,
+            metadata=concept.metadata.model_dump(exclude_none=True),
+        )
+
+        # Link concept to topic
+        graph.add_edge(source_id=concept.id, target_id=topic.id, type="INCLUDE")
+
+        print(f"[INFO] Added nodes for {user_name}")
+
+    # Step 5: Query and print ALL for verification
+    print("\n=== Export entire DB (for verification, includes ALL users) ===")
+    graph = GraphStoreFactory.from_config(config)
+    all_graph_data = graph.export_graph()
+    print(all_graph_data)
+
+    # Step 6: Search for alice's data only
+    print("\n=== Search for travel_member_alice ===")
+    config_alice = GraphDBConfigFactory(
         backend="neo4j",
         config={
             "uri": "bolt://localhost:7687",
             "user": "neo4j",
             "password": "12345678",
             "db_name": db_name,
-            "auto_create": True,
+            "user_name": user_list[0],
             "embedding_dimension": 768,
         },
     )
-
-    # Step 2: Instantiate the graph store
-    graph = GraphStoreFactory.from_config(config)
-    graph.clear()
-
-    # Step 3: Create topic node
-    topic = TextualMemoryItem(
-        memory="Travel",
-        metadata=TreeNodeTextualMemoryMetadata(
-            memory_type="LongTermMemory",
-            hierarchy_level="topic",
-            status="activated",
-            visibility="public",
-            embedding=embed_memory_item("Travel"),
-        ),
-    )
-
-    graph.add_node(
-        id=topic.id, content=topic.memory, metadata=topic.metadata.model_dump(exclude_none=True)
-    )
-
-    concept1 = TextualMemoryItem(
-        memory="Travel in Italy",
-        metadata=TreeNodeTextualMemoryMetadata(
-            memory_type="LongTermMemory",
-            hierarchy_level="concept",
-            status="activated",
-            visibility="public",
-            embedding=embed_memory_item("Travel in Italy"),
-        ),
-    )
-
-    graph.add_node(
-        id=concept1.id,
-        content=concept1.memory,
-        metadata=concept1.metadata.model_dump(exclude_none=True),
-    )
-    graph.add_edge(source_id=topic.id, target_id=concept1.id, type="INCLUDE")
-
-    concept2 = TextualMemoryItem(
-        memory="Traval plan",
-        metadata=TreeNodeTextualMemoryMetadata(
-            memory_type="LongTermMemory",
-            hierarchy_level="concept",
-            status="activated",
-            visibility="public",
-            embedding=embed_memory_item("Traval plan"),
-        ),
-    )
-
-    graph.add_node(
-        id=concept2.id,
-        content=concept2.memory,
-        metadata=concept2.metadata.model_dump(exclude_none=True),
-    )
-    graph.add_edge(source_id=concept1.id, target_id=concept2.id, type="INCLUDE")
-
-    fact1 = TextualMemoryItem(
-        memory="10-Day Itinerary for Traveling in Italy",
-        metadata=TreeNodeTextualMemoryMetadata(
-            memory_type="WorkingMemory",
-            key="Reward Components",
-            value="Coverage gain, energy usage penalty, overlap penalty",
-            hierarchy_level="fact",
-            type="fact",
-            memory_time="2024-01-01",
-            source="file",
-            sources=["paper://multi-uav-coverage/reward-details"],
-            status="activated",
-            confidence=90.0,
-            tags=["reward", "overlap", "multi-agent"],
-            entities=["coverage", "energy", "overlap"],
-            visibility="public",
-            embedding=embed_memory_item("10-Day Itinerary for Traveling in Italy"),
-            updated_at=datetime.now().isoformat(),
-        ),
-    )
-
-    graph.add_node(
-        id=fact1.id, content=fact1.memory, metadata=fact1.metadata.model_dump(exclude_none=True)
-    )
-    graph.add_edge(source_id=concept2.id, target_id=fact1.id, type="INCLUDE")
-
-    all_graph_data = graph.export_graph()
-    print(all_graph_data)
-
-    nodes = graph.search_by_embedding(vector=embed_memory_item("what does FT reflect?"), top_k=1)
-
-    for node_i in nodes:
-        print(graph.get_node(node_i["id"]))
+    graph_alice = GraphStoreFactory.from_config(config_alice)
+    nodes = graph_alice.search_by_embedding(vector=embed_memory_item("travel itinerary"), top_k=1)
+    for node in nodes:
+        print(graph_alice.get_node(node["id"]))
 
 
 if __name__ == "__main__":
-    example_1_paper(db_name="paper")
+    print("\n=== Example: Multi-DB ===")
+    example_multi_db(db_name="paper")
 
-if __name__ == "__main__":
-    example_2_travel(db_name="traval")
+    print("\n=== Example: Single-DB ===")
+    example_shared_db(db_name="shared-traval-group11")

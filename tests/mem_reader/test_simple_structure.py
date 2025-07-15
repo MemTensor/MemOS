@@ -19,6 +19,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
         self.config.llm = MagicMock()
         self.config.embedder = MagicMock()
         self.config.chunker = MagicMock()
+        self.config.remove_prompt_example = MagicMock()
 
         # Mock dependencies
         with (

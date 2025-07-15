@@ -232,13 +232,6 @@ class MemoryManager:
         # After creating merged node and tracing lineage
         self._inherit_edges(original_id, merged_id)
 
-        # Relate other similar nodes to merged if needed
-        for related_node in similar_nodes[1:]:
-            if not self.graph_store.edge_exists(
-                merged_id, related_node["id"], type="ANY", direction="ANY"
-            ):
-                self.graph_store.add_edge(merged_id, related_node["id"], type="RELATE")
-
         # log to reorganizer before updating the graph
         self.reorganizer.add_message(
             QueueMessage(

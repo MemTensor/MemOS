@@ -2,7 +2,7 @@
 
 [tool.poetry]
 name = "MemoryOS"
-version = "0.1.13"
+version = "0.2.0"
 description = "Intelligence Begins with Memory"
 license = "Apache-2.0"
 authors = ["MemTensor <lizy@memtensor.cn>"]
@@ -28,6 +28,7 @@ sqlalchemy = "^2.0.41"
 redis = "^6.2.0"
 pika = "^1.3.2"
 schedule = "^1.2.2"
+volcengine-python-sdk = "^4.0.4"
 
 [tool.poetry.group.dev]
 optional = false
