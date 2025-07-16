@@ -104,7 +104,7 @@ Another Example:
 - Node 2: "The venue was booked for a wedding in August."
 Answer: CONFLICT
 
-Always respond with ONE word, no matter what language is for the input nodes: [CAUSE | CONDITION | RELATE_TO | CONFLICT | NONE]
+Always respond with ONE word, no matter what language is for the input nodes: [CAUSE | CONDITION | RELATE | CONFLICT | NONE]
 """
 
 INFER_FACT_PROMPT = """

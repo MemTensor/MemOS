@@ -505,7 +505,7 @@ class GraphStructureReorganizer:
         parent_key = response_json.get("key", "").strip()
         parent_value = response_json.get("value", "").strip()
         parent_tags = response_json.get("tags", [])
-        parent_background = response_json.get("background", "").strip()
+        parent_background = response_json.get("summary", "").strip()
 
         embedding = self.embedder.embed([parent_value])[0]
 
