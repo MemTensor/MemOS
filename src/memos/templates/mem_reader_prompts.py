@@ -1,5 +1,4 @@
-SIMPLE_STRUCT_MEM_READER_PROMPT = """
-You are a memory extraction expert.
+SIMPLE_STRUCT_MEM_READER_PROMPT = """You are a memory extraction expert.
 Always respond in the same language as the conversation. If the conversation is in Chinese, respond in Chinese.
 
 Your task is to extract memories from the perspective of ${user_a}, based on a conversation between ${user_a} and ${user_b}. This means identifying what ${user_a} would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as ${user_b}) that impacted or were acknowledged by ${user_a}.
@@ -72,8 +71,7 @@ Output:
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
-Another Example in Chinese(Note: You MUST output the SAME language as the
-input conversation!!)：
+Another Example in Chinese (注意: 你的输出必须和输入的user语言一致)：
 {
   "memory list": [
     {
@@ -93,9 +91,12 @@ ${conversation}
 Your Output:"""
 
 SIMPLE_STRUCT_DOC_READER_PROMPT = """
+**ABSOLUTE, NON-NEGOTIABLE, CRITICAL RULE: The language of your entire JSON output's string values (specifically `summary` and `tags`) MUST be identical to the language of the input `[DOCUMENT_CHUNK]`. There are absolutely no exceptions. Do not translate. If the input is Chinese, the output must be Chinese. If English, the output must be English. Any deviation from this rule constitutes a failure to follow instructions.**
+
 You are an expert text analyst for a search and retrieval system. Your task is to process a document chunk and generate a single, structured JSON object.
-Always respond in the same language as the conversation. If the conversation
-is in Chinese, MUST respond in Chinese.
+Written in English if the input conversation is in English, or in Chinese if
+the conversation is in Chinese, or any language which align with the
+conversation language. 如果输入语言是中文，请务必输出中文。
 
 The input is a single piece of text: `[DOCUMENT_CHUNK]`.
 You must generate a single JSON object with two top-level keys: `summary` and `tags`.
@@ -147,6 +148,20 @@ Output:
     },
   ],
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
+}
+
+Another Example in Chinese (注意: 你的输出必须和输入的user语言一致)：
+{
+  "memory list": [
+    {
+      "key": "项目会议",
+      "memory_type": "LongTermMemory",
+      "value": "在2025年6月25日下午3点，Tom与团队开会讨论了新项目，涉及时间表，并提出了对12月15日截止日期可行性的担忧。",
+      "tags": ["项目", "时间表", "会议", "截止日期"]
+    },
+    ...
+  ],
+  "summary": "Tom 目前专注于管理一个进度紧张的新项目..."
 }
 
 """

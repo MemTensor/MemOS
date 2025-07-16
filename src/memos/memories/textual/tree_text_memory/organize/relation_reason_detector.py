@@ -174,7 +174,7 @@ class RelationAndReasoningDetector:
         combined_nodes = [node, *nearest_nodes]
 
         joined = "\n".join(f"- {n.memory}" for n in combined_nodes)
-        prompt = AGGREGATE_PROMPT.format(joined=joined)
+        prompt = AGGREGATE_PROMPT.replace("{joined}", joined)
         response_text = self._call_llm(prompt)
         response_json = self._parse_json_result(response_text)
         if not response_json:

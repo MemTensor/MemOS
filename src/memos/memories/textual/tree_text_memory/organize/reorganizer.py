@@ -358,7 +358,7 @@ class GraphStructureReorganizer:
             scene_lines.append(line)
 
         joined_scene = "\n".join(scene_lines)
-        prompt = LOCAL_SUBCLUSTER_PROMPT.format(joined_scene=joined_scene)
+        prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
@@ -484,18 +484,15 @@ class GraphStructureReorganizer:
         if not cluster_nodes:
             raise ValueError("Cluster nodes cannot be empty.")
 
-        joined_keys = "\n".join(f"- {n.metadata.key}" for n in cluster_nodes if n.metadata.key)
-        joined_values = "\n".join(f"- {n.memory}" for n in cluster_nodes)
-        joined_backgrounds = "\n".join(
-            f"- {n.metadata.background}" for n in cluster_nodes if n.metadata.background
+        memories_items_text = "\n\n".join(
+            [
+                f"{i}. key: {n.metadata.key}\nvalue: {n.memory}\nsummary:{n.metadata.background}"
+                for i, n in enumerate(cluster_nodes)
+            ]
         )
 
         # Build prompt
-        prompt = REORGANIZE_PROMPT.format(
-            joined_keys=joined_keys,
-            joined_values=joined_values,
-            joined_backgrounds=joined_backgrounds,
-        )
+        prompt = REORGANIZE_PROMPT.replace("{memory_items_text}", memories_items_text)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
@@ -505,7 +502,7 @@ class GraphStructureReorganizer:
         parent_key = response_json.get("key", "").strip()
         parent_value = response_json.get("value", "").strip()
         parent_tags = response_json.get("tags", [])
-        parent_background = response_json.get("background", "").strip()
+        parent_background = response_json.get("summary", "").strip()
 
         embedding = self.embedder.embed([parent_value])[0]
 
