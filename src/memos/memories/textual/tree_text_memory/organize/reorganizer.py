@@ -6,7 +6,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import PriorityQueue
 from typing import Literal
-
+from collections import Counter, defaultdict
 import numpy as np
 import schedule
 
@@ -378,9 +378,7 @@ class GraphStructureReorganizer:
 
         return result_subclusters
 
-    def _partition(
-        self, nodes: list[GraphDBNode], min_cluster_size: int = 3
-    ) -> list[list[GraphDBNode]]:
+    def _partition(self, nodes, min_cluster_size: int = 1, max_cluster_size: int = 20):
         """
         Partition nodes by:
         1) Frequent tags (top N & above threshold)
@@ -394,8 +392,6 @@ class GraphStructureReorganizer:
         Returns:
             List of clusters, each as a list of GraphDBNode
         """
-        from collections import Counter, defaultdict
-
         # 1) Count all tags
         tag_counter = Counter()
         for node in nodes:
@@ -407,7 +403,7 @@ class GraphStructureReorganizer:
         threshold_tags = {tag for tag, count in tag_counter.items() if count >= 50}
         frequent_tags = top_n_tags | threshold_tags
 
-        # Group nodes by tags, ensure each group is unique internally
+        # Group nodes by tags
         tag_groups = defaultdict(list)
 
         for node in nodes:
@@ -420,48 +416,67 @@ class GraphStructureReorganizer:
         assigned_ids = set()
         for tag, group in tag_groups.items():
             if len(group) >= min_cluster_size:
-                filtered_tag_clusters.append(group)
-                assigned_ids.update(n.id for n in group)
+                # Split large groups into chunks of at most max_cluster_size
+                for i in range(0, len(group), max_cluster_size):
+                    sub_group = group[i : i + max_cluster_size]
+                    filtered_tag_clusters.append(sub_group)
+                    assigned_ids.update(n.id for n in sub_group)
             else:
-                logger.info(f"... dropped {tag} ...")
+                logger.info(f"... dropped tag {tag} due to low size ...")
 
         logger.info(
             f"[MixedPartition] Created {len(filtered_tag_clusters)} clusters from tags. "
             f"Nodes grouped by tags: {len(assigned_ids)} / {len(nodes)}"
         )
 
-        # 5) Remaining nodes -> embedding clustering
+        # Remaining nodes -> embedding clustering
         remaining_nodes = [n for n in nodes if n.id not in assigned_ids]
         logger.info(
             f"[MixedPartition] Remaining nodes for embedding clustering: {len(remaining_nodes)}"
         )
 
         embedding_clusters = []
-        if remaining_nodes:
-            x = np.array([n.metadata.embedding for n in remaining_nodes if n.metadata.embedding])
-            k = max(1, min(len(remaining_nodes) // min_cluster_size, 20))
-            if len(x) < k:
-                k = len(x)
 
-            if 1 < k <= len(x):
+        def recursive_clustering(nodes_list):
+            """Recursively split clusters until each is <= max_cluster_size."""
+            if len(nodes_list) <= max_cluster_size:
+                return [nodes_list]
+
+            # Try kmeans with k = ceil(len(nodes) / max_cluster_size)
+            x = np.array([n.metadata.embedding for n in nodes_list if n.metadata.embedding])
+            if len(x) < 2:
+                return [nodes_list]
+
+            k = min(len(x), (len(nodes_list) + max_cluster_size - 1) // max_cluster_size)
+            k = max(1, min(k, len(x)))
+
+            try:
                 kmeans = MiniBatchKMeans(n_clusters=k, batch_size=256, random_state=42)
                 labels = kmeans.fit_predict(x)
 
                 label_groups = defaultdict(list)
-                for node, label in zip(remaining_nodes, labels, strict=False):
+                for node, label in zip(nodes_list, labels, strict=False):
                     label_groups[label].append(node)
 
-                embedding_clusters = list(label_groups.values())
-                logger.info(
-                    f"[MixedPartition] Created {len(embedding_clusters)} clusters from embedding."
-                )
-            else:
-                embedding_clusters = [remaining_nodes]
+                result = []
+                for sub_group in label_groups.values():
+                    result.extend(recursive_clustering(sub_group))
+                return result
+            except Exception as e:
+                logger.warning(f"Clustering failed: {e}, falling back to single cluster.")
+                return [nodes_list]
 
-        # Merge all & handle small clusters
+        if remaining_nodes:
+            clusters = recursive_clustering(remaining_nodes)
+            embedding_clusters.extend(clusters)
+            logger.info(
+                f"[MixedPartition] Created {len(embedding_clusters)} clusters from embeddings."
+            )
+
+        # Merge all clusters
         all_clusters = filtered_tag_clusters + embedding_clusters
 
-        # Optional: merge tiny clusters
+        # Handle small clusters (< min_cluster_size)
         final_clusters = []
         small_nodes = []
         for group in all_clusters:
