@@ -36,7 +36,7 @@ class GeneralScheduler(BaseScheduler):
         Args:
             messages: List of query messages to process
         """
-        logger.debug(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
 
         # Process the query in a session turn
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
@@ -67,7 +67,7 @@ class GeneralScheduler(BaseScheduler):
         Args:
           messages: List of answer messages to process
         """
-        logger.debug(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
         # Process the query in a session turn
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
 
@@ -93,7 +93,7 @@ class GeneralScheduler(BaseScheduler):
                     )
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.debug(f"Messages {messages} assigned to {ADD_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
 
@@ -155,32 +155,59 @@ class GeneralScheduler(BaseScheduler):
             logger.error("Not implemented!", exc_info=True)
             return
 
+        logger.info(f"Processing {len(queries)} queries.")
+
         working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
         text_working_memory: list[str] = [w_m.memory for w_m in working_memory]
         intent_result = self.monitor.detect_intent(
             q_list=query_history, text_working_memory=text_working_memory
         )
 
-        if intent_result["trigger_retrieval"]:
-            missing_evidences = intent_result["missing_evidences"]
-            num_evidence = len(missing_evidences)
-            k_per_evidence = max(1, top_k // max(1, num_evidence))
-            new_candidates = []
-            for item in missing_evidences:
-                logger.debug(f"missing_evidences: {item}")
-                results = self.retriever.search(
-                    query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
-                )
-                logger.debug(f"search results for {missing_evidences}: {results}")
-                new_candidates.extend(results)
+        time_trigger_flag = False
+        if self.monitor.timed_trigger(
+            last_time=self.monitor._last_query_consume_time,
+            interval_seconds=self.monitor.query_trigger_interval,
+        ):
+            time_trigger_flag = True
+            self._query_consume_time = True
 
-            new_order_working_memory = self.retriever.replace_working_memory(
-                queries=queries,
-                user_id=user_id,
-                mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube,
-                original_memory=working_memory,
-                new_memory=new_candidates,
-                top_k=top_k,
+        if (not intent_result["trigger_retrieval"]) and (not time_trigger_flag):
+            logger.info(f"Query schedule not triggered. Intent_result: {intent_result}")
+            return
+        elif (not intent_result["trigger_retrieval"]) and time_trigger_flag:
+            logger.info("Query schedule is forced to trigger due to time ticker")
+            intent_result["trigger_retrieval"] = True
+            intent_result["missing_evidences"] = queries
+        else:
+            logger.info(
+                f"Query schedule is triggered, and missing_evidences: {intent_result['missing_evidences']}"
             )
-            logger.debug(f"size of new_order_working_memory: {len(new_order_working_memory)}")
+
+        missing_evidences = intent_result["missing_evidences"]
+        num_evidence = len(missing_evidences)
+        k_per_evidence = max(1, top_k // max(1, num_evidence))
+        new_candidates = []
+        for item in missing_evidences:
+            logger.debug(f"missing_evidences: {item}")
+            results = self.retriever.search(
+                query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
+            )
+            logger.debug(f"search results for {missing_evidences}: {results}")
+            new_candidates.extend(results)
+
+        new_order_working_memory = self.retriever.replace_working_memory(
+            queries=queries,
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+            original_memory=working_memory,
+            new_memory=new_candidates,
+            top_k=top_k,
+        )
+        logger.debug(f"size of new_order_working_memory: {len(new_order_working_memory)}")
+
+        self.monitor.update_memory_monitors(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+        )

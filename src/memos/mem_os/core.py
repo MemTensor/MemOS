@@ -58,10 +58,15 @@ class MOSCore:
                 f"User '{self.user_id}' does not exist or is inactive. Please create user first."
             )
 
-        # Lazy initialization marker
+        # Initialize mem_scheduler
         self._mem_scheduler_lock = Lock()
         self.enable_mem_scheduler = self.config.get("enable_mem_scheduler", False)
-        self._mem_scheduler: GeneralScheduler = None
+        if self.enable_mem_scheduler:
+            self._mem_scheduler = self._initialize_mem_scheduler()
+            self._mem_scheduler.mem_cubes = self.mem_cubes
+        else:
+            self._mem_scheduler: GeneralScheduler = None
+
         logger.info(f"MOS initialized for user: {self.user_id}")
 
     @property
@@ -93,14 +98,16 @@ class MOSCore:
             else:
                 logger.debug("Memory scheduler cleared")
 
-    def _initialize_mem_scheduler(self):
+    def _initialize_mem_scheduler(self) -> GeneralScheduler:
         """Initialize the memory scheduler on first access."""
         if not self.config.enable_mem_scheduler:
             logger.debug("Memory scheduler is disabled in config")
             self._mem_scheduler = None
+            return self._mem_scheduler
         elif not hasattr(self.config, "mem_scheduler"):
             logger.error("Config of Memory scheduler is not available")
             self._mem_scheduler = None
+            return self._mem_scheduler
         else:
             logger.info("Initializing memory scheduler...")
             scheduler_config = self.config.mem_scheduler
@@ -111,13 +118,16 @@ class MOSCore:
                     f"Memory reader of type {type(self.mem_reader).__name__} "
                     "missing required 'llm' attribute"
                 )
-                self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
+                self._mem_scheduler.initialize_modules(
+                    chat_llm=self.chat_llm, process_llm=self.chat_llm
+                )
             else:
                 # Configure scheduler modules
                 self._mem_scheduler.initialize_modules(
                     chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
                 )
             self._mem_scheduler.start()
+            return self._mem_scheduler
 
     def mem_scheduler_on(self) -> bool:
         if not self.config.enable_mem_scheduler or self._mem_scheduler is None:

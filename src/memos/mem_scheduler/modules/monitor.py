@@ -31,7 +31,8 @@ class SchedulerMonitor(BaseSchedulerModule):
 
         # hyper-parameters
         self.config: BaseSchedulerConfig = config
-        self.act_mem_update_interval = self.config.get("act_mem_update_interval", 300)
+        self.act_mem_update_interval = self.config.get("act_mem_update_interval", 30)
+        self.query_trigger_interval = self.config.get("query_trigger_interval", 10)
 
         # Partial Retention Strategy
         self.partial_retention_number = 2
@@ -46,6 +47,7 @@ class SchedulerMonitor(BaseSchedulerModule):
 
         # Lifecycle monitor
         self._last_activation_mem_update_time = datetime.min
+        self._last_query_consume_time = datetime.min
 
         self._process_llm = process_llm
 

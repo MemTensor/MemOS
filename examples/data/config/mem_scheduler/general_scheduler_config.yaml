@@ -5,5 +5,5 @@ config:
   act_mem_update_interval: 30
   context_window_size: 5
   thread_pool_max_workers: 5
-  consume_interval_seconds: 3
+  consume_interval_seconds: 1
   enable_parallel_dispatch: true

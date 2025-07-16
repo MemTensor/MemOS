@@ -44,7 +44,7 @@ class MOSForTestScheduler(MOS):
 
         chat_history = self.chat_history_manager[target_user_id]
 
-        topk_for_scheduler = 2
+        topk_for_scheduler = 5
 
         if self.config.enable_textual_memory and self.mem_cubes:
             memories_all = []
@@ -64,14 +64,10 @@ class MOSForTestScheduler(MOS):
                         content=query,
                         timestamp=datetime.now(),
                     )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
 
-                self.mem_scheduler.monitor.register_memory_manager_if_not_exists(
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    memory_monitors=self.mem_scheduler.monitor.working_memory_monitors,
-                    max_capacity=self.mem_scheduler.monitor.working_mem_monitor_capacity,
-                )
+                    # --- force to run mem_scheduler ---
+                    self.mem_scheduler.monitor.query_trigger_interval = 0
+                    self.mem_scheduler._query_message_consumer(messages=[message_item])
 
                 # from scheduler
                 scheduler_memories = self.mem_scheduler.monitor.get_monitor_memories(
@@ -80,13 +76,13 @@ class MOSForTestScheduler(MOS):
                     memory_type=MONITOR_WORKING_MEMORY_TYPE,
                     top_k=topk_for_scheduler,
                 )
+                print(f"Memories from the scheduler: {scheduler_memories}")
                 memories_all.extend(scheduler_memories)
 
                 # from mem_cube
-                memories = mem_cube.text_mem.search(
-                    query, top_k=self.config.top_k - topk_for_scheduler
-                )
+                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
                 text_memories = [m.memory for m in memories]
+                print(f"Memories from search: {text_memories}")
                 memories_all.extend(text_memories)
 
                 memories_all = list(set(memories_all))

@@ -1,6 +1,7 @@
 import shutil
 import sys
 
+from datetime import datetime
 from pathlib import Path
 from queue import Queue
 from typing import TYPE_CHECKING
@@ -13,7 +14,11 @@ from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import NOT_APPLICABLE_TYPE
+from memos.mem_scheduler.modules.schemas import (
+    NOT_APPLICABLE_TYPE,
+    QUERY_LABEL,
+    ScheduleMessageItem,
+)
 from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
 
 
@@ -183,6 +188,17 @@ if __name__ == "__main__":
             top_k=10,
             query_history=None,
         )
+
+        # test query_consume
+        message_item = ScheduleMessageItem(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+            label=QUERY_LABEL,
+            content=query,
+            timestamp=datetime.now(),
+        )
+        mos.mem_scheduler._query_message_consumer(messages=[message_item])
 
         # test activation memory update
         mos.mem_scheduler.update_activation_memory_periodically(

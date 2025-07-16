@@ -22,7 +22,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
     - Bulk handler registration
     """
 
-    def __init__(self, max_workers=3, enable_parallel_dispatch=False):
+    def __init__(self, max_workers=30, enable_parallel_dispatch=False):
         super().__init__()
         # Main dispatcher thread pool
         self.max_workers = max_workers
@@ -128,16 +128,13 @@ class SchedulerDispatcher(BaseSchedulerModule):
             else:
                 handler = self.handlers[label]
             # dispatch to different handler
-            logger.debug(f"Dispatch {len(msgs)} messages to {label} handler.")
+            logger.debug(f"Dispatch {len(msgs)} message(s) to {label} handler.")
             if self.enable_parallel_dispatch and self.dispatcher_executor is not None:
                 # Capture variables in lambda to avoid loop variable issues
-                # TODO check this
-                future = self.dispatcher_executor.submit(handler, msgs)
-                logger.debug(f"Dispatched {len(msgs)} messages as future task")
-                return future
+                self.dispatcher_executor.submit(handler, msgs)
+                logger.info(f"Dispatched {len(msgs)} message(s) as future task")
             else:
                 handler(msgs)
-                return None
 
     def join(self, timeout: float | None = None) -> bool:
         """Wait for all dispatched tasks to complete.
@@ -159,7 +156,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if self.dispatcher_executor is not None:
             self.dispatcher_executor.shutdown(wait=True)
         self._running = False
-        logger.info("Dispatcher has been shutdown")
+        logger.info("Dispatcher has been shutdown.")
 
     def __enter__(self):
         self._running = True
