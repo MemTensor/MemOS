@@ -1,7 +1,7 @@
 SIMPLE_STRUCT_MEM_READER_PROMPT = """You are a memory extraction expert.
 Always respond in the same language as the conversation. If the conversation is in Chinese, respond in Chinese.
 
-Your task is to extract memories from the perspective of user, based on a conversation between user and assistant. This means identifying what user would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as assistant) that impacted or were acknowledged by user.
+Your task is to extract memories from the perspective of ${user_a}, based on a conversation between ${user_a} and ${user_b}. This means identifying what ${user_a} would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as ${user_b}) that impacted or were acknowledged by ${user_a}.
 
 Please perform:
 1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
@@ -27,12 +27,16 @@ Return a single valid JSON object with the following structure:
     {
       "key": <string, a unique, concise memory title>,
       "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
-      "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input conversation is in English, or in Chinese if the conversation is in Chinese>,
+      "value": <A detailed, self-contained, and unambiguous memory statement
+      — written in English if the input conversation is in English,
+      or in Chinese if the conversation is in Chinese, or any language which
+      align with the conversation language>,
       "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>
     },
     ...
   ],
-  "summary": <a natural paragraph summarizing the above memories from user's perspective, 120–200 words, same language as the input>
+  "summary": <a natural paragraph summarizing the above memories from user's
+  perspective, 120–200 words, **same language** as the input>
 }
 
 Language rules:
@@ -96,6 +100,9 @@ conversation language. 如果输入语言是中文，请务必输出中文。
 
 The input is a single piece of text: `[DOCUMENT_CHUNK]`.
 You must generate a single JSON object with two top-level keys: `summary` and `tags`.
+Written in English if the input conversation is in English, or in Chinese if
+the conversation is in Chinese, or any language which align with the conversation language.
+
 1. `summary`:
    - A dense, searchable summary of the ENTIRE `[DOCUMENT_CHUNK]`.
    - The purpose is for semantic search embedding.

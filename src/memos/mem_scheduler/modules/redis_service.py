@@ -63,21 +63,21 @@ class RedisSchedulerModule(BaseSchedulerModule):
         self._redis_conn.xtrim("user:queries:stream", self.query_list_capacity)
         return self._redis_conn
 
-    async def add_message_stream(self, message: dict):
+    async def redis_add_message_stream(self, message: dict):
         logger.debug(f"add_message_stream: {message}")
         return self._redis_conn.xadd("user:queries:stream", message)
 
-    async def consume_message_stream(self, message: dict):
+    async def redis_consume_message_stream(self, message: dict):
         logger.debug(f"consume_message_stream: {message}")
 
-    def _run_listener_async(self, handler: Callable):
+    def _redis_run_listener_async(self, handler: Callable):
         """Run the async listener in a separate thread"""
         self._redis_listener_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._redis_listener_loop)
 
         async def listener_wrapper():
             try:
-                await self._listen_query_stream(handler)
+                await self.__redis_listen_query_stream(handler)
             except Exception as e:
                 logger.error(f"Listener thread error: {e}")
             finally:
@@ -85,7 +85,9 @@ class RedisSchedulerModule(BaseSchedulerModule):
 
         self._redis_listener_loop.run_until_complete(listener_wrapper())
 
-    async def _listen_query_stream(self, handler=None, last_id: str = "$", block_time: int = 2000):
+    async def __redis_listen_query_stream(
+        self, handler=None, last_id: str = "$", block_time: int = 2000
+    ):
         """Internal async stream listener"""
         self._redis_listener_running = True
         while self._redis_listener_running:
@@ -99,6 +101,7 @@ class RedisSchedulerModule(BaseSchedulerModule):
                     for _, stream_messages in messages:
                         for message_id, message_data in stream_messages:
                             try:
+                                print(f"deal with message_data {message_data}")
                                 await handler(message_data)
                                 last_id = message_id
                             except Exception as e:
@@ -112,17 +115,17 @@ class RedisSchedulerModule(BaseSchedulerModule):
                 logger.error(f"Unexpected error: {e}")
                 await asyncio.sleep(1)
 
-    def start_listening(self, handler: Callable | None = None):
+    def redis_start_listening(self, handler: Callable | None = None):
         """Start the Redis stream listener in a background thread"""
         if self._redis_listener_thread and self._redis_listener_thread.is_alive():
             logger.warning("Listener is already running")
             return
 
         if handler is None:
-            handler = self.consume_message_stream
+            handler = self.redis_consume_message_stream
 
         self._redis_listener_thread = threading.Thread(
-            target=self._run_listener_async,
+            target=self._redis_run_listener_async,
             args=(handler,),
             daemon=True,
             name="RedisListenerThread",
@@ -130,13 +133,7 @@ class RedisSchedulerModule(BaseSchedulerModule):
         self._redis_listener_thread.start()
         logger.info("Started Redis stream listener thread")
 
-    def close(self):
-        """Close Redis connection"""
-        if self._redis_conn is not None:
-            self._redis_conn.close()
-            self._redis_conn = None
-
-    def stop_listening(self):
+    def redis_stop_listening(self):
         """Stop the listener thread gracefully"""
         self._redis_listener_running = False
         if self._redis_listener_thread and self._redis_listener_thread.is_alive():
@@ -144,3 +141,9 @@ class RedisSchedulerModule(BaseSchedulerModule):
             if self._redis_listener_thread.is_alive():
                 logger.warning("Listener thread did not stop gracefully")
         logger.info("Redis stream listener stopped")
+
+    def redis_close(self):
+        """Close Redis connection"""
+        if self._redis_conn is not None:
+            self._redis_conn.close()
+            self._redis_conn = None

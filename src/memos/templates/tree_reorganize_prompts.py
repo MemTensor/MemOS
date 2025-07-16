@@ -26,6 +26,9 @@ Language rules:
 - The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input memory items. **如果输入是中文，请输出中文**
 - Keep `memory_type` in English.
 
+Language rules:
+- The `key`, `value`, `tags`, `background` fields must match the language of the input conversation.
+
 Return valid JSON:
 {
   "key": <string, a unique, concise memory title>,

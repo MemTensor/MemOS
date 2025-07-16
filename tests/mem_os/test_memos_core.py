@@ -331,6 +331,126 @@ class TestMOSMemoryOperations:
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
     @patch("memos.mem_os.core.LLMFactory")
+    @patch("memos.mem_os.core.logger")
+    def test_register_mem_cube_embedder_consistency_warning(
+        self,
+        mock_logger,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+        mock_mem_cube,
+    ):
+        """Test embedder consistency warning when cube embedder differs from MOS config."""
+        # Setup mocks
+        mock_llm_factory.from_config.return_value = mock_llm
+        mock_reader_factory.from_config.return_value = mock_mem_reader
+        mock_user_manager_class.return_value = mock_user_manager
+        mock_user_manager.get_cube.return_value = None  # Cube doesn't exist
+
+        # Create different embedder configs for MOS and cube
+        mos_embedder_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": "nomic-embed-text:latest",
+            },
+        }
+
+        cube_embedder_config = {
+            "backend": "sentence_transformer",
+            "config": {
+                "model_name_or_path": "all-MiniLM-L6-v2",
+            },
+        }
+
+        # Mock the cube's text memory embedder config
+        mock_mem_cube.text_mem.config.embedder = cube_embedder_config
+
+        with patch("memos.mem_os.core.GeneralMemCube") as mock_general_cube:
+            mock_general_cube.init_from_dir.return_value = mock_mem_cube
+
+            mos = MOSCore(MOSConfig(**mock_config))
+
+            # Ensure MOS config has different embedder
+            mos.config.mem_reader.config.embedder = mos_embedder_config
+
+            with patch("os.path.exists", return_value=True):
+                mos.register_mem_cube("test_cube_path", "test_cube_1")
+
+            # Verify warning was logged
+            mock_logger.warning.assert_called_with(
+                f"Cube Embedder is not consistent with MOSConfig for cube: test_cube_1, will use Cube Embedder: {cube_embedder_config}"
+            )
+
+            # Verify cube was still registered
+            assert "test_cube_1" in mos.mem_cubes
+            mock_general_cube.init_from_dir.assert_called_once_with("test_cube_path")
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
+    @patch("memos.mem_os.core.logger")
+    def test_register_mem_cube_embedder_consistency_no_warning(
+        self,
+        mock_logger,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+        mock_mem_cube,
+    ):
+        """Test no warning when cube embedder is consistent with MOS config."""
+        # Setup mocks
+        mock_llm_factory.from_config.return_value = mock_llm
+        mock_reader_factory.from_config.return_value = mock_mem_reader
+        mock_user_manager_class.return_value = mock_user_manager
+        mock_user_manager.get_cube.return_value = None  # Cube doesn't exist
+
+        # Create same embedder config for both MOS and cube
+        embedder_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": "nomic-embed-text:latest",
+            },
+        }
+
+        # Mock the cube's text memory embedder config to be the same
+        mock_mem_cube.text_mem.config.embedder = embedder_config
+
+        with patch("memos.mem_os.core.GeneralMemCube") as mock_general_cube:
+            mock_general_cube.init_from_dir.return_value = mock_mem_cube
+
+            mos = MOSCore(MOSConfig(**mock_config))
+
+            # Ensure MOS config has same embedder
+            mos.config.mem_reader.config.embedder = embedder_config
+
+            with patch("os.path.exists", return_value=True):
+                mos.register_mem_cube("test_cube_path", "test_cube_1")
+
+            # Verify no embedder consistency warning was logged
+            warning_calls = [
+                call
+                for call in mock_logger.warning.call_args_list
+                if "Cube Embedder is not consistent" in str(call)
+            ]
+            assert len(warning_calls) == 0, (
+                "No embedder consistency warning should be logged when configs match"
+            )
+
+            # Verify cube was still registered
+            assert "test_cube_1" in mos.mem_cubes
+            mock_general_cube.init_from_dir.assert_called_once_with("test_cube_path")
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
     def test_add_memory_content(
         self,
         mock_llm_factory,
@@ -453,11 +573,13 @@ class TestMOSChat:
 
         mos = MOSCore(MOSConfig(**mock_config))
         mos.mem_cubes["test_cube_1"] = mock_mem_cube
+        mos.mem_cubes["test_cube_2"] = mock_mem_cube  # Add the second cube to avoid KeyError
 
         response = mos.chat("What do I like?")
 
-        # Verify memory search was called
-        mock_mem_cube.text_mem.search.assert_called_once_with("What do I like?", top_k=5)
+        # Verify memory search was called (called twice because we have two cubes)
+        assert mock_mem_cube.text_mem.search.call_count == 2
+        mock_mem_cube.text_mem.search.assert_any_call("What do I like?", top_k=5)
 
         # Verify LLM was called
         mock_llm.generate.assert_called_once()
@@ -494,6 +616,8 @@ class TestMOSChat:
         config_dict["enable_textual_memory"] = False
 
         mos = MOSCore(MOSConfig(**config_dict))
+        mos.mem_cubes["test_cube_1"] = MagicMock()  # Add the cube to avoid KeyError
+        mos.mem_cubes["test_cube_2"] = MagicMock()  # Add the second cube to avoid KeyError
 
         response = mos.chat("Hello")
 
