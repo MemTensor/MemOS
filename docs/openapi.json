@@ -884,7 +884,7 @@
             "type": "string",
             "title": "Session Id",
             "description": "Session ID for the MOS. This is used to distinguish between different dialogue",
-            "default": "3d88949f-cbe1-4244-a2e1-d346e8b76ca0"
+            "default": "a47d75a0-5ee8-473f-86c4-3f09073fd59f"
           },
           "chat_model": {
             "$ref": "#/components/schemas/LLMConfigFactory",

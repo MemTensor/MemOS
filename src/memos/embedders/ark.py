@@ -44,10 +44,26 @@ class ArkEmbedder(BaseEmbedder):
         Returns:
             List of embeddings, each represented as a list of floats.
         """
-        texts_input = [
-            MultimodalEmbeddingContentPartTextParam(text=text, type="text") for text in texts
-        ]
-        return self.multimodal_embeddings(texts_input, chunk_size=self.config.chunk_size)
+        if self.config.multi_modal:
+            texts_input = [
+                MultimodalEmbeddingContentPartTextParam(text=text, type="text") for text in texts
+            ]
+            return self.multimodal_embeddings(inputs=texts_input, chunk_size=self.config.chunk_size)
+        return self.text_embedding(texts, chunk_size=self.config.chunk_size)
+
+    def text_embedding(self, inputs: list[str], chunk_size: int | None = None) -> list[list[float]]:
+        chunk_size_ = chunk_size or self.config.chunk_size
+        embeddings: list[list[float]] = []
+        for i in range(0, len(inputs), chunk_size_):
+            response = self.client.embeddings.create(
+                model=self.config.model_name_or_path,
+                input=inputs[i : i + chunk_size_],
+            )
+
+            data = [response.data] if isinstance(response.data, dict) else response.data
+            embeddings.extend(r.embedding for r in data)
+
+        return embeddings
 
     def multimodal_embeddings(
         self, inputs: list[EmbeddingInputParam], chunk_size: int | None = None

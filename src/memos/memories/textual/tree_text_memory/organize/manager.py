@@ -5,7 +5,7 @@ from datetime import datetime
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
-from memos.llms.factory import OllamaLLM, OpenAILLM
+from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.reorganizer import (
@@ -22,7 +22,7 @@ class MemoryManager:
         self,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
-        llm: OpenAILLM | OllamaLLM,
+        llm: OpenAILLM | OllamaLLM | AzureLLM,
         memory_size: dict | None = None,
         threshold: float | None = 0.80,
         merged_threshold: float | None = 0.92,
@@ -231,13 +231,6 @@ class MemoryManager:
         self.graph_store.add_edge(source_id, merged_id, type="MERGED_TO")
         # After creating merged node and tracing lineage
         self._inherit_edges(original_id, merged_id)
-
-        # Relate other similar nodes to merged if needed
-        for related_node in similar_nodes[1:]:
-            if not self.graph_store.edge_exists(
-                merged_id, related_node["id"], type="ANY", direction="ANY"
-            ):
-                self.graph_store.add_edge(merged_id, related_node["id"], type="RELATE")
 
         # log to reorganizer before updating the graph
         self.reorganizer.add_message(

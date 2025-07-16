@@ -174,6 +174,14 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 To use functionalities based on the `transformers` library, ensure you have [PyTorch](https://pytorch.org/get-started/locally/) installed (CUDA version recommended for GPU acceleration).
 
+#### Download Examples
+
+To download example code, data and configurations, run the following command:
+
+```bash
+memos download_examples
+```
+
 ## 💬 Community & Support
 
 Join our community to ask questions, share your projects, and connect with other developers.

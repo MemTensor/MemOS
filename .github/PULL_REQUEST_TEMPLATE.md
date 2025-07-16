@@ -4,12 +4,12 @@
 Please include a summary of the changes below;
 Fill in the issue number that this PR addresses (if applicable);
 Mention the person who will review this PR (if you know who it is);
-Replace (summary), (issue), and (reviewer) with the appropriate information (No parentheses).
+Replace (summary), (issue), and (reviewer) with the appropriate information.
 
 请在下方填写更改的摘要；
 填写此 PR 解决的问题编号（如果适用）；
 提及将审查此 PR 的人（如果您知道是谁）；
-替换 (summary)、(issue) 和 (reviewer) 为适当的信息（不带括号）。
+替换 (summary)、(issue) 和 (reviewer) 为适当的信息。
 -->
 
 Summary: (summary)

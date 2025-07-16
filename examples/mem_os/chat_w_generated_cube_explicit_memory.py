@@ -84,7 +84,7 @@ config = GeneralMemCubeConfig.model_validate(
                 "graph_db": {
                     "backend": "neo4j",
                     "config": {
-                        "uri": "bolt://123.57.48.226:7687",
+                        "uri": "bolt://localhost:7687",
                         "user": "neo4j",
                         "password": "12345678",
                         "db_name": "user03alice11",

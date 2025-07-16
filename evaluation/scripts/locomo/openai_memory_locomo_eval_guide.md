@@ -81,7 +81,7 @@ Can you please extract relevant information from this conversation and create me
     * Click on **Manage** in the memory confirmation to view the newly generated memories.
     * Create a new local `.txt` file with the same name as the input file (e.g., `0-D1.txt`).
     * Copy each memory entry from ChatGPT and paste it into the new file, with each memory on a new line.
-5.  **Reset Memories for the Next Conversation:** 
+5.  **Reset Memories for the Next Conversation:**
     * Once all sessions for a conversation are complete, it is essential to **delete all memories to ensure a clean state for the next conversation**. Navigate to Settings -> Personalization -> Manage and click Delete all.
 
 **Example Memory Output (`0-D9.txt`):**

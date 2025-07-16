@@ -1,7 +1,7 @@
 import numpy as np
 
 from memos.embedders.factory import OllamaEmbedder
-from memos.llms.factory import OllamaLLM, OpenAILLM
+from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
 
@@ -41,7 +41,7 @@ class MemoryReranker:
     Rank retrieved memory cards by structural priority and contextual similarity.
     """
 
-    def __init__(self, llm: OpenAILLM | OllamaLLM, embedder: OllamaEmbedder):
+    def __init__(self, llm: OpenAILLM | OllamaLLM | AzureLLM, embedder: OllamaEmbedder):
         self.llm = llm
         self.embedder = embedder
 

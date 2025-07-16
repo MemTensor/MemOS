@@ -70,7 +70,7 @@ class GeneralMemCubeConfig(BaseMemCubeConfig):
     @classmethod
     def validate_act_mem(cls, act_mem: MemoryConfigFactory) -> MemoryConfigFactory:
         """Validate the act_mem field."""
-        allowed_backends = ["kv_cache", "uninitialized"]
+        allowed_backends = ["kv_cache", "vllm_kv_cache", "uninitialized"]
         if act_mem.backend not in allowed_backends:
             raise ConfigurationError(
                 f"GeneralMemCubeConfig requires act_mem backend to be one of {allowed_backends}, got '{act_mem.backend}'"
