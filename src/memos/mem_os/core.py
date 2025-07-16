@@ -426,6 +426,14 @@ class MOSCore:
         # Check if cube already exists in database
         existing_cube = self.user_manager.get_cube(mem_cube_id)
 
+        # check the embedder is it consistent with MOSConfig
+        if self.config.mem_reader.config.embedder != (
+            cube_embedder := self.mem_cubes[mem_cube_id].text_mem.config.embedder
+        ):
+            logger.warning(
+                f"Cube Embedder is not consistent with MOSConfig for cube: {mem_cube_id}, will use Cube Embedder: {cube_embedder}"
+            )
+
         if existing_cube:
             # Cube exists, just add user to cube if not already associated
             if not self.user_manager.validate_user_cube_access(target_user_id, mem_cube_id):
