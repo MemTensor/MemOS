@@ -1,10 +1,12 @@
 """
-Modify the code from the mem0 project, Original file link is: https://github.com/mem0ai/mem0/blob/main/evaluation/src/rag.py
+Modify the code from the mem0 project
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
+import threading
 import time
 
 from collections import defaultdict
@@ -30,8 +32,7 @@ PROMPT = """
 # Short answer:
 """
 
-TECHNIQUES = ["mem0", "rag", "langmem", "zep", "openai"]
-METHODS = ["add", "search"]
+TECHNIQUES = ["mem0", "rag"]
 
 
 class RAGManager:
@@ -198,6 +199,7 @@ class RAGManager:
         # Save results
         with open(output_file_path, "w+") as f:
             json.dump(final_results, f, indent=4)
+        print("The original rag file have been generated!")
 
 
 class Experiment:
@@ -211,28 +213,121 @@ class Experiment:
         )
 
 
+def process_item(item_data):
+    k, v = item_data
+    local_results = defaultdict(list)
+
+    for item in tqdm(v):
+        gt_answer = str(item["answer"])
+        pred_answer = str(item["response"])
+        category = str(item["category"])
+        question = str(item["question"])
+        search_time = str(item["search_time"])
+        response_time = str(item["response_time"])
+        search_context = str(item["context"])
+
+        # Skip category 5
+        if category == "5":
+            continue
+
+        local_results[k].append(
+            {
+                "question": question,
+                "golden_answer": gt_answer,
+                "answer": pred_answer,
+                "category": int(category),
+                "response_duration_ms": float(response_time) * 1000,
+                "search_duration_ms": float(search_time) * 1000,
+                "search_context": search_context,
+                # "llm_score_std":np.std(llm_score)
+            }
+        )
+
+    return local_results
+
+
+def rename_json_keys(file_path):
+    with open(file_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    new_data = {}
+    for old_key in data:
+        new_key = f"locomo_exp_user_{old_key}"
+        new_data[new_key] = data[old_key]
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(new_data, f, indent=2, ensure_ascii=False)
+
+
+def generate_response_file(file_path):
+    parser = argparse.ArgumentParser(description="Evaluate RAG results")
+
+    parser.add_argument(
+        "--output_folder",
+        type=str,
+        default="default_locomo_responses.json",
+        help="Path to save the evaluation results",
+    )
+    parser.add_argument(
+        "--max_workers", type=int, default=10, help="Maximum number of worker threads"
+    )
+    parser.add_argument("--chunk_size", type=int, default=2000, help="Chunk size for processing")
+    parser.add_argument("--num_chunks", type=int, default=2, help="Number of chunks to process")
+
+    args = parser.parse_args()
+    with open(file_path) as f:
+        data = json.load(f)
+
+    results = defaultdict(list)
+    results_lock = threading.Lock()
+
+    # Use ThreadPoolExecutor with specified workers
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = [executor.submit(process_item, item_data) for item_data in data.items()]
+
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+            local_results = future.result()
+            with results_lock:
+                for k, items in local_results.items():
+                    results[k].extend(items)
+
+    # Save results to JSON file
+    with open(file_path, "w") as f:
+        json.dump(results, f, indent=4)
+
+    rename_json_keys(file_path)
+    print(f"Results saved to {file_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run memory experiments")
     parser.add_argument(
         "--technique_type", choices=TECHNIQUES, default="rag", help="Memory technique to use"
     )
-    parser.add_argument("--chunk_size", type=int, default=500, help="Chunk size for processing")
+    parser.add_argument("--chunk_size", type=int, default=2000, help="Chunk size for processing")
     parser.add_argument(
-        "--output_folder", type=str, default="results/", help="Output path for results"
+        "--output_folder",
+        type=str,
+        default="results/locomo/mem0-default/",
+        help="Output path for results",
     )
     parser.add_argument("--top_k", type=int, default=30, help="Number of top memories to retrieve")
     parser.add_argument("--num_chunks", type=int, default=2, help="Number of chunks to process")
+    parser.add_argument("--frame", type=str, default="mem0")
+    parser.add_argument("--version", type=str, default="default")
 
     args = parser.parse_args()
 
+    response_path = f"{args.frame}_locomo_responses.json"
+
     if args.technique_type == "rag":
-        output_file_path = os.path.join(
-            args.output_folder, f"rag_results_{args.chunk_size}_k{args.num_chunks}.json"
-        )
+        output_file_path = os.path.join(args.output_folder, response_path)
         rag_manager = RAGManager(
             data_path="data/locomo/locomo10_rag.json", chunk_size=args.chunk_size, k=args.num_chunks
         )
         rag_manager.process_all_conversations(output_file_path)
+        """Generate response files"""
+        generate_response_file(output_file_path)
 
 
 if __name__ == "__main__":
