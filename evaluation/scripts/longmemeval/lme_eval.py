@@ -1,26 +1,30 @@
 import argparse
+import asyncio
+import concurrent.futures
 import json
 import logging
 import os
 import sys
+
 import nltk
 import numpy as np
 import transformers
-import asyncio
-import concurrent.futures
 
 from bert_score import score as bert_score
+from dotenv import load_dotenv
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from nltk.translate.meteor_score import meteor_score
-from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from rouge_score import rouge_scorer
 from scipy.spatial.distance import cosine
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prompts import LME_JUDGE_MODEL_TEMPLATE
+
 
 logging.basicConfig(level=logging.CRITICAL)
 transformers.logging.set_verbosity_error()
@@ -36,16 +40,17 @@ except Exception as e:
 try:
     sentence_model_name = "Qwen/Qwen3-Embedding-0.6B"
     sentence_model = SentenceTransformer(sentence_model_name)
-    print(
-        f"SentenceTransformer model : {sentence_model_name} loaded successfully.")
+    print(f"SentenceTransformer model : {sentence_model_name} loaded successfully.")
 except Exception as e:
     print(f"Failed to load SentenceTransformer model: {e}")
     sentence_model = None
 
+
 class LLMGrade(BaseModel):
     llm_judgment: str = Field(description="CORRECT or WRONG")
     llm_reasoning: str = Field(description="Explain why the answer is correct or incorrect.")
-    
+
+
 def calculate_rouge_scores(golden_answer, response):
     metrics = {"rouge1_f": 0.0, "rouge2_f": 0.0, "rougeL_f": 0.0}
     try:
@@ -150,30 +155,32 @@ def calculate_nlp_metrics(golden_answer, response, context, options=None):
 
     return metrics
 
+
 def lme_grader(llm_client, question, golden_answer, response):
     system_prompt = """You are an expert grader that determines if answers to questions match a gold standard answer"""
     judge_prompt = LME_JUDGE_MODEL_TEMPLATE.format(
-        question=question,
-        golden_answer=golden_answer,
-        response=response
+        question=question, golden_answer=golden_answer, response=response
     )
-    
+
     response = llm_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": judge_prompt}
+            {"role": "user", "content": judge_prompt},
         ],
         temperature=0,
     )
-    
+
     message_content = response.choices[0].message.content
     label = json.loads(message_content)["label"]
     parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
-    
+
     return parsed.llm_judgment.strip().lower() == "correct"
 
-async def process_qa(user_id, response_data, llm_client, num_runs: int, nlp_options=None, executor=None):
+
+async def process_qa(
+    user_id, response_data, llm_client, num_runs: int, nlp_options=None, executor=None
+):
     question = response_data.get("question")
     golden_answer = response_data.get("golden_answer", "")
     context = response_data.get("search_context", "")
@@ -188,30 +195,35 @@ async def process_qa(user_id, response_data, llm_client, num_runs: int, nlp_opti
     judgments_dict = {f"judgment_{i + 1}": j for i, j in enumerate(judgments)}
 
     nlp_metrics = calculate_nlp_metrics(
-        golden_answer=golden_answer,
-        response=response,
-        context=context,
-        options=nlp_options
+        golden_answer=golden_answer, response=response, context=context, options=nlp_options
     )
-    
-    print("\n" + "="*80)
+
+    print("\n" + "=" * 80)
     print(f"🔍 Processed User: \033[1m{user_id}\033[0m")
-    print("-"*80)
+    print("-" * 80)
     print(f"❓ Question: \n   {question}")
-    print("-"*80)
-    print(f"📖 Golden Answer: \n   {golden_answer[:150]}..." if len(golden_answer) > 150 else f"📖 Golden Answer: \n   {golden_answer}")
-    print("-"*80)
-    print(f"💬 LLM Response: \n   {response[:150]}..." if len(response) > 150 else f"💬 Answer: \n   {response}")
-    print("-"*80)
-    
+    print("-" * 80)
+    print(
+        f"📖 Golden Answer: \n   {golden_answer[:150]}..."
+        if len(golden_answer) > 150
+        else f"📖 Golden Answer: \n   {golden_answer}"
+    )
+    print("-" * 80)
+    print(
+        f"💬 LLM Response: \n   {response[:150]}..."
+        if len(response) > 150
+        else f"💬 Answer: \n   {response}"
+    )
+    print("-" * 80)
+
     judgments_formatted = []
     for run, correct in judgments_dict.items():
         status = "\033[92m✓ CORRECT\033[0m" if correct else "\033[91m✗ WRONG\033[0m"
         judgments_formatted.append(f"{run}: {status}")
-    
+
     print(f"⚖️  Judgments: \n   {', '.join(judgments_formatted)}")
-    print("="*80)
-    
+    print("=" * 80)
+
     graded_response = {
         "user_id": user_id,
         "category": response_data.get("category"),
@@ -223,9 +235,11 @@ async def process_qa(user_id, response_data, llm_client, num_runs: int, nlp_opti
         "nlp_metrics": nlp_metrics,
         "response_duration_ms": response_data.get("response_duration_ms"),
         "search_duration_ms": response_data.get("search_duration_ms"),
-        "total_duration_ms": response_data.get("response_duration_ms") + response_data.get("search_duration_ms", 0),
+        "total_duration_ms": response_data.get("response_duration_ms")
+        + response_data.get("search_duration_ms", 0),
     }
     return graded_response
+
 
 def convert_numpy_types(obj):
     if isinstance(obj, np.number):
@@ -236,6 +250,7 @@ def convert_numpy_types(obj):
         return [convert_numpy_types(i) for i in obj]
     else:
         return obj
+
 
 def evaluate_accuracy(results, num_runs):
     run_scores = []
@@ -255,19 +270,17 @@ def evaluate_accuracy(results, num_runs):
     evaluated_count = evaluated_count // num_runs
     return run_scores, evaluated_count
 
+
 async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
     print(f"Starting evaluation for {frame} version {version}...")
-    
+
     load_dotenv()
-    oai_client = OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL")
-    )
+    oai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL"))
 
     response_path = f"results/lme/{frame}-{version}/{frame}_lme_responses.json"
     judged_path = f"results/lme/{frame}-{version}/{frame}_lme_judged.json"
 
-    with open(response_path, "r") as file:
+    with open(response_path) as file:
         lme_responses = json.load(file)
 
     lme_eval_results = {}
@@ -295,15 +308,19 @@ async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
 
     run_scores, evaluated_count = evaluate_accuracy(lme_eval_results, num_runs)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("\033[1;36m📊 EVALUATION SUMMARY\033[0m".center(80))
-    print("="*80)
+    print("=" * 80)
 
     if evaluated_count > 0:
-        print(f"📋 \033[1mEvaluated:\033[0m \033[93m{evaluated_count}\033[0m responses across \033[93m{num_runs}\033[0m runs")
-        print(f"🎯 \033[1mLLM-as-a-Judge Mean Accuracy:\033[0m \033[92m{np.mean(run_scores):.4f}\033[0m")
+        print(
+            f"📋 \033[1mEvaluated:\033[0m \033[93m{evaluated_count}\033[0m responses across \033[93m{num_runs}\033[0m runs"
+        )
+        print(
+            f"🎯 \033[1mLLM-as-a-Judge Mean Accuracy:\033[0m \033[92m{np.mean(run_scores):.4f}\033[0m"
+        )
         print(f"🔍 \033[1mStandard Deviation:\033[0m \033[93m{np.std(run_scores):.4f}\033[0m")
-        
+
         run_scores_formatted = [f"\033[94m{round(s, 4):.4f}\033[0m" for s in run_scores]
         print(f"🔢 \033[1mIndividual run scores:\033[0m [{', '.join(run_scores_formatted)}]")
     else:
@@ -311,17 +328,17 @@ async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
 
     if error_count > 0:
         print(f"\033[91m⚠️  Encountered {error_count} errors during processing\033[0m")
-    
-    print("-"*80)
-    
+
+    print("-" * 80)
+
     # Convert and save results
     lme_eval_results = convert_numpy_types(lme_eval_results)
     with open(judged_path, "w") as file:
         json.dump(lme_eval_results, file, indent=4)
-    
-    print(f"\033[92m✅ Evaluation completed successfully!\033[0m")
+
+    print("\033[92m✅ Evaluation completed successfully!\033[0m")
     print(f"📁 Results saved to: \033[1;94m{judged_path}\033[0m")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":
@@ -332,32 +349,23 @@ if __name__ == "__main__":
         choices=["mem0-local", "mem0-api"],
     )
     parser.add_argument(
-        "--version",
-        type=str,
-        default="v1",
-        help="Version of the evaluation framework."
+        "--version", type=str, default="v1", help="Version of the evaluation framework."
     )
-    parser.add_argument(        
+    parser.add_argument(
         "--options",
         type=str,
         nargs="+",
         default=["lexical", "semantic"],
         choices=["lexical", "semantic"],
-        help="NLP options to use for evaluation."
+        help="NLP options to use for evaluation.",
     )
     parser.add_argument(
-        "--num_runs",
-        type=int,
-        default=3,
-        help="Number of runs for LLM-as-a-Judge evaluation."
+        "--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
     )
     parser.add_argument(
-        "--workers",
-        type=int,
-        default=3,
-        help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
     )
-    
+
     args = parser.parse_args()
     asyncio.run(
         main(
@@ -365,6 +373,6 @@ if __name__ == "__main__":
             version=args.version,
             nlp_options=args.options,
             num_runs=args.num_runs,
-            num_workers=args.workers
+            num_workers=args.workers,
         )
     )

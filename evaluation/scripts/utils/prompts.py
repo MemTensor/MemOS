@@ -7,9 +7,9 @@ ANSWER_PROMPT = """
     # INSTRUCTIONS:
     1. Carefully analyze all provided memories.
     2. Pay special attention to the timestamps to determine the answer.
-    3. If the question asks about a specific event or fact, look for direct evidence in the memories.    
+    3. If the question asks about a specific event or fact, look for direct evidence in the memories.
     4. The answer must be brief (under 10 words) and direct, with no extra description.
-    
+
     # APPROACH (Think step by step):
     1. First, examine all memories that contain information related to the question.
     2. Examine the timestamps and content of these memories carefully.
@@ -18,16 +18,16 @@ ANSWER_PROMPT = """
     5. Formulate a precise, concise answer based solely on the evidence in the memories.
     6. Double-check that your answer directly addresses the question asked.
     7. Ensure your final answer is specific and avoids vague time references.
-    
+
     {context}
-    
+
     Current Date: {question_date}
-    
+
     Question: {question}
 
     Answer:
     """
-    
+
 ZEP_CONTEXT_TEMPLATE = """
     FACTS and ENTITIES represent relevant context to the current conversation.
 
@@ -49,23 +49,23 @@ ZEP_CONTEXT_TEMPLATE = """
 
 MEM0_CONTEXT_TEMPLATE = """
     Memories for user {user_id}:
-    
+
     {memories}
 """
 
 MEM0_GRAPH_CONTEXT_TEMPLATE = """
     Memories for user {user_id}:
-    
+
     {memories}
-    
+
     Relations:
-    
+
     {relations}
 """
 
 MEMOS_CONTEXT_TEMPLATE = """
     Memories for user {user_id}:
-    
+
     {memories}
 """
 
