@@ -2,14 +2,7 @@ REORGANIZE_PROMPT = """You are a memory clustering and summarization expert.
 
 Given the following child memory items:
 
-Keys:
-{joined_keys}
-
-Values:
-{joined_values}
-
-Summaries:
-{joined_backgrounds}
+{memory_items_text}
 
 Please perform:
 1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
