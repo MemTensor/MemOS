@@ -34,13 +34,13 @@ Language rules:
 - Keep `memory_type` in English.
 
 Return valid JSON:
-{{
+{
   "key": <string, a unique, concise memory title>,
   "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
   "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input memory items are in English, or in Chinese if the input is in Chinese>,
   "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
   "summary": <a natural paragraph summarizing the above memories from user's perspective, 120–200 words, same language as the input>
-}}
+}
 """
 
 LOCAL_SUBCLUSTER_PROMPT = """You are a memory organization expert.
@@ -62,15 +62,15 @@ Language rules:
 - The `key` fields must match the mostly used language of the clustered memories. **如果输入是中文，请输出中文**
 
 Return valid JSON:
-{{
+{
   "clusters": [
-    {{
+    {
       "ids": ["<id1>", "<id2>", ...],
       "key": "<string, a unique, concise memory title>"
-    }},
+    },
     ...
   ]
-}}
+}
 
 Memory items:
 {joined_scene}
@@ -149,12 +149,12 @@ Language rules:
 - The `key`, `value`, `tags`, `background` fields must match the language of the input.
 
 Good Aggregate:
-{{
+{
   "key": "Mary's Sustainability Summit Role",
   "value": "Mary organized and spoke at the 2023 sustainability summit in Berlin, highlighting renewable energy initiatives.",
   "tags": ["Mary", "summit", "Berlin", "2023"],
   "background": "Combined from multiple memories about Mary's activities at the summit."
-}}
+}
 
 If you find NO useful higher-level concept, reply exactly: "None".
 """

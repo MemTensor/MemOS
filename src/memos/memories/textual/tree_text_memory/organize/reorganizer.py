@@ -358,7 +358,7 @@ class GraphStructureReorganizer:
             scene_lines.append(line)
 
         joined_scene = "\n".join(scene_lines)
-        prompt = LOCAL_SUBCLUSTER_PROMPT.format(joined_scene=joined_scene)
+        prompt = LOCAL_SUBCLUSTER_PROMPT.replace('{joined_scene}', joined_scene)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
@@ -491,11 +491,8 @@ class GraphStructureReorganizer:
         )
 
         # Build prompt
-        prompt = REORGANIZE_PROMPT.format(
-            joined_keys=joined_keys,
-            joined_values=joined_values,
-            joined_backgrounds=joined_backgrounds,
-        )
+        prompt = REORGANIZE_PROMPT.replace('{joined_keys}', joined_keys).\
+            replace('{joined_values}', joined_values).replace('{joined_backgrounds}', joined_backgrounds)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
