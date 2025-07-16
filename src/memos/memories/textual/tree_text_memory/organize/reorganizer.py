@@ -183,7 +183,7 @@ class GraphStructureReorganizer:
         scope: str = "LongTermMemory",
         local_tree_threshold: int = 10,
         min_cluster_size: int = 3,
-        min_group_size: int = 10,
+        min_group_size: int = 5,
     ):
         """
         Periodically reorganize the graph:

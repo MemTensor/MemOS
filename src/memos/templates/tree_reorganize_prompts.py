@@ -70,7 +70,7 @@ Your task:
 Valid options:
 - CAUSE: One clearly leads to the other.
 - CONDITION: One happens only if the other condition holds.
-- RELATE_TO: They are semantically related by shared people, time, place, or event, but neither causes the other.
+- RELATE: They are semantically related by shared people, time, place, or event, but neither causes the other.
 - CONFLICT: They logically contradict each other.
 - NONE: No clear useful connection.
 
@@ -84,7 +84,7 @@ Another Example:
 - Node 2: "The venue was booked for a wedding in August."
 Answer: CONFLICT
 
-Always respond with ONE word: [CAUSE | CONDITION | RELATE_TO | CONFLICT | NONE]
+Always respond with ONE word: [CAUSE | CONDITION | RELATE | CONFLICT | NONE]
 """
 
 INFER_FACT_PROMPT = """
