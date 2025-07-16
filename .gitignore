@@ -13,6 +13,7 @@ evaluation/.env
 evaluation/configs/*
 **tree_textual_memory_locomo**
 .env
+benchmarks/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
