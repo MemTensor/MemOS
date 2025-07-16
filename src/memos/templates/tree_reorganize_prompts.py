@@ -59,7 +59,7 @@ Instructions:
 Example: If you have items about a project across multiple phases, group them by milestone, team, or event.
 
 Language rules:
-- The `theme` fields must match the mostly used language of the clustered memories. **如果输入是中文，请输出中文**
+- The `key` fields must match the mostly used language of the clustered memories. **如果输入是中文，请输出中文**
 
 Return valid JSON:
 {
