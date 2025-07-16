@@ -34,13 +34,13 @@ Language rules:
 - Keep `memory_type` in English.
 
 Return valid JSON:
-{
+{{
   "key": <string, a unique, concise memory title>,
   "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
   "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input conversation is in English, or in Chinese if the conversation is in Chinese>,
   "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
   "summary": <a natural paragraph summarizing the above memories from user's perspective, 120–200 words, same language as the input>
-}
+}}
 """
 
 LOCAL_SUBCLUSTER_PROMPT = """You are a memory organization expert.
@@ -62,15 +62,15 @@ Language rules:
 - The `theme` fields must match the mostly used language of the clustered memories.
 
 Return valid JSON:
-{
+{{
   "clusters": [
-    {
+    {{
       "ids": ["<id1>", "<id2>", ...],
       "key": "<string, a unique, concise memory title>"
-    },
+    }},
     ...
   ]
-}
+}}
 
 Memory items:
 {joined_scene}
