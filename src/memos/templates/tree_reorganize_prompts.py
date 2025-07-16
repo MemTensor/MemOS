@@ -30,14 +30,14 @@ For example, write "The user felt exhausted..." instead of "I felt exhausted..."
 5. Summarize all child memory items into one memory item.
 
 Language rules:
-- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input memory items.
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input memory items. **如果输入是中文，请输出中文**
 - Keep `memory_type` in English.
 
 Return valid JSON:
 {{
   "key": <string, a unique, concise memory title>,
   "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
-  "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input conversation is in English, or in Chinese if the conversation is in Chinese>,
+  "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input memory items are in English, or in Chinese if the input is in Chinese>,
   "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
   "summary": <a natural paragraph summarizing the above memories from user's perspective, 120–200 words, same language as the input>
 }}
@@ -59,7 +59,7 @@ Instructions:
 Example: If you have items about a project across multiple phases, group them by milestone, team, or event.
 
 Language rules:
-- The `theme` fields must match the mostly used language of the clustered memories.
+- The `key` fields must match the mostly used language of the clustered memories. **如果输入是中文，请输出中文**
 
 Return valid JSON:
 {{
