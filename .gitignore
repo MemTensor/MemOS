@@ -6,7 +6,7 @@ tmp/
 **/tmp_data/
 
 # evaluation data
-evaluation/data/langmemeval/*.json
+evaluation/data/longmemeval/*.json
 evaluation/*tmp/
 evaluation/results
 evaluation/.env

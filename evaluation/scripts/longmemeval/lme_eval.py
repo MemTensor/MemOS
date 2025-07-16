@@ -205,13 +205,13 @@ async def process_qa(
     print("-" * 80)
     print(
         f"📖 Golden Answer: \n   {golden_answer[:150]}..."
-        if len(golden_answer) > 150
+        if len(str(golden_answer)) > 150
         else f"📖 Golden Answer: \n   {golden_answer}"
     )
     print("-" * 80)
     print(
         f"💬 LLM Response: \n   {response[:150]}..."
-        if len(response) > 150
+        if len(str(response)) > 150
         else f"💬 Answer: \n   {response}"
     )
     print("-" * 80)
