@@ -24,6 +24,10 @@ class ArkEmbedderConfig(BaseEmbedderConfig):
         default="https://ark.cn-beijing.volces.com/api/v3/", description="Base URL for Ark API"
     )
     chunk_size: int = Field(default=1, description="Chunk size for Ark API")
+    multi_modal: bool = Field(
+        default=False,
+        description="Whether to use multi-modal embedding (text + image) with Ark",
+    )
 
 
 class SenTranEmbedderConfig(BaseEmbedderConfig):
