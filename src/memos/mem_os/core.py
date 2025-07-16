@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal, List
+from typing import Any, Literal
 
 from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory

@@ -56,12 +56,6 @@ class HFLLMConfig(BaseLLMConfig):
         description="Apply generation template for the conversation",
     )
 
-class VLLMLLMConfig(BaseLLMConfig):
-    api_key: str = Field(default="", description="API key for vLLM (optional for local server)")
-    api_base: str = Field(
-        default="http://localhost:8088/v1",
-        description="Base URL for vLLM API",
-    )
 
 class VLLMLLMConfig(BaseLLMConfig):
     api_key: str = Field(default="", description="API key for vLLM (optional for local server)")

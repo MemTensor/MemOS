@@ -1,10 +1,9 @@
 import shutil
 import sys
-from typing import TYPE_CHECKING
+
 from datetime import datetime
 from pathlib import Path
 
-from memos.configs.mem_scheduler import AuthConfig
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.configs.mem_scheduler import AuthConfig, SchedulerConfigFactory
@@ -18,15 +17,6 @@ from memos.mem_scheduler.modules.schemas import (
 )
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.utils import parse_yaml
-
-
-
-
-if TYPE_CHECKING:
-    from memos.mem_scheduler.modules.schemas import (
-        ScheduleLogForWebItem,
-    )
-
 
 
 FILE_PATH = Path(__file__).absolute()

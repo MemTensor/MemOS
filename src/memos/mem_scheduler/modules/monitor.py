@@ -4,7 +4,6 @@ from typing import Any
 from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
 from memos.mem_scheduler.modules.misc import AutoDroppingQueue as Queue
@@ -22,8 +21,6 @@ from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 
 logger = get_logger(__name__)
-
-
 
 
 class SchedulerMonitor(BaseSchedulerModule):

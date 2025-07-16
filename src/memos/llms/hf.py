@@ -1,7 +1,6 @@
 from collections.abc import Generator
 
 import torch
-from collections.abc import Generator
 
 from transformers import (
     AutoModelForCausalLM,

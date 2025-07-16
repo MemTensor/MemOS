@@ -1,7 +1,6 @@
 import queue
 import threading
 import time
-from typing import TYPE_CHECKING, List
 
 from datetime import datetime
 from pathlib import Path
@@ -38,9 +37,6 @@ from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 logger = get_logger(__name__)

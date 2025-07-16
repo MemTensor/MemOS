@@ -1,5 +1,4 @@
 import sys
-from datetime import datetime
 import unittest
 
 from datetime import datetime
@@ -144,8 +143,7 @@ class TestGeneralScheduler(unittest.TestCase):
 
             # Verify method calls
             mock_detect.assert_called_once_with(
-                q_list=["Test query"],
-                text_working_memory=["Memory 1", "Memory 2"]
+                q_list=["Test query"], text_working_memory=["Memory 1", "Memory 2"]
             )
 
             # Verify search calls - using ANY for the method since we can't predict the exact value

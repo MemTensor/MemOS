@@ -7,15 +7,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, computed_field
 from typing_extensions import TypedDict
-from typing import ClassVar, TypeVar, List, Optional, NewType
-from pydantic import BaseModel, Field, computed_field
 
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.utils import parse_yaml
-from memos.log import get_logger
-
-logger = get_logger(__name__)
 
 
 logger = get_logger(__name__)
@@ -172,32 +166,11 @@ DEFAULT_MEMORY_CAPACITIES = {
 
 class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
-        description="Unique identifier for the log entry",
-        default_factory=lambda: str(uuid4())
+        description="Unique identifier for the log entry", default_factory=lambda: str(uuid4())
     )
-    user_id: str = Field(
-        ...,
-        description="Identifier for the user associated with the log"
-    )
+    user_id: str = Field(..., description="Identifier for the user associated with the log")
     mem_cube_id: str = Field(
-        ...,
-        description="Identifier for the memcube associated with this log entry"
-    )
-    label: str = Field(
-        ...,
-        description="Label categorizing the type of log"
-    )
-    from_memory_type: str = Field(
-        ...,
-        description="Source memory type"
-    )
-    to_memory_type: str = Field(
-        ...,
-        description="Destination memory type"
-    )
-    log_content: str = Field(
-        ...,
-        description="Detailed content of the log entry"
+        ..., description="Identifier for the memcube associated with this log entry"
     )
     label: str = Field(..., description="Label categorizing the type of log")
     from_memory_type: str = Field(..., description="Source memory type")

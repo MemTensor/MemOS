@@ -2,11 +2,10 @@ import os
 
 from pathlib import Path
 from typing import Any, ClassVar
-from pathlib import Path
+
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
-from memos.mem_scheduler.utils import parse_yaml
 from memos.mem_scheduler.modules.schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,

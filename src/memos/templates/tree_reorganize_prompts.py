@@ -29,9 +29,6 @@ Language rules:
 Language rules:
 - The `key`, `value`, `tags`, `background` fields must match the language of the input conversation.
 
-Language rules:
-- The `key`, `value`, `tags`, `background` fields must match the language of the input conversation.
-
 Return valid JSON:
 {
   "key": <string, a unique, concise memory title>,

@@ -2,6 +2,7 @@ SIMPLE_STRUCT_MEM_READER_PROMPT = """You are a memory extraction expert.
 Always respond in the same language as the conversation. If the conversation is in Chinese, respond in Chinese.
 
 Your task is to extract memories from the perspective of ${user_a}, based on a conversation between ${user_a} and ${user_b}. This means identifying what ${user_a} would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as ${user_b}) that impacted or were acknowledged by ${user_a}.
+
 Please perform:
 1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
 2. Resolve all time, person, and event references clearly:

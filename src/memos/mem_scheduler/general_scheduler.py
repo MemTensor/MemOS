@@ -12,6 +12,7 @@ from memos.mem_scheduler.modules.schemas import (
 )
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
+
 logger = get_logger(__name__)
 
 
@@ -137,8 +138,9 @@ class GeneralScheduler(BaseScheduler):
         query_history: list[str] | None = None,
     ) -> None:
         """
-        Update activation memory by extracting KVCacheItems from new_memory (list of str),
-        add them to a KVCacheMemory instance, and dump to disk.
+        Process a dialog turn:
+        - If q_list reaches window size, trigger retrieval;
+        - Immediately switch to the new memory if retrieval is triggered.
         """
         if isinstance(queries, str):
             queries = [queries]

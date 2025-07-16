@@ -19,40 +19,8 @@ from memos.mem_scheduler.utils import (
 )
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
-from click import style
-from memos.mem_scheduler.modules.misc import AutoDroppingQueue as Queue
-from memos.log import get_logger
-from memos.llms.base import BaseLLM
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.base import BaseSchedulerModule
-from memos.configs.mem_scheduler import BaseSchedulerConfig
-from memos.mem_scheduler.utils import extract_json_dict
-from memos.memories.textual.tree import TreeTextMemory
-from memos.mem_scheduler.modules.schemas import (
-    DEFAULT_ACTIVATION_MEM_SIZE,
-    MemoryMonitorManager,
-    UserID,
-    MemCubeID,
-    USER_MEMORY_TYPE,
-    DEFAULT_CONSUME_INTERVAL_SECONDS,
-    DEFAULT_THREAD__POOL_MAX_WORKERS,
-    QUERY_LABEL,
-    ANSWER_LABEL,
-    ACTIVATION_MEMORY_TYPE,
-    LONG_TERM_MEMORY_TYPE,
-    WORKING_MEMORY_TYPE,
-    DEFAULT_ACT_MEM_DUMP_PATH,
-    DEFAULT_ACTIVATION_MEM_SIZE,
-    NOT_INITIALIZED,
-    ScheduleLogForWebItem,
-    ScheduleMessageItem,
-    TextMemory_SEARCH_METHOD,
-    TreeTextMemory_SEARCH_METHOD,
-)
 
 logger = get_logger(__name__)
-
 
 
 class SchedulerRetriever(BaseSchedulerModule):
