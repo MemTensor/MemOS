@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from memos.configs.mem_scheduler import SchedulerConfigFactory
-from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.modules.schemas import QUERY_LABEL, ScheduleMessageItem
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
@@ -20,8 +19,6 @@ if TYPE_CHECKING:
 FILE_PATH = Path(__file__).absolute()
 BASE_DIR = FILE_PATH.parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
-
-logger = get_logger(__name__)
 
 
 async def service_run():
@@ -43,35 +40,34 @@ async def service_run():
         {"question": "What food should I avoid due to allergy?", "category": "Allergy"},
     ]
     init_mem_cube = f"{BASE_DIR}/examples/data/mem_cube_2"
-    logger.debug("Loading MemChatCube...")
+    print("Loading MemChatCube...")
     mem_cube = GeneralMemCube.init_from_dir(init_mem_cube)
 
     user_id = str(uuid4)
 
     mem_scheduler.initialize_redis()
 
-    mem_scheduler.start_listening()
+    mem_scheduler.redis_start_listening()
 
     for item in questions:
         query = item["question"]
         message_item = ScheduleMessageItem(
             user_id=user_id,
-            cube_id=f"{BASE_DIR}/examples/data/mem_cube_2",
+            mem_cube_id="mem_cube_2",
             label=QUERY_LABEL,
-            cube=mem_cube,
+            mem_cube=mem_cube,
             content=query,
             timestamp=datetime.now(),
         )
-
-        res = await mem_scheduler.add_message_stream(message=message_item.to_dict())
-        logger.debug(
+        res = await mem_scheduler.redis_add_message_stream(message=message_item.to_dict())
+        print(
             f"Added: {res}",
         )
         await asyncio.sleep(0.5)
 
-    mem_scheduler.stop_listening()
+    mem_scheduler.redis_stop_listening()
 
-    mem_scheduler.close()
+    mem_scheduler.redis_close()
 
 
 if __name__ == "__main__":

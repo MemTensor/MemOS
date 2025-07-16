@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from memos.configs.memory import MemoryConfigFactory
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.kv import KVCacheMemory
+from memos.memories.activation.vllmkv import VLLMKVCacheMemory
 from memos.memories.base import BaseMemory
 from memos.memories.parametric.base import BaseParaMemory
 from memos.memories.parametric.lora import LoRAMemory
@@ -20,6 +21,7 @@ class MemoryFactory(BaseMemory):
         "general_text": GeneralTextMemory,
         "tree_text": TreeTextMemory,
         "kv_cache": KVCacheMemory,
+        "vllm_kv_cache": VLLMKVCacheMemory,
         "lora": LoRAMemory,
     }
 
