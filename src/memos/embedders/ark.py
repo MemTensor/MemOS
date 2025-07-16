@@ -44,7 +44,7 @@ class ArkEmbedder(BaseEmbedder):
         Returns:
             List of embeddings, each represented as a list of floats.
         """
-        if self.config.muiti_modal:
+        if self.config.multi_modal:
             texts_input = [
                 MultimodalEmbeddingContentPartTextParam(text=text, type="text") for text in texts
             ]
