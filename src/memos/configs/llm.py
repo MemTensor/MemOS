@@ -24,6 +24,19 @@ class OpenAILLMConfig(BaseLLMConfig):
     api_base: str = Field(
         default="https://api.openai.com/v1", description="Base URL for OpenAI API"
     )
+    extra_body: Any = Field(default=None, description="extra body")
+
+
+class AzureLLMConfig(BaseLLMConfig):
+    base_url: str = Field(
+        default="https://api.openai.azure.com/",
+        description="Base URL for Azure OpenAI API",
+    )
+    api_version: str = Field(
+        default="2024-03-01-preview",
+        description="API version for Azure OpenAI",
+    )
+    api_key: str = Field(..., description="API key for Azure OpenAI")
 
 
 class OllamaLLMConfig(BaseLLMConfig):
@@ -50,6 +63,14 @@ class VLLMLLMConfig(BaseLLMConfig):
         description="Base URL for vLLM API",
     )
 
+class VLLMLLMConfig(BaseLLMConfig):
+    api_key: str = Field(default="", description="API key for vLLM (optional for local server)")
+    api_base: str = Field(
+        default="http://localhost:8088/v1",
+        description="Base URL for vLLM API",
+    )
+
+
 class LLMConfigFactory(BaseConfig):
     """Factory class for creating LLM configurations."""
 
@@ -59,6 +80,7 @@ class LLMConfigFactory(BaseConfig):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "openai": OpenAILLMConfig,
         "ollama": OllamaLLMConfig,
+        "azure": AzureLLMConfig,
         "huggingface": HFLLMConfig,
         "vllm": VLLMLLMConfig,
         "huggingface_singleton": HFLLMConfig,  # Add singleton support

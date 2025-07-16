@@ -1,3 +1,6 @@
+import os
+
+from pathlib import Path
 from typing import Any, ClassVar
 from pathlib import Path
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -6,11 +9,10 @@ from memos.configs.base import BaseConfig
 from memos.mem_scheduler.utils import parse_yaml
 from memos.mem_scheduler.modules.schemas import (
     BASE_DIR,
-    DictConversionMixin,
     DEFAULT_ACT_MEM_DUMP_PATH,
-    DEFAULT_ACTIVATION_MEM_SIZE,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_THREAD__POOL_MAX_WORKERS,
+    DictConversionMixin,
 )
 
 
@@ -49,10 +51,6 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
     context_window_size: int | None = Field(
         default=5, description="Size of the context window for conversation history"
     )
-    activation_mem_size: int | None = Field(
-        default=DEFAULT_ACTIVATION_MEM_SIZE,  # Assuming DEFAULT_ACTIVATION_MEM_SIZE is 1000
-        description="Maximum size of the activation memory",
-    )
     act_mem_dump_path: str | None = Field(
         default=DEFAULT_ACT_MEM_DUMP_PATH,  # Replace with DEFAULT_ACT_MEM_DUMP_PATH
         description="File path for dumping activation memory",
@@ -88,9 +86,10 @@ class SchedulerConfigFactory(BaseConfig):
         return self
 
 
-
 # ************************* Auth *************************
-class RabbitMQConfig(BaseConfig, ):
+class RabbitMQConfig(
+    BaseConfig,
+):
     host_name: str = Field(default="", description="Endpoint for RabbitMQ instance access")
     user_name: str = Field(default="", description="Static username for RabbitMQ instance")
     password: str = Field(default="", description="Password for the static username")
@@ -105,8 +104,10 @@ class RabbitMQConfig(BaseConfig, ):
         le=65535,  # Port must be <= 65535
     )
 
+
 class GraphDBAuthConfig(BaseConfig):
     uri: str = Field(default="localhost", description="URI for graph database access")
+
 
 class OpenAIConfig(BaseConfig):
     api_key: str = Field(default="", description="API key for OpenAI service")

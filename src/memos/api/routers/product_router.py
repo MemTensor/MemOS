@@ -41,7 +41,13 @@ def get_mos_product_instance():
         from memos.configs.mem_os import MOSConfig
 
         mos_config = MOSConfig(**default_config)
-        MOS_PRODUCT_INSTANCE = MOSProduct(default_config=mos_config)
+
+        # Get default cube config from APIConfig (may be None if disabled)
+        default_cube_config = APIConfig.get_default_cube_config()
+        print("*********default_cube_config*********", default_cube_config)
+        MOS_PRODUCT_INSTANCE = MOSProduct(
+            default_config=mos_config, default_cube_config=default_cube_config
+        )
         logger.info("MOSProduct instance created successfully with inheritance architecture")
     return MOS_PRODUCT_INSTANCE
 
@@ -65,7 +71,10 @@ async def register_user(user_req: UserRegisterRequest):
         user_config, default_mem_cube = APIConfig.create_user_config(
             user_name=user_req.user_id, user_id=user_req.user_id
         )
+        logger.info(f"user_config: {user_config.model_dump(mode='json')}")
+        logger.info(f"default_mem_cube: {default_mem_cube.config.model_dump(mode='json')}")
         mos_product = get_mos_product_instance()
+
         # Register user with default config and mem cube
         result = mos_product.user_register(
             user_id=user_req.user_id,
@@ -87,6 +96,7 @@ async def register_user(user_req: UserRegisterRequest):
         logger.error(f"Failed to register user: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
+
 @router.get(
     "/suggestions/{user_id}", summary="Get suggestion queries", response_model=SuggestionResponse
 )
@@ -105,14 +115,17 @@ async def get_suggestion_queries(user_id: str):
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
 
-@router.post("/suggestions", summary="Get suggestion queries with language", response_model=SuggestionResponse)
+@router.post(
+    "/suggestions",
+    summary="Get suggestion queries with language",
+    response_model=SuggestionResponse,
+)
 async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
     """Get suggestion queries for a specific user with language preference."""
     try:
         mos_product = get_mos_product_instance()
         suggestions = mos_product.get_suggestion_query(
-            user_id=suggestion_req.user_id, 
-            language=suggestion_req.language
+            user_id=suggestion_req.user_id, language=suggestion_req.language
         )
         return SuggestionResponse(
             message="Suggestions retrieved successfully", data={"query": suggestions}
@@ -201,7 +214,7 @@ async def chat(chat_req: ChatRequest):
             """Generate chat response as SSE stream."""
             try:
                 import asyncio
-                
+
                 for chunk in mos_product.chat_with_references(
                     query=chat_req.query,
                     user_id=chat_req.user_id,

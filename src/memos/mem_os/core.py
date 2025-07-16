@@ -1,5 +1,7 @@
+import json
 import os
 import uuid
+
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
@@ -11,7 +13,11 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
+from memos.mem_scheduler.modules.schemas import (
+    ADD_LABEL,
+    ANSWER_LABEL,
+    ScheduleMessageItem,
+)
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
@@ -105,14 +111,11 @@ class MOSCore:
                     f"Memory reader of type {type(self.mem_reader).__name__} "
                     "missing required 'llm' attribute"
                 )
-                self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm
-                )
+                self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
             else:
                 # Configure scheduler modules
                 self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm,
-                    process_llm=self.mem_reader.llm
+                    chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
                 )
             self._mem_scheduler.start()
 
@@ -239,7 +242,7 @@ class MOSCore:
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=mem_cube,
-                        label=QUERY_LABEL,
+                        label=ADD_LABEL,
                         content=query,
                         timestamp=datetime.now(),
                     )
@@ -298,7 +301,9 @@ class MOSCore:
 
         return response
 
-    def _build_system_prompt(self, memories: List[TextualMemoryItem] | List[str] | None = None) -> str:
+    def _build_system_prompt(
+        self, memories: list[TextualMemoryItem] | list[str] | None = None
+    ) -> str:
         """Build system prompt with optional memories context."""
         base_prompt = (
             "You are a knowledgeable and helpful AI assistant. "
@@ -420,6 +425,14 @@ class MOSCore:
                 )
         # Check if cube already exists in database
         existing_cube = self.user_manager.get_cube(mem_cube_id)
+
+        # check the embedder is it consistent with MOSConfig
+        if self.config.mem_reader.config.embedder != (
+            cube_embedder := self.mem_cubes[mem_cube_id].text_mem.config.embedder
+        ):
+            logger.warning(
+                f"Cube Embedder is not consistent with MOSConfig for cube: {mem_cube_id}, will use Cube Embedder: {cube_embedder}"
+            )
 
         if existing_cube:
             # Cube exists, just add user to cube if not already associated
@@ -565,6 +578,21 @@ class MOSCore:
                 )
                 for mem in memories:
                     self.mem_cubes[mem_cube_id].text_mem.add(mem)
+
+                # submit messages for scheduler
+                mem_cube = self.mem_cubes[mem_cube_id]
+                if self.enable_mem_scheduler and self.mem_scheduler is not None:
+                    text_messages = [message["content"] for message in messages]
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        label=ADD_LABEL,
+                        content=json.dumps(text_messages),
+                        timestamp=datetime.now(),
+                    )
+                    self.mem_scheduler.submit_messages(messages=[message_item])
+
         if (
             (memory_content is not None)
             and self.config.enable_textual_memory

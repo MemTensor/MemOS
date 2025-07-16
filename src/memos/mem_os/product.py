@@ -1,26 +1,29 @@
 import json
 import os
+import random
 import time
 
 from collections.abc import Generator
 from datetime import datetime
 from typing import Any, Literal
 
+from dotenv import load_dotenv
 from transformers import AutoTokenizer
 
+from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
 from memos.mem_os.utils.format_utils import (
-    convert_activation_memory_to_serializable,
     convert_graph_to_tree_forworkmem,
     filter_nodes_by_tree_ids,
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
 from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
-from memos.mem_user.persistent_user_manager import PersistentUserManager, UserRole
+from memos.mem_user.persistent_user_manager import PersistentUserManager
+from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
@@ -29,11 +32,11 @@ from memos.types import MessageList
 
 logger = get_logger(__name__)
 
-CUBE_PATH = "/tmp/data"
+load_dotenv()
+
+CUBE_PATH = os.getenv("MOS_CUBE_PATH", "/tmp/data/")
 with open("./tmp/fake_data.json") as f:
     MOCK_DATA = json.loads(f.read())
-
-# Removed ensure_user_instance decorator as it's redundant with MOSCore's built-in validation
 
 
 class MOSProduct(MOSCore):
@@ -42,13 +45,19 @@ class MOSProduct(MOSCore):
     Each user has their own configuration and cube access, but shares the same model instances.
     """
 
-    def __init__(self, default_config: MOSConfig | None = None, max_user_instances: int = 100):
+    def __init__(
+        self,
+        default_config: MOSConfig | None = None,
+        max_user_instances: int = 100,
+        default_cube_config: GeneralMemCubeConfig | None = None,
+    ):
         """
         Initialize MOSProduct with an optional default configuration.
 
         Args:
             default_config (MOSConfig | None): Default configuration for new users
             max_user_instances (int): Maximum number of user instances to keep in memory
+            default_cube_config (GeneralMemCubeConfig | None): Default cube configuration for loading cubes
         """
         # Initialize with a root config for shared resources
         if default_config is None:
@@ -73,6 +82,7 @@ class MOSProduct(MOSCore):
 
         # Product-specific attributes
         self.default_config = default_config
+        self.default_cube_config = default_cube_config
         self.max_user_instances = max_user_instances
 
         # User-specific data structures
@@ -95,11 +105,17 @@ class MOSProduct(MOSCore):
             self.tokenizer = None
 
         # Restore user instances from persistent storage
-        self._restore_user_instances()
+        self._restore_user_instances(default_cube_config=default_cube_config)
         logger.info(f"User instances restored successfully, now user is {self.mem_cubes.keys()}")
 
-    def _restore_user_instances(self) -> None:
-        """Restore user instances from persistent storage after service restart."""
+    def _restore_user_instances(
+        self, default_cube_config: GeneralMemCubeConfig | None = None
+    ) -> None:
+        """Restore user instances from persistent storage after service restart.
+
+        Args:
+            default_cube_config (GeneralMemCubeConfig | None, optional): Default cube configuration. Defaults to None.
+        """
         try:
             # Get all user configurations from persistent storage
             user_configs = self.global_user_manager.list_user_configs()
@@ -126,11 +142,13 @@ class MOSProduct(MOSCore):
                         # Store user config and cube access
                         self.user_configs[user_id] = config
                         self._load_user_cube_access(user_id)
-                        
-                        # Pre-load all cubes for this user
-                        self._preload_user_cubes(user_id)
-                        
-                        logger.info(f"Restored user configuration and pre-loaded cubes for {user_id}")
+
+                        # Pre-load all cubes for this user with default config
+                        self._preload_user_cubes(user_id, default_cube_config)
+
+                        logger.info(
+                            f"Restored user configuration and pre-loaded cubes for {user_id}"
+                        )
 
                     except Exception as e:
                         logger.error(f"Failed to restore user configuration for {user_id}: {e}")
@@ -138,26 +156,32 @@ class MOSProduct(MOSCore):
         except Exception as e:
             logger.error(f"Error during user instance restoration: {e}")
 
-    def _preload_user_cubes(self, user_id: str) -> None:
+    def _preload_user_cubes(
+        self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
+    ) -> None:
         """Pre-load all cubes for a user into memory.
-        
+
         Args:
             user_id (str): The user ID to pre-load cubes for.
+            default_cube_config (GeneralMemCubeConfig | None, optional): Default cube configuration. Defaults to None.
         """
         try:
             # Get user's accessible cubes from persistent storage
             accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
-            
+
             for cube in accessible_cubes:
                 if cube.cube_id not in self.mem_cubes:
                     try:
                         if cube.cube_path and os.path.exists(cube.cube_path):
-                            # Pre-load cube with all memory types
+                            # Pre-load cube with all memory types and default config
                             self.register_mem_cube(
-                                cube.cube_path, 
-                                cube.cube_id, 
-                                user_id, 
-                                memory_types=["act_mem"] if self.config.enable_activation_memory else []
+                                cube.cube_path,
+                                cube.cube_id,
+                                user_id,
+                                memory_types=["act_mem"]
+                                if self.config.enable_activation_memory
+                                else [],
+                                default_config=default_cube_config,
                             )
                             logger.info(f"Pre-loaded cube {cube.cube_id} for user {user_id}")
                         else:
@@ -165,10 +189,44 @@ class MOSProduct(MOSCore):
                                 f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}, skipping pre-load"
                             )
                     except Exception as e:
-                        logger.error(f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}")
-                        
+                        logger.error(
+                            f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}"
+                        )
+
         except Exception as e:
             logger.error(f"Error pre-loading cubes for user {user_id}: {e}")
+
+    def _load_user_cubes(
+        self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
+    ) -> None:
+        """Load all cubes for a user into memory.
+
+        Args:
+            user_id (str): The user ID to load cubes for.
+            default_cube_config (GeneralMemCubeConfig | None, optional): Default cube configuration. Defaults to None.
+        """
+        # Get user's accessible cubes from persistent storage
+        accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
+
+        for cube in accessible_cubes[:1]:
+            if cube.cube_id not in self.mem_cubes:
+                try:
+                    if cube.cube_path and os.path.exists(cube.cube_path):
+                        # Use MOSCore's register_mem_cube method directly with default config
+                        # Only load act_mem since text_mem is stored in database
+                        self.register_mem_cube(
+                            cube.cube_path,
+                            cube.cube_id,
+                            user_id,
+                            memory_types=["act_mem"],
+                            default_config=default_cube_config,
+                        )
+                    else:
+                        logger.warning(
+                            f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}"
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
 
     def _ensure_user_instance(self, user_id: str, max_instances: int | None = None) -> None:
         """
@@ -270,30 +328,6 @@ class MOSProduct(MOSCore):
             raise ValueError(f"No configuration provided for user {user_id}")
 
         return self._create_user_config(user_id, user_config)
-
-    def _load_user_cubes(self, user_id: str) -> None:
-        """Load all cubes for a user into memory."""
-        # Get user's accessible cubes from persistent storage
-        accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
-
-        for cube in accessible_cubes[:1]:
-            if cube.cube_id not in self.mem_cubes:
-                try:
-                    if cube.cube_path and os.path.exists(cube.cube_path):
-                        # Use MOSCore's register_mem_cube method directly
-                        # Only load act_mem since text_mem is stored in database
-                        self.register_mem_cube(
-                            cube.cube_path, 
-                            cube.cube_id, 
-                            user_id, 
-                            memory_types=["act_mem"]
-                        )
-                    else:
-                        logger.warning(
-                            f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}"
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
 
     def _build_system_prompt(self, user_id: str, memories_all: list[TextualMemoryItem]) -> str:
         """
@@ -461,11 +495,12 @@ class MOSProduct(MOSCore):
             self.mem_scheduler.submit_messages(messages=[message_item])
 
     def register_mem_cube(
-        self, 
-        mem_cube_name_or_path_or_object: str | GeneralMemCube, 
-        mem_cube_id: str | None = None, 
+        self,
+        mem_cube_name_or_path_or_object: str | GeneralMemCube,
+        mem_cube_id: str | None = None,
         user_id: str | None = None,
-        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
+        default_config: GeneralMemCubeConfig | None = None,
     ) -> None:
         """
         Register a MemCube with the MOS.
@@ -474,9 +509,10 @@ class MOSProduct(MOSCore):
             mem_cube_name_or_path_or_object (str | GeneralMemCube): The name, path, or GeneralMemCube object to register.
             mem_cube_id (str, optional): The identifier for the MemCube. If not provided, a default ID is used.
             user_id (str, optional): The user ID to register the cube for.
-            memory_types (list[str], optional): List of memory types to load. 
+            memory_types (list[str], optional): List of memory types to load.
                 If None, loads all available memory types.
                 Options: ["text_mem", "act_mem", "para_mem"]
+            default_config (GeneralMemCubeConfig, optional): Default configuration for the cube.
         """
         # Handle different input types
         if isinstance(mem_cube_name_or_path_or_object, GeneralMemCube):
@@ -496,12 +532,16 @@ class MOSProduct(MOSCore):
 
             # Create MemCube from path
             if os.path.exists(mem_cube_name_or_path):
-                mem_cube = GeneralMemCube.init_from_dir(mem_cube_name_or_path, memory_types)
+                mem_cube = GeneralMemCube.init_from_dir(
+                    mem_cube_name_or_path, memory_types, default_config
+                )
             else:
                 logger.warning(
                     f"MemCube {mem_cube_name_or_path} does not exist, try to init from remote repo."
                 )
-                mem_cube = GeneralMemCube.init_from_remote_repo(mem_cube_name_or_path, memory_types=memory_types)
+                mem_cube = GeneralMemCube.init_from_remote_repo(
+                    mem_cube_name_or_path, memory_types=memory_types, default_config=default_config
+                )
 
         # Register the MemCube
         self.mem_cubes[mem_cube_id] = mem_cube
@@ -513,6 +553,7 @@ class MOSProduct(MOSCore):
         config: MOSConfig | None = None,
         interests: str | None = None,
         default_mem_cube: GeneralMemCube | None = None,
+        default_cube_config: GeneralMemCubeConfig | None = None,
     ) -> dict[str, str]:
         """Register a new user with configuration and default cube.
 
@@ -521,6 +562,8 @@ class MOSProduct(MOSCore):
             user_name (str): The user name for registration.
             config (MOSConfig | None, optional): User-specific configuration. Defaults to None.
             interests (str | None, optional): User interests as string. Defaults to None.
+            default_mem_cube (GeneralMemCube | None, optional): Default memory cube. Defaults to None.
+            default_cube_config (GeneralMemCubeConfig | None, optional): Default cube configuration. Defaults to None.
 
         Returns:
             dict[str, str]: Registration result with status and message.
@@ -557,12 +600,13 @@ class MOSProduct(MOSCore):
                 except Exception as e:
                     print(e)
 
-            # Register the default cube with MOS TODO overide
+            # Register the default cube with MOS
             self.register_mem_cube(
-                mem_cube_name_or_path_or_object=default_mem_cube, 
-                mem_cube_id=default_cube_id, 
+                mem_cube_name_or_path_or_object=default_mem_cube,
+                mem_cube_id=default_cube_id,
                 user_id=user_id,
-                memory_types=["act_mem"] if self.config.enable_activation_memory else []
+                memory_types=["act_mem"] if self.config.enable_activation_memory else [],
+                default_config=default_cube_config,  # use default cube config
             )
 
             # Add interests to the default cube if provided
@@ -619,14 +663,11 @@ class MOSProduct(MOSCore):
                 "query": ["query1", "query2", "query3"]
             }}
             """
-        text_mem_result = super().search("my recently memories", user_id=user_id, top_k=10)["text_mem"]
+        text_mem_result = super().search("my recently memories", user_id=user_id, top_k=10)[
+            "text_mem"
+        ]
         if text_mem_result:
-            memories = "\n".join(
-                [
-                    m.memory
-                    for m in text_mem_result[0]["memories"]
-                ]
-            )
+            memories = "\n".join([m.memory for m in text_mem_result[0]["memories"]])
         else:
             memories = ""
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
@@ -659,7 +700,7 @@ class MOSProduct(MOSCore):
             self._validate_user_exists(user_id)
 
         # Load user cubes if not already loaded
-        self._load_user_cubes(user_id)
+        self._load_user_cubes(user_id, self.default_cube_config)
         time_start = time.time()
         memories_list = super().search(query, user_id)["text_mem"]
         # Get response from parent MOSCore (returns string, not generator)
@@ -706,7 +747,7 @@ class MOSProduct(MOSCore):
             Generator[str, None, None]: The response string generator with reference processing.
         """
 
-        self._load_user_cubes(user_id)
+        self._load_user_cubes(user_id, self.default_cube_config)
 
         time_start = time.time()
         memories_list = []
@@ -748,9 +789,13 @@ class MOSProduct(MOSCore):
                         logger.info("past_key_values is None will not apply to chat")
                     break
             if self.config.chat_model.backend == "huggingface":
-                response_stream = self.chat_llm.generate_stream(current_messages, past_key_values=past_key_values)
+                response_stream = self.chat_llm.generate_stream(
+                    current_messages, past_key_values=past_key_values
+                )
+            elif self.config.chat_model.backend == "vllm":
+                response_stream = self.chat_llm.generate_stream(current_messages)
         else:
-            if self.config.chat_model.backend == "huggingface":
+            if self.config.chat_model.backend in ["huggingface", "vllm"]:
                 response_stream = self.chat_llm.generate_stream(current_messages)
             else:
                 response_stream = self.chat_llm.generate(current_messages)
@@ -764,7 +809,7 @@ class MOSProduct(MOSCore):
         full_response = ""
 
         # Use tiktoken for proper token-based chunking
-        if self.config.chat_model.backend != "huggingface":
+        if self.config.chat_model.backend not in ["huggingface", "vllm"]:
             # For non-huggingface backends, we need to collect the full response first
             full_response_text = ""
             for chunk in response_stream:
@@ -820,13 +865,25 @@ class MOSProduct(MOSCore):
         self.add(
             user_id=user_id,
             messages=[
-                {"role": "user", "content": query},
-                {"role": "assistant", "content": full_response}
+                {
+                    "role": "user",
+                    "content": query,
+                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                },
+                {
+                    "role": "assistant",
+                    "content": full_response,
+                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                },
             ],
-            mem_cube_id=cube_id
+            mem_cube_id=cube_id,
         )
+        # Keep chat history under 30 messages by removing oldest conversation pair
         if len(self.chat_history_manager[user_id].chat_history) > 30:
-            self.chat_history_manager[user_id].chat_history.pop(0)
+            self.chat_history_manager[user_id].chat_history.pop(0)  # Remove oldest user message
+            self.chat_history_manager[user_id].chat_history.pop(
+                0
+            )  # Remove oldest assistant response
 
     def get_all(
         self,
@@ -846,7 +903,7 @@ class MOSProduct(MOSCore):
         """
 
         # Load user cubes if not already loaded
-        self._load_user_cubes(user_id)
+        self._load_user_cubes(user_id, self.default_cube_config)
         memory_list = super().get_all(
             mem_cube_id=mem_cube_ids[0] if mem_cube_ids else None, user_id=user_id
         )[memory_type]
@@ -868,25 +925,41 @@ class MOSProduct(MOSCore):
                 tree_result["children"] = children_sort
                 memories_filtered["tree_structure"] = tree_result
                 reformat_memory_list.append(
-                    {"cube_id": memory["cube_id"], "memories": [memories_filtered], "memory_statistics": node_type_count}
+                    {
+                        "cube_id": memory["cube_id"],
+                        "memories": [memories_filtered],
+                        "memory_statistics": node_type_count,
+                    }
                 )
         elif memory_type == "act_mem":
+            memories_list = []
+            act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
+            if act_mem_params:
+                memories_data = act_mem_params[0].model_dump()
+                records = memories_data.get("records", [])
+                for record in records["text_memories"]:
+                    memories_list.append(
+                        {
+                            "id": memories_data["id"],
+                            "text": record,
+                            "create_time": records["timestamp"],
+                            "size": random.randint(1, 20),
+                            "modify_times": 1,
+                        }
+                    )
             reformat_memory_list.append(
                 {
                     "cube_id": "xxxxxxxxxxxxxxxx" if not mem_cube_ids else mem_cube_ids[0],
-                    "memories": MOCK_DATA,
+                    "memories": memories_list,
                 }
             )
         elif memory_type == "para_mem":
-            cache_item = self.mem_cubes[mem_cube_ids[0]].act_mem.extract("这是一个小问题哈哈哈哈")
-            self.mem_cubes[mem_cube_ids[0]].act_mem.add([cache_item])
             act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
-            # Convert activation memory to serializable format
-            serializable_act_mem = convert_activation_memory_to_serializable(act_mem_params)
+            logger.info(f"act_mem_params: {act_mem_params}")
             reformat_memory_list.append(
                 {
                     "cube_id": "xxxxxxxxxxxxxxxx" if not mem_cube_ids else mem_cube_ids[0],
-                    "memories": serializable_act_mem,
+                    "memories": act_mem_params[0].model_dump(),
                 }
             )
         return reformat_memory_list
@@ -924,7 +997,7 @@ class MOSProduct(MOSCore):
         """
 
         # Load user cubes if not already loaded
-        self._load_user_cubes(user_id)
+        self._load_user_cubes(user_id, self.default_cube_config)
         memory_list = self._get_subgraph(
             query=query, mem_cube_id=mem_cube_ids[0], user_id=user_id, top_k=20
         )["text_mem"]
@@ -941,7 +1014,11 @@ class MOSProduct(MOSCore):
             tree_result["children"] = children_sort
             memories_filtered["tree_structure"] = tree_result
             reformat_memory_list.append(
-                {"cube_id": memory["cube_id"], "memories": [memories_filtered], "memory_statistics": node_type_count}
+                {
+                    "cube_id": memory["cube_id"],
+                    "memories": [memories_filtered],
+                    "memory_statistics": node_type_count,
+                }
             )
 
         return reformat_memory_list
@@ -954,7 +1031,7 @@ class MOSProduct(MOSCore):
         self._validate_user_access(user_id)
 
         # Load user cubes if not already loaded
-        self._load_user_cubes(user_id)
+        self._load_user_cubes(user_id, self.default_cube_config)
         search_result = super().search(query, user_id, install_cube_ids, top_k)
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
@@ -990,7 +1067,7 @@ class MOSProduct(MOSCore):
             self._validate_user_exists(user_id)
 
         # Load user cubes if not already loaded
-        self._load_user_cubes(user_id)
+        self._load_user_cubes(user_id, self.default_cube_config)
 
         result = super().add(messages, memory_content, doc_path, mem_cube_id, user_id)
 

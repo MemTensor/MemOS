@@ -1,30 +1,18 @@
-import os
 from datetime import datetime
-from pathlib import Path
-from threading import Lock
-from typing import Any, Literal
 
-from flatbuffers.compat import memoryview_type
 from memos.configs.mem_os import MOSConfig
-from memos.mem_os.main import MOS
-from memos.configs.mem_os import MOSConfig
-from memos.llms.factory import LLMFactory
 from memos.log import get_logger
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_reader.factory import MemReaderFactory
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_user.user_manager import UserManager, UserRole
-from memos.memories.activation.item import ActivationMemoryItem
-from memos.memories.parametric.item import ParametricMemoryItem
-from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
-from memos.types import ChatHistory, MessageList, MOSSearchResult
+from memos.mem_os.main import MOS
 from memos.mem_scheduler.modules.schemas import (
+    ANSWER_LABEL,
     MONITOR_WORKING_MEMORY_TYPE,
-    MONITOR_ACTIVATION_MEMORY_TYPE,
+    QUERY_LABEL,
+    ScheduleMessageItem,
 )
+
+
 logger = get_logger(__name__)
+
 
 class MOSForTestScheduler(MOS):
     """This class is only to test abilities of mem scheduler"""
@@ -32,14 +20,11 @@ class MOSForTestScheduler(MOS):
     def __init__(self, config: MOSConfig):
         super().__init__(config)
 
-    def _str_memories(
-        self, memories: list[str]
-    ) -> str:
+    def _str_memories(self, memories: list[str]) -> str:
         """Format memories for display."""
         if not memories:
             return "No memories."
         return "\n".join(f"{i + 1}. {memory}" for i, memory in enumerate(memories))
-
 
     def chat(self, query: str, user_id: str | None = None) -> str:
         """
@@ -80,21 +65,27 @@ class MOSForTestScheduler(MOS):
                         timestamp=datetime.now(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
-                    self.mem_scheduler.monitor.update_mem_cube_info(user_id=user_id,
-                                                                    mem_cube_id=mem_cube_id,
-                                                                    mem_cube=mem_cube)
+
+                self.mem_scheduler.monitor.register_memory_manager_if_not_exists(
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    memory_monitors=self.mem_scheduler.monitor.working_memory_monitors,
+                    max_capacity=self.mem_scheduler.monitor.working_mem_monitor_capacity,
+                )
 
                 # from scheduler
                 scheduler_memories = self.mem_scheduler.monitor.get_monitor_memories(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
                     memory_type=MONITOR_WORKING_MEMORY_TYPE,
-                    top_k=topk_for_scheduler
+                    top_k=topk_for_scheduler,
                 )
                 memories_all.extend(scheduler_memories)
 
                 # from mem_cube
-                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k-topk_for_scheduler)
+                memories = mem_cube.text_mem.search(
+                    query, top_k=self.config.top_k - topk_for_scheduler
+                )
                 text_memories = [m.memory for m in memories]
                 memories_all.extend(text_memories)
 

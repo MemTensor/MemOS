@@ -74,6 +74,14 @@ class BaseSchedulerModule:
         self._process_llm = value
 
     @property
+    def process_llm(self) -> BaseLLM:
+        return self._process_llm
+
+    @process_llm.setter
+    def process_llm(self, value: BaseLLM) -> None:
+        self._process_llm = value
+
+    @property
     def mem_cube(self) -> GeneralMemCube:
         """The memory cube associated with this MemChat."""
         return self._current_mem_cube

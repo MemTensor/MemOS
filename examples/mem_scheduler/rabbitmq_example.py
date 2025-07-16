@@ -1,9 +1,9 @@
-import time
 import threading
+import time
 
 from memos.configs.mem_scheduler import AuthConfig
-from memos.mem_scheduler.modules.schemas import DIRECT_EXCHANGE_TYPE
 from memos.mem_scheduler.modules.rabbitmq_service import RabbitMQSchedulerModule
+
 
 def publish_message(rabbitmq_module, message):
     """Function to publish a message."""

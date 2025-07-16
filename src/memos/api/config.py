@@ -41,6 +41,19 @@ class APIConfig:
         }
 
     @staticmethod
+    def vllm_config() -> dict[str, Any]:
+        """Get Qwen configuration."""
+        return {
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "Qwen/Qwen3-1.7B"),
+            "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
+            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "4096")),
+            "remove_think_prefix": True,
+            "api_key": os.getenv("VLLM_API_KEY", ""),
+            "api_base": os.getenv("VLLM_API_BASE", "http://localhost:8088/v1"),
+            "model_schema": os.getenv("MOS_MODEL_SCHEMA", "memos.configs.llm.VLLMLLMConfig"),
+        }
+
+    @staticmethod
     def get_activation_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
@@ -58,6 +71,20 @@ class APIConfig:
                         "add_generation_prompt": True,
                         "remove_think_prefix": False,
                     },
+                },
+            },
+        }
+
+    @staticmethod
+    def get_activation_vllm_config() -> dict[str, Any]:
+        """Get Ollama configuration."""
+        return {
+            "backend": "vllm_kv_cache",
+            "config": {
+                "memory_filename": "activation_memory.pickle",
+                "extractor_llm": {
+                    "backend": "vllm",
+                    "config": APIConfig.vllm_config(),
                 },
             },
         }
@@ -84,7 +111,6 @@ class APIConfig:
                     os.getenv("MOS_SCHEDULER_ACT_MEM_UPDATE_INTERVAL", "300")
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
-                "activation_mem_size": int(os.getenv("MOS_SCHEDULER_ACTIVATION_MEM_SIZE", "1000")),
                 "thread_pool_max_workers": int(
                     os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
                 ),
@@ -95,6 +121,7 @@ class APIConfig:
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"
                 ).lower()
                 == "true",
+                "enable_act_memory_update": True,
             },
         }
 
@@ -104,18 +131,25 @@ class APIConfig:
         return os.getenv("MOS_ENABLE_SCHEDULER", "false").lower() == "true"
 
     @staticmethod
+    def is_default_cube_config_enabled() -> bool:
+        """Check if default cube config is enabled via environment variable."""
+        return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "false").lower() == "true"
+
+    @staticmethod
     def get_product_default_config() -> dict[str, Any]:
         """Get default configuration for Product API."""
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
+        vllm_config = APIConfig.vllm_config()
+        backend_model = {
+            "openai": openai_config,
+            "huggingface": qwen_config,
+            "vllm": vllm_config,
+        }
+        backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         config = {
             "user_id": os.getenv("MOS_USER_ID", "root"),
-            "chat_model": {
-                "backend": os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai"),
-                "config": openai_config
-                if os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai") == "openai"
-                else qwen_config,
-            },
+            "chat_model": {"backend": backend, "config": backend_model[backend]},
             "mem_reader": {
                 "backend": "simple_struct",
                 "config": {
@@ -197,14 +231,19 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         neo4j_config = APIConfig.get_neo4j_config()
         qwen_config = APIConfig.qwen_config()
+        vllm_config = APIConfig.vllm_config()
+        backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
+        backend_model = {
+            "openai": openai_config,
+            "huggingface": qwen_config,
+            "vllm": vllm_config,
+        }
         # Create MOSConfig
         config_dict = {
             "user_id": user_id,
             "chat_model": {
-                "backend": os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai"),
-                "config": openai_config
-                if os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai") == "openai"
-                else qwen_config,
+                "backend": backend,
+                "config": backend_model[backend],
             },
             "mem_reader": {
                 "backend": "simple_struct",
@@ -280,10 +319,53 @@ class APIConfig:
                 },
                 "act_mem": {}
                 if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                else APIConfig.get_activation_config(),
+                else APIConfig.get_activation_vllm_config(),
                 "para_mem": {},
             }
         )
 
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
+
+    @staticmethod
+    def get_default_cube_config() -> GeneralMemCubeConfig | None:
+        """Get default cube configuration for product initialization.
+
+        Returns:
+            GeneralMemCubeConfig | None: Default cube configuration if enabled, None otherwise.
+        """
+        if not APIConfig.is_default_cube_config_enabled():
+            return None
+
+        openai_config = APIConfig.get_openai_config()
+        neo4j_config = APIConfig.get_neo4j_config()
+
+        return GeneralMemCubeConfig.model_validate(
+            {
+                "user_id": "default",
+                "cube_id": "default_cube",
+                "text_mem": {
+                    "backend": "tree_text",
+                    "config": {
+                        "extractor_llm": {"backend": "openai", "config": openai_config},
+                        "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                        "graph_db": {
+                            "backend": "neo4j",
+                            "config": neo4j_config,
+                        },
+                        "embedder": {
+                            "backend": "ollama",
+                            "config": {
+                                "model_name_or_path": "nomic-embed-text:latest",
+                                "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
+                            },
+                        },
+                        "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower() == "true",
+                    },
+                },
+                "act_mem": {}
+                if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
+                else APIConfig.get_activation_vllm_config(),
+                "para_mem": {},
+            }
+        )
