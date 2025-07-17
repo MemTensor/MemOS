@@ -87,4 +87,4 @@ jobs:
         poetry run ruff format --check
     - name: PyTest unit tests
       run: |
-        poetry run pytest tests -vv
+        poetry run pytest tests -vv --durations=10
