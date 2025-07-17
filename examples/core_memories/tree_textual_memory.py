@@ -186,7 +186,9 @@ scene_data = [
 memory = reader.get_memory(scene_data, type="chat", info={"user_id": "1234", "session_id": "2222"})
 
 for m_list in memory:
-    my_tree_textual_memory.add(m_list)
+    added_ids = my_tree_textual_memory.add(m_list)
+    for i, id in enumerate(added_ids):
+        print(f"{i}'th added result is:" + my_tree_textual_memory.get(id).memory)
     my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 time.sleep(60)
@@ -217,7 +219,7 @@ doc_paths = [
 doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"})
 
 for m_list in doc_memory:
-    my_tree_textual_memory.add(m_list)
+    added_ids = my_tree_textual_memory.add(m_list)
     my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 results = my_tree_textual_memory.search(
