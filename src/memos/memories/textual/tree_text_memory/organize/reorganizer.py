@@ -378,7 +378,7 @@ class GraphStructureReorganizer:
 
         return result_subclusters
 
-    def _partition(self, nodes, min_cluster_size: int = 1, max_cluster_size: int = 20):
+    def _partition(self, nodes, min_cluster_size: int = 3, max_cluster_size: int = 20):
         """
         Partition nodes by:
         1) Frequent tags (top N & above threshold)
