@@ -544,6 +544,9 @@ class MOSProduct(MOSCore):
                 )
 
         # Register the MemCube
+        logger.info(
+            f"Registering MemCube {mem_cube_id} with cube config {mem_cube.config.model_dump(mode='json')}"
+        )
         self.mem_cubes[mem_cube_id] = mem_cube
 
     def user_register(
@@ -769,7 +772,7 @@ class MOSProduct(MOSCore):
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
-            {"role": "user", "content": query + "/nothink"},
+            {"role": "user", "content": query},
         ]
 
         # Generate response with custom prompt
@@ -879,7 +882,7 @@ class MOSProduct(MOSCore):
             mem_cube_id=cube_id,
         )
         # Keep chat history under 30 messages by removing oldest conversation pair
-        if len(self.chat_history_manager[user_id].chat_history) > 30:
+        if len(self.chat_history_manager[user_id].chat_history) > 10:
             self.chat_history_manager[user_id].chat_history.pop(0)  # Remove oldest user message
             self.chat_history_manager[user_id].chat_history.pop(
                 0

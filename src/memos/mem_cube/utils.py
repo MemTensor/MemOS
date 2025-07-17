@@ -3,8 +3,6 @@ import logging
 import subprocess
 import tempfile
 
-from typing import Any
-
 from memos.configs.mem_cube import GeneralMemCubeConfig
 
 
@@ -50,77 +48,79 @@ def merge_config_with_default(
         GeneralMemCubeConfig: Merged configuration
     """
 
-    def deep_merge_dicts(
-        existing: dict[str, Any], default: dict[str, Any], preserve_keys: set[str] | None = None
-    ) -> dict[str, Any]:
-        """Recursively merge dictionaries, preserving specified keys from existing dict."""
-        if preserve_keys is None:
-            preserve_keys = set()
-
-        result = copy.deepcopy(existing)
-
-        for key, default_value in default.items():
-            if key in preserve_keys:
-                # Preserve existing value for critical keys
-                continue
-
-            if key in result and isinstance(result[key], dict) and isinstance(default_value, dict):
-                # Recursively merge nested dictionaries
-                result[key] = deep_merge_dicts(result[key], default_value, preserve_keys)
-            elif key not in result or result[key] is None:
-                # Use default value if key doesn't exist or is None
-                result[key] = copy.deepcopy(default_value)
-            # For non-dict values, keep existing value unless it's None
-
-        return result
-
     # Convert configs to dictionaries
     existing_dict = existing_config.model_dump(mode="json")
     default_dict = default_config.model_dump(mode="json")
 
-    # Merge text_mem config
+    logger.info(
+        f"Starting config merge for user {existing_config.user_id}, cube {existing_config.cube_id}"
+    )
+
+    # Define fields that should be preserved from existing config
+    preserve_fields = {"user_id", "cube_id", "config_filename", "model_schema"}
+
+    # Preserve graph_db from existing config if it exists, but merge some fields
+    preserved_graph_db = None
     if "text_mem" in existing_dict and "text_mem" in default_dict:
         existing_text_config = existing_dict["text_mem"].get("config", {})
         default_text_config = default_dict["text_mem"].get("config", {})
 
-        # Handle nested graph_db config specially
         if "graph_db" in existing_text_config and "graph_db" in default_text_config:
-            existing_graph_config = existing_text_config["graph_db"].get("config", {})
-            default_graph_config = default_text_config["graph_db"].get("config", {})
+            existing_graph_config = existing_text_config["graph_db"]["config"]
+            default_graph_config = default_text_config["graph_db"]["config"]
 
-            # Merge graph_db config, preserving critical keys
-            merged_graph_config = deep_merge_dicts(
-                existing_graph_config,
-                default_graph_config,
-                preserve_keys={"uri", "user", "password", "db_name", "auto_create"},
-            )
+            # Define graph_db fields to preserve (user-specific)
+            preserve_graph_fields = {
+                "uri",
+                "user",
+                "password",
+                "db_name",
+                "auto_create",
+                "user_name",
+                "use_multi_db",
+            }
 
-            # Update the configs
-            existing_text_config["graph_db"]["config"] = merged_graph_config
-            default_text_config["graph_db"]["config"] = merged_graph_config
+            # Create merged graph_db config
+            merged_graph_config = copy.deepcopy(existing_graph_config)
+            for key, value in default_graph_config.items():
+                if key not in preserve_graph_fields:
+                    merged_graph_config[key] = value
+                    logger.debug(
+                        f"Updated graph_db field '{key}': {existing_graph_config.get(key)} -> {value}"
+                    )
+            if not default_graph_config.get("use_multi_db", True):
+                # set original use_multi_db to False if default_graph_config.use_multi_db is False
+                if merged_graph_config.get("use_multi_db", True):
+                    merged_graph_config["use_multi_db"] = False
+                    merged_graph_config["user_name"] = merged_graph_config.get("db_name")
+                    merged_graph_config["db_name"] = default_graph_config.get("db_name")
+                else:
+                    logger.info("use_multi_db is already False, no need to change")
 
-        # Merge other text_mem config fields
-        merged_text_config = deep_merge_dicts(existing_text_config, default_text_config)
-        existing_dict["text_mem"]["config"] = merged_text_config
+            preserved_graph_db = {
+                "backend": existing_text_config["graph_db"]["backend"],
+                "config": merged_graph_config,
+            }
 
-    # Merge act_mem config
-    if "act_mem" in existing_dict and "act_mem" in default_dict:
-        existing_act_config = existing_dict["act_mem"].get("config", {})
-        default_act_config = default_dict["act_mem"].get("config", {})
-        merged_act_config = deep_merge_dicts(existing_act_config, default_act_config)
-        existing_dict["act_mem"]["config"] = merged_act_config
+    # Use default config as base
+    merged_dict = copy.deepcopy(default_dict)
 
-    # Merge para_mem config
-    if "para_mem" in existing_dict and "para_mem" in default_dict:
-        existing_para_config = existing_dict["para_mem"].get("config", {})
-        default_para_config = default_dict["para_mem"].get("config", {})
-        merged_para_config = deep_merge_dicts(existing_para_config, default_para_config)
-        existing_dict["para_mem"]["config"] = merged_para_config
+    # Restore preserved fields from existing config
+    for field in preserve_fields:
+        if field in existing_dict:
+            merged_dict[field] = existing_dict[field]
+            logger.debug(f"Preserved field '{field}': {existing_dict[field]}")
+
+    # Restore graph_db if it was preserved
+    if preserved_graph_db and "text_mem" in merged_dict:
+        merged_dict["text_mem"]["config"]["graph_db"] = preserved_graph_db
+        logger.debug(f"Preserved graph_db with merged config: {preserved_graph_db}")
 
     # Create new config from merged dictionary
-    merged_config = GeneralMemCubeConfig.model_validate(existing_dict)
+    merged_config = GeneralMemCubeConfig.model_validate(merged_dict)
+
     logger.info(
-        f"Merged cube config for user {merged_config.user_id}, cube {merged_config.cube_id}"
+        f"Successfully merged cube config for user {merged_config.user_id}, cube {merged_config.cube_id}"
     )
 
     return merged_config

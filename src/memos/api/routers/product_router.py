@@ -222,7 +222,7 @@ async def chat(chat_req: ChatRequest):
                     history=chat_req.history,
                 ):
                     yield chunk
-                    await asyncio.sleep(0.05)  # 50ms delay between chunks
+                    await asyncio.sleep(0.00001)  # 50ms delay between chunks
             except Exception as e:
                 logger.error(f"Error in chat stream: {e}")
                 error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"

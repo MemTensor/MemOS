@@ -53,7 +53,7 @@ async def locomo_grader(llm_client, question: str, gold_answer: str, response: s
         """
 
     accuracy_prompt = f"""
-    Your task is to label an answer to a question as ’CORRECT’ or ’WRONG’. You williolw23 be given the following data:
+    Your task is to label an answer to a question as ’CORRECT’ or ’WRONG’. You will be given the following data:
         (1) a question (posed by one user to another user),
         (2) a ’gold’ (ground truth) answer,
         (3) a generated answer

@@ -90,13 +90,64 @@ class APIConfig:
         }
 
     @staticmethod
-    def get_neo4j_config() -> dict[str, Any]:
+    def get_embedder_config() -> dict[str, Any]:
+        """Get embedder configuration."""
+        embedder_backend = os.getenv("MOS_EMBEDDER_BACKEND", "ollama")
+
+        if embedder_backend == "universal_api":
+            return {
+                "backend": "universal_api",
+                "config": {
+                    "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
+                    "api_key": os.getenv("OPENAI_API_KEY", "sk-xxxx"),
+                    "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                    "base_url": os.getenv("OPENAI_API_BASE", "http://openai.com"),
+                },
+            }
+        else:  # ollama
+            return {
+                "backend": "ollama",
+                "config": {
+                    "model_name_or_path": os.getenv(
+                        "MOS_EMBEDDER_MODEL", "nomic-embed-text:latest"
+                    ),
+                    "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
+                },
+            }
+
+    @staticmethod
+    def get_neo4j_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get Neo4j configuration."""
+        if os.getenv("MOS_NEO4J_SHARED_DB", "false").lower() == "true":
+            return APIConfig.get_neo4j_shared_config(user_id)
+        else:
+            return APIConfig.get_noshared_neo4j_config(user_id)
+
+    @staticmethod
+    def get_noshared_neo4j_config(user_id) -> dict[str, Any]:
         """Get Neo4j configuration."""
         return {
             "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             "user": os.getenv("NEO4J_USER", "neo4j"),
+            "db_name": f"memos{user_id.replace('-', '')}",
             "password": os.getenv("NEO4J_PASSWORD", "12345678"),
             "auto_create": True,
+            "use_multi_db": True,
+            "embedding_dimension": 3072,
+        }
+
+    @staticmethod
+    def get_neo4j_shared_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get Neo4j configuration."""
+        return {
+            "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            "user": os.getenv("NEO4J_USER", "neo4j"),
+            "db_name": os.getenv("NEO4J_DB_NAME", "shared-tree-textual-memory"),
+            "password": os.getenv("NEO4J_PASSWORD", "12345678"),
+            "user_name": f"memos{user_id.replace('-', '')}",
+            "auto_create": True,
+            "use_multi_db": False,
+            "embedding_dimension": 3072,
         }
 
     @staticmethod
@@ -157,13 +208,7 @@ class APIConfig:
                         "backend": "openai",
                         "config": openai_config,
                     },
-                    "embedder": {
-                        "backend": "ollama",
-                        "config": {
-                            "model_name_or_path": "nomic-embed-text:latest",
-                            "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
-                        },
-                    },
+                    "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
                         "config": {
@@ -229,7 +274,7 @@ class APIConfig:
     def create_user_config(user_name: str, user_id: str) -> tuple[MOSConfig, GeneralMemCube]:
         """Create configuration for a specific user."""
         openai_config = APIConfig.get_openai_config()
-        neo4j_config = APIConfig.get_neo4j_config()
+        neo4j_config = APIConfig.get_neo4j_config(user_id)
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
@@ -252,13 +297,7 @@ class APIConfig:
                         "backend": "openai",
                         "config": openai_config,
                     },
-                    "embedder": {
-                        "backend": "ollama",
-                        "config": {
-                            "model_name_or_path": "nomic-embed-text:latest",
-                            "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
-                        },
-                    },
+                    "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
                         "config": {
@@ -298,23 +337,9 @@ class APIConfig:
                         "dispatcher_llm": {"backend": "openai", "config": openai_config},
                         "graph_db": {
                             "backend": "neo4j",
-                            "config": {
-                                "uri": neo4j_config["uri"],
-                                "user": neo4j_config["user"],
-                                "password": neo4j_config["password"],
-                                "db_name": os.getenv(
-                                    "NEO4J_DB_NAME", f"memos{user_id.replace('-', '')}"
-                                ),  # , replace with
-                                "auto_create": neo4j_config["auto_create"],
-                            },
+                            "config": neo4j_config,
                         },
-                        "embedder": {
-                            "backend": "ollama",
-                            "config": {
-                                "model_name_or_path": "nomic-embed-text:latest",
-                                "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
-                            },
-                        },
+                        "embedder": APIConfig.get_embedder_config(),
                     },
                 },
                 "act_mem": {}
@@ -338,7 +363,7 @@ class APIConfig:
             return None
 
         openai_config = APIConfig.get_openai_config()
-        neo4j_config = APIConfig.get_neo4j_config()
+        neo4j_config = APIConfig.get_neo4j_config(user_id="default")
 
         return GeneralMemCubeConfig.model_validate(
             {
@@ -353,13 +378,7 @@ class APIConfig:
                             "backend": "neo4j",
                             "config": neo4j_config,
                         },
-                        "embedder": {
-                            "backend": "ollama",
-                            "config": {
-                                "model_name_or_path": "nomic-embed-text:latest",
-                                "api_base": os.getenv("OLLAMA_API_BASE", "http://localhost:11434"),
-                            },
-                        },
+                        "embedder": APIConfig.get_embedder_config(),
                         "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower() == "true",
                     },
                 },
