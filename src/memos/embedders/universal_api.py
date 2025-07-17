@@ -1,5 +1,5 @@
-from openai import OpenAI as OpenAIClient
 from openai import AzureOpenAI as AzureClient
+from openai import OpenAI as OpenAIClient
 
 from memos.configs.embedder import UniversalAPIEmbedderConfig
 from memos.embedders.base import BaseEmbedder
