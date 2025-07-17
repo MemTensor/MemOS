@@ -91,3 +91,28 @@ messages = [
 response = llm.generate(messages)
 print("Scenario 4:", response)
 print("==" * 20)
+
+
+# Scenario 5: Using LLMFactory with Qwen (DashScope Compatible API)
+
+config = LLMConfigFactory.model_validate(
+    {
+        "backend": "qwen",
+        "config": {
+            "model_name_or_path": "qwen-plus",  # or qwen-max-2025-01-25
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "top_p": 0.9,
+            "top_k": 50,
+            "api_key": "sk-xxx",
+            "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        },
+    }
+)
+llm = LLMFactory.from_config(config)
+messages = [
+    {"role": "user", "content": "Can you speak Chinese?"},
+]
+response = llm.generate(messages)
+print("Scenario 5:", response)
+print("==" * 20)

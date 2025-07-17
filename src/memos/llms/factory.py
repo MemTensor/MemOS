@@ -6,6 +6,7 @@ from memos.llms.hf import HFLLM
 from memos.llms.hf_singleton import HFSingletonLLM
 from memos.llms.ollama import OllamaLLM
 from memos.llms.openai import AzureLLM, OpenAILLM
+from memos.llms.qwen import QwenLLM
 from memos.llms.vllm import VLLMLLM
 
 
@@ -19,6 +20,7 @@ class LLMFactory(BaseLLM):
         "huggingface": HFLLM,
         "huggingface_singleton": HFSingletonLLM,  # Add singleton version
         "vllm": VLLMLLM,
+        "qwen": QwenLLM,
     }
 
     @classmethod
