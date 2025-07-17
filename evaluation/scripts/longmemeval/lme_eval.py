@@ -346,7 +346,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api"],
+        choices=["mem0-local", "mem0-api", "memos-local"],
     )
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."

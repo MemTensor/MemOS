@@ -119,7 +119,9 @@ def memos_search(client, user_id, query, frame="memos-local"):
         user_id=user_id,
     )
 
-    search_memories = filter_memory_data(results)["text_mem"][0]["memories"]
+    results = filter_memory_data(results)["text_mem"][0]["memories"]
+
+    search_memories = "\n".join([f"  - {item['memory']}" for item in results])
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000

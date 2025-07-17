@@ -171,6 +171,8 @@ def main(frame, version, num_workers=2):
 
     start_time = datetime.now()
     for session_idx in range(num_multi_sessions):
+        if session_idx < 433:
+            continue
         ingest_conv(lme_df, version, session_idx, frame, num_workers=num_workers)
     end_time = datetime.now()
     elapsed_time = end_time - start_time
