@@ -138,3 +138,27 @@ def test_drop_creates_backup_and_cleans(mock_tree_text_memory):
     mock_tree_text_memory.dump.assert_called_once()
     mock_tree_text_memory._cleanup_old_backups.assert_called_once()
     mock_tree_text_memory.graph_store.drop_database.assert_called_once()
+
+
+def test_add_returns_ids(mock_tree_text_memory):
+    # Mock the memory_manager.add to return specific IDs
+    dummy_ids = ["id1", "id2"]
+    mock_tree_text_memory.memory_manager.add = MagicMock(return_value=dummy_ids)
+
+    mock_items = [
+        TextualMemoryItem(
+            id="id1",
+            memory="Memory 1",
+            metadata=TreeNodeTextualMemoryMetadata(updated_at=None),
+        ),
+        TextualMemoryItem(
+            id="id2",
+            memory="Memory 2",
+            metadata=TreeNodeTextualMemoryMetadata(updated_at=None),
+        ),
+    ]
+
+    result = mock_tree_text_memory.add(mock_items)
+
+    assert result == dummy_ids
+    mock_tree_text_memory.memory_manager.add.assert_called_once_with(mock_items)

@@ -212,7 +212,9 @@ class MemoryManager:
         merged_background = f"{original_meta.background}\n⟵MERGED⟶\n{source_meta.background}"
         merged_embedding = self.embedder.embed([merged_text])[0]
 
-        merged_confidence = float((original_meta.confidence + source_meta.confidence) / 2)
+        original_conf = original_meta.confidence or 0.0
+        source_conf = source_meta.confidence or 0.0
+        merged_confidence = float((original_conf + source_conf) / 2)
         merged_usage = list(set((original_meta.usage or []) + (source_meta.usage or [])))
 
         # Create new merged node
