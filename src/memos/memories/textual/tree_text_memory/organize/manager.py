@@ -49,15 +49,18 @@ class MemoryManager:
         )
         self._merged_threshold = merged_threshold
 
-    def add(self, memories: list[TextualMemoryItem]) -> None:
+    def add(self, memories: list[TextualMemoryItem]) -> list[str]:
         """
         Add new memories in parallel to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         """
+        added_ids: list[str] = []
+
         with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(self._process_memory, memory) for memory in memories]
+            futures = {executor.submit(self._process_memory, m): m for m in memories}
             for future in as_completed(futures):
                 try:
-                    future.result()
+                    ids = future.result()
+                    added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
 
@@ -72,6 +75,7 @@ class MemoryManager:
         )
 
         self._refresh_memory_size()
+        return added_ids
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         """
@@ -113,17 +117,23 @@ class MemoryManager:
         Process and add memory to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         This method runs asynchronously to process each memory item.
         """
+        ids = []
+
         # Add to WorkingMemory
-        self._add_memory_to_db(memory, "WorkingMemory")
+        working_id = self._add_memory_to_db(memory, "WorkingMemory")
+        ids.append(working_id)
 
         # Add to LongTermMemory and UserMemory
         if memory.metadata.memory_type in ["LongTermMemory", "UserMemory"]:
-            self._add_to_graph_memory(
+            added_id = self._add_to_graph_memory(
                 memory=memory,
                 memory_type=memory.metadata.memory_type,
             )
+            ids.append(added_id)
 
-    def _add_memory_to_db(self, memory: TextualMemoryItem, memory_type: str):
+        return ids
+
+    def _add_memory_to_db(self, memory: TextualMemoryItem, memory_type: str) -> str:
         """
         Add a single memory item to the graph store, with FIFO logic for WorkingMemory.
         """
@@ -135,6 +145,7 @@ class MemoryManager:
 
         # Insert node into graph
         self.graph_store.add_node(working_memory.id, working_memory.memory, metadata)
+        return working_memory.id
 
     def _add_to_graph_memory(self, memory: TextualMemoryItem, memory_type: str):
         """
@@ -159,7 +170,7 @@ class MemoryManager:
         )
 
         if similar_nodes and similar_nodes[0]["score"] > self._merged_threshold:
-            self._merge(memory, similar_nodes)
+            return self._merge(memory, similar_nodes)
         else:
             node_id = str(uuid.uuid4())
             # Step 2: Add new node to graph
@@ -172,8 +183,9 @@ class MemoryManager:
                     after_node=[node_id],
                 )
             )
+            return node_id
 
-    def _merge(self, source_node: TextualMemoryItem, similar_nodes: list[dict]) -> None:
+    def _merge(self, source_node: TextualMemoryItem, similar_nodes: list[dict]) -> str:
         """
         TODO: Add node traceability support by optionally preserving source nodes and linking them with MERGED_FROM edges.
 
@@ -243,6 +255,7 @@ class MemoryManager:
                 after_node=[merged_id],
             )
         )
+        return merged_id
 
     def _inherit_edges(self, from_id: str, to_id: str) -> None:
         """
