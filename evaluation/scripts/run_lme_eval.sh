@@ -2,9 +2,9 @@
 
 # Common parameters for all scripts
 LIB="memos-local"
-VERSION="071503"
+VERSION="071701"
 WORKERS=10
-TOPK=20
+TOPK=40
 
 # echo "Running lme_ingestion.py..."
 # CUDA_VISIBLE_DEVICES=0 python scripts/longmemeval/lme_ingestion.py --lib $LIB --version $VERSION --workers $WORKERS
@@ -34,10 +34,10 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Running lme_metrics.py..."
-CUDA_VISIBLE_DEVICES=0 python scripts/longmemeval/lme_metrics.py --lib $LIB --version $VERSION
+echo "Running lme_metric.py..."
+CUDA_VISIBLE_DEVICES=0 python scripts/longmemeval/lme_metric.py --lib $LIB --version $VERSION
 if [ $? -ne 0 ]; then
-    echo "Error running lme_metrics.py"
+    echo "Error running lme_metric.py"
     exit 1
 fi
 
