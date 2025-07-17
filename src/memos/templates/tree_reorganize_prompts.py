@@ -23,7 +23,7 @@ For example, write "The user felt exhausted..." instead of "I felt exhausted..."
 5. Summarize all child memory items into one memory item.
 
 Language rules:
-- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input memory items. **如果输入是中文，请输出中文**
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input memory items.  **如果输入是中文，请输出中文**
 - Keep `memory_type` in English.
 
 Return valid JSON:
@@ -34,6 +34,7 @@ Return valid JSON:
   "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
   "summary": <a natural paragraph summarizing the above memories from user's perspective, only contain information from the input `summary` fields, 120–200 words, same language as the input>
 }
+
 """
 
 LOCAL_SUBCLUSTER_PROMPT = """You are a memory organization expert.
