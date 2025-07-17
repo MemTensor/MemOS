@@ -31,13 +31,16 @@ class MOS(MOSCore):
             logger.info(PRO_MODE_WELCOME_MESSAGE)
         super().__init__(config)
 
-    def chat(self, query: str, user_id: str | None = None) -> str:
+    def chat(self, query: str, user_id: str | None = None, base_prompt: str | None = None) -> str:
         """
         Enhanced chat method with optional CoT (Chain of Thought) enhancement.
 
         Args:
             query (str): The user's query.
             user_id (str, optional): User ID for context.
+            base_prompt (str, optional): A custom base prompt to use for the chat.
+                It can be a template string with a `{memories}` placeholder.
+                If not provided, a default prompt is used.
 
         Returns:
             str: The response from the MOS.
@@ -46,12 +49,14 @@ class MOS(MOSCore):
 
         if not self.enable_cot:
             # Use the original chat method from core
-            return super().chat(query, user_id)
+            return super().chat(query, user_id, base_prompt=base_prompt)
 
         # Enhanced chat with CoT decomposition
-        return self._chat_with_cot_enhancement(query, user_id)
+        return self._chat_with_cot_enhancement(query, user_id, base_prompt=base_prompt)
 
-    def _chat_with_cot_enhancement(self, query: str, user_id: str | None = None) -> str:
+    def _chat_with_cot_enhancement(
+        self, query: str, user_id: str | None = None, base_prompt: str | None = None
+    ) -> str:
         """
         Chat with CoT enhancement for complex query decomposition.
         This method includes all the same validation and processing logic as the core chat method.
@@ -84,7 +89,7 @@ class MOS(MOSCore):
             # Check if the query is complex and needs decomposition
             if not decomposition_result.get("is_complex", False):
                 logger.info("🔍 [CoT] Query is not complex, using standard chat")
-                return super().chat(query, user_id)
+                return super().chat(query, user_id, base_prompt=base_prompt)
 
             sub_questions = decomposition_result.get("sub_questions", [])
             logger.info(f"🔍 [CoT] Decomposed into {len(sub_questions)} sub-questions")
@@ -93,7 +98,7 @@ class MOS(MOSCore):
             search_engine = self._get_search_engine_for_cot_with_validation(user_cube_ids)
             if not search_engine:
                 logger.warning("🔍 [CoT] No search engine available, using standard chat")
-                return super().chat(query, user_id)
+                return super().chat(query, user_id, base_prompt=base_prompt)
 
             # Step 4: Get answers for sub-questions
             logger.info("🔍 [CoT] Getting answers for sub-questions...")
@@ -115,6 +120,7 @@ class MOS(MOSCore):
                 chat_history=chat_history,
                 user_id=target_user_id,
                 search_engine=search_engine,
+                base_prompt=base_prompt,
             )
 
             # Step 6: Update chat history (same as core method)
@@ -149,7 +155,7 @@ class MOS(MOSCore):
         except Exception as e:
             logger.error(f"🔍 [CoT] Error in CoT enhancement: {e}")
             logger.info("🔍 [CoT] Falling back to standard chat")
-            return super().chat(query, user_id)
+            return super().chat(query, user_id, base_prompt=base_prompt)
 
     def _get_search_engine_for_cot_with_validation(
         self, user_cube_ids: list[str]
@@ -183,6 +189,7 @@ class MOS(MOSCore):
         chat_history: Any,
         user_id: str | None = None,
         search_engine: BaseTextMemory | None = None,
+        base_prompt: str | None = None,
     ) -> str:
         """
         Generate an enhanced response using sub-questions and their answers, with chat context.
@@ -193,6 +200,8 @@ class MOS(MOSCore):
             sub_answers (list[str]): List of answers to sub-questions.
             chat_history: The user's chat history.
             user_id (str, optional): User ID for context.
+            search_engine (BaseTextMemory, optional): Search engine for context retrieval.
+            base_prompt (str, optional): A custom base prompt for the chat.
 
         Returns:
             str: The enhanced response.
@@ -213,10 +222,10 @@ class MOS(MOSCore):
                     original_query, top_k=self.config.top_k, mode="fast"
                 )
             system_prompt = self._build_system_prompt(
-                search_memories
+                search_memories, base_prompt=base_prompt
             )  # Use the same system prompt builder
         else:
-            system_prompt = self._build_system_prompt()
+            system_prompt = self._build_system_prompt(base_prompt=base_prompt)
         current_messages = [
             {"role": "system", "content": system_prompt + SYNTHESIS_PROMPT.format(qa_text=qa_text)},
             *chat_history.chat_history,
@@ -261,7 +270,7 @@ class MOS(MOSCore):
         except Exception as e:
             logger.error(f"🔍 [CoT] Error generating enhanced response: {e}")
             # Fallback to standard chat
-            return super().chat(original_query, user_id)
+            return super().chat(original_query, user_id, base_prompt=base_prompt)
 
     @classmethod
     def cot_decompose(
