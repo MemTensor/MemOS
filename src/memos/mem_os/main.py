@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import os
 
 from typing import Any
 
@@ -7,6 +8,7 @@ from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_os.core import MOSCore
+from memos.mem_os.utils.default_config import get_default
 from memos.memories.textual.base import BaseTextMemory
 from memos.templates.mos_prompts import (
     COT_DECOMPOSE_PROMPT,
@@ -24,12 +26,83 @@ class MOS(MOSCore):
     This class maintains backward compatibility with the original MOS interface.
     """
 
-    def __init__(self, config: MOSConfig):
+    def __init__(self, config: MOSConfig | None = None):
+        """
+        Initialize MOS with optional automatic configuration.
+
+        Args:
+            config (MOSConfig, optional): MOS configuration. If None, will use automatic configuration from environment variables.
+        """
+        if config is None:
+            # Auto-configure if no config provided
+            config, default_cube = self._auto_configure()
+            self._auto_registered_cube = default_cube
+        else:
+            self._auto_registered_cube = None
+
         self.enable_cot = config.PRO_MODE
         if config.PRO_MODE:
             print(PRO_MODE_WELCOME_MESSAGE)
             logger.info(PRO_MODE_WELCOME_MESSAGE)
         super().__init__(config)
+
+        # Auto-register cube if one was created
+        if self._auto_registered_cube is not None:
+            self.register_mem_cube(self._auto_registered_cube)
+            logger.info(
+                f"Auto-registered default cube: {self._auto_registered_cube.config.cube_id}"
+            )
+
+    def _auto_configure(self, **kwargs) -> tuple[MOSConfig, Any]:
+        """
+        Automatically configure MOS with default settings.
+
+        Returns:
+            tuple[MOSConfig, Any]: MOS configuration and default MemCube
+        """
+        # Get configuration from environment variables
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai_api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+        text_mem_type = os.getenv("MOS_TEXT_MEM_TYPE", "general_text")
+
+        if not openai_api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+
+        logger.info(f"Auto-configuring MOS with text_mem_type: {text_mem_type}")
+        return get_default(
+            openai_api_key=openai_api_key,
+            openai_api_base=openai_api_base,
+            text_mem_type=text_mem_type,
+        )
+
+    @classmethod
+    def simple(cls) -> "MOS":
+        """
+        Create a MOS instance with automatic configuration from environment variables.
+
+        This is the simplest way to get started with MemOS.
+
+        Environment variables needed:
+        - OPENAI_API_KEY: Your OpenAI API key
+        - OPENAI_API_BASE: OpenAI API base URL (optional, defaults to "https://api.openai.com/v1")
+        - MOS_TEXT_MEM_TYPE: Text memory type (optional, defaults to "general_text")
+
+        Returns:
+            MOS: Configured MOS instance with auto-registered default cube
+
+        Example:
+            ```python
+            # Set environment variables
+            export OPENAI_API_KEY="your-api-key"
+            export MOS_TEXT_MEM_TYPE="general_text"
+
+            # Then use
+            memory = MOS.simple()
+            memory.add_memory("Hello world!")
+            response = memory.chat("What did I just say?")
+            ```
+        """
+        return cls()
 
     def chat(self, query: str, user_id: str | None = None, base_prompt: str | None = None) -> str:
         """
