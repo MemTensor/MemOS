@@ -595,6 +595,44 @@ class TestMOSChat:
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
     @patch("memos.mem_os.core.LLMFactory")
+    def test_chat_with_custom_base_prompt(
+        self,
+        mock_llm_factory,
+        mock_reader_factory,
+        mock_user_manager_class,
+        mock_config,
+        mock_llm,
+        mock_mem_reader,
+        mock_user_manager,
+        mock_mem_cube,
+    ):
+        """Test chat functionality with a custom base prompt."""
+        # Setup mocks
+        mock_llm_factory.from_config.return_value = mock_llm
+        mock_reader_factory.from_config.return_value = mock_mem_reader
+        mock_user_manager_class.return_value = mock_user_manager
+
+        mos = MOSCore(MOSConfig(**mock_config))
+        mos.mem_cubes["test_cube_1"] = mock_mem_cube
+        mos.mem_cubes["test_cube_2"] = mock_mem_cube
+
+        custom_prompt = "You are a pirate. Answer as such. User memories: {memories}"
+        mos.chat("What do I like?", base_prompt=custom_prompt)
+
+        # Verify that the system prompt passed to the LLM is the custom one
+        mock_llm.generate.assert_called_once()
+        call_args = mock_llm.generate.call_args[0]
+        messages = call_args[0]
+        system_prompt = messages[0]["content"]
+
+        assert "You are a pirate." in system_prompt
+        assert "You are a knowledgeable and helpful AI assistant." not in system_prompt
+        assert "User memories:" in system_prompt
+        assert "I like playing football" in system_prompt  # Check if memory is interpolated
+
+    @patch("memos.mem_os.core.UserManager")
+    @patch("memos.mem_os.core.MemReaderFactory")
+    @patch("memos.mem_os.core.LLMFactory")
     def test_chat_without_memories(
         self,
         mock_llm_factory,
@@ -662,6 +700,60 @@ class TestMOSChat:
 
         assert len(mos.chat_history_manager["test_user"].chat_history) == 0
         assert mos.chat_history_manager["test_user"].user_id == "test_user"
+
+
+class TestMOSSystemPrompt:
+    """Test the _build_system_prompt method in MOSCore."""
+
+    @pytest.fixture
+    def mos_core_instance(self, mock_config, mock_user_manager):
+        """Fixture to create a MOSCore instance for testing the prompt builder."""
+        with patch("memos.mem_os.core.LLMFactory"), patch("memos.mem_os.core.MemReaderFactory"):
+            return MOSCore(MOSConfig(**mock_config), user_manager=mock_user_manager)
+
+    def test_build_prompt_with_template_and_memories(self, mos_core_instance):
+        """Test prompt with a template and memories."""
+        base_prompt = "You are a sales agent. Here are past interactions: {memories}"
+        memories = [TextualMemoryItem(memory="User likes blue cars.")]
+        prompt = mos_core_instance._build_system_prompt(memories, base_prompt)
+        assert "You are a sales agent." in prompt
+        assert "1. User likes blue cars." in prompt
+        assert "{memories}" not in prompt
+
+    def test_build_prompt_with_template_no_memories(self, mos_core_instance):
+        """Test prompt with a template but no memories."""
+        base_prompt = "You are a sales agent. Here are past interactions: {memories}"
+        prompt = mos_core_instance._build_system_prompt(None, base_prompt)
+        assert "You are a sales agent." in prompt
+        assert "Here are past interactions:" in prompt
+        # The placeholder should be replaced with an empty string
+        assert "{memories}" not in prompt
+        # Check that the output is clean
+        assert prompt.strip() == "You are a sales agent. Here are past interactions:"
+        assert "## Memories:" not in prompt
+
+    def test_build_prompt_no_template_with_memories(self, mos_core_instance):
+        """Test prompt without a template but with memories (backward compatibility)."""
+        base_prompt = "You are a helpful assistant."
+        memories = [TextualMemoryItem(memory="User is a developer.")]
+        prompt = mos_core_instance._build_system_prompt(memories, base_prompt)
+        assert "You are a helpful assistant." in prompt
+        assert "## Memories:" in prompt
+        assert "1. User is a developer." in prompt
+
+    def test_build_prompt_default_with_memories(self, mos_core_instance):
+        """Test default prompt with memories."""
+        memories = [TextualMemoryItem(memory="User lives in New York.")]
+        prompt = mos_core_instance._build_system_prompt(memories)
+        assert "You are a knowledgeable and helpful AI assistant." in prompt
+        assert "## Memories:" in prompt
+        assert "1. User lives in New York." in prompt
+
+    def test_build_prompt_default_no_memories(self, mos_core_instance):
+        """Test default prompt without any memories."""
+        prompt = mos_core_instance._build_system_prompt()
+        assert "You are a knowledgeable and helpful AI assistant." in prompt
+        assert "## Memories:" not in prompt
 
 
 class TestMOSErrorHandling:
