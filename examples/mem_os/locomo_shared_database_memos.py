@@ -99,7 +99,7 @@ def get_user_configs(db_name, user_name):
                             "base_url": openapi_config["api_base"],
                         },
                     },
-                    "reorganize": False,
+                    "reorganize": True,
                 },
             },
         }
