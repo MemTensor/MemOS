@@ -1,7 +1,7 @@
 import concurrent.futures
 import copy
 import json
-import re
+
 from abc import ABC
 from typing import Any
 
@@ -16,8 +16,8 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
-    SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+    SIMPLE_STRUCT_MEM_READER_PROMPT,
 )
 
 

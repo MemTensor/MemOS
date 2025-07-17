@@ -210,12 +210,16 @@ class MOSCore:
                 documents.append(str(file_path))
         return documents
 
-    def chat(self, query: str, user_id: str | None = None) -> str:
+    def chat(self, query: str, user_id: str | None = None, base_prompt: str | None = None) -> str:
         """
         Chat with the MOS.
 
         Args:
             query (str): The user's query.
+            user_id (str, optional): The user ID for the chat session. Defaults to the user ID from the config.
+            base_prompt (str, optional): A custom base prompt to use for the chat.
+                It can be a template string with a `{memories}` placeholder.
+                If not provided, a default prompt is used.
 
         Returns:
             str: The response from the MOS.
@@ -251,9 +255,9 @@ class MOSCore:
                 memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
                 memories_all.extend(memories)
             logger.info(f"🧠 [Memory] Searched memories:\n{self._str_memories(memories_all)}\n")
-            system_prompt = self._build_system_prompt(memories_all)
+            system_prompt = self._build_system_prompt(memories_all, base_prompt=base_prompt)
         else:
-            system_prompt = self._build_system_prompt()
+            system_prompt = self._build_system_prompt(base_prompt=base_prompt)
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
@@ -302,18 +306,22 @@ class MOSCore:
         return response
 
     def _build_system_prompt(
-        self, memories: list[TextualMemoryItem] | list[str] | None = None
+        self,
+        memories: list[TextualMemoryItem] | list[str] | None = None,
+        base_prompt: str | None = None,
     ) -> str:
         """Build system prompt with optional memories context."""
-        base_prompt = (
-            "You are a knowledgeable and helpful AI assistant. "
-            "You have access to conversation memories that help you provide more personalized responses. "
-            "Use the memories to understand the user's context, preferences, and past interactions. "
-            "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
-        )
+        if base_prompt is None:
+            base_prompt = (
+                "You are a knowledgeable and helpful AI assistant. "
+                "You have access to conversation memories that help you provide more personalized responses. "
+                "Use the memories to understand the user's context, preferences, and past interactions. "
+                "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
+            )
 
+        memory_context = ""
         if memories:
-            memory_context = "\n\n## Memories:\n"
+            memory_list = []
             for i, memory in enumerate(memories, 1):
                 if isinstance(memory, TextualMemoryItem):
                     text_memory = memory.memory
@@ -321,8 +329,15 @@ class MOSCore:
                     if not isinstance(memory, str):
                         logger.error("Unexpected memory type.")
                     text_memory = memory
-                memory_context += f"{i}. {text_memory}\n"
-            return base_prompt + memory_context
+                memory_list.append(f"{i}. {text_memory}")
+            memory_context = "\n".join(memory_list)
+
+        if "{memories}" in base_prompt:
+            return base_prompt.format(memories=memory_context)
+        elif memories:
+            # For backward compatibility, append memories if no placeholder is found
+            memory_context_with_header = "\n\n## Memories:\n" + memory_context
+            return base_prompt + memory_context_with_header
         return base_prompt
 
     def _str_memories(
