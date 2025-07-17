@@ -47,6 +47,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
         cache: 'poetry'
 
+    # Dependency and building tests
     - name: Install main dependencies
       run: |
         poetry install --no-root --no-interaction
@@ -76,6 +77,7 @@ jobs:
         pip install dist/*.tar.gz
         pip uninstall -y memoryos
 
+    # Ruff and PyTest checks
     - name: Install all dependencies
       run: |
         poetry install --no-interaction --extras all --with test
