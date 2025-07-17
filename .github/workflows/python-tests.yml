@@ -46,13 +46,39 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'poetry'
-    - name: Install dependencies
+
+    - name: Install main dependencies
       run: |
-        poetry install --no-interaction --extras all --with dev --with test
-    - name: Test with ruff
+        poetry install --no-root --no-interaction
+    - name: Check no top-level optional dependencies
+      run: |
+        poetry run python scripts/check_dependencies.py
+    - name: Build sdist and wheel
+      run: poetry build
+    - name: Test wheel installation
+      run: |
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          for f in dist/*.whl; do pip install "$f"; done
+        else
+          pip install dist/*.whl
+        fi
+        pip uninstall -y memoryos
+    - name: Test sdist installation
+      run: |
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          for f in dist/*.tar.gz; do pip install "$f"; done
+        else
+          pip install dist/*.tar.gz
+        fi
+        pip uninstall -y memoryos
+
+    - name: Install all dependencies
+      run: |
+        poetry install --no-interaction --extras all --with test
+    - name: Ruff checks
       run: |
         poetry run ruff check
         poetry run ruff format --check
-    - name: Test with pytest
+    - name: PyTest unit tests
       run: |
         poetry run pytest tests -vv
