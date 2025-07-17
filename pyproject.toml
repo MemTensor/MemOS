@@ -1,14 +1,22 @@
-# Poetry related
-
-[tool.poetry]
+[project]
 name = "MemoryOS"
 version = "0.2.0"
 description = "Intelligence Begins with Memory"
-license = "Apache-2.0"
-authors = ["MemTensor <lizy@memtensor.cn>"]
+license = {text = "Apache-2.0"}
+authors = [{name = "MemTensor", email = "lizy@memtensor.cn"}]
 readme = "README.md"
-repository = "https://github.com/MemTensor/MemOS"
+requires-python = ">=3.10"
 keywords = ["memory", "llm", "language model", "memoryOS", "agent"]
+
+[project.urls]
+homepage = "https://memos.openmem.net/"
+repository = "https://github.com/MemTensor/MemOS"
+documentation = "https://memos-docs.openmem.net/home/overview/"
+"Bug Tracker" = "https://github.com/MemTensor/MemOS/issues"
+
+# Poetry related
+
+[tool.poetry]
 packages = [{include = "memos", from = "src"}]
 
 [tool.poetry.dependencies]

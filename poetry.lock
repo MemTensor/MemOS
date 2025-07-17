@@ -5502,4 +5502,4 @@ tree-mem = ["neo4j", "schedule", "scikit-learn"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "09822b5a4c16cd0de1522734e4e5fa196bb3b02c7bc4302047283c18914a1b0e"
+content-hash = "82876beb46dc709cc724a15435bd949906d4f921b1eea1fef66577b555de3519"
