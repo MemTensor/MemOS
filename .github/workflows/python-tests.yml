@@ -58,7 +58,7 @@ jobs:
     - name: Test wheel installation on Windows
       if: startsWith(matrix.os, 'windows')
       run: |
-        for f in dist/*.whl; do pip install "$f"; done
+        Get-ChildItem dist/*.whl | ForEach-Object { pip install $_.FullName }
         pip uninstall -y memoryos
     - name: Test wheel installation on Linux / Mac
       if: ${{ !startsWith(matrix.os, 'windows') }}
@@ -68,7 +68,7 @@ jobs:
     - name: Test sdist installation on Windows
       if: startsWith(matrix.os, 'windows')
       run: |
-        for f in dist/*.tar.gz; do pip install "$f"; done
+        Get-ChildItem dist/*.tar.gz | ForEach-Object { pip install $_.FullName }
         pip uninstall -y memoryos
     - name: Test sdist installation on Linux / Mac
       if: ${{ !startsWith(matrix.os, 'windows') }}
