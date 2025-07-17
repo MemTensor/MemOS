@@ -385,7 +385,7 @@ class GraphStructureReorganizer:
         return result_subclusters
 
     @require_python_package(
-        imoport_name="sklearn",
+        import_name="sklearn",
         install_command="pip install scikit-learn",
         install_link="https://scikit-learn.org/stable/install.html",
     )
