@@ -37,6 +37,18 @@ class QwenLLMConfig(BaseLLMConfig):
     model_name_or_path: str = Field(..., description="Model name for Qwen, e.g., 'qwen-plus'")
 
 
+class DeepSeekLLMConfig(BaseLLMConfig):
+    api_key: str = Field(..., description="API key for DeepSeek")
+    api_base: str = Field(
+        default="https://api.deepseek.com",
+        description="Base URL for DeepSeek OpenAI-compatible API",
+    )
+    extra_body: Any = Field(default=None, description="Extra options for API")
+    model_name_or_path: str = Field(
+        ..., description="Model name: 'deepseek-chat' or 'deepseek-reasoner'"
+    )
+
+
 class AzureLLMConfig(BaseLLMConfig):
     base_url: str = Field(
         default="https://api.openai.azure.com/",
@@ -89,6 +101,7 @@ class LLMConfigFactory(BaseConfig):
         "vllm": VLLMLLMConfig,
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
         "qwen": QwenLLMConfig,
+        "deepseek": DeepSeekLLMConfig,
     }
 
     @field_validator("backend")

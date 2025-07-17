@@ -1,6 +1,4 @@
-from collections.abc import Generator
-
-from memos.configs.llm import QwenLLMConfig
+from memos.configs.llm import DeepSeekLLMConfig
 from memos.llms.openai import OpenAILLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
@@ -10,31 +8,31 @@ from memos.types import MessageList
 logger = get_logger(__name__)
 
 
-class QwenLLM(OpenAILLM):
-    """Qwen (DashScope) LLM class via OpenAI-compatible API."""
+class DeepSeekLLM(OpenAILLM):
+    """DeepSeek LLM via OpenAI-compatible API."""
 
-    def __init__(self, config: QwenLLMConfig):
+    def __init__(self, config: DeepSeekLLMConfig):
         super().__init__(config)
 
     def generate(self, messages: MessageList) -> str:
-        """Generate a response from Qwen LLM."""
+        """Generate a response from DeepSeek."""
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
             messages=messages,
-            extra_body=self.config.extra_body,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             top_p=self.config.top_p,
+            extra_body=self.config.extra_body,
         )
-        logger.info(f"Response from Qwen: {response.model_dump_json()}")
+        logger.info(f"Response from DeepSeek: {response.model_dump_json()}")
         response_content = response.choices[0].message.content
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         else:
             return response_content
 
-    def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
-        """Stream response from Qwen LLM."""
+    def generate_stream(self, messages: MessageList, **kwargs):
+        """Stream response from DeepSeek."""
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
             messages=messages,
@@ -44,20 +42,15 @@ class QwenLLM(OpenAILLM):
             top_p=self.config.top_p,
             extra_body=self.config.extra_body,
         )
-
-        reasoning_started = False
+        # Streaming chunks of text
+        reasoning_parts = ""
+        answer_parts = ""
         for chunk in response:
             delta = chunk.choices[0].delta
-
-            # Some models may have separate `reasoning_content` vs `content`
-            # For Qwen (DashScope), likely only `content` is used
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                if not reasoning_started and not self.config.remove_think_prefix:
-                    yield "<think>"
-                    reasoning_started = True
+                reasoning_parts += delta.reasoning_content
                 yield delta.reasoning_content
-            elif hasattr(delta, "content") and delta.content:
-                if reasoning_started and not self.config.remove_think_prefix:
-                    yield "</think>"
-                    reasoning_started = False
+
+            if hasattr(delta, "content") and delta.content:
+                answer_parts += delta.content
                 yield delta.content

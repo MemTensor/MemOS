@@ -2,6 +2,7 @@ from typing import Any, ClassVar
 
 from memos.configs.llm import LLMConfigFactory
 from memos.llms.base import BaseLLM
+from memos.llms.deepseek import DeepSeekLLM
 from memos.llms.hf import HFLLM
 from memos.llms.hf_singleton import HFSingletonLLM
 from memos.llms.ollama import OllamaLLM
@@ -21,6 +22,7 @@ class LLMFactory(BaseLLM):
         "huggingface_singleton": HFSingletonLLM,  # Add singleton version
         "vllm": VLLMLLM,
         "qwen": QwenLLM,
+        "deepseek": DeepSeekLLM,
     }
 
     @classmethod

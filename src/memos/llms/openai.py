@@ -1,3 +1,5 @@
+from collections.abc import Generator
+
 import openai
 
 from memos.configs.llm import AzureLLMConfig, OpenAILLMConfig
@@ -61,3 +63,6 @@ class AzureLLM(BaseLLM):
             return remove_thinking_tags(response_content)
         else:
             return response_content
+
+    def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
+        raise NotImplementedError
