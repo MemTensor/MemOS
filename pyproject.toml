@@ -9,8 +9,6 @@ requires-python = ">=3.10"
 keywords = ["memory", "llm", "language model", "memoryOS", "agent"]
 
 [project.urls]
-Repository = "https://github.com/MemTensor/MemOS"
-[project.urls]
 homepage = "https://memos.openmem.net/"
 repository = "https://github.com/MemTensor/MemOS"
 documentation = "https://memos-docs.openmem.net/home/overview/"
