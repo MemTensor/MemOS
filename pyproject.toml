@@ -12,30 +12,57 @@ keywords = ["memory", "llm", "language model", "memoryOS", "agent"]
 packages = [{include = "memos", from = "src"}]
 
 [tool.poetry.dependencies]
+
+# Core dependencies. These should not be optional.
 python = "^3.10"
 openai = "^1.77.0"
 ollama = "^0.4.8"
-qdrant-client = "^1.14.2"
+tenacity = "^9.1.2"  # Error handling and retrying library
 transformers = "^4.51.3"
-markitdown = {extras = ["docx", "pdf", "pptx", "xls", "xlsx"], version = "^0.1.1"}
-chonkie = "^1.0.7"
-tenacity = "^9.1.2"
-neo4j = "^5.28.1"
-accelerate = "^1.7.0"
 fastapi = {extras = ["all"], version = "^0.115.12"}
-sentence-transformers = "^4.1.0"
-sqlalchemy = "^2.0.41"
-redis = "^6.2.0"
-pika = "^1.3.2"
-schedule = "^1.2.2"
-volcengine-python-sdk = "^4.0.4"
+sqlalchemy = "^2.0.41"  # SQL toolkit
+
+# GeneralTextualMemory dependencies
+qdrant-client = {version = "^1.14.2", optional = true}  # Vector database
+
+# TreeTextualMemory dependencies
+neo4j = {version = "^5.28.1", optional = true}  # Graph database
+schedule = {version = "^1.2.2", optional = true}  # Task scheduling library
+scikit-learn = {version = "^1.7.0", optional = true}  # Machine learning library
+
+# MemScheduler dependencies
+redis = {version = "^6.2.0", optional = true}  # Key-value store
+pika = {version = "^1.3.2", optional = true}  # RabbitMQ client for Python
+
+[tool.poetry.extras]
+general-mem = ["qdrant-client"]
+tree-mem = ["neo4j", "schedule", "scikit-learn"]
+mem-scheduler = ["redis", "pika"]
+all = [
+    "qdrant-client",
+    "neo4j",
+    "schedule",
+    "scikit-learn",
+    "redis",
+    "pika",
+]
 
 [tool.poetry.group.dev]
 optional = false
 
 [tool.poetry.group.dev.dependencies]
+# Core development dependencies
 pre-commit = "^4.2.0"
 ruff = "^0.11.8"
+
+# Hard-to-avoid dependencies
+torch = "^2.0.0"  # CPU-version of PyTorch, only used for testing
+
+# Infrequently used dependencies
+markitdown = {extras = ["docx", "pdf", "pptx", "xls", "xlsx"], version = "^0.1.1"}  # MarkItDown parser for various file formats
+chonkie = "^1.0.7"  # Sentence chunking library
+sentence-transformers = "^4.1.0"  # Text Embedding
+volcengine-python-sdk = "^4.0.4"  # ByteDance's AI Service SDK (namely, Volcano Ark)
 
 [tool.poetry.group.test]
 optional = false
