@@ -69,6 +69,11 @@ response = llm.generate(messages)
 print("Scenario 3:", response)
 print("==" * 20)
 
+print("Scenario 3:\n")
+for chunk in llm.generate_stream(messages):
+    print(chunk, end="")
+print("==" * 20)
+
 
 # Scenario 4: Using LLMFactory with Huggingface Models
 

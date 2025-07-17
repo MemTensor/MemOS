@@ -36,6 +36,39 @@ class OpenAILLM(BaseLLM):
         else:
             return response_content
 
+    def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
+        """Stream response from OpenAI LLM with optional reasoning support."""
+        response = self.client.chat.completions.create(
+            model=self.config.model_name_or_path,
+            messages=messages,
+            stream=True,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            top_p=self.config.top_p,
+            extra_body=self.config.extra_body,
+        )
+
+        reasoning_started = False
+
+        for chunk in response:
+            delta = chunk.choices[0].delta
+
+            # Support for custom 'reasoning_content' (if present in OpenAI-compatible models like Qwen)
+            if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+                if not reasoning_started and not self.config.remove_think_prefix:
+                    yield "<think>"
+                    reasoning_started = True
+                yield delta.reasoning_content
+            elif hasattr(delta, "content") and delta.content:
+                if reasoning_started and not self.config.remove_think_prefix:
+                    yield "</think>"
+                    reasoning_started = False
+                yield delta.content
+
+        # Ensure we close the <think> block if not already done
+        if reasoning_started and not self.config.remove_think_prefix:
+            yield "</think>"
+
 
 class AzureLLM(BaseLLM):
     """Azure OpenAI LLM class."""
