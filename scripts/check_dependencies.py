@@ -52,7 +52,7 @@ def main():
 
     for py_file in py_files:
         try:
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(py_file))
         except SyntaxError as e:
             print(f"❌ Syntax error in {py_file}: {e}")
