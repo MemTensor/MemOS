@@ -118,7 +118,7 @@ description = "Screen-scraping library"
 optional = true
 python-versions = ">=3.7.0"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "beautifulsoup4-4.13.4-py3-none-any.whl", hash = "sha256:9bbbb14bfde9d79f38b8cd5f8c7c85f4b8f2523190ebed90e950a8dea4cb1c4b"},
     {file = "beautifulsoup4-4.13.4.tar.gz", hash = "sha256:dbb3c4e1ceae6aefebdaf2423247260cd062430a410e38c66f2baa50a8437195"},
@@ -245,7 +245,7 @@ files = [
     {file = "cffi-1.17.1-cp39-cp39-win_amd64.whl", hash = "sha256:d016c76bdd850f3c626af19b0542c9677ba156e4ee4fccfdd7848803533ef662"},
     {file = "cffi-1.17.1.tar.gz", hash = "sha256:1c39c6016c32bc48dd54561950ebd6836e1670f2ae46128f67cf49e789c52824"},
 ]
-markers = {main = "platform_python_implementation != \"PyPy\" and (extra == \"markitdown\" or extra == \"all\")", eval = "platform_python_implementation == \"PyPy\""}
+markers = {main = "platform_python_implementation != \"PyPy\" and (extra == \"mem-reader\" or extra == \"all\")", eval = "platform_python_implementation == \"PyPy\""}
 
 [package.dependencies]
 pycparser = "*"
@@ -371,7 +371,7 @@ description = "🦛 CHONK your texts with Chonkie ✨ - The no-nonsense chunking
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"chonkie\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "chonkie-1.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:8de0021904b952f879a35b6d1d498b1a260dbac3c68b4b445dc4bfebee7ed975"},
     {file = "chonkie-1.1.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:75138736da5bafbee8c47b5c538904e928ef217254c635b561ca9740472ede18"},
@@ -434,7 +434,7 @@ description = "Create data objects"
 optional = true
 python-versions = ">=3.5"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "cobble-0.1.4-py3-none-any.whl", hash = "sha256:36c91b1655e599fd428e2b95fdd5f0da1ca2e9f1abb0bc871dec21a0e78a2b44"},
     {file = "cobble-0.1.4.tar.gz", hash = "sha256:de38be1539992c8a06e569630717c485a5f91be2192c461ea2b220607dfa78aa"},
@@ -460,7 +460,7 @@ description = "Colored terminal output for Python's logging module"
 optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "coloredlogs-15.0.1-py2.py3-none-any.whl", hash = "sha256:612ee75c546f53e92e70049c9dbfcc18c935a2b9a53b66085ce9ef6a6e5c0934"},
     {file = "coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0"},
@@ -556,7 +556,7 @@ description = "cryptography is a package which provides cryptographic recipes an
 optional = true
 python-versions = "!=3.9.0,!=3.9.1,>=3.7"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "cryptography-45.0.5-cp311-abi3-macosx_10_9_universal2.whl", hash = "sha256:101ee65078f6dd3e5a028d4f19c07ffa4dd22cce6a20eaa160f8b5219911e7d8"},
     {file = "cryptography-45.0.5-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:3a264aae5f7fbb089dbc01e0242d3b67dffe3e6292e1f5182122bdf58e65215d"},
@@ -633,7 +633,7 @@ description = "XML bomb protection for Python stdlib modules"
 optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61"},
     {file = "defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69"},
@@ -739,7 +739,7 @@ description = "An implementation of lxml.xmlfile for the standard library"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa"},
     {file = "et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54"},
@@ -766,19 +766,19 @@ test = ["pytest (>=6)"]
 
 [[package]]
 name = "fastapi"
-version = "0.116.1"
+version = "0.115.14"
 description = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "fastapi-0.116.1-py3-none-any.whl", hash = "sha256:c46ac7c312df840f0c9e220f7964bada936781bc4e2e6eb71f1c4d7553786565"},
-    {file = "fastapi-0.116.1.tar.gz", hash = "sha256:ed52cbf946abfd70c5a0dccb24673f0670deeb517a88b3544d03c2a6bf283143"},
+    {file = "fastapi-0.115.14-py3-none-any.whl", hash = "sha256:6c0c8bf9420bd58f565e585036d971872472b4f7d3f6c73b698e10cffdefb3ca"},
+    {file = "fastapi-0.115.14.tar.gz", hash = "sha256:b1de15cdc1c499a4da47914db35d0e4ef8f1ce62b624e94e0e5824421df99739"},
 ]
 
 [package.dependencies]
 email-validator = {version = ">=2.0.0", optional = true, markers = "extra == \"all\""}
-fastapi-cli = {version = ">=0.0.8", extras = ["standard"], optional = true, markers = "extra == \"all\""}
+fastapi-cli = {version = ">=0.0.5", extras = ["standard"], optional = true, markers = "extra == \"all\""}
 httpx = {version = ">=0.23.0", optional = true, markers = "extra == \"all\""}
 itsdangerous = {version = ">=1.1.0", optional = true, markers = "extra == \"all\""}
 jinja2 = {version = ">=3.1.5", optional = true, markers = "extra == \"all\""}
@@ -788,15 +788,14 @@ pydantic-extra-types = {version = ">=2.0.0", optional = true, markers = "extra =
 pydantic-settings = {version = ">=2.0.0", optional = true, markers = "extra == \"all\""}
 python-multipart = {version = ">=0.0.18", optional = true, markers = "extra == \"all\""}
 pyyaml = {version = ">=5.3.1", optional = true, markers = "extra == \"all\""}
-starlette = ">=0.40.0,<0.48.0"
+starlette = ">=0.40.0,<0.47.0"
 typing-extensions = ">=4.8.0"
 ujson = {version = ">=4.0.1,<4.0.2 || >4.0.2,<4.1.0 || >4.1.0,<4.2.0 || >4.2.0,<4.3.0 || >4.3.0,<5.0.0 || >5.0.0,<5.1.0 || >5.1.0", optional = true, markers = "extra == \"all\""}
 uvicorn = {version = ">=0.12.0", extras = ["standard"], optional = true, markers = "extra == \"all\""}
 
 [package.extras]
-all = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.8)", "httpx (>=0.23.0)", "itsdangerous (>=1.1.0)", "jinja2 (>=3.1.5)", "orjson (>=3.2.1)", "pydantic-extra-types (>=2.0.0)", "pydantic-settings (>=2.0.0)", "python-multipart (>=0.0.18)", "pyyaml (>=5.3.1)", "ujson (>=4.0.1,!=4.0.2,!=4.1.0,!=4.2.0,!=4.3.0,!=5.0.0,!=5.1.0)", "uvicorn[standard] (>=0.12.0)"]
-standard = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.8)", "httpx (>=0.23.0)", "jinja2 (>=3.1.5)", "python-multipart (>=0.0.18)", "uvicorn[standard] (>=0.12.0)"]
-standard-no-fastapi-cloud-cli = ["email-validator (>=2.0.0)", "fastapi-cli[standard-no-fastapi-cloud-cli] (>=0.0.8)", "httpx (>=0.23.0)", "jinja2 (>=3.1.5)", "python-multipart (>=0.0.18)", "uvicorn[standard] (>=0.12.0)"]
+all = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.5)", "httpx (>=0.23.0)", "itsdangerous (>=1.1.0)", "jinja2 (>=3.1.5)", "orjson (>=3.2.1)", "pydantic-extra-types (>=2.0.0)", "pydantic-settings (>=2.0.0)", "python-multipart (>=0.0.18)", "pyyaml (>=5.3.1)", "ujson (>=4.0.1,!=4.0.2,!=4.1.0,!=4.2.0,!=4.3.0,!=5.0.0,!=5.1.0)", "uvicorn[standard] (>=0.12.0)"]
+standard = ["email-validator (>=2.0.0)", "fastapi-cli[standard] (>=0.0.5)", "httpx (>=0.23.0)", "jinja2 (>=3.1.5)", "python-multipart (>=0.0.18)", "uvicorn[standard] (>=0.12.0)"]
 
 [[package]]
 name = "fastapi-cli"
@@ -868,7 +867,7 @@ description = "The FlatBuffers serialization format for Python"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "flatbuffers-25.2.10-py2.py3-none-any.whl", hash = "sha256:ebba5f4d5ea615af3f7fd70fc310636fbb2bbd1f566ac0a23d98dd412de50051"},
     {file = "flatbuffers-25.2.10.tar.gz", hash = "sha256:97e451377a41262f8d9bd4295cc836133415cc03d8cb966410a4af92eb00d26e"},
@@ -1108,7 +1107,7 @@ files = [
     {file = "grpcio-1.73.1-cp39-cp39-win_amd64.whl", hash = "sha256:42f0660bce31b745eb9d23f094a332d31f210dcadd0fc8e5be7e4c62a87ce86b"},
     {file = "grpcio-1.73.1.tar.gz", hash = "sha256:7fce2cd1c0c1116cf3850564ebfc3264fba75d3c74a7414373f1238ea365ef87"},
 ]
-markers = {main = "extra == \"general-mem\" or extra == \"all\""}
+markers = {main = "extra == \"all\""}
 
 [package.extras]
 protobuf = ["grpcio-tools (>=1.73.1)"]
@@ -1136,7 +1135,7 @@ files = [
     {file = "h2-4.2.0-py3-none-any.whl", hash = "sha256:479a53ad425bb29af087f3458a61d30780bc818e4ebcf01f0b536ba916462ed0"},
     {file = "h2-4.2.0.tar.gz", hash = "sha256:c8a52129695e88b1a0578d8d2cc6842bbd79128ac685463b887ee278126ad01f"},
 ]
-markers = {main = "extra == \"general-mem\" or extra == \"all\""}
+markers = {main = "extra == \"all\""}
 
 [package.dependencies]
 hpack = ">=4.1,<5"
@@ -1175,7 +1174,7 @@ files = [
     {file = "hpack-4.1.0-py3-none-any.whl", hash = "sha256:157ac792668d995c657d93111f46b4535ed114f0c9c8d672271bbec7eae1b496"},
     {file = "hpack-4.1.0.tar.gz", hash = "sha256:ec5eca154f7056aa06f196a557655c5b009b382873ac8d1e66e79e87535f1dca"},
 ]
-markers = {main = "extra == \"general-mem\" or extra == \"all\""}
+markers = {main = "extra == \"all\""}
 
 [[package]]
 name = "httpcore"
@@ -1327,7 +1326,7 @@ description = "Human friendly output for text interfaces using Python"
 optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "humanfriendly-10.0-py2.py3-none-any.whl", hash = "sha256:1697e1a8a8f550fd43c2865cd84542fc175a61dcb779b6fee18cf6b6ccba1477"},
     {file = "humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc"},
@@ -1347,7 +1346,7 @@ files = [
     {file = "hyperframe-6.1.0-py3-none-any.whl", hash = "sha256:b03380493a519fce58ea5af42e4a42317bf9bd425596f7a0835ffce80f1a42e5"},
     {file = "hyperframe-6.1.0.tar.gz", hash = "sha256:f630908a00854a7adeabd6382b43923a4c4cd4b821fcb527e6ab9e15382a3b08"},
 ]
-markers = {main = "extra == \"general-mem\" or extra == \"all\""}
+markers = {main = "extra == \"all\""}
 
 [[package]]
 name = "identify"
@@ -1519,7 +1518,7 @@ files = [
     {file = "joblib-1.5.1-py3-none-any.whl", hash = "sha256:4719a31f054c7d766948dcd83e9613686b27114f190f717cec7eaa2084f8a74a"},
     {file = "joblib-1.5.1.tar.gz", hash = "sha256:f4f86e351f39fe3d0d32a9f2c3d8af1ee4cec285aafcb27003dda5205576b444"},
 ]
-markers = {main = "extra == \"tree-mem\" or extra == \"all\" or extra == \"sentence-transformers\""}
+markers = {main = "extra == \"tree-mem\" or extra == \"all\""}
 
 [[package]]
 name = "jsonpatch"
@@ -1873,7 +1872,7 @@ description = "Powerful and Pythonic XML processing library combining libxml2/li
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "lxml-6.0.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:35bc626eec405f745199200ccb5c6b36f202675d204aa29bb52e27ba2b71dea8"},
     {file = "lxml-6.0.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:246b40f8a4aec341cbbf52617cad8ab7c888d944bfe12a6abd2b1f6cfb6f6082"},
@@ -1984,7 +1983,7 @@ description = "A tool to determine the content type of a file with deep learning
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "magika-0.6.2-py3-none-any.whl", hash = "sha256:5ef72fbc07723029b3684ef81454bc224ac5f60986aa0fc5a28f4456eebcb5b2"},
     {file = "magika-0.6.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:9109309328a1553886c8ff36c2ee9a5e9cfd36893ad81b65bf61a57debdd9d0e"},
@@ -2010,7 +2009,7 @@ description = "Convert Word documents from docx to simple and clean HTML and Mar
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "mammoth-1.9.1-py2.py3-none-any.whl", hash = "sha256:f0569bd640cee6c77a07e7c75c5dc10d745dc4dc95d530cfcbb0a5d9536d636c"},
     {file = "mammoth-1.9.1.tar.gz", hash = "sha256:7924254ab8f03efe55fadc0fd5f7828db831190eb2679d63cb4372873e71c572"},
@@ -2051,7 +2050,7 @@ description = "Convert HTML to markdown."
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "markdownify-1.1.0-py3-none-any.whl", hash = "sha256:32a5a08e9af02c8a6528942224c91b933b4bd2c7d078f9012943776fc313eeef"},
     {file = "markdownify-1.1.0.tar.gz", hash = "sha256:449c0bbbf1401c5112379619524f33b63490a8fa479456d41de9dc9e37560ebd"},
@@ -2068,7 +2067,7 @@ description = "Utility tool for converting various files to Markdown"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "markitdown-0.1.2-py3-none-any.whl", hash = "sha256:4881f0768794ffccb52d09dd86498813a6896ba9639b4fc15512817f56ed9d74"},
     {file = "markitdown-0.1.2.tar.gz", hash = "sha256:85fe108a92bd18f317e75a36cf567a6fa812072612a898abf8c156d5d74c13c4"},
@@ -2281,7 +2280,7 @@ files = [
     {file = "mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"},
     {file = "mpmath-1.3.0.tar.gz", hash = "sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\" or extra == \"torch\" or extra == \"sentence-transformers\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [package.extras]
 develop = ["codecov", "pycodestyle", "pytest (>=4.6)", "pytest-cov", "wheel"]
@@ -2321,7 +2320,7 @@ files = [
     {file = "networkx-3.4.2-py3-none-any.whl", hash = "sha256:df5d4365b724cf81b8c6a7312509d0c22386097011ad1abe274afd5e9d3bbc5f"},
     {file = "networkx-3.4.2.tar.gz", hash = "sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1"},
 ]
-markers = {main = "python_version == \"3.10\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\")", eval = "python_version == \"3.10\""}
+markers = {main = "python_version == \"3.10\" and extra == \"all\"", eval = "python_version == \"3.10\""}
 
 [package.extras]
 default = ["matplotlib (>=3.7)", "numpy (>=1.24)", "pandas (>=2.0)", "scipy (>=1.10,!=1.11.0,!=1.11.1)"]
@@ -2342,7 +2341,7 @@ files = [
     {file = "networkx-3.5-py3-none-any.whl", hash = "sha256:0030d386a9a06dee3565298b4a734b68589749a544acbb6c412dc9e2489ec6ec"},
     {file = "networkx-3.5.tar.gz", hash = "sha256:d4c6f9cf81f52d69230866796b82afbccdec3db7ae4fbd1b65ea750feed50037"},
 ]
-markers = {main = "python_version >= \"3.11\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\")", eval = "python_version >= \"3.11\""}
+markers = {main = "python_version >= \"3.11\" and extra == \"all\"", eval = "python_version >= \"3.11\""}
 
 [package.extras]
 default = ["matplotlib (>=3.8)", "numpy (>=1.25)", "pandas (>=2.0)", "scipy (>=1.11.2)"]
@@ -2531,7 +2530,7 @@ files = [
     {file = "nvidia_cublas_cu12-12.6.4.1-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:235f728d6e2a409eddf1df58d5b0921cf80cfa9e72b9f2775ccb7b4a87984668"},
     {file = "nvidia_cublas_cu12-12.6.4.1-py3-none-win_amd64.whl", hash = "sha256:9e4fa264f4d8a4eb0cdbd34beadc029f453b3bafae02401e999cf3d5a5af75f8"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-cuda-cupti-cu12"
@@ -2547,7 +2546,7 @@ files = [
     {file = "nvidia_cuda_cupti_cu12-12.6.80-py3-none-manylinux2014_x86_64.whl", hash = "sha256:a3eff6cdfcc6a4c35db968a06fcadb061cbc7d6dde548609a941ff8701b98b73"},
     {file = "nvidia_cuda_cupti_cu12-12.6.80-py3-none-win_amd64.whl", hash = "sha256:bbe6ae76e83ce5251b56e8c8e61a964f757175682bbad058b170b136266ab00a"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-cuda-nvrtc-cu12"
@@ -2561,7 +2560,7 @@ files = [
     {file = "nvidia_cuda_nvrtc_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:35b0cc6ee3a9636d5409133e79273ce1f3fd087abb0532d2d2e8fff1fe9efc53"},
     {file = "nvidia_cuda_nvrtc_cu12-12.6.77-py3-none-win_amd64.whl", hash = "sha256:f7007dbd914c56bd80ea31bc43e8e149da38f68158f423ba845fc3292684e45a"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-cuda-runtime-cu12"
@@ -2577,7 +2576,7 @@ files = [
     {file = "nvidia_cuda_runtime_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:a84d15d5e1da416dd4774cb42edf5e954a3e60cc945698dc1d5be02321c44dc8"},
     {file = "nvidia_cuda_runtime_cu12-12.6.77-py3-none-win_amd64.whl", hash = "sha256:86c58044c824bf3c173c49a2dbc7a6c8b53cb4e4dca50068be0bf64e9dab3f7f"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-cudnn-cu12"
@@ -2591,7 +2590,7 @@ files = [
     {file = "nvidia_cudnn_cu12-9.5.1.17-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:30ac3869f6db17d170e0e556dd6cc5eee02647abc31ca856634d5a40f82c15b2"},
     {file = "nvidia_cudnn_cu12-9.5.1.17-py3-none-win_amd64.whl", hash = "sha256:d7af0f8a4f3b4b9dbb3122f2ef553b45694ed9c384d5a75bab197b8eefb79ab8"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [package.dependencies]
 nvidia-cublas-cu12 = "*"
@@ -2610,7 +2609,7 @@ files = [
     {file = "nvidia_cufft_cu12-11.3.0.4-py3-none-manylinux2014_x86_64.whl", hash = "sha256:768160ac89f6f7b459bee747e8d175dbf53619cfe74b2a5636264163138013ca"},
     {file = "nvidia_cufft_cu12-11.3.0.4-py3-none-win_amd64.whl", hash = "sha256:6048ebddfb90d09d2707efb1fd78d4e3a77cb3ae4dc60e19aab6be0ece2ae464"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [package.dependencies]
 nvidia-nvjitlink-cu12 = "*"
@@ -2626,7 +2625,7 @@ files = [
     {file = "nvidia_cufile_cu12-1.11.1.6-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:cc23469d1c7e52ce6c1d55253273d32c565dd22068647f3aa59b3c6b005bf159"},
     {file = "nvidia_cufile_cu12-1.11.1.6-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:8f57a0051dcf2543f6dc2b98a98cb2719c37d3cee1baba8965d57f3bbc90d4db"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-curand-cu12"
@@ -2642,7 +2641,7 @@ files = [
     {file = "nvidia_curand_cu12-10.3.7.77-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:7b2ed8e95595c3591d984ea3603dd66fe6ce6812b886d59049988a712ed06b6e"},
     {file = "nvidia_curand_cu12-10.3.7.77-py3-none-win_amd64.whl", hash = "sha256:6d6d935ffba0f3d439b7cd968192ff068fafd9018dbf1b85b37261b13cfc9905"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-cusolver-cu12"
@@ -2658,7 +2657,7 @@ files = [
     {file = "nvidia_cusolver_cu12-11.7.1.2-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:dbbe4fc38ec1289c7e5230e16248365e375c3673c9c8bac5796e2e20db07f56e"},
     {file = "nvidia_cusolver_cu12-11.7.1.2-py3-none-win_amd64.whl", hash = "sha256:6813f9d8073f555444a8705f3ab0296d3e1cb37a16d694c5fc8b862a0d8706d7"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [package.dependencies]
 nvidia-cublas-cu12 = "*"
@@ -2679,7 +2678,7 @@ files = [
     {file = "nvidia_cusparse_cu12-12.5.4.2-py3-none-manylinux2014_x86_64.whl", hash = "sha256:23749a6571191a215cb74d1cdbff4a86e7b19f1200c071b3fcf844a5bea23a2f"},
     {file = "nvidia_cusparse_cu12-12.5.4.2-py3-none-win_amd64.whl", hash = "sha256:4acb8c08855a26d737398cba8fb6f8f5045d93f82612b4cfd84645a2332ccf20"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [package.dependencies]
 nvidia-nvjitlink-cu12 = "*"
@@ -2696,7 +2695,7 @@ files = [
     {file = "nvidia_cusparselt_cu12-0.6.3-py3-none-manylinux2014_x86_64.whl", hash = "sha256:e5c8a26c36445dd2e6812f1177978a24e2d37cacce7e090f297a688d1ec44f46"},
     {file = "nvidia_cusparselt_cu12-0.6.3-py3-none-win_amd64.whl", hash = "sha256:3b325bcbd9b754ba43df5a311488fca11a6b5dc3d11df4d190c000cf1a0765c7"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-nccl-cu12"
@@ -2709,7 +2708,7 @@ files = [
     {file = "nvidia_nccl_cu12-2.26.2-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:5c196e95e832ad30fbbb50381eb3cbd1fadd5675e587a548563993609af19522"},
     {file = "nvidia_nccl_cu12-2.26.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:694cf3879a206553cc9d7dbda76b13efaf610fdb70a50cba303de1b0d1530ac6"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-nvjitlink-cu12"
@@ -2723,7 +2722,7 @@ files = [
     {file = "nvidia_nvjitlink_cu12-12.6.85-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:cf4eaa7d4b6b543ffd69d6abfb11efdeb2db48270d94dfd3a452c24150829e41"},
     {file = "nvidia_nvjitlink_cu12-12.6.85-py3-none-win_amd64.whl", hash = "sha256:e61120e52ed675747825cdd16febc6a0730537451d867ee58bee3853b1b13d1c"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "nvidia-nvtx-cu12"
@@ -2739,18 +2738,18 @@ files = [
     {file = "nvidia_nvtx_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl", hash = "sha256:6574241a3ec5fdc9334353ab8c479fe75841dbe8f4532a8fc97ce63503330ba1"},
     {file = "nvidia_nvtx_cu12-12.6.77-py3-none-win_amd64.whl", hash = "sha256:2fb11a4af04a5e6c84073e6404d26588a34afd35379f0855a99797897efa75c0"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [[package]]
 name = "ollama"
-version = "0.5.1"
+version = "0.4.9"
 description = "The official Python client for Ollama."
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "ollama-0.5.1-py3-none-any.whl", hash = "sha256:4c8839f35bc173c7057b1eb2cbe7f498c1a7e134eafc9192824c8aecb3617506"},
-    {file = "ollama-0.5.1.tar.gz", hash = "sha256:5a799e4dc4e7af638b11e3ae588ab17623ee019e496caaf4323efbaa8feeff93"},
+    {file = "ollama-0.4.9-py3-none-any.whl", hash = "sha256:18c8c85358c54d7f73d6a66cda495b0e3ba99fdb88f824ae470d740fbb211a50"},
+    {file = "ollama-0.4.9.tar.gz", hash = "sha256:5266d4d29b5089a01489872b8e8f980f018bccbdd1082b3903448af1d5615ce7"},
 ]
 
 [package.dependencies]
@@ -2764,7 +2763,7 @@ description = "ONNX Runtime is a runtime accelerator for Machine Learning models
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "onnxruntime-1.22.1-cp310-cp310-macosx_13_0_universal2.whl", hash = "sha256:80e7f51da1f5201c1379b8d6ef6170505cd800e40da216290f5e06be01aadf95"},
     {file = "onnxruntime-1.22.1-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b89ddfdbbdaf7e3a59515dee657f6515601d55cb21a0f0f48c81aefc54ff1b73"},
@@ -2829,7 +2828,7 @@ description = "A Python library to read/write Excel 2010 xlsx/xlsm files"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2"},
     {file = "openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050"},
@@ -3034,7 +3033,7 @@ files = [
     {file = "pandas-2.3.1-cp39-cp39-win_amd64.whl", hash = "sha256:b4b0de34dc8499c2db34000ef8baad684cfa4cbd836ecee05f323ebfba348c7d"},
     {file = "pandas-2.3.1.tar.gz", hash = "sha256:0a95b9ac964fe83ce317827f80304d37388ea77616b1425f0ae41c9d2d0d7bb2"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [package.dependencies]
 numpy = [
@@ -3078,7 +3077,7 @@ description = "PDF parser and analyzer"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "pdfminer_six-20250506-py3-none-any.whl", hash = "sha256:d81ad173f62e5f841b53a8ba63af1a4a355933cfc0ffabd608e568b9193909e3"},
     {file = "pdfminer_six-20250506.tar.gz", hash = "sha256:b03cc8df09cf3c7aba8246deae52e0bca7ebb112a38895b5e1d4f5dd2b8ca2e7"},
@@ -3226,7 +3225,7 @@ files = [
     {file = "pillow-11.3.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:c84d689db21a1c397d001aa08241044aa2069e7587b398c8cc63020390b1c1b8"},
     {file = "pillow-11.3.0.tar.gz", hash = "sha256:3828ee7586cd0b2091b6209e5ad53e20d0649bbe87164a459d0676e035e8f523"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\" or extra == \"sentence-transformers\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [package.extras]
 docs = ["furo", "olefile", "sphinx (>=8.2)", "sphinx-autobuild", "sphinx-copybutton", "sphinx-inline-tabs", "sphinxext-opengraph"]
@@ -3281,7 +3280,7 @@ files = [
     {file = "portalocker-2.10.1-py3-none-any.whl", hash = "sha256:53a5984ebc86a025552264b459b46a2086e269b21823cb572f8f28ee759e45bf"},
     {file = "portalocker-2.10.1.tar.gz", hash = "sha256:ef1bf844e878ab08aee7e40184156e1151f228f103aa5c6bd0724cc330960f8f"},
 ]
-markers = {main = "extra == \"general-mem\" or extra == \"all\""}
+markers = {main = "extra == \"all\""}
 
 [package.dependencies]
 pywin32 = {version = ">=226", markers = "platform_system == \"Windows\""}
@@ -3353,7 +3352,7 @@ files = [
     {file = "protobuf-6.31.1-py3-none-any.whl", hash = "sha256:720a6c7e6b77288b85063569baae8536671b39f15cc22037ec7045658d80489e"},
     {file = "protobuf-6.31.1.tar.gz", hash = "sha256:d8cac4c982f0b957a4dc73a80e2ea24fab08e679c0de9deb835f4a12d69aca9a"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\" or extra == \"general-mem\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [[package]]
 name = "pycparser"
@@ -3366,7 +3365,7 @@ files = [
     {file = "pycparser-2.22-py3-none-any.whl", hash = "sha256:c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc"},
     {file = "pycparser-2.22.tar.gz", hash = "sha256:491c8be9c040f5390f5bf44a5b07752bd07f56edf992381b05c701439eec10f6"},
 ]
-markers = {main = "platform_python_implementation != \"PyPy\" and (extra == \"markitdown\" or extra == \"all\")", eval = "platform_python_implementation == \"PyPy\""}
+markers = {main = "platform_python_implementation != \"PyPy\" and (extra == \"mem-reader\" or extra == \"all\")", eval = "platform_python_implementation == \"PyPy\""}
 
 [[package]]
 name = "pydantic"
@@ -3588,7 +3587,7 @@ description = "A python implementation of GNU readline."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "(extra == \"markitdown\" or extra == \"all\") and sys_platform == \"win32\""
+markers = "(extra == \"mem-reader\" or extra == \"all\") and sys_platform == \"win32\""
 files = [
     {file = "pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6"},
     {file = "pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7"},
@@ -3651,7 +3650,7 @@ files = [
     {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
     {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\" or extra == \"volcengine\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [package.dependencies]
 six = ">=1.5"
@@ -3690,7 +3689,7 @@ description = "Create, read, and update PowerPoint 2007+ (.pptx) files."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "python_pptx-1.0.2-py3-none-any.whl", hash = "sha256:160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba"},
     {file = "python_pptx-1.0.2.tar.gz", hash = "sha256:479a8af0eaf0f0d76b6f00b0887732874ad2e3188230315290cd1f9dd9cc7095"},
@@ -3713,7 +3712,7 @@ files = [
     {file = "pytz-2025.2-py2.py3-none-any.whl", hash = "sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00"},
     {file = "pytz-2025.2.tar.gz", hash = "sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3"},
 ]
-markers = {main = "extra == \"tree-mem\" or extra == \"all\" or extra == \"markitdown\""}
+markers = {main = "extra == \"tree-mem\" or extra == \"all\" or extra == \"mem-reader\""}
 
 [[package]]
 name = "pywin32"
@@ -3744,7 +3743,7 @@ files = [
     {file = "pywin32-311-cp39-cp39-win_amd64.whl", hash = "sha256:e0c4cfb0621281fe40387df582097fd796e80430597cb9944f0ae70447bacd91"},
     {file = "pywin32-311-cp39-cp39-win_arm64.whl", hash = "sha256:62ea666235135fee79bb154e695f3ff67370afefd71bd7fea7512fc70ef31e3d"},
 ]
-markers = {main = "platform_system == \"Windows\" and (extra == \"general-mem\" or extra == \"all\")", eval = "platform_system == \"Windows\""}
+markers = {main = "platform_system == \"Windows\" and extra == \"all\"", eval = "platform_system == \"Windows\""}
 
 [[package]]
 name = "pyyaml"
@@ -3820,7 +3819,7 @@ files = [
     {file = "qdrant_client-1.14.3-py3-none-any.whl", hash = "sha256:66faaeae00f9b5326946851fe4ca4ddb1ad226490712e2f05142266f68dfc04d"},
     {file = "qdrant_client-1.14.3.tar.gz", hash = "sha256:bb899e3e065b79c04f5e47053d59176150c0a5dabc09d7f476c8ce8e52f4d281"},
 ]
-markers = {main = "extra == \"general-mem\" or extra == \"all\""}
+markers = {main = "extra == \"all\""}
 
 [package.dependencies]
 grpcio = ">=1.41.0"
@@ -4273,7 +4272,7 @@ description = "A set of python modules for machine learning and data mining"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"tree-mem\" or extra == \"all\" or extra == \"sentence-transformers\""
+markers = "extra == \"tree-mem\" or extra == \"all\""
 files = [
     {file = "scikit_learn-1.7.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9fe7f51435f49d97bd41d724bb3e11eeb939882af9c29c931a8002c357e8cdd5"},
     {file = "scikit_learn-1.7.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:d0c93294e1e1acbee2d029b1f2a064f26bd928b284938d51d412c22e0c977eb3"},
@@ -4440,15 +4439,15 @@ test = ["Cython", "array-api-strict (>=2.3.1)", "asv", "gmpy2", "hypothesis (>=6
 
 [[package]]
 name = "sentence-transformers"
-version = "5.0.0"
+version = "4.1.0"
 description = "Embeddings, Retrieval, and Reranking"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"sentence-transformers\" or extra == \"all\""
+markers = "extra == \"all\""
 files = [
-    {file = "sentence_transformers-5.0.0-py3-none-any.whl", hash = "sha256:346240f9cc6b01af387393f03e103998190dfb0826a399d0c38a81a05c7a5d76"},
-    {file = "sentence_transformers-5.0.0.tar.gz", hash = "sha256:e5a411845910275fd166bacb01d28b7f79537d3550628ae42309dbdd3d5670d1"},
+    {file = "sentence_transformers-4.1.0-py3-none-any.whl", hash = "sha256:382a7f6be1244a100ce40495fb7523dbe8d71b3c10b299f81e6b735092b3b8ca"},
+    {file = "sentence_transformers-4.1.0.tar.gz", hash = "sha256:f125ffd1c727533e0eca5d4567de72f84728de8f7482834de442fd90c2c3d50b"},
 ]
 
 [package.dependencies]
@@ -4536,7 +4535,7 @@ files = [
     {file = "setuptools-80.9.0-py3-none-any.whl", hash = "sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922"},
     {file = "setuptools-80.9.0.tar.gz", hash = "sha256:f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c"},
 ]
-markers = {main = "(extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and (platform_system == \"Linux\" or python_version >= \"3.12\") and (platform_machine == \"x86_64\" or python_version >= \"3.12\")", eval = "platform_system == \"Linux\" and platform_machine == \"x86_64\" or python_version >= \"3.12\""}
+markers = {main = "extra == \"all\" and platform_system == \"Linux\" and platform_machine == \"x86_64\" or python_version >= \"3.12\" and extra == \"all\"", eval = "platform_system == \"Linux\" and platform_machine == \"x86_64\" or python_version >= \"3.12\""}
 
 [package.extras]
 check = ["pytest-checkdocs (>=2.4)", "pytest-ruff (>=0.2.1) ; sys_platform != \"cygwin\"", "ruff (>=0.8.0) ; sys_platform != \"cygwin\""]
@@ -4570,7 +4569,7 @@ files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\" or extra == \"volcengine\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [[package]]
 name = "sniffio"
@@ -4591,7 +4590,7 @@ description = "A modern CSS selector implementation for Beautiful Soup."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "soupsieve-2.7-py3-none-any.whl", hash = "sha256:6e60cc5c1ffaf1cebcc12e8188320b72071e922c2e897f737cadce79ad5d30c4"},
     {file = "soupsieve-2.7.tar.gz", hash = "sha256:ad282f9b6926286d2ead4750552c8a6142bc4c783fd66b0293547c8fe6ae126a"},
@@ -4695,19 +4694,18 @@ sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
 name = "starlette"
-version = "0.47.1"
+version = "0.46.2"
 description = "The little ASGI library that shines."
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "starlette-0.47.1-py3-none-any.whl", hash = "sha256:5e11c9f5c7c3f24959edbf2dffdc01bba860228acf657129467d8a7468591527"},
-    {file = "starlette-0.47.1.tar.gz", hash = "sha256:aef012dd2b6be325ffa16698f9dc533614fb1cebd593a906b90dc1025529a79b"},
+    {file = "starlette-0.46.2-py3-none-any.whl", hash = "sha256:595633ce89f8ffa71a015caed34a5b2dc1c0cdb3f0f1fbd1e69339cf2abeec35"},
+    {file = "starlette-0.46.2.tar.gz", hash = "sha256:7f7361f34eed179294600af672f565727419830b54b7b084efe44bb82d2fccd5"},
 ]
 
 [package.dependencies]
 anyio = ">=3.6.2,<5"
-typing-extensions = {version = ">=4.10.0", markers = "python_version < \"3.13\""}
 
 [package.extras]
 full = ["httpx (>=0.27.0,<0.29.0)", "itsdangerous", "jinja2", "python-multipart (>=0.0.18)", "pyyaml"]
@@ -4723,7 +4721,7 @@ files = [
     {file = "sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"},
     {file = "sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\" or extra == \"torch\" or extra == \"sentence-transformers\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [package.dependencies]
 mpmath = ">=1.1.0,<1.4"
@@ -4754,7 +4752,7 @@ description = "threadpoolctl"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"tree-mem\" or extra == \"all\" or extra == \"sentence-transformers\""
+markers = "extra == \"tree-mem\" or extra == \"all\""
 files = [
     {file = "threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb"},
     {file = "threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e"},
@@ -4917,7 +4915,7 @@ files = [
     {file = "torch-2.7.1-cp39-cp39-win_amd64.whl", hash = "sha256:df41989d9300e6e3c19ec9f56f856187a6ef060c3662fe54f4b6baf1fc90bd19"},
     {file = "torch-2.7.1-cp39-none-macosx_11_0_arm64.whl", hash = "sha256:a737b5edd1c44a5c1ece2e9f3d00df9d1b3fb9541138bee56d83d38293fb6c9d"},
 ]
-markers = {main = "extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\""}
+markers = {main = "extra == \"all\""}
 
 [package.dependencies]
 filelock = "*"
@@ -5057,7 +5055,7 @@ files = [
     {file = "triton-3.3.1-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a3198adb9d78b77818a5388bff89fa72ff36f9da0bc689db2f0a651a67ce6a42"},
     {file = "triton-3.3.1-cp39-cp39-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f6139aeb04a146b0b8e0fbbd89ad1e65861c57cfed881f21d62d3cb94a36bab7"},
 ]
-markers = {main = "platform_machine == \"x86_64\" and (extra == \"torch\" or extra == \"all\" or extra == \"sentence-transformers\") and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
+markers = {main = "platform_machine == \"x86_64\" and extra == \"all\" and platform_system == \"Linux\"", eval = "platform_machine == \"x86_64\" and platform_system == \"Linux\""}
 
 [package.dependencies]
 setuptools = ">=40.8.0"
@@ -5141,7 +5139,7 @@ files = [
     {file = "tzdata-2025.2-py2.py3-none-any.whl", hash = "sha256:1a403fada01ff9221ca8044d701868fa132215d84beb92242d9acd2147f667a8"},
     {file = "tzdata-2025.2.tar.gz", hash = "sha256:b60a638fcc0daffadf82fe0f57e53d06bdec2f36c4df66280ae79bce6bd6f2b9"},
 ]
-markers = {main = "extra == \"markitdown\" or extra == \"all\""}
+markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [[package]]
 name = "ujson"
@@ -5357,7 +5355,7 @@ description = "Volcengine SDK for Python"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"volcengine\" or extra == \"all\""
+markers = "extra == \"all\""
 files = [
     {file = "volcengine-python-sdk-4.0.6.tar.gz", hash = "sha256:6367a892f10759c96133a31508aa32fd761b09f877d2efce00bf74b4eabb832f"},
 ]
@@ -5576,7 +5574,7 @@ description = "Library for developers to extract data from Microsoft Excel (tm) 
 optional = true
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,>=2.7"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "xlrd-2.0.2-py2.py3-none-any.whl", hash = "sha256:ea762c3d29f4cca48d82df517b6d89fbce4db3107f9d78713e48cd321d5c9aa9"},
     {file = "xlrd-2.0.2.tar.gz", hash = "sha256:08b5e25de58f21ce71dc7db3b3b8106c1fa776f3024c54e45b45b374e89234c9"},
@@ -5594,7 +5592,7 @@ description = "A Python module for creating Excel XLSX files."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"markitdown\" or extra == \"all\""
+markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
     {file = "xlsxwriter-3.2.5-py3-none-any.whl", hash = "sha256:4f4824234e1eaf9d95df9a8fe974585ff91d0f5e3d3f12ace5b71e443c1c6abd"},
     {file = "xlsxwriter-3.2.5.tar.gz", hash = "sha256:7e88469d607cdc920151c0ab3ce9cf1a83992d4b7bc730c5ffdd1a12115a7dbe"},
@@ -5865,16 +5863,11 @@ cffi = ["cffi (>=1.11)"]
 
 [extras]
 all = ["chonkie", "markitdown", "neo4j", "pika", "qdrant-client", "redis", "schedule", "scikit-learn", "sentence-transformers", "torch", "volcengine-python-sdk"]
-chonkie = ["chonkie"]
-general-mem = ["qdrant-client"]
-markitdown = ["markitdown"]
+mem-reader = ["chonkie", "markitdown"]
 mem-scheduler = ["pika", "redis"]
-sentence-transformers = ["sentence-transformers"]
-torch = ["torch"]
 tree-mem = ["neo4j", "schedule", "scikit-learn"]
-volcengine = ["volcengine-python-sdk"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "77639a1d1a924c0acf683affa300228cede202abf06c41184fd4825814e45086"
+content-hash = "b0f2f8ddaff4ff3184e927335e8946f6c645c2f5bf1f1f16144faa83630448ed"
