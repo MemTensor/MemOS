@@ -129,7 +129,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.2.0"
-ruff = "^0.11.8"
+
 
 [tool.poetry.group.test]
 optional = true
@@ -137,6 +137,7 @@ optional = true
 [tool.poetry.group.test.dependencies]
 pytest = "^8.3.5"
 pytest-asyncio = "^0.23.5"
+ruff = "^0.11.8"
 
 [tool.poetry.group.eval]
 optional = true
