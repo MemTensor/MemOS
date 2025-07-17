@@ -55,21 +55,25 @@ jobs:
         poetry run python scripts/check_dependencies.py
     - name: Build sdist and wheel
       run: poetry build
-    - name: Test wheel installation
+    - name: Test wheel installation on Windows
+      if: startsWith(matrix.os, 'windows')
       run: |
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          for f in dist/*.whl; do pip install "$f"; done
-        else
-          pip install dist/*.whl
-        fi
+        for f in dist/*.whl; do pip install "$f"; done
         pip uninstall -y memoryos
-    - name: Test sdist installation
+    - name: Test wheel installation on Linux / Mac
+      if: ${{ !startsWith(matrix.os, 'windows') }}
       run: |
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          for f in dist/*.tar.gz; do pip install "$f"; done
-        else
-          pip install dist/*.tar.gz
-        fi
+        pip install dist/*.whl
+        pip uninstall -y memoryos
+    - name: Test sdist installation on Windows
+      if: startsWith(matrix.os, 'windows')
+      run: |
+        for f in dist/*.tar.gz; do pip install "$f"; done
+        pip uninstall -y memoryos
+    - name: Test sdist installation on Linux / Mac
+      if: ${{ !startsWith(matrix.os, 'windows') }}
+      run: |
+        pip install dist/*.tar.gz
         pip uninstall -y memoryos
 
     - name: Install all dependencies
