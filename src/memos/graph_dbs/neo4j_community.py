@@ -1,60 +1,19 @@
 import time
 
-from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from neo4j import GraphDatabase
 from neo4j.exceptions import ClientError
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
-from memos.graph_dbs.base import BaseGraphDB
+from memos.graph_dbs.neo4j import Neo4jGraphDB, _parse_node
 from memos.log import get_logger
 
 
 logger = get_logger(__name__)
 
 
-def _parse_node(node_data: dict[str, Any]) -> dict[str, Any]:
-    node = node_data.copy()
-
-    # Convert Neo4j datetime to string
-    for time_field in ("created_at", "updated_at"):
-        if time_field in node and hasattr(node[time_field], "isoformat"):
-            node[time_field] = node[time_field].isoformat()
-    node.pop("user_name", None)
-
-    return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
-
-
-def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-    node_id = item["id"]
-    memory = item["memory"]
-    metadata = item.get("metadata", {})
-    return node_id, memory, metadata
-
-
-def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """
-    Ensure metadata has proper datetime fields and normalized types.
-
-    - Fill `created_at` and `updated_at` if missing (in ISO 8601 format).
-    - Convert embedding to list of float if present.
-    """
-    now = datetime.utcnow().isoformat()
-
-    # Fill timestamps if missing
-    metadata.setdefault("created_at", now)
-    metadata.setdefault("updated_at", now)
-
-    # Normalize embedding type
-    embedding = metadata.get("embedding")
-    if embedding and isinstance(embedding, list):
-        metadata["embedding"] = [float(x) for x in embedding]
-
-    return metadata
-
-
-class Neo4jGraphDB(BaseGraphDB):
+class Neo4jCommunityGraphDB(Neo4jGraphDB):
     """Neo4j-based implementation of a graph memory store."""
 
     def __init__(self, config: Neo4jGraphDBConfig):
@@ -80,11 +39,7 @@ class Neo4jGraphDB(BaseGraphDB):
         self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
         self.db_name = config.db_name
         self.user_name = config.user_name
-
-        self.system_db_name = "system" if config.use_multi_db else config.db_name
-        if config.auto_create:
-            self._ensure_database_exists()
-
+        self.system_db_name = config.db_name
         # Create only if not exists
         self.create_index(dimensions=config.embedding_dimension)
 
@@ -98,9 +53,6 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         Create the vector index for embedding and datetime indexes for created_at and updated_at fields.
         """
-        # Create vector index if it doesn't exist
-        if not self._vector_index_exists(index_name):
-            self._create_vector_index(label, vector_property, dimensions, index_name)
         # Create indexes
         self._create_basic_property_indexes()
 
@@ -164,337 +116,6 @@ class Neo4jGraphDB(BaseGraphDB):
         with self.driver.session(database=self.db_name) as session:
             session.run(query)
 
-    def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
-        if not self.config.use_multi_db and self.config.user_name:
-            metadata["user_name"] = self.config.user_name
-
-        # Safely process metadata
-        metadata = _prepare_node_metadata(metadata)
-
-        # Merge node and set metadata
-        created_at = metadata.pop("created_at")
-        updated_at = metadata.pop("updated_at")
-
-        query = """
-            MERGE (n:Memory {id: $id})
-            SET n.memory = $memory,
-                n.created_at = datetime($created_at),
-                n.updated_at = datetime($updated_at),
-                n += $metadata
-        """
-        with self.driver.session(database=self.db_name) as session:
-            session.run(
-                query,
-                id=id,
-                memory=memory,
-                created_at=created_at,
-                updated_at=updated_at,
-                metadata=metadata,
-            )
-
-    def update_node(self, id: str, fields: dict[str, Any]) -> None:
-        """
-        Update node fields in Neo4j, auto-converting `created_at` and `updated_at` to datetime type if present.
-        """
-        fields = fields.copy()  # Avoid mutating external dict
-        set_clauses = []
-        params = {"id": id, "fields": fields}
-
-        for time_field in ("created_at", "updated_at"):
-            if time_field in fields:
-                # Set clause like: n.created_at = datetime($created_at)
-                set_clauses.append(f"n.{time_field} = datetime(${time_field})")
-                params[time_field] = fields.pop(time_field)
-
-        set_clauses.append("n += $fields")  # Merge remaining fields
-        set_clause_str = ",\n    ".join(set_clauses)
-
-        query = """
-        MATCH (n:Memory {id: $id})
-        """
-        if not self.config.use_multi_db and self.config.user_name:
-            query += "\nWHERE n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query += f"\nSET {set_clause_str}"
-
-        with self.driver.session(database=self.db_name) as session:
-            session.run(query, **params)
-
-    def delete_node(self, id: str) -> None:
-        """
-        Delete a node from the graph.
-        Args:
-            id: Node identifier to delete.
-        """
-        query = "MATCH (n:Memory {id: $id})"
-
-        params = {"id": id}
-        if not self.config.use_multi_db and self.config.user_name:
-            query += " WHERE n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query += " DETACH DELETE n"
-
-        with self.driver.session(database=self.db_name) as session:
-            session.run(query, **params)
-
-    # Edge (Relationship) Management
-    def add_edge(self, source_id: str, target_id: str, type: str) -> None:
-        """
-        Create an edge from source node to target node.
-        Args:
-            source_id: ID of the source node.
-            target_id: ID of the target node.
-            type: Relationship type (e.g., 'RELATE_TO', 'PARENT').
-        """
-        query = """
-                MATCH (a:Memory {id: $source_id})
-                MATCH (b:Memory {id: $target_id})
-            """
-        params = {"source_id": source_id, "target_id": target_id}
-        if not self.config.use_multi_db and self.config.user_name:
-            query += """
-                    WHERE a.user_name = $user_name AND b.user_name = $user_name
-                """
-            params["user_name"] = self.config.user_name
-
-        query += f"\nMERGE (a)-[:{type}]->(b)"
-
-        with self.driver.session(database=self.db_name) as session:
-            session.run(query, params)
-
-    def delete_edge(self, source_id: str, target_id: str, type: str) -> None:
-        """
-        Delete a specific edge between two nodes.
-        Args:
-            source_id: ID of the source node.
-            target_id: ID of the target node.
-            type: Relationship type to remove.
-        """
-        query = f"""
-            MATCH (a:Memory {{id: $source}})
-            -[r:{type}]->
-            (b:Memory {{id: $target}})
-        """
-        params = {"source": source_id, "target": target_id}
-
-        if not self.config.use_multi_db and self.config.user_name:
-            query += "\nWHERE a.user_name = $user_name AND b.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query += "\nDELETE r"
-
-        with self.driver.session(database=self.db_name) as session:
-            session.run(query, params)
-
-    def edge_exists(
-        self, source_id: str, target_id: str, type: str = "ANY", direction: str = "OUTGOING"
-    ) -> bool:
-        """
-        Check if an edge exists between two nodes.
-        Args:
-            source_id: ID of the source node.
-            target_id: ID of the target node.
-            type: Relationship type. Use "ANY" to match any relationship type.
-            direction: Direction of the edge.
-                       Use "OUTGOING" (default), "INCOMING", or "ANY".
-        Returns:
-            True if the edge exists, otherwise False.
-        """
-        # Prepare the relationship pattern
-        rel = "r" if type == "ANY" else f"r:{type}"
-
-        # Prepare the match pattern with direction
-        if direction == "OUTGOING":
-            pattern = f"(a:Memory {{id: $source}})-[{rel}]->(b:Memory {{id: $target}})"
-        elif direction == "INCOMING":
-            pattern = f"(a:Memory {{id: $source}})<-[{rel}]-(b:Memory {{id: $target}})"
-        elif direction == "ANY":
-            pattern = f"(a:Memory {{id: $source}})-[{rel}]-(b:Memory {{id: $target}})"
-        else:
-            raise ValueError(
-                f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
-            )
-        query = f"MATCH {pattern}"
-        params = {"source": source_id, "target": target_id}
-
-        if not self.config.use_multi_db and self.config.user_name:
-            query += "\nWHERE a.user_name = $user_name AND b.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query += "\nRETURN r"
-
-        # Run the Cypher query
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, params)
-            return result.single() is not None
-
-    # Graph Query & Reasoning
-    def get_node(self, id: str) -> dict[str, Any] | None:
-        """
-        Retrieve the metadata and memory of a node.
-        Args:
-            id: Node identifier.
-        Returns:
-            Dictionary of node fields, or None if not found.
-        """
-        where_user = ""
-        params = {"id": id}
-        if not self.config.use_multi_db and self.config.user_name:
-            where_user = " AND n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query = f"MATCH (n:Memory) WHERE n.id = $id {where_user} RETURN n"
-
-        with self.driver.session(database=self.db_name) as session:
-            record = session.run(query, params).single()
-            return _parse_node(dict(record["n"])) if record else None
-
-    def get_nodes(self, ids: list[str]) -> list[dict[str, Any]]:
-        """
-        Retrieve the metadata and memory of a list of nodes.
-        Args:
-            ids: List of Node identifier.
-        Returns:
-        list[dict]: Parsed node records containing 'id', 'memory', and 'metadata'.
-
-        Notes:
-            - Assumes all provided IDs are valid and exist.
-            - Returns empty list if input is empty.
-        """
-        if not ids:
-            return []
-
-        where_user = ""
-        params = {"ids": ids}
-
-        if not self.config.use_multi_db and self.config.user_name:
-            where_user = " AND n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query = f"MATCH (n:Memory) WHERE n.id IN $ids{where_user} RETURN n"
-
-        with self.driver.session(database=self.db_name) as session:
-            results = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in results]
-
-    def get_edges(self, id: str, type: str = "ANY", direction: str = "ANY") -> list[dict[str, str]]:
-        """
-        Get edges connected to a node, with optional type and direction filter.
-
-        Args:
-            id: Node ID to retrieve edges for.
-            type: Relationship type to match, or 'ANY' to match all.
-            direction: 'OUTGOING', 'INCOMING', or 'ANY'.
-
-        Returns:
-            List of edges:
-            [
-              {"from": "source_id", "to": "target_id", "type": "RELATE"},
-              ...
-            ]
-        """
-        # Build relationship type filter
-        rel_type = "" if type == "ANY" else f":{type}"
-
-        # Build Cypher pattern based on direction
-        if direction == "OUTGOING":
-            pattern = f"(a:Memory)-[r{rel_type}]->(b:Memory)"
-            where_clause = "a.id = $id"
-        elif direction == "INCOMING":
-            pattern = f"(a:Memory)<-[r{rel_type}]-(b:Memory)"
-            where_clause = "a.id = $id"
-        elif direction == "ANY":
-            pattern = f"(a:Memory)-[r{rel_type}]-(b:Memory)"
-            where_clause = "a.id = $id OR b.id = $id"
-        else:
-            raise ValueError("Invalid direction. Must be 'OUTGOING', 'INCOMING', or 'ANY'.")
-
-        params = {"id": id}
-
-        if not self.config.use_multi_db and self.config.user_name:
-            where_clause += " AND a.user_name = $user_name AND b.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query = f"""
-                MATCH {pattern}
-                WHERE {where_clause}
-                RETURN a.id AS from_id, b.id AS to_id, type(r) AS type
-            """
-
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, params)
-            edges = []
-            for record in result:
-                edges.append(
-                    {"from": record["from_id"], "to": record["to_id"], "type": record["type"]}
-                )
-            return edges
-
-    def get_neighbors(
-        self, id: str, type: str, direction: Literal["in", "out", "both"] = "out"
-    ) -> list[str]:
-        """
-        Get connected node IDs in a specific direction and relationship type.
-        Args:
-            id: Source node ID.
-            type: Relationship type.
-            direction: Edge direction to follow ('out', 'in', or 'both').
-        Returns:
-            List of neighboring node IDs.
-        """
-        raise NotImplementedError
-
-    def get_neighbors_by_tag(
-        self,
-        tags: list[str],
-        exclude_ids: list[str],
-        top_k: int = 5,
-        min_overlap: int = 1,
-    ) -> list[dict[str, Any]]:
-        """
-        Find top-K neighbor nodes with maximum tag overlap.
-
-        Args:
-            tags: The list of tags to match.
-            exclude_ids: Node IDs to exclude (e.g., local cluster).
-            top_k: Max number of neighbors to return.
-            min_overlap: Minimum number of overlapping tags required.
-
-        Returns:
-            List of dicts with node details and overlap count.
-        """
-        where_user = ""
-        params = {
-            "tags": tags,
-            "exclude_ids": exclude_ids,
-            "min_overlap": min_overlap,
-            "top_k": top_k,
-        }
-
-        if not self.config.use_multi_db and self.config.user_name:
-            where_user = "AND n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query = f"""
-                MATCH (n:Memory)
-                WHERE NOT n.id IN $exclude_ids
-                  AND n.status = 'activated'
-                  AND n.type <> 'reasoning'
-                  AND n.memory_type <> 'WorkingMemory'
-                  {where_user}
-                WITH n, [tag IN n.tags WHERE tag IN $tags] AS overlap_tags
-                WHERE size(overlap_tags) >= $min_overlap
-                RETURN n, size(overlap_tags) AS overlap_count
-                ORDER BY overlap_count DESC
-                LIMIT $top_k
-            """
-
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in result]
-
     def get_children_with_embeddings(self, id: str) -> list[dict[str, Any]]:
         where_user = ""
         params = {"id": id}
@@ -514,18 +135,6 @@ class Neo4jGraphDB(BaseGraphDB):
             return [
                 {"id": r["id"], "embedding": r["embedding"], "memory": r["memory"]} for r in result
             ]
-
-    def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
-        """
-        Get the path of nodes from source to target within a limited depth.
-        Args:
-            source_id: Starting node ID.
-            target_id: Target node ID.
-            max_depth: Maximum path length to traverse.
-        Returns:
-            Ordered list of node IDs along the path.
-        """
-        raise NotImplementedError
 
     def get_subgraph(
         self, center_id: str, depth: int = 2, center_status: str = "activated"
@@ -590,17 +199,6 @@ class Neo4jGraphDB(BaseGraphDB):
 
             return {"core_node": core_node, "neighbors": neighbors, "edges": edges}
 
-    def get_context_chain(self, id: str, type: str = "FOLLOWS") -> list[str]:
-        """
-        Get the ordered context chain starting from a node, following a relationship type.
-        Args:
-            id: Starting node ID.
-            type: Relationship type to follow (e.g., 'FOLLOWS').
-        Returns:
-            List of ordered node IDs in the chain.
-        """
-        raise NotImplementedError
-
     # Search / recall operations
     def search_by_embedding(
         self,
@@ -632,291 +230,11 @@ class Neo4jGraphDB(BaseGraphDB):
             - Typical use case: restrict to 'status = activated' to avoid
             matching archived or merged nodes.
         """
-        # Build WHERE clause dynamically
-        where_clauses = []
-        if scope:
-            where_clauses.append("node.memory_type = $scope")
-        if status:
-            where_clauses.append("node.status = $status")
-        if not self.config.use_multi_db and self.config.user_name:
-            where_clauses.append("node.user_name = $user_name")
+        # TODO
+        from your_vector_index import vector_index
 
-        where_clause = ""
-        if where_clauses:
-            where_clause = "WHERE " + " AND ".join(where_clauses)
-
-        query = f"""
-            CALL db.index.vector.queryNodes('memory_vector_index', $k, $embedding)
-            YIELD node, score
-            {where_clause}
-            RETURN node.id AS id, score
-        """
-
-        parameters = {"embedding": vector, "k": top_k, "scope": scope}
-        if scope:
-            parameters["scope"] = scope
-        if status:
-            parameters["status"] = status
-        if not self.config.use_multi_db and self.config.user_name:
-            parameters["user_name"] = self.config.user_name
-
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, parameters)
-            records = [{"id": record["id"], "score": record["score"]} for record in result]
-
-        # Threshold filtering after retrieval
-        if threshold is not None:
-            records = [r for r in records if r["score"] >= threshold]
-
-        return records
-
-    def get_by_metadata(self, filters: list[dict[str, Any]]) -> list[str]:
-        """
-        TODO:
-        1. ADD logic: "AND" vs "OR"(support logic combination);
-        2. Support nested conditional expressions;
-
-        Retrieve node IDs that match given metadata filters.
-        Supports exact match.
-
-        Args:
-        filters: List of filter dicts like:
-            [
-                {"field": "key", "op": "in", "value": ["A", "B"]},
-                {"field": "confidence", "op": ">=", "value": 80},
-                {"field": "tags", "op": "contains", "value": "AI"},
-                ...
-            ]
-
-        Returns:
-            list[str]: Node IDs whose metadata match the filter conditions. (AND logic).
-
-        Notes:
-            - Supports structured querying such as tag/category/importance/time filtering.
-            - Can be used for faceted recall or prefiltering before embedding rerank.
-        """
-        where_clauses = []
-        params = {}
-
-        for i, f in enumerate(filters):
-            field = f["field"]
-            op = f.get("op", "=")
-            value = f["value"]
-            param_key = f"val{i}"
-
-            # Build WHERE clause
-            if op == "=":
-                where_clauses.append(f"n.{field} = ${param_key}")
-                params[param_key] = value
-            elif op == "in":
-                where_clauses.append(f"n.{field} IN ${param_key}")
-                params[param_key] = value
-            elif op == "contains":
-                where_clauses.append(f"ANY(x IN ${param_key} WHERE x IN n.{field})")
-                params[param_key] = value
-            elif op == "starts_with":
-                where_clauses.append(f"n.{field} STARTS WITH ${param_key}")
-                params[param_key] = value
-            elif op == "ends_with":
-                where_clauses.append(f"n.{field} ENDS WITH ${param_key}")
-                params[param_key] = value
-            elif op in [">", ">=", "<", "<="]:
-                where_clauses.append(f"n.{field} {op} ${param_key}")
-                params[param_key] = value
-            else:
-                raise ValueError(f"Unsupported operator: {op}")
-
-        if not self.config.use_multi_db and self.config.user_name:
-            where_clauses.append("n.user_name = $user_name")
-            params["user_name"] = self.config.user_name
-
-        where_str = " AND ".join(where_clauses)
-        query = f"MATCH (n:Memory) WHERE {where_str} RETURN n.id AS id"
-
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, params)
-            return [record["id"] for record in result]
-
-    def get_grouped_counts(
-        self,
-        group_fields: list[str],
-        where_clause: str = "",
-        params: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Count nodes grouped by any fields.
-
-        Args:
-            group_fields (list[str]): Fields to group by, e.g., ["memory_type", "status"]
-            where_clause (str, optional): Extra WHERE condition. E.g.,
-            "WHERE n.status = 'activated'"
-            params (dict, optional): Parameters for WHERE clause.
-
-        Returns:
-            list[dict]: e.g., [{ 'memory_type': 'WorkingMemory', 'status': 'active', 'count': 10 }, ...]
-        """
-        if not group_fields:
-            raise ValueError("group_fields cannot be empty")
-
-        final_params = params.copy() if params else {}
-
-        if not self.config.use_multi_db and self.config.user_name:
-            user_clause = "n.user_name = $user_name"
-            final_params["user_name"] = self.config.user_name
-            if where_clause:
-                where_clause = where_clause.strip()
-                if where_clause.upper().startswith("WHERE"):
-                    where_clause += f" AND {user_clause}"
-                else:
-                    where_clause = f"WHERE {where_clause} AND {user_clause}"
-            else:
-                where_clause = f"WHERE {user_clause}"
-
-        # Force RETURN field AS field to guarantee key match
-        group_fields_cypher = ", ".join([f"n.{field} AS {field}" for field in group_fields])
-
-        query = f"""
-        MATCH (n:Memory)
-        {where_clause}
-        RETURN {group_fields_cypher}, COUNT(n) AS count
-        """
-
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, final_params)
-            return [
-                {**{field: record[field] for field in group_fields}, "count": record["count"]}
-                for record in result
-            ]
-
-    # Structure Maintenance
-    def deduplicate_nodes(self) -> None:
-        """
-        Deduplicate redundant or semantically similar nodes.
-        This typically involves identifying nodes with identical or near-identical memory.
-        """
-        raise NotImplementedError
-
-    def detect_conflicts(self) -> list[tuple[str, str]]:
-        """
-        Detect conflicting nodes based on logical or semantic inconsistency.
-        Returns:
-            A list of (node_id1, node_id2) tuples that conflict.
-        """
-        raise NotImplementedError
-
-    def merge_nodes(self, id1: str, id2: str) -> str:
-        """
-        Merge two similar or duplicate nodes into one.
-        Args:
-            id1: First node ID.
-            id2: Second node ID.
-        Returns:
-            ID of the resulting merged node.
-        """
-        raise NotImplementedError
-
-    # Utilities
-    def clear(self) -> None:
-        """
-        Clear the entire graph if the target database exists.
-        """
-        try:
-            if not self.config.use_multi_db and self.config.user_name:
-                query = "MATCH (n:Memory) WHERE n.user_name = $user_name DETACH DELETE n"
-                params = {"user_name": self.config.user_name}
-            else:
-                query = "MATCH (n) DETACH DELETE n"
-                params = {}
-
-            # Step 2: Clear the graph in that database
-            with self.driver.session(database=self.db_name) as session:
-                session.run(query, params)
-                logger.info(f"Cleared all nodes from database '{self.db_name}'.")
-
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to clear database '{self.db_name}': {e}")
-            raise
-
-    def export_graph(self) -> dict[str, Any]:
-        """
-        Export all graph nodes and edges in a structured form.
-
-        Returns:
-            {
-                "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
-            }
-        """
-        with self.driver.session(database=self.db_name) as session:
-            # Export nodes
-            node_query = "MATCH (n:Memory)"
-            edge_query = "MATCH (a:Memory)-[r]->(b:Memory)"
-            params = {}
-
-            if not self.config.use_multi_db and self.config.user_name:
-                node_query += " WHERE n.user_name = $user_name"
-                edge_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
-                params["user_name"] = self.config.user_name
-
-            node_result = session.run(f"{node_query} RETURN n", params)
-            nodes = [_parse_node(dict(record["n"])) for record in node_result]
-
-            # Export edges
-            edge_result = session.run(
-                f"{edge_query} RETURN a.id AS source, b.id AS target, type(r) AS type", params
-            )
-            edges = [
-                {"source": record["source"], "target": record["target"], "type": record["type"]}
-                for record in edge_result
-            ]
-
-            return {"nodes": nodes, "edges": edges}
-
-    def import_graph(self, data: dict[str, Any]) -> None:
-        """
-        Import the entire graph from a serialized dictionary.
-
-        Args:
-            data: A dictionary containing all nodes and edges to be loaded.
-        """
-        with self.driver.session(database=self.db_name) as session:
-            for node in data.get("nodes", []):
-                id, memory, metadata = _compose_node(node)
-
-                if not self.config.use_multi_db and self.config.user_name:
-                    metadata["user_name"] = self.config.user_name
-
-                metadata = _prepare_node_metadata(metadata)
-
-                # Merge node and set metadata
-                created_at = metadata.pop("created_at")
-                updated_at = metadata.pop("updated_at")
-
-                session.run(
-                    """
-                    MERGE (n:Memory {id: $id})
-                    SET n.memory = $memory,
-                        n.created_at = datetime($created_at),
-                        n.updated_at = datetime($updated_at),
-                        n += $metadata
-                    """,
-                    id=id,
-                    memory=memory,
-                    created_at=created_at,
-                    updated_at=updated_at,
-                    metadata=metadata,
-                )
-
-            for edge in data.get("edges", []):
-                session.run(
-                    f"""
-                    MATCH (a:Memory {{id: $source_id}})
-                    MATCH (b:Memory {{id: $target_id}})
-                    MERGE (a)-[:{edge["type"]}]->(b)
-                    """,
-                    source_id=edge["source"],
-                    target_id=edge["target"],
-                )
+        results = vector_index.query(vector, top_k=top_k)
+        return [{"id": item.id, "score": item.score} for item in results]
 
     def get_all_memory_items(self, scope: str) -> list[dict]:
         """
@@ -980,18 +298,10 @@ class Neo4jGraphDB(BaseGraphDB):
         Permanently delete the entire database this instance is using.
         WARNING: This operation is destructive and cannot be undone.
         """
-        if self.config.use_multi_db:
-            if self.db_name in ("system", "neo4j"):
-                raise ValueError(f"Refusing to drop protected database: {self.db_name}")
-
-            with self.driver.session(database=self.system_db_name) as session:
-                session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
-                print(f"Database '{self.db_name}' has been dropped.")
-        else:
-            raise ValueError(
-                f"Refusing to drop protected database: {self.db_name} in "
-                f"Shared Database Multi-Tenant mode"
-            )
+        raise ValueError(
+            f"Refusing to drop protected database: {self.db_name} in "
+            f"Shared Database Multi-Tenant mode"
+        )
 
     def _ensure_database_exists(self):
         try:
@@ -1015,35 +325,6 @@ class Neo4jGraphDB(BaseGraphDB):
             time.sleep(1)
 
         raise RuntimeError(f"Database {self.db_name} not ready after waiting.")
-
-    def _vector_index_exists(self, index_name: str = "memory_vector_index") -> bool:
-        query = "SHOW INDEXES YIELD name WHERE name = $name RETURN name"
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query, name=index_name)
-            return result.single() is not None
-
-    def _create_vector_index(
-        self, label: str, vector_property: str, dimensions: int, index_name: str
-    ) -> None:
-        """
-        Create a vector index for the specified property in the label.
-        """
-        try:
-            query = f"""
-                CREATE VECTOR INDEX {index_name} IF NOT EXISTS
-                FOR (n:{label}) ON (n.{vector_property})
-                OPTIONS {{
-                    indexConfig: {{
-                        `vector.dimensions`: {dimensions},
-                        `vector.similarity_function`: 'cosine'
-                    }}
-                }}
-                """
-            with self.driver.session(database=self.db_name) as session:
-                session.run(query)
-            logger.debug(f"Vector index '{index_name}' ensured.")
-        except Exception as e:
-            logger.warning(f"Failed to create vector index '{index_name}': {e}")
 
     def _create_basic_property_indexes(self) -> None:
         """
