@@ -1,7 +1,5 @@
-import openai
-
 from memos.configs.llm import QwenLLMConfig
-from memos.llms.base import BaseLLM
+from memos.llms.openai import OpenAILLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
 from memos.types import MessageList
@@ -10,12 +8,11 @@ from memos.types import MessageList
 logger = get_logger(__name__)
 
 
-class QwenLLM(BaseLLM):
+class QwenLLM(OpenAILLM):
     """Qwen (DashScope) LLM class via OpenAI-compatible API."""
 
     def __init__(self, config: QwenLLMConfig):
-        self.config = config
-        self.client = openai.Client(api_key=config.api_key, base_url=config.api_base)
+        super().__init__(config)
 
     def generate(self, messages: MessageList) -> str:
         """Generate a response from Qwen LLM."""
