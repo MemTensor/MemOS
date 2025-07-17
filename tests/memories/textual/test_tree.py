@@ -147,12 +147,12 @@ def test_add_returns_ids(mock_tree_text_memory):
 
     mock_items = [
         TextualMemoryItem(
-            id="id1",
+            id=str(uuid.uuid4()),
             memory="Memory 1",
             metadata=TreeNodeTextualMemoryMetadata(updated_at=None),
         ),
         TextualMemoryItem(
-            id="id2",
+            id=str(uuid.uuid4()),
             memory="Memory 2",
             metadata=TreeNodeTextualMemoryMetadata(updated_at=None),
         ),
