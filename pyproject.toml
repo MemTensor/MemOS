@@ -21,7 +21,6 @@ markitdown = {extras = ["docx", "pdf", "pptx", "xls", "xlsx"], version = "^0.1.1
 chonkie = "^1.0.7"
 tenacity = "^9.1.2"
 neo4j = "^5.28.1"
-accelerate = "^1.7.0"
 fastapi = {extras = ["all"], version = "^0.115.12"}
 sentence-transformers = "^4.1.0"
 sqlalchemy = "^2.0.41"
