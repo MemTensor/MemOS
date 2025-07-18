@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import os
 
 from typing import Any
 
@@ -7,6 +8,7 @@ from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_os.core import MOSCore
+from memos.mem_os.utils.default_config import get_default
 from memos.memories.textual.base import BaseTextMemory
 from memos.templates.mos_prompts import (
     COT_DECOMPOSE_PROMPT,
@@ -24,20 +26,94 @@ class MOS(MOSCore):
     This class maintains backward compatibility with the original MOS interface.
     """
 
-    def __init__(self, config: MOSConfig):
+    def __init__(self, config: MOSConfig | None = None):
+        """
+        Initialize MOS with optional automatic configuration.
+
+        Args:
+            config (MOSConfig, optional): MOS configuration. If None, will use automatic configuration from environment variables.
+        """
+        if config is None:
+            # Auto-configure if no config provided
+            config, default_cube = self._auto_configure()
+            self._auto_registered_cube = default_cube
+        else:
+            self._auto_registered_cube = None
+
         self.enable_cot = config.PRO_MODE
         if config.PRO_MODE:
             print(PRO_MODE_WELCOME_MESSAGE)
             logger.info(PRO_MODE_WELCOME_MESSAGE)
         super().__init__(config)
 
-    def chat(self, query: str, user_id: str | None = None) -> str:
+        # Auto-register cube if one was created
+        if self._auto_registered_cube is not None:
+            self.register_mem_cube(self._auto_registered_cube)
+            logger.info(
+                f"Auto-registered default cube: {self._auto_registered_cube.config.cube_id}"
+            )
+
+    def _auto_configure(self, **kwargs) -> tuple[MOSConfig, Any]:
+        """
+        Automatically configure MOS with default settings.
+
+        Returns:
+            tuple[MOSConfig, Any]: MOS configuration and default MemCube
+        """
+        # Get configuration from environment variables
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai_api_base = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+        text_mem_type = os.getenv("MOS_TEXT_MEM_TYPE", "general_text")
+
+        if not openai_api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+
+        logger.info(f"Auto-configuring MOS with text_mem_type: {text_mem_type}")
+        return get_default(
+            openai_api_key=openai_api_key,
+            openai_api_base=openai_api_base,
+            text_mem_type=text_mem_type,
+        )
+
+    @classmethod
+    def simple(cls) -> "MOS":
+        """
+        Create a MOS instance with automatic configuration from environment variables.
+
+        This is the simplest way to get started with MemOS.
+
+        Environment variables needed:
+        - OPENAI_API_KEY: Your OpenAI API key
+        - OPENAI_API_BASE: OpenAI API base URL (optional, defaults to "https://api.openai.com/v1")
+        - MOS_TEXT_MEM_TYPE: Text memory type (optional, defaults to "general_text")
+
+        Returns:
+            MOS: Configured MOS instance with auto-registered default cube
+
+        Example:
+            ```python
+            # Set environment variables
+            export OPENAI_API_KEY="your-api-key"
+            export MOS_TEXT_MEM_TYPE="general_text"
+
+            # Then use
+            memory = MOS.simple()
+            memory.add_memory("Hello world!")
+            response = memory.chat("What did I just say?")
+            ```
+        """
+        return cls()
+
+    def chat(self, query: str, user_id: str | None = None, base_prompt: str | None = None) -> str:
         """
         Enhanced chat method with optional CoT (Chain of Thought) enhancement.
 
         Args:
             query (str): The user's query.
             user_id (str, optional): User ID for context.
+            base_prompt (str, optional): A custom base prompt to use for the chat.
+                It can be a template string with a `{memories}` placeholder.
+                If not provided, a default prompt is used.
 
         Returns:
             str: The response from the MOS.
@@ -46,12 +122,14 @@ class MOS(MOSCore):
 
         if not self.enable_cot:
             # Use the original chat method from core
-            return super().chat(query, user_id)
+            return super().chat(query, user_id, base_prompt=base_prompt)
 
         # Enhanced chat with CoT decomposition
-        return self._chat_with_cot_enhancement(query, user_id)
+        return self._chat_with_cot_enhancement(query, user_id, base_prompt=base_prompt)
 
-    def _chat_with_cot_enhancement(self, query: str, user_id: str | None = None) -> str:
+    def _chat_with_cot_enhancement(
+        self, query: str, user_id: str | None = None, base_prompt: str | None = None
+    ) -> str:
         """
         Chat with CoT enhancement for complex query decomposition.
         This method includes all the same validation and processing logic as the core chat method.
@@ -84,7 +162,7 @@ class MOS(MOSCore):
             # Check if the query is complex and needs decomposition
             if not decomposition_result.get("is_complex", False):
                 logger.info("🔍 [CoT] Query is not complex, using standard chat")
-                return super().chat(query, user_id)
+                return super().chat(query, user_id, base_prompt=base_prompt)
 
             sub_questions = decomposition_result.get("sub_questions", [])
             logger.info(f"🔍 [CoT] Decomposed into {len(sub_questions)} sub-questions")
@@ -93,7 +171,7 @@ class MOS(MOSCore):
             search_engine = self._get_search_engine_for_cot_with_validation(user_cube_ids)
             if not search_engine:
                 logger.warning("🔍 [CoT] No search engine available, using standard chat")
-                return super().chat(query, user_id)
+                return super().chat(query, user_id, base_prompt=base_prompt)
 
             # Step 4: Get answers for sub-questions
             logger.info("🔍 [CoT] Getting answers for sub-questions...")
@@ -115,6 +193,7 @@ class MOS(MOSCore):
                 chat_history=chat_history,
                 user_id=target_user_id,
                 search_engine=search_engine,
+                base_prompt=base_prompt,
             )
 
             # Step 6: Update chat history (same as core method)
@@ -149,7 +228,7 @@ class MOS(MOSCore):
         except Exception as e:
             logger.error(f"🔍 [CoT] Error in CoT enhancement: {e}")
             logger.info("🔍 [CoT] Falling back to standard chat")
-            return super().chat(query, user_id)
+            return super().chat(query, user_id, base_prompt=base_prompt)
 
     def _get_search_engine_for_cot_with_validation(
         self, user_cube_ids: list[str]
@@ -183,6 +262,7 @@ class MOS(MOSCore):
         chat_history: Any,
         user_id: str | None = None,
         search_engine: BaseTextMemory | None = None,
+        base_prompt: str | None = None,
     ) -> str:
         """
         Generate an enhanced response using sub-questions and their answers, with chat context.
@@ -193,6 +273,8 @@ class MOS(MOSCore):
             sub_answers (list[str]): List of answers to sub-questions.
             chat_history: The user's chat history.
             user_id (str, optional): User ID for context.
+            search_engine (BaseTextMemory, optional): Search engine for context retrieval.
+            base_prompt (str, optional): A custom base prompt for the chat.
 
         Returns:
             str: The enhanced response.
@@ -213,10 +295,10 @@ class MOS(MOSCore):
                     original_query, top_k=self.config.top_k, mode="fast"
                 )
             system_prompt = self._build_system_prompt(
-                search_memories
+                search_memories, base_prompt=base_prompt
             )  # Use the same system prompt builder
         else:
-            system_prompt = self._build_system_prompt()
+            system_prompt = self._build_system_prompt(base_prompt=base_prompt)
         current_messages = [
             {"role": "system", "content": system_prompt + SYNTHESIS_PROMPT.format(qa_text=qa_text)},
             *chat_history.chat_history,
@@ -261,7 +343,7 @@ class MOS(MOSCore):
         except Exception as e:
             logger.error(f"🔍 [CoT] Error generating enhanced response: {e}")
             # Fallback to standard chat
-            return super().chat(original_query, user_id)
+            return super().chat(original_query, user_id, base_prompt=base_prompt)
 
     @classmethod
     def cot_decompose(
