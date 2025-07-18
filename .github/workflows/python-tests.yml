@@ -89,6 +89,8 @@ jobs:
 
     # PyTest checks
     - name: Install all extra dependencies
+      # macos-13 doesn't support torch==2.7.1
+      # So, pytest won't work
       if: ${{ !startsWith(matrix.os, 'macos-13') }}
       run: |
         poetry install --no-interaction --extras all
