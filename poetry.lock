@@ -366,24 +366,29 @@ files = [
 
 [[package]]
 name = "chonkie"
-version = "1.1.0"
+version = "1.1.1"
 description = "🦛 CHONK your texts with Chonkie ✨ - The no-nonsense chunking library"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
 markers = "extra == \"mem-reader\" or extra == \"all\""
 files = [
-    {file = "chonkie-1.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:8de0021904b952f879a35b6d1d498b1a260dbac3c68b4b445dc4bfebee7ed975"},
-    {file = "chonkie-1.1.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:75138736da5bafbee8c47b5c538904e928ef217254c635b561ca9740472ede18"},
-    {file = "chonkie-1.1.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:31307dbfafb8cbfb807535500eed7e4849d2d391d33df53e0f03ebaeb220a021"},
-    {file = "chonkie-1.1.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ab542a485d7caef6a452bb8df9033a0e83e5710a631a5f49606b805487f5465a"},
-    {file = "chonkie-1.1.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:cd7beb1013b9e93fab78d450972e46fec9781bf8330757da51f138bb89c23f14"},
-    {file = "chonkie-1.1.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dda97475be316bf119e665e2990b8fbcbae69220c92f495c3ac395c1bc81d482"},
-    {file = "chonkie-1.1.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:9ba0cc92587546591e4f80ecdeaa1141f943b644b47e1979ce53d3ad039f4f11"},
-    {file = "chonkie-1.1.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f3dba3bbb3fefdf093f4c6d7d8a1dfdc85cd6d709de2dea1fed209808e7fbda2"},
-    {file = "chonkie-1.1.0-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:241cf2f634325b61661414348e9cc59741fae09fd3c923bf9a6667e3f87c995b"},
-    {file = "chonkie-1.1.0-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:802732c16c308145334cd6808f8b562d98b1fb219bd2e94420343242260b0ce7"},
-    {file = "chonkie-1.1.0.tar.gz", hash = "sha256:a3c145f7b94820fd3bee366714996abb0900a2302baa89ec7f948173c6ba4257"},
+    {file = "chonkie-1.1.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:c56cff89f38ff5cc06b2e8b4c9a802b85b77ba8ecdda6896f5dba6b0c54d4303"},
+    {file = "chonkie-1.1.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8bb0d88b4254a9bac7b494349ee3c94f94d3ee2f8cd4970d23e0c0ef3e6392a4"},
+    {file = "chonkie-1.1.1-cp310-cp310-win_amd64.whl", hash = "sha256:515f200597f86a4e877d8f57cb21e50b5ab67df123f796cf87396c9ad3dd5f73"},
+    {file = "chonkie-1.1.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:ebb19d8888f7c4cac6c32bd3fd050cfec3067e21fb4bb02ea95795d19a8954cb"},
+    {file = "chonkie-1.1.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3f0f85f1682809564377fdbdbf36d1d170f5ec904ad81297c7bc1ad96617033c"},
+    {file = "chonkie-1.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:0644f2664b563550c520f33f54586cfe6fcc0892de79078e41c2e1e1488e8d81"},
+    {file = "chonkie-1.1.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:c9e3249d55173c08fb9692992ce5021704a83c91c01615f1386748b0cb24a25e"},
+    {file = "chonkie-1.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:acfc4f6827e2bba98c31805fcd71feba654957140c42970a3bd995eff89625b7"},
+    {file = "chonkie-1.1.1-cp312-cp312-win_amd64.whl", hash = "sha256:afad359a02f3db46d3fcad2639d062ead5a3ad2bae45cb9f511ae0efdec79656"},
+    {file = "chonkie-1.1.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:ecf8f99a9f5981d399b22d69c050a8dab4e376d221f6bb298bbc126571315049"},
+    {file = "chonkie-1.1.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:653f53702f286df1348657702f2660010cabb2dee90c8783978d5adfa818fec4"},
+    {file = "chonkie-1.1.1-cp313-cp313-win_amd64.whl", hash = "sha256:5905b31adf73006b832f4bd20f8f31a180b31114d9c75e9b8ff2ca74d12a2172"},
+    {file = "chonkie-1.1.1-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:11130d189252dabace35967d2b8d16d325448fec2e0b8a926fcd333c0093737b"},
+    {file = "chonkie-1.1.1-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:35038142af6141c26bc777c195a440c56693d9def7ffc4e647cec8e0493904a6"},
+    {file = "chonkie-1.1.1-cp39-cp39-win_amd64.whl", hash = "sha256:e2e00362bbc697dc345dcdf3b77853bd3848a1377e79074aad64ce8dac319d42"},
+    {file = "chonkie-1.1.1.tar.gz", hash = "sha256:391f90bd137fba5b82ed34411082a2abe46b6d12c00d75d73655f59f6c1ae504"},
 ]
 
 [package.dependencies]
@@ -394,6 +399,7 @@ all = ["accelerate (>=1.6.0)", "chromadb (>=1.0.0)", "cohere (>=5.13.0)", "googl
 chroma = ["chromadb (>=1.0.0)"]
 code = ["magika (>=0.6.0,<0.7.0)", "tree-sitter (>=0.20.0)", "tree-sitter-language-pack (>=0.7.0)"]
 cohere = ["cohere (>=5.13.0)", "numpy (>=2.0.0,<3.0)"]
+datasets = ["datasets (>=4.0.0)"]
 dev = ["coverage", "cython (>=3.0.0)", "datasets (>=1.14.0)", "mypy (>=1.11.0)", "pytest (>=6.2.0)", "pytest-asyncio (>=0.26.0)", "pytest-cov (>=4.0.0)", "pytest-xdist (>=2.5.0)", "ruff (>=0.0.265)", "transformers (>=4.0.0)"]
 gemini = ["google-genai (>=1.0.0)", "pydantic (>=2.0.0)"]
 genie = ["google-genai (>=1.0.0)", "pydantic (>=2.0.0)"]
@@ -1840,14 +1846,14 @@ trustcall = ">=0.0.39"
 
 [[package]]
 name = "langsmith"
-version = "0.4.6"
+version = "0.4.7"
 description = "Client library to connect to the LangSmith LLM Tracing and Evaluation Platform."
 optional = false
 python-versions = ">=3.9"
 groups = ["eval"]
 files = [
-    {file = "langsmith-0.4.6-py3-none-any.whl", hash = "sha256:900e83fe59ee672bcf2f75c8bb47cd012bf8154d92a99c0355fc38b6485cbd3e"},
-    {file = "langsmith-0.4.6.tar.gz", hash = "sha256:9189dbc9c60f2086ca3a1f0110cfe3aff6b0b7c2e0e3384f9572e70502e7933c"},
+    {file = "langsmith-0.4.7-py3-none-any.whl", hash = "sha256:de91f1abdd65da369996f8eedb5201f442110c9c3bde5babc6f5300f07da65df"},
+    {file = "langsmith-0.4.7.tar.gz", hash = "sha256:3864cf29295c2565c578e93d1533f5b39e2b4af616545ace30f069635a319890"},
 ]
 
 [package.dependencies]
@@ -5733,14 +5739,14 @@ files = [
 
 [[package]]
 name = "zep-cloud"
-version = "2.18.0"
+version = "2.19.0"
 description = ""
 optional = false
 python-versions = "<4.0,>=3.9.0"
 groups = ["eval"]
 files = [
-    {file = "zep_cloud-2.18.0-py3-none-any.whl", hash = "sha256:d2e2f11f81d155441c8b32ffa36167c1a07458cc5ef4b297cec87ad6ebb9da1d"},
-    {file = "zep_cloud-2.18.0.tar.gz", hash = "sha256:4b6d90d84a21dc7ec35397accc3f02d58f166cc0e5a3f2d60a53828f4b8134d2"},
+    {file = "zep_cloud-2.19.0-py3-none-any.whl", hash = "sha256:5372fa74502976e558ce89b7034a47c601a0fba5b1c9d3a2adb1452fd73b5e9a"},
+    {file = "zep_cloud-2.19.0.tar.gz", hash = "sha256:9683d8347acf21723434bfc6568602b5627928419cb5a9e3695fa6b2839d58c7"},
 ]
 
 [package.dependencies]
@@ -5870,4 +5876,4 @@ tree-mem = ["neo4j", "schedule", "scikit-learn"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "d5d128d60ec3d62608444e1c74e058b94523c66b0490d7969ac0b48819bd10e6"
+content-hash = "ae014e5b508b1611904647978477b3bbe9dd8415a200ff833354adac6c0f13b5"
