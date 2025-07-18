@@ -42,6 +42,7 @@ dependencies = [
     "tenacity (>=9.1.2,<10.0.0)",  # Error handling and retrying library
     "fastapi[all] (>=0.115.12,<0.116.0)",  # Web framework for building APIs
     "sqlalchemy (>=2.0.41,<3.0.0)",  # SQL toolkit
+    "scikit-learn (>=1.7.0,<2.0.0)",  # Machine learning
 ]
 
 [project.urls]
@@ -65,7 +66,6 @@ memos = "memos.cli:main"
 tree-mem = [
     "neo4j (>=5.28.1,<6.0.0)",  # Graph database
     "schedule (>=1.2.2,<2.0.0)",  # Task scheduling
-    "scikit-learn (>=1.7.0,<2.0.0)",  # Machine learning
 ]
 
 # MemScheduler
@@ -84,10 +84,8 @@ mem-reader = [
 # Allow users to install with `pip install MemoryOS[all]`
 all = [
     # Exist in the above optional groups
-    "qdrant-client (>=1.14.2,<2.0.0)",
     "neo4j (>=5.28.1,<6.0.0)",
     "schedule (>=1.2.2,<2.0.0)",
-    "scikit-learn (>=1.7.0,<2.0.0)",
     "redis (>=6.2.0,<7.0.0)",
     "pika (>=1.3.2,<2.0.0)",
     "chonkie (>=1.0.7,<2.0.0)",
@@ -98,6 +96,7 @@ all = [
     # We kindof don't want users to install them.
     "torch (>=2.7.1,<3.0.0)",
     "sentence-transformers (>=4.1.0,<5.0.0)",
+    "qdrant-client (>=1.14.2,<2.0.0)",
     "volcengine-python-sdk (>=4.0.4,<5.0.0)",
 
     # Uncategorized dependencies

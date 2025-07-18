@@ -1524,7 +1524,6 @@ files = [
     {file = "joblib-1.5.1-py3-none-any.whl", hash = "sha256:4719a31f054c7d766948dcd83e9613686b27114f190f717cec7eaa2084f8a74a"},
     {file = "joblib-1.5.1.tar.gz", hash = "sha256:f4f86e351f39fe3d0d32a9f2c3d8af1ee4cec285aafcb27003dda5205576b444"},
 ]
-markers = {main = "extra == \"tree-mem\" or extra == \"all\""}
 
 [[package]]
 name = "jsonpatch"
@@ -4275,10 +4274,9 @@ timezone = ["pytz"]
 name = "scikit-learn"
 version = "1.7.0"
 description = "A set of python modules for machine learning and data mining"
-optional = true
+optional = false
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"tree-mem\" or extra == \"all\""
 files = [
     {file = "scikit_learn-1.7.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9fe7f51435f49d97bd41d724bb3e11eeb939882af9c29c931a8002c357e8cdd5"},
     {file = "scikit_learn-1.7.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:d0c93294e1e1acbee2d029b1f2a064f26bd928b284938d51d412c22e0c977eb3"},
@@ -4755,10 +4753,9 @@ test = ["pytest", "tornado (>=4.5)", "typeguard"]
 name = "threadpoolctl"
 version = "3.6.0"
 description = "threadpoolctl"
-optional = true
+optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"tree-mem\" or extra == \"all\""
 files = [
     {file = "threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb"},
     {file = "threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e"},
@@ -5868,12 +5865,12 @@ cffi = {version = ">=1.11", markers = "platform_python_implementation == \"PyPy\
 cffi = ["cffi (>=1.11)"]
 
 [extras]
-all = ["chonkie", "markitdown", "neo4j", "pika", "qdrant-client", "redis", "schedule", "scikit-learn", "sentence-transformers", "torch", "volcengine-python-sdk"]
+all = ["chonkie", "markitdown", "neo4j", "pika", "qdrant-client", "redis", "schedule", "sentence-transformers", "torch", "volcengine-python-sdk"]
 mem-reader = ["chonkie", "markitdown"]
 mem-scheduler = ["pika", "redis"]
-tree-mem = ["neo4j", "schedule", "scikit-learn"]
+tree-mem = ["neo4j", "schedule"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "ae014e5b508b1611904647978477b3bbe9dd8415a200ff833354adac6c0f13b5"
+content-hash = "e072d74f80e118b785c887b9724f104868e07af8a5ce9e594420700c18d5806a"
