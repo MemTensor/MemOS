@@ -43,12 +43,10 @@ class DeepSeekLLM(OpenAILLM):
             extra_body=self.config.extra_body,
         )
         # Streaming chunks of text
-        reasoning_parts = ""
         answer_parts = ""
         for chunk in response:
             delta = chunk.choices[0].delta
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                reasoning_parts += delta.reasoning_content
                 yield delta.reasoning_content
 
             if hasattr(delta, "content") and delta.content:
