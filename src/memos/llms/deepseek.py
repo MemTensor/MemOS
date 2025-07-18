@@ -31,7 +31,7 @@ class DeepSeekLLM(OpenAILLM):
         else:
             return response_content
 
-    def generate_stream(self, messages: MessageList, **kwargs):
+    def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from DeepSeek."""
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
