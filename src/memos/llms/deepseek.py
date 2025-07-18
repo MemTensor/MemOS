@@ -50,5 +50,4 @@ class DeepSeekLLM(OpenAILLM):
                 yield delta.reasoning_content
 
             if hasattr(delta, "content") and delta.content:
-                answer_parts += delta.content
                 yield delta.content
