@@ -32,7 +32,7 @@ PROMPT = """
 # Short answer:
 """
 
-TECHNIQUES = ["mem0", "rag"]
+TECHNIQUES = ["rag"]
 
 
 class RAGManager:
@@ -239,7 +239,6 @@ def process_item(item_data):
                 "response_duration_ms": float(response_time) * 1000,
                 "search_duration_ms": float(search_time) * 1000,
                 "search_context": search_context,
-                # "llm_score_std":np.std(llm_score)
             }
         )
 
@@ -308,12 +307,12 @@ def main():
     parser.add_argument(
         "--output_folder",
         type=str,
-        default="results/locomo/mem0-default/",
+        default="results/locomo/rag-default/",
         help="Output path for results",
     )
     parser.add_argument("--top_k", type=int, default=30, help="Number of top memories to retrieve")
     parser.add_argument("--num_chunks", type=int, default=2, help="Number of chunks to process")
-    parser.add_argument("--frame", type=str, default="mem0")
+    parser.add_argument("--frame", type=str, default="rag")
     parser.add_argument("--version", type=str, default="default")
 
     args = parser.parse_args()
