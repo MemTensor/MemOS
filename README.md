@@ -147,21 +147,31 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 pip install MemoryOS
 ```
 
-### Development Install
+### Optional Dependencies
 
-To contribute to MemOS, clone the repository and install it in editable mode:
+MemOS provides several optional dependency groups for different features. You can install them based on your needs.
+
+| Feature               | Package Name              |
+| --------------------- | ------------------------- |
+| Tree Memory           | `MemoryOS[tree-mem]`      |
+| Memory Reader         | `MemoryOS[mem-reader]`    |
+| Memory Scheduler      | `MemoryOS[mem-scheduler]` |
+
+Example installation commands:
 
 ```bash
-git clone https://github.com/MemTensor/MemOS.git
-cd MemOS
-make install
+pip install MemoryOS[tree-mem]
+pip install MemoryOS[tree-mem,mem-reader]
+pip install MemoryOS[mem-scheduler]
+pip install MemoryOS[tree-mem,mem-reader,mem-scheduler]
 ```
 
-### Optional Dependencies
+### External Dependencies
 
 #### Ollama Support
 
 To use MemOS with [Ollama](https://ollama.com/), first install the Ollama CLI:
+
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
