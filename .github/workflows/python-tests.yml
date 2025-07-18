@@ -26,6 +26,7 @@ jobs:
         os:
           - "ubuntu-latest"
           - "windows-latest"
+          - "macos-13"
           - "macos-14"
           - "macos-15"
           # Ref: https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-where-your-workflow-runs/choosing-the-runner-for-a-job
@@ -77,14 +78,21 @@ jobs:
         pip install dist/*.tar.gz
         pip uninstall -y memoryos
 
-    # Ruff and PyTest checks
-    - name: Install all dependencies
+    # Ruff checks
+    - name: Install test group dependencies
       run: |
-        poetry install --no-interaction --extras all --with test
+        poetry install --no-interaction --with test
     - name: Ruff checks
       run: |
         poetry run ruff check
         poetry run ruff format --check
+
+    # PyTest checks
+    - name: Install all extra dependencies
+      #if: ${{ !startsWith(matrix.os, 'macos-13') }}
+      run: |
+        poetry install --no-interaction --extras all
     - name: PyTest unit tests
+      #if: ${{ !startsWith(matrix.os, 'macos-13') }}
       run: |
         poetry run pytest tests -vv --durations=10
