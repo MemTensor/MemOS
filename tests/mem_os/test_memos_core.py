@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from memos.configs.mem_os import MOSConfig
+from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
@@ -284,16 +285,15 @@ class TestMOSMemoryOperations:
         mock_user_manager_class.return_value = mock_user_manager
         mock_user_manager.get_cube.return_value = None  # Cube doesn't exist
 
-        with patch("memos.mem_os.core.GeneralMemCube") as mock_general_cube:
-            mock_general_cube.init_from_dir.return_value = mock_mem_cube
-
+        # Mock only the static method, not the entire class
+        with patch.object(GeneralMemCube, "init_from_dir", return_value=mock_mem_cube):
             mos = MOSCore(MOSConfig(**mock_config))
 
             with patch("os.path.exists", return_value=True):
                 mos.register_mem_cube("test_cube_path", "test_cube_1")
 
             assert "test_cube_1" in mos.mem_cubes
-            mock_general_cube.init_from_dir.assert_called_once_with("test_cube_path")
+            GeneralMemCube.init_from_dir.assert_called_once_with("test_cube_path")
 
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
@@ -369,9 +369,8 @@ class TestMOSMemoryOperations:
         # Mock the cube's text memory embedder config
         mock_mem_cube.text_mem.config.embedder = cube_embedder_config
 
-        with patch("memos.mem_os.core.GeneralMemCube") as mock_general_cube:
-            mock_general_cube.init_from_dir.return_value = mock_mem_cube
-
+        # Mock only the static method, not the entire class
+        with patch.object(GeneralMemCube, "init_from_dir", return_value=mock_mem_cube):
             mos = MOSCore(MOSConfig(**mock_config))
 
             # Ensure MOS config has different embedder
@@ -387,7 +386,7 @@ class TestMOSMemoryOperations:
 
             # Verify cube was still registered
             assert "test_cube_1" in mos.mem_cubes
-            mock_general_cube.init_from_dir.assert_called_once_with("test_cube_path")
+            GeneralMemCube.init_from_dir.assert_called_once_with("test_cube_path")
 
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
@@ -423,9 +422,8 @@ class TestMOSMemoryOperations:
         # Mock the cube's text memory embedder config to be the same
         mock_mem_cube.text_mem.config.embedder = embedder_config
 
-        with patch("memos.mem_os.core.GeneralMemCube") as mock_general_cube:
-            mock_general_cube.init_from_dir.return_value = mock_mem_cube
-
+        # Mock only the static method, not the entire class
+        with patch.object(GeneralMemCube, "init_from_dir", return_value=mock_mem_cube):
             mos = MOSCore(MOSConfig(**mock_config))
 
             # Ensure MOS config has same embedder
@@ -446,7 +444,7 @@ class TestMOSMemoryOperations:
 
             # Verify cube was still registered
             assert "test_cube_1" in mos.mem_cubes
-            mock_general_cube.init_from_dir.assert_called_once_with("test_cube_path")
+            GeneralMemCube.init_from_dir.assert_called_once_with("test_cube_path")
 
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
