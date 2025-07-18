@@ -14,18 +14,6 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
-def _parse_node(node_data: dict[str, Any]) -> dict[str, Any]:
-    node = node_data.copy()
-
-    # Convert Neo4j datetime to string
-    for time_field in ("created_at", "updated_at"):
-        if time_field in node and hasattr(node[time_field], "isoformat"):
-            node[time_field] = node[time_field].isoformat()
-    node.pop("user_name", None)
-
-    return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
-
-
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     node_id = item["id"]
     memory = item["memory"]
@@ -349,7 +337,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             record = session.run(query, params).single()
-            return _parse_node(dict(record["n"])) if record else None
+            return self._parse_node(dict(record["n"])) if record else None
 
     def get_nodes(self, ids: list[str]) -> list[dict[str, Any]]:
         """
@@ -377,7 +365,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in results]
+            return [self._parse_node(dict(record["n"])) for record in results]
 
     def get_edges(self, id: str, type: str = "ANY", direction: str = "ANY") -> list[dict[str, str]]:
         """
@@ -493,7 +481,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in result]
+            return [self._parse_node(dict(record["n"])) for record in result]
 
     def get_children_with_embeddings(self, id: str) -> list[dict[str, Any]]:
         where_user = ""
@@ -575,8 +563,8 @@ class Neo4jGraphDB(BaseGraphDB):
             if not centers or centers[0] is None:
                 return {"core_node": None, "neighbors": [], "edges": []}
 
-            core_node = _parse_node(dict(centers[0]))
-            neighbors = [_parse_node(dict(n)) for n in record["neighbors"] if n]
+            core_node = self._parse_node(dict(centers[0]))
+            neighbors = [self._parse_node(dict(n)) for n in record["neighbors"] if n]
             edges = []
             for rel_chain in record["rels"]:
                 for rel in rel_chain:
@@ -859,7 +847,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 params["user_name"] = self.config.user_name
 
             node_result = session.run(f"{node_query} RETURN n", params)
-            nodes = [_parse_node(dict(record["n"])) for record in node_result]
+            nodes = [self._parse_node(dict(record["n"])) for record in node_result]
 
             # Export edges
             edge_result = session.run(
@@ -946,7 +934,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in results]
+            return [self._parse_node(dict(record["n"])) for record in results]
 
     def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
         """
@@ -973,7 +961,9 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node({"id": record["id"], **dict(record["node"])}) for record in results]
+            return [
+                self._parse_node({"id": record["id"], **dict(record["node"])}) for record in results
+            ]
 
     def drop_database(self) -> None:
         """
@@ -1094,3 +1084,14 @@ class Neo4jGraphDB(BaseGraphDB):
                 if record["name"] == index_name:
                     return True
         return False
+
+    def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
+        node = node_data.copy()
+
+        # Convert Neo4j datetime to string
+        for time_field in ("created_at", "updated_at"):
+            if time_field in node and hasattr(node[time_field], "isoformat"):
+                node[time_field] = node[time_field].isoformat()
+        node.pop("user_name", None)
+
+        return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}

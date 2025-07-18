@@ -1,47 +1,34 @@
-import time
-
 from typing import Any
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ClientError
-
 from memos.configs.graph_db import Neo4jGraphDBConfig
-from memos.graph_dbs.neo4j import Neo4jGraphDB, _parse_node
+from memos.graph_dbs.neo4j import Neo4jGraphDB, _prepare_node_metadata
 from memos.log import get_logger
+from memos.vec_dbs.factory import VecDBFactory
+from memos.vec_dbs.item import VecDBItem
 
 
 logger = get_logger(__name__)
 
 
 class Neo4jCommunityGraphDB(Neo4jGraphDB):
-    """Neo4j-based implementation of a graph memory store."""
+    """
+    Neo4j Community Edition graph memory store.
+
+    Note:
+        This class avoids Enterprise-only features:
+        - No multi-database support
+        - No vector index
+        - No CREATE DATABASE
+    """
 
     def __init__(self, config: Neo4jGraphDBConfig):
-        """Neo4j-based implementation of a graph memory store.
+        assert config.auto_create is False
+        assert config.use_multi_db is False
+        # Call parent init
+        super().__init__(config)
 
-        Tenant Modes:
-        - use_multi_db = True:
-            Dedicated Database Mode (Multi-Database Multi-Tenant).
-            Each tenant or logical scope uses a separate Neo4j database.
-            `db_name` is the specific tenant database.
-            `user_name` can be None (optional).
-
-        - use_multi_db = False:
-            Shared Database Multi-Tenant Mode.
-            All tenants share a single Neo4j database.
-            `db_name` is the shared database.
-            `user_name` is required to isolate each tenant's data at the node level.
-            All node queries will enforce `user_name` in WHERE conditions and store it in metadata,
-            but it will be removed automatically before returning to external consumers.
-        """
-
-        self.config = config
-        self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
-        self.db_name = config.db_name
-        self.user_name = config.user_name
-        self.system_db_name = config.db_name
-        # Create only if not exists
-        self.create_index(dimensions=config.embedding_dimension)
+        # Init vector database
+        self.vec_db = VecDBFactory.from_config(config.vec_config)
 
     def create_index(
         self,
@@ -116,6 +103,54 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         with self.driver.session(database=self.db_name) as session:
             session.run(query)
 
+    def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
+        # Safely process metadata
+        metadata = _prepare_node_metadata(metadata)
+
+        # Extract required fields
+        embedding = metadata.pop("embedding", None)
+        if embedding is None:
+            raise ValueError(f"Missing 'embedding' in metadata for node {id}")
+
+        # Merge node and set metadata
+        created_at = metadata.pop("created_at")
+        updated_at = metadata.pop("updated_at")
+        vector_sync_status = "success"
+
+        try:
+            # Write to Vector DB
+            item = VecDBItem(
+                id=id,
+                vector=embedding,
+                payload={
+                    "memory": memory,
+                    "metadata": metadata,
+                    "vector_sync": vector_sync_status,
+                },
+            )
+            self.vec_db.add([item])
+        except Exception as e:
+            logger.warning(f"[VecDB] Vector insert failed for node {id}: {e}")
+            vector_sync_status = "failed"
+
+        metadata["vector_sync"] = vector_sync_status
+        query = """
+            MERGE (n:Memory {id: $id})
+            SET n.memory = $memory,
+                n.created_at = datetime($created_at),
+                n.updated_at = datetime($updated_at),
+                n += $metadata
+        """
+        with self.driver.session(database=self.db_name) as session:
+            session.run(
+                query,
+                id=id,
+                memory=memory,
+                created_at=created_at,
+                updated_at=updated_at,
+                metadata=metadata,
+            )
+
     def get_children_with_embeddings(self, id: str) -> list[dict[str, Any]]:
         where_user = ""
         params = {"id": id}
@@ -184,8 +219,8 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             if not centers or centers[0] is None:
                 return {"core_node": None, "neighbors": [], "edges": []}
 
-            core_node = _parse_node(dict(centers[0]))
-            neighbors = [_parse_node(dict(n)) for n in record["neighbors"] if n]
+            core_node = self._parse_node(dict(centers[0]))
+            neighbors = [self._parse_node(dict(n)) for n in record["neighbors"] if n]
             edges = []
             for rel_chain in record["rels"]:
                 for rel in rel_chain:
@@ -209,32 +244,42 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         threshold: float | None = None,
     ) -> list[dict]:
         """
-        Retrieve node IDs based on vector similarity.
+        Retrieve node IDs based on vector similarity using external vector DB.
 
         Args:
             vector (list[float]): The embedding vector representing query semantics.
             top_k (int): Number of top similar nodes to retrieve.
             scope (str, optional): Memory type filter (e.g., 'WorkingMemory', 'LongTermMemory').
-            status (str, optional): Node status filter (e.g., 'active', 'archived').
-                            If provided, restricts results to nodes with matching status.
+            status (str, optional): Node status filter (e.g., 'activated', 'archived').
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
 
         Notes:
-            - This method uses Neo4j native vector indexing to search for similar nodes.
-            - If scope is provided, it restricts results to nodes with matching memory_type.
-            - If 'status' is provided, only nodes with the matching status will be returned.
-            - If threshold is provided, only results with score >= threshold will be returned.
-            - Typical use case: restrict to 'status = activated' to avoid
-            matching archived or merged nodes.
+            - This method uses an external vector database (not Neo4j) to perform the search.
+            - If 'scope' is provided, it restricts results to nodes with matching memory_type.
+            - If 'status' is provided, it further filters nodes by status.
+            - If 'threshold' is provided, only results with score >= threshold will be returned.
+            - The returned IDs can be used to fetch full node data from Neo4j if needed.
         """
-        # TODO
-        from your_vector_index import vector_index
+        # Build VecDB filter
+        vec_filter = {}
+        if scope:
+            vec_filter["metadata.memory_type"] = scope
+        if status:
+            vec_filter["metadata.status"] = status
+        vec_filter["metadata.vector_sync"] = "success"
 
-        results = vector_index.query(vector, top_k=top_k)
-        return [{"id": item.id, "score": item.score} for item in results]
+        # Perform vector search
+        results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)
+
+        # Filter by threshold
+        if threshold is not None:
+            results = [r for r in results if r.score is None or r.score >= threshold]
+
+        # Return consistent format
+        return [{"id": r.id, "score": r.score} for r in results]
 
     def get_all_memory_items(self, scope: str) -> list[dict]:
         """
@@ -264,7 +309,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in results]
+            return [self._parse_node(dict(record["n"])) for record in results]
 
     def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
         """
@@ -291,7 +336,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node({"id": record["id"], **dict(record["node"])}) for record in results]
+            return [
+                self._parse_node({"id": record["id"], **dict(record["node"])}) for record in results
+            ]
 
     def drop_database(self) -> None:
         """
@@ -303,28 +350,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             f"Shared Database Multi-Tenant mode"
         )
 
+    # Avoid enterprise feature
     def _ensure_database_exists(self):
-        try:
-            with self.driver.session(database="system") as session:
-                session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
-        except ClientError as e:
-            if "ExistingDatabaseFound" in str(e):
-                pass  # Ignore, database already exists
-            else:
-                raise
-
-        # Wait until the database is available
-        for _ in range(10):
-            with self.driver.session(database=self.system_db_name) as session:
-                result = session.run(
-                    "SHOW DATABASES YIELD name, currentStatus RETURN name, currentStatus"
-                )
-                status_map = {r["name"]: r["currentStatus"] for r in result}
-                if self.db_name in status_map and status_map[self.db_name] == "online":
-                    return
-            time.sleep(1)
-
-        raise RuntimeError(f"Database {self.db_name} not ready after waiting.")
+        pass
 
     def _create_basic_property_indexes(self) -> None:
         """
@@ -375,3 +403,23 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 if record["name"] == index_name:
                     return True
         return False
+
+    def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
+        """Parse Neo4j node and optionally fetch embedding from vector DB."""
+        node = node_data.copy()
+
+        # Convert Neo4j datetime to string
+        for time_field in ("created_at", "updated_at"):
+            if time_field in node and hasattr(node[time_field], "isoformat"):
+                node[time_field] = node[time_field].isoformat()
+        node.pop("user_name", None)
+
+        new_node = {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
+        try:
+            vec_item = self.vec_db.get_by_id(new_node["id"])
+            if vec_item and vec_item.vector:
+                new_node["embedding"] = vec_item.vector
+        except Exception as e:
+            logger.warning(f"Failed to fetch vector for node {new_node['id']}: {e}")
+            new_node["embedding"] = None
+        return new_node
