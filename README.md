@@ -17,6 +17,9 @@
     <a href="https://pypi.org/project/MemoryOS">
       <img src="https://img.shields.io/pypi/pyversions/MemoryOS.svg" alt="Supported Python versions">
     </a>
+    <a href="https://pypi.org/project/MemoryOS">
+      <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Supported Platforms">
+    </a>
     <a href="https://memos-docs.openmem.net/home/overview/">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>
@@ -137,13 +140,6 @@ print(f"text_memories: {retrieved_memories['text_mem']}")
 For more detailed examples, please check out the [`examples`](./examples) directory.
 
 ## 📦 Installation
-
-> [!WARNING]
-> MemOS is compatible with Linux, Windows, and macOS.
->
-> However, if you're using macOS, please note that there may be dependency issues that are difficult to resolve.
->
-> For example, compatibility with macOS 13 Ventura is currently challenging.
 
 ### Install via pip
 
