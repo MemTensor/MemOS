@@ -3,11 +3,10 @@ import pickle
 
 from datetime import datetime
 
-import torch
-
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
+from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import KVCacheItem
@@ -20,6 +19,10 @@ class KVCacheMemory(BaseActMemory):
     This memory type is designed to store and retrieve key-value caches.
     """
 
+    @require_python_package(
+        import_name="torch",
+        install_link="https://pytorch.org/get-started/locally/",
+    )
     def __init__(self, config: KVCacheMemoryConfig) -> None:
         """Initialize the KV Cache Memory with a configuration."""
         self.config = config
@@ -139,6 +142,8 @@ class KVCacheMemory(BaseActMemory):
         Args:
             dir (str): The directory containing the memory files.
         """
+        import torch
+
         file_path = os.path.join(dir, self.config.memory_filename)
 
         if not os.path.exists(file_path):
@@ -197,6 +202,8 @@ class KVCacheMemory(BaseActMemory):
         Faster concat merge: for each layer, gather all caches' tensors
         and do a single torch.cat per layer.
         """
+        import torch
+
         assert caches, "Need at least one cache"
         if len(caches) == 1:
             return caches[0]
@@ -215,7 +222,7 @@ class KVCacheMemory(BaseActMemory):
         return merged
 
 
-def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: torch.device) -> DynamicCache:
+def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
     """
     In SimpleMemChat.run(), if self.config.enable_activation_memory is enabled,
     we load serialized kv cache from a [class KVCacheMemory] object, which has a kv_cache_memories on CPU.

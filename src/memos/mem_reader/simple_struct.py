@@ -208,15 +208,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         for i, chunk_res in enumerate(processed_chunks):
             if chunk_res:
                 node_i = TextualMemoryItem(
-                    memory=chunk_res["summary"],
+                    memory=chunk_res["value"],
                     metadata=TreeNodeTextualMemoryMetadata(
                         user_id=info.get("user_id"),
                         session_id=info.get("session_id"),
                         memory_type="LongTermMemory",
                         status="activated",
                         tags=chunk_res["tags"],
-                        key="",
-                        embedding=self.embedder.embed([chunk_res["summary"]])[0],
+                        key=chunk_res["key"],
+                        embedding=self.embedder.embed([chunk_res["value"]])[0],
                         usage=[],
                         sources=[f"{scene_data_info['file']}_{i}"],
                         background="",

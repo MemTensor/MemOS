@@ -3,10 +3,8 @@ import time
 from datetime import datetime
 from typing import Any, Literal
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ClientError
-
 from memos.configs.graph_db import Neo4jGraphDBConfig
+from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 
@@ -45,6 +43,11 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 class Neo4jGraphDB(BaseGraphDB):
     """Neo4j-based implementation of a graph memory store."""
 
+    @require_python_package(
+        import_name="neo4j",
+        install_command="pip install neo4j",
+        install_link="https://neo4j.com/docs/python-manual/current/install/",
+    )
     def __init__(self, config: Neo4jGraphDBConfig):
         """Neo4j-based implementation of a graph memory store.
 
@@ -63,6 +66,7 @@ class Neo4jGraphDB(BaseGraphDB):
             All node queries will enforce `user_name` in WHERE conditions and store it in metadata,
             but it will be removed automatically before returning to external consumers.
         """
+        from neo4j import GraphDatabase
 
         self.config = config
         self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
@@ -984,6 +988,8 @@ class Neo4jGraphDB(BaseGraphDB):
             )
 
     def _ensure_database_exists(self):
+        from neo4j.exceptions import ClientError
+
         try:
             with self.driver.session(database="system") as session:
                 session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
