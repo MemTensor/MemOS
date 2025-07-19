@@ -24,11 +24,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
     def __init__(self, config: Neo4jGraphDBConfig):
         assert config.auto_create is False
         assert config.use_multi_db is False
-        # Call parent init
-        super().__init__(config)
-
         # Init vector database
         self.vec_db = VecDBFactory.from_config(config.vec_config)
+        # Call parent init
+        super().__init__(config)
 
     def create_index(
         self,
@@ -239,6 +238,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         Create standard B-tree indexes on user_name when use Shared Database
         Multi-Tenant Mode
         """
+        # Step 1: Neo4j indexes
         try:
             with self.driver.session(database=self.db_name) as session:
                 session.run("""
@@ -269,6 +269,25 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 logger.debug("Index 'memory_user_name_index' ensured.")
         except Exception as e:
             logger.warning(f"Failed to create basic property indexes: {e}")
+
+        # Step 2: Qdrant payload indexes
+        try:
+            # Qdrant supports `create_payload_index`, which is idempotent
+            self.vec_db.client.create_payload_index(
+                collection_name=self.vec_db.config.collection_name,
+                field_name="user_name",
+                field_schema="keyword",
+            )
+            logger.debug("Qdrant payload index on 'user_name' ensured.")
+
+            self.vec_db.client.create_payload_index(
+                collection_name=self.vec_db.config.collection_name,
+                field_name="memory_type",
+                field_schema="keyword",
+            )
+            logger.debug("Qdrant payload index on 'memory_type' ensured.")
+        except Exception as e:
+            logger.warning(f"Failed to create Qdrant payload indexes: {e}")
 
     def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
         """Parse Neo4j node and optionally fetch embedding from vector DB."""
