@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.10"
 authors = [
     {name = "MemTensor", email = "MemTensor@memtensor.cn"}
 ]
@@ -124,6 +124,7 @@ build-backend = "poetry.core.masonry.api"
 
 packages = [{include = "memos", from = "src"}]
 requires-poetry = ">=2.0"
+dependencies = { "python" = ">=3.10,<4.0" }
 
 [tool.poetry.group.dev]
 optional = true
