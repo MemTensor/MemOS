@@ -9,10 +9,8 @@ from queue import PriorityQueue
 from typing import Literal
 
 import numpy as np
-import schedule
 
-from sklearn.cluster import MiniBatchKMeans
-
+from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
 from memos.graph_dbs.neo4j import Neo4jGraphDB
@@ -115,11 +113,18 @@ class GraphStructureReorganizer:
                 logger.error(traceback.format_exc())
             self.queue.task_done()
 
+    @require_python_package(
+        import_name="schedule",
+        install_command="pip install schedule",
+        install_link="https://schedule.readthedocs.io/en/stable/installation.html",
+    )
     def _run_structure_organizer_loop(self):
         """
         Use schedule library to periodically trigger structure optimization.
         This runs until the stop flag is set.
         """
+        import schedule
+
         schedule.every(20).seconds.do(self.optimize_structure, scope="LongTermMemory")
         schedule.every(20).seconds.do(self.optimize_structure, scope="UserMemory")
 
@@ -376,6 +381,11 @@ class GraphStructureReorganizer:
 
         return result_subclusters
 
+    @require_python_package(
+        import_name="sklearn",
+        install_command="pip install scikit-learn",
+        install_link="https://scikit-learn.org/stable/install.html",
+    )
     def _partition(self, nodes, min_cluster_size: int = 3, max_cluster_size: int = 20):
         """
         Partition nodes by:
@@ -390,6 +400,8 @@ class GraphStructureReorganizer:
         Returns:
             List of clusters, each as a list of GraphDBNode
         """
+        from sklearn.cluster import MiniBatchKMeans
+
         # 1) Count all tags
         tag_counter = Counter()
         for node in nodes:

@@ -9,8 +9,8 @@ from memos.configs.chunker import ChunkerConfigFactory
 class TestSentenceChunker(unittest.TestCase):
     def test_sentence_chunker(self):
         """Test SentenceChunker functionality with mocked backend."""
-        with patch("memos.chunkers.sentence_chunker.ChonkieSentenceChunker") as mock_chunker_cls:
-            # Set up the mock for ChonkieSentenceChunker
+        with patch("chonkie.SentenceChunker") as mock_chunker_cls:
+            # Set up the mock for SentenceChunker
             mock_chunker = MagicMock()
             mock_chunks = [
                 MagicMock(

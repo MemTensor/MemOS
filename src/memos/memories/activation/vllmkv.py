@@ -4,6 +4,7 @@ import pickle
 from datetime import datetime
 
 from memos.configs.memory import KVCacheMemoryConfig
+from memos.dependency import require_python_package
 from memos.llms.factory import LLMFactory
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.activation.item import VLLMKVCacheItem
@@ -17,6 +18,10 @@ class VLLMKVCacheMemory(BaseActMemory):
     Unlike traditional KV cache that stores DynamicCache objects, vLLM handles cache on server side.
     """
 
+    @require_python_package(
+        import_name="torch",
+        install_link="https://pytorch.org/get-started/locally/",
+    )
     def __init__(self, config: KVCacheMemoryConfig) -> None:
         """Initialize the VLLM KV Cache Memory with a configuration."""
         self.config = config

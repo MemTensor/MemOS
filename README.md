@@ -17,6 +17,9 @@
     <a href="https://pypi.org/project/MemoryOS">
       <img src="https://img.shields.io/pypi/pyversions/MemoryOS.svg" alt="Supported Python versions">
     </a>
+    <a href="https://pypi.org/project/MemoryOS">
+      <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Supported Platforms">
+    </a>
     <a href="https://memos-docs.openmem.net/home/overview/">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>
@@ -138,34 +141,37 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 
 ## 📦 Installation
 
-> [!WARNING]
-> MemOS is compatible with Linux, Windows, and macOS.
->
-> However, if you're using macOS, please note that there may be dependency issues that are difficult to resolve.
->
-> For example, compatibility with macOS 13 Ventura is currently challenging.
-
 ### Install via pip
 
 ```bash
 pip install MemoryOS
 ```
 
-### Development Install
+### Optional Dependencies
 
-To contribute to MemOS, clone the repository and install it in editable mode:
+MemOS provides several optional dependency groups for different features. You can install them based on your needs.
+
+| Feature               | Package Name              |
+| --------------------- | ------------------------- |
+| Tree Memory           | `MemoryOS[tree-mem]`      |
+| Memory Reader         | `MemoryOS[mem-reader]`    |
+| Memory Scheduler      | `MemoryOS[mem-scheduler]` |
+
+Example installation commands:
 
 ```bash
-git clone https://github.com/MemTensor/MemOS.git
-cd MemOS
-make install
+pip install MemoryOS[tree-mem]
+pip install MemoryOS[tree-mem,mem-reader]
+pip install MemoryOS[mem-scheduler]
+pip install MemoryOS[tree-mem,mem-reader,mem-scheduler]
 ```
 
-### Optional Dependencies
+### External Dependencies
 
 #### Ollama Support
 
 To use MemOS with [Ollama](https://ollama.com/), first install the Ollama CLI:
+
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```

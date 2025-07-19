@@ -1,9 +1,7 @@
 import logging
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
 from memos.configs.mem_scheduler import BaseSchedulerConfig
+from memos.dependency import require_python_package
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -68,6 +66,11 @@ class SchedulerRetriever(BaseSchedulerModule):
             results = []
         return results
 
+    @require_python_package(
+        import_name="sklearn",
+        install_command="pip install scikit-learn",
+        install_link="https://scikit-learn.org/stable/install.html",
+    )
     def filter_similar_memories(
         self, text_memories: list[str], similarity_threshold: float = 0.75
     ) -> list[str]:
@@ -82,6 +85,9 @@ class SchedulerRetriever(BaseSchedulerModule):
         Returns:
             List of filtered memories with duplicates removed
         """
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+
         if not text_memories:
             logging.warning("Received empty memories list - nothing to filter")
             return []
