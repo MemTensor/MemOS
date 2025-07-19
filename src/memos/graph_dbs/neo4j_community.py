@@ -210,8 +210,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Step2: Clear the vector db
         try:
             items = self.vec_db.get_by_filter({"user_name": self.config.user_name})
-            self.vec_db.delete([item.id for item in items])
-            logger.info(f"Cleared {len(items)} vectors for user '{self.config.user_name}'.")
+            if items:
+                self.vec_db.delete([item.id for item in items])
+                logger.info(f"Cleared {len(items)} vectors for user '{self.config.user_name}'.")
+            else:
+                logger.info(f"No vectors to clear for user '{self.config.user_name}'.")
         except Exception as e:
             logger.warning(f"Failed to clear vector DB for user '{self.config.user_name}': {e}")
 
