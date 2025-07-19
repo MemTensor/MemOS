@@ -158,6 +158,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if status:
             vec_filter["status"] = status
         vec_filter["vector_sync"] = "success"
+        vec_filter["user_name"] = self.config.user_name
 
         # Perform vector search
         results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)

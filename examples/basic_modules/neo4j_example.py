@@ -358,18 +358,21 @@ def run_user_session(
                 "uri": "bolt://localhost:7687",
                 "user": "neo4j",
                 "password": "12345678",
-                "db_name": "neo4j",
+                "db_name": db_name,
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": False,  # Neo4j Community does not allow auto DB creation
                 "embedding_dimension": 768,
-                "vec_config": {  # Pass nested config to initialize external vector DB
+                "vec_config": {
+                    # Pass nested config to initialize external vector DB
+                    # If you use qdrant, please use Server instead of local mode.
                     "backend": "qdrant",
                     "config": {
-                        "collection_name": f"{user_name}_memory",
+                        "collection_name": "neo4j_vec_db",
                         "vector_dimension": 768,
                         "distance_metric": "cosine",
-                        "path": "./qdrant_data",  # or any valid path
+                        "host": "localhost",
+                        "port": 6333,
                     },
                 },
             },
@@ -460,7 +463,8 @@ def run_user_session(
     vector = embed_memory_item("How is memory retrieved?")
     search_result = graph.search_by_embedding(vector, top_k=2)
     for r in search_result:
-        print("🔍 Search result:", graph.get_node(r["id"])["memory"])
+        node = graph.get_node(r["id"])
+        print("🔍 Search result:", node["memory"])
 
     # === Step 5: Tag-based neighborhood discovery ===
     neighbors = graph.get_neighbors_by_tag(["concept"], exclude_ids=[], top_k=2)
@@ -534,4 +538,4 @@ if __name__ == "__main__":
     example_complex_shared_db(db_name="shared-traval-group-complex-new")
 
     print("\n=== Example: Single-Community-DB-Complex ===")
-    example_complex_shared_db(db_name="neo4j", community=True)
+    example_complex_shared_db(db_name="paper", community=True)
