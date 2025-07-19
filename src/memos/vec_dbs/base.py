@@ -56,6 +56,10 @@ class BaseVecDB(ABC):
         """Get an item from the vector database."""
 
     @abstractmethod
+    def get_by_ids(self, ids: list[str]) -> list[VecDBItem]:
+        """Get multiple items by their IDs."""
+
+    @abstractmethod
     def get_by_filter(self, filter: dict[str, Any]) -> list[VecDBItem]:
         """
         Retrieve all items that match the given filter criteria.

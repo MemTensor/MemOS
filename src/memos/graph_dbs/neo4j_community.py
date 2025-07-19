@@ -43,67 +43,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Create indexes
         self._create_basic_property_indexes()
 
-    def get_memory_count(self, memory_type: str) -> int:
-        query = """
-        MATCH (n:Memory)
-        WHERE n.memory_type = $memory_type
-        """
-        if not self.config.use_multi_db and self.config.user_name:
-            query += "\nAND n.user_name = $user_name"
-        query += "\nRETURN COUNT(n) AS count"
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(
-                query,
-                {
-                    "memory_type": memory_type,
-                    "user_name": self.config.user_name if self.config.user_name else None,
-                },
-            )
-            return result.single()["count"]
-
-    def count_nodes(self, scope: str) -> int:
-        query = """
-        MATCH (n:Memory)
-        WHERE n.memory_type = $scope
-        """
-        if not self.config.use_multi_db and self.config.user_name:
-            query += "\nAND n.user_name = $user_name"
-        query += "\nRETURN count(n) AS count"
-
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(
-                query,
-                {
-                    "scope": scope,
-                    "user_name": self.config.user_name if self.config.user_name else None,
-                },
-            )
-            return result.single()["count"]
-
-    def remove_oldest_memory(self, memory_type: str, keep_latest: int) -> None:
-        """
-        Remove all WorkingMemory nodes except the latest `keep_latest` entries.
-
-        Args:
-            memory_type (str): Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
-            keep_latest (int): Number of latest WorkingMemory entries to keep.
-        """
-        query = f"""
-        MATCH (n:Memory)
-        WHERE n.memory_type = '{memory_type}'
-        """
-        if not self.config.use_multi_db and self.config.user_name:
-            query += f"\nAND n.user_name = '{self.config.user_name}'"
-
-        query += f"""
-            WITH n ORDER BY n.updated_at DESC
-            SKIP {keep_latest}
-            DETACH DELETE n
-        """
-        with self.driver.session(database=self.db_name) as session:
-            session.run(query)
-
     def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
+        if not self.config.use_multi_db and self.config.user_name:
+            metadata["user_name"] = self.config.user_name
+
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
 
@@ -124,8 +67,8 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 vector=embedding,
                 payload={
                     "memory": memory,
-                    "metadata": metadata,
                     "vector_sync": vector_sync_status,
+                    **metadata,  # unpack all metadata keys to top-level
                 },
             )
             self.vec_db.add([item])
@@ -162,77 +105,22 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         query = f"""
                 MATCH (p:Memory)-[:PARENT]->(c:Memory)
                 WHERE p.id = $id {where_user}
-                RETURN c.id AS id, c.embedding AS embedding, c.memory AS memory
+                RETURN c.id AS id, c.memory AS memory
             """
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, params)
-            return [
-                {"id": r["id"], "embedding": r["embedding"], "memory": r["memory"]} for r in result
-            ]
+            child_nodes = [{"id": r["id"], "memory": r["memory"]} for r in result]
 
-    def get_subgraph(
-        self, center_id: str, depth: int = 2, center_status: str = "activated"
-    ) -> dict[str, Any]:
-        """
-        Retrieve a local subgraph centered at a given node.
-        Args:
-            center_id: The ID of the center node.
-            depth: The hop distance for neighbors.
-            center_status: Required status for center node.
-        Returns:
-            {
-                "core_node": {...},
-                "neighbors": [...],
-                "edges": [...]
-            }
-        """
-        with self.driver.session(database=self.db_name) as session:
-            params = {"center_id": center_id}
-            center_user_clause = ""
-            neighbor_user_clause = ""
+        # Get embeddings from vector DB
+        ids = [n["id"] for n in child_nodes]
+        vec_items = {v.id: v.vector for v in self.vec_db.get_by_ids(ids)}
 
-            if not self.config.use_multi_db and self.config.user_name:
-                center_user_clause = " AND center.user_name = $user_name"
-                neighbor_user_clause = " WHERE neighbor.user_name = $user_name"
-                params["user_name"] = self.config.user_name
-            status_clause = f" AND center.status = '{center_status}'" if center_status else ""
+        # Merge results
+        for node in child_nodes:
+            node["embedding"] = vec_items.get(node["id"])
 
-            query = f"""
-                MATCH (center:Memory)
-                WHERE center.id = $center_id{status_clause}{center_user_clause}
-
-                OPTIONAL MATCH (center)-[r*1..{depth}]-(neighbor:Memory)
-                {neighbor_user_clause}
-
-                WITH collect(DISTINCT center) AS centers,
-                     collect(DISTINCT neighbor) AS neighbors,
-                     collect(DISTINCT r) AS rels
-                RETURN centers, neighbors, rels
-            """
-            record = session.run(query, params).single()
-
-            if not record:
-                return {"core_node": None, "neighbors": [], "edges": []}
-
-            centers = record["centers"]
-            if not centers or centers[0] is None:
-                return {"core_node": None, "neighbors": [], "edges": []}
-
-            core_node = self._parse_node(dict(centers[0]))
-            neighbors = [self._parse_node(dict(n)) for n in record["neighbors"] if n]
-            edges = []
-            for rel_chain in record["rels"]:
-                for rel in rel_chain:
-                    edges.append(
-                        {
-                            "type": rel.type,
-                            "source": rel.start_node["id"],
-                            "target": rel.end_node["id"],
-                        }
-                    )
-
-            return {"core_node": core_node, "neighbors": neighbors, "edges": edges}
+        return child_nodes
 
     # Search / recall operations
     def search_by_embedding(
@@ -266,10 +154,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Build VecDB filter
         vec_filter = {}
         if scope:
-            vec_filter["metadata.memory_type"] = scope
+            vec_filter["memory_type"] = scope
         if status:
-            vec_filter["metadata.status"] = status
-        vec_filter["metadata.vector_sync"] = "success"
+            vec_filter["status"] = status
+        vec_filter["vector_sync"] = "success"
 
         # Perform vector search
         results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)
@@ -311,34 +199,20 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             results = session.run(query, params)
             return [self._parse_node(dict(record["n"])) for record in results]
 
-    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+    def clear(self) -> None:
         """
-        Find nodes that are likely candidates for structure optimization:
-        - Isolated nodes, nodes with empty background, or nodes with exactly one child.
-        - Plus: the child of any parent node that has exactly one child.
+        Clear the entire graph if the target database exists.
         """
-        where_clause = """
-                WHERE n.memory_type = $scope
-                  AND n.status = 'activated'
-                  AND NOT ( (n)-[:PARENT]->() OR ()-[:PARENT]->(n) )
-            """
-        params = {"scope": scope}
+        # Step 1: clear Neo4j part via parent logic
+        super().clear()
 
-        if not self.config.use_multi_db and self.config.user_name:
-            where_clause += " AND n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
-
-        query = f"""
-            MATCH (n:Memory)
-            {where_clause}
-            RETURN n.id AS id, n AS node
-            """
-
-        with self.driver.session(database=self.db_name) as session:
-            results = session.run(query, params)
-            return [
-                self._parse_node({"id": record["id"], **dict(record["node"])}) for record in results
-            ]
+        # Step2: Clear the vector db
+        try:
+            items = self.vec_db.get_by_filter({"user_name": self.config.user_name})
+            self.vec_db.delete([item.id for item in items])
+            logger.info(f"Cleared {len(items)} vectors for user '{self.config.user_name}'.")
+        except Exception as e:
+            logger.warning(f"Failed to clear vector DB for user '{self.config.user_name}': {e}")
 
     def drop_database(self) -> None:
         """
@@ -392,18 +266,6 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         except Exception as e:
             logger.warning(f"Failed to create basic property indexes: {e}")
 
-    def _index_exists(self, index_name: str) -> bool:
-        """
-        Check if an index with the given name exists.
-        """
-        query = "SHOW INDEXES"
-        with self.driver.session(database=self.db_name) as session:
-            result = session.run(query)
-            for record in result:
-                if record["name"] == index_name:
-                    return True
-        return False
-
     def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
         """Parse Neo4j node and optionally fetch embedding from vector DB."""
         node = node_data.copy()
@@ -418,8 +280,8 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         try:
             vec_item = self.vec_db.get_by_id(new_node["id"])
             if vec_item and vec_item.vector:
-                new_node["embedding"] = vec_item.vector
+                new_node["metadata"]["embedding"] = vec_item.vector
         except Exception as e:
             logger.warning(f"Failed to fetch vector for node {new_node['id']}: {e}")
-            new_node["embedding"] = None
+            new_node["metadata"]["embedding"] = None
         return new_node
