@@ -38,7 +38,7 @@ class TestDeepSeekLLM(unittest.TestCase):
         self.assertEqual(output_with_think, full_content)
 
         # Config with think tag removed
-        config_without_think = config_with_think.copy(update={"remove_think_prefix": True})
+        config_without_think = config_with_think.model_copy(update={"remove_think_prefix": True})
         llm_without_think = DeepSeekLLM(config_without_think)
         llm_without_think.client.chat.completions.create = MagicMock(return_value=mock_response)
 

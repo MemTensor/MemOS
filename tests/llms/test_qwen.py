@@ -40,7 +40,7 @@ class TestQwenLLM(unittest.TestCase):
         self.assertEqual(response_with_think, full_content)
 
         # Create config with remove_think_prefix = True
-        config_without_think = config_with_think.copy(update={"remove_think_prefix": True})
+        config_without_think = config_with_think.model_copy(update={"remove_think_prefix": True})
 
         # Instance with think tag removed
         llm_without_think = QwenLLM(config_without_think)

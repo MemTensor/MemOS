@@ -1,3 +1,5 @@
+from collections.abc import Generator
+
 from memos.configs.llm import DeepSeekLLMConfig
 from memos.llms.openai import OpenAILLM
 from memos.llms.utils import remove_thinking_tags
@@ -43,7 +45,6 @@ class DeepSeekLLM(OpenAILLM):
             extra_body=self.config.extra_body,
         )
         # Streaming chunks of text
-        answer_parts = ""
         for chunk in response:
             delta = chunk.choices[0].delta
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
