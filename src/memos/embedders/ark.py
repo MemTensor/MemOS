@@ -1,11 +1,5 @@
-from volcenginesdkarkruntime import Ark
-from volcenginesdkarkruntime.types.multimodal_embedding import (
-    EmbeddingInputParam,
-    MultimodalEmbeddingContentPartTextParam,
-    MultimodalEmbeddingResponse,
-)
-
 from memos.configs.embedder import ArkEmbedderConfig
+from memos.dependency import require_python_package
 from memos.embedders.base import BaseEmbedder
 from memos.log import get_logger
 
@@ -16,7 +10,14 @@ logger = get_logger(__name__)
 class ArkEmbedder(BaseEmbedder):
     """Ark Embedder class."""
 
+    @require_python_package(
+        import_name="volcenginesdkarkruntime",
+        install_command="pip install 'volcengine-python-sdk[ark]'",
+        install_link="https://www.volcengine.com/docs/82379/1541595",
+    )
     def __init__(self, config: ArkEmbedderConfig):
+        from volcenginesdkarkruntime import Ark
+
         self.config = config
 
         if self.config.embedding_dims is not None:
@@ -44,6 +45,10 @@ class ArkEmbedder(BaseEmbedder):
         Returns:
             List of embeddings, each represented as a list of floats.
         """
+        from volcenginesdkarkruntime.types.multimodal_embedding import (
+            MultimodalEmbeddingContentPartTextParam,
+        )
+
         if self.config.multi_modal:
             texts_input = [
                 MultimodalEmbeddingContentPartTextParam(text=text, type="text") for text in texts
@@ -66,8 +71,12 @@ class ArkEmbedder(BaseEmbedder):
         return embeddings
 
     def multimodal_embeddings(
-        self, inputs: list[EmbeddingInputParam], chunk_size: int | None = None
+        self, inputs: list, chunk_size: int | None = None
     ) -> list[list[float]]:
+        from volcenginesdkarkruntime.types.multimodal_embedding import (
+            MultimodalEmbeddingResponse,  # noqa: TC002
+        )
+
         chunk_size_ = chunk_size or self.config.chunk_size
         embeddings: list[list[float]] = []
 

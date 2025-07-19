@@ -35,8 +35,6 @@ logger = get_logger(__name__)
 load_dotenv()
 
 CUBE_PATH = os.getenv("MOS_CUBE_PATH", "/tmp/data/")
-with open("./tmp/fake_data.json") as f:
-    MOCK_DATA = json.loads(f.read())
 
 
 class MOSProduct(MOSCore):
