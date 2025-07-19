@@ -34,7 +34,7 @@ except Exception as e:
 
 
 try:
-    sentence_model_name = "/home/liupeng/dataroot/models/Qwen/Qwen3-Embedding-0.6B"
+    sentence_model_name = "Qwen/Qwen3-Embedding-0.6B"
     sentence_model = SentenceTransformer(sentence_model_name)
     print(f"SentenceTransformer model : {sentence_model_name} loaded successfully.")
 except Exception as e:
@@ -138,9 +138,7 @@ def calculate_semantic_similarity(gold_answer, response):
 
     try:
         if sentence_model is None:
-            sentence_model = SentenceTransformer(
-                "/home/liupeng/dataroot/models/Qwen/Qwen3-Embedding-0.6B"
-            )
+            sentence_model = SentenceTransformer("Qwen/Qwen3-Embedding-0.6B")
 
         gold_embedding = sentence_model.encode([gold_answer], show_progress_bar=False)[0]
         response_embedding = sentence_model.encode([response], show_progress_bar=False)[0]
