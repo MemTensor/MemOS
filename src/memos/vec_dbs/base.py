@@ -107,3 +107,11 @@ class BaseVecDB(ABC):
     @abstractmethod
     def delete(self, ids: list[str]) -> None:
         """Delete items from the vector database."""
+
+    @abstractmethod
+    def ensure_payload_indexes(self, fields: list[str]) -> None:
+        """
+        Create payload indexes for specified fields in the collection.
+        Args:
+            fields (list[str]): List of field names to index (as keyword).
+        """
