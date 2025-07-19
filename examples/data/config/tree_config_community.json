@@ -37,13 +37,14 @@
       "vec_config": {
         "backend": "qdrant",
         "config": {
-          "collection_name": "shared-db-community-20250719",
+          "collection_name": "neo4j_vec_db",
           "vector_dimension": 768,
           "distance_metric": "cosine",
-          "path": "./qdrant_data"
+          "host": "localhost",
+          "port": 6333
         }
       }
     }
   },
-  "reorganize": false
+  "reorganize": true
 }
