@@ -1,3 +1,5 @@
+import time
+
 from memos import log
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
@@ -25,7 +27,9 @@ def embed_memory_item(memory: str) -> list[float]:
     return embedder.embed([memory])[0]
 
 
-tree_config = TreeTextMemoryConfig.from_json_file("examples/data/config/tree_config.json")
+tree_config = TreeTextMemoryConfig.from_json_file(
+    "examples/data/config/tree_config_shared_database.json"
+)
 my_tree_textual_memory = TreeTextMemory(tree_config)
 my_tree_textual_memory.delete_all()
 
@@ -182,8 +186,12 @@ scene_data = [
 memory = reader.get_memory(scene_data, type="chat", info={"user_id": "1234", "session_id": "2222"})
 
 for m_list in memory:
-    my_tree_textual_memory.add(m_list)
+    added_ids = my_tree_textual_memory.add(m_list)
+    for i, id in enumerate(added_ids):
+        print(f"{i}'th added result is:" + my_tree_textual_memory.get(id).memory)
     my_tree_textual_memory.memory_manager.wait_reorganizer()
+
+time.sleep(60)
 
 results = my_tree_textual_memory.search(
     "Talk about the user's childhood story?",
@@ -211,7 +219,7 @@ doc_paths = [
 doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"})
 
 for m_list in doc_memory:
-    my_tree_textual_memory.add(m_list)
+    added_ids = my_tree_textual_memory.add(m_list)
     my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 results = my_tree_textual_memory.search(

@@ -3,15 +3,14 @@ import threading
 import time
 import traceback
 
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import PriorityQueue
 from typing import Literal
 
 import numpy as np
-import schedule
 
-from sklearn.cluster import MiniBatchKMeans
-
+from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
 from memos.graph_dbs.neo4j import Neo4jGraphDB
@@ -32,7 +31,7 @@ logger = get_logger(__name__)
 class QueueMessage:
     def __init__(
         self,
-        op: Literal["add", "remove", "merge", "update"],
+        op: Literal["add", "remove", "merge", "update", "end"],
         # `str` for node and edge IDs, `GraphDBNode` and `GraphDBEdge` for actual objects
         before_node: list[str] | list[GraphDBNode] | None = None,
         before_edge: list[str] | list[GraphDBEdge] | None = None,
@@ -49,7 +48,7 @@ class QueueMessage:
         return f"QueueMessage(op={self.op}, before_node={self.before_node if self.before_node is None else len(self.before_node)}, after_node={self.after_node if self.after_node is None else len(self.after_node)})"
 
     def __lt__(self, other: "QueueMessage") -> bool:
-        op_priority = {"add": 2, "remove": 2, "merge": 1}
+        op_priority = {"add": 2, "remove": 2, "merge": 1, "end": 0}
         return op_priority[self.op] < op_priority[other.op]
 
 
@@ -104,7 +103,7 @@ class GraphStructureReorganizer:
     def _run_message_consumer_loop(self):
         while True:
             message = self.queue.get()
-            if message is None:
+            if message.op == "end":
                 break
 
             try:
@@ -114,11 +113,18 @@ class GraphStructureReorganizer:
                 logger.error(traceback.format_exc())
             self.queue.task_done()
 
+    @require_python_package(
+        import_name="schedule",
+        install_command="pip install schedule",
+        install_link="https://schedule.readthedocs.io/en/stable/installation.html",
+    )
     def _run_structure_organizer_loop(self):
         """
         Use schedule library to periodically trigger structure optimization.
         This runs until the stop flag is set.
         """
+        import schedule
+
         schedule.every(20).seconds.do(self.optimize_structure, scope="LongTermMemory")
         schedule.every(20).seconds.do(self.optimize_structure, scope="UserMemory")
 
@@ -134,7 +140,7 @@ class GraphStructureReorganizer:
         if not self.is_reorganize:
             return
 
-        self.add_message(None)
+        self.add_message(QueueMessage(op="end"))
         self.thread.join()
         logger.info("Reorganize thread stopped.")
         self._stop_scheduler = True
@@ -152,9 +158,6 @@ class GraphStructureReorganizer:
 
     def handle_add(self, message: QueueMessage):
         logger.debug(f"Handling add operation: {str(message)[:500]}")
-        assert message.before_node is None and message.before_edge is None, (
-            "Before node and edge should be None for `add` operation."
-        )
         # ———————— 1. check for conflicts ————————
         added_node = message.after_node[0]
         conflicts = self.conflict.detect(added_node, scope=added_node.metadata.memory_type)
@@ -183,7 +186,7 @@ class GraphStructureReorganizer:
         scope: str = "LongTermMemory",
         local_tree_threshold: int = 10,
         min_cluster_size: int = 3,
-        min_group_size: int = 10,
+        min_group_size: int = 5,
     ):
         """
         Periodically reorganize the graph:
@@ -358,7 +361,7 @@ class GraphStructureReorganizer:
             scene_lines.append(line)
 
         joined_scene = "\n".join(scene_lines)
-        prompt = LOCAL_SUBCLUSTER_PROMPT.format(joined_scene=joined_scene)
+        prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
@@ -378,9 +381,12 @@ class GraphStructureReorganizer:
 
         return result_subclusters
 
-    def _partition(
-        self, nodes: list[GraphDBNode], min_cluster_size: int = 3
-    ) -> list[list[GraphDBNode]]:
+    @require_python_package(
+        import_name="sklearn",
+        install_command="pip install scikit-learn",
+        install_link="https://scikit-learn.org/stable/install.html",
+    )
+    def _partition(self, nodes, min_cluster_size: int = 3, max_cluster_size: int = 20):
         """
         Partition nodes by:
         1) Frequent tags (top N & above threshold)
@@ -394,7 +400,7 @@ class GraphStructureReorganizer:
         Returns:
             List of clusters, each as a list of GraphDBNode
         """
-        from collections import Counter, defaultdict
+        from sklearn.cluster import MiniBatchKMeans
 
         # 1) Count all tags
         tag_counter = Counter()
@@ -407,7 +413,7 @@ class GraphStructureReorganizer:
         threshold_tags = {tag for tag, count in tag_counter.items() if count >= 50}
         frequent_tags = top_n_tags | threshold_tags
 
-        # Group nodes by tags, ensure each group is unique internally
+        # Group nodes by tags
         tag_groups = defaultdict(list)
 
         for node in nodes:
@@ -420,48 +426,67 @@ class GraphStructureReorganizer:
         assigned_ids = set()
         for tag, group in tag_groups.items():
             if len(group) >= min_cluster_size:
-                filtered_tag_clusters.append(group)
-                assigned_ids.update(n.id for n in group)
+                # Split large groups into chunks of at most max_cluster_size
+                for i in range(0, len(group), max_cluster_size):
+                    sub_group = group[i : i + max_cluster_size]
+                    filtered_tag_clusters.append(sub_group)
+                    assigned_ids.update(n.id for n in sub_group)
             else:
-                logger.info(f"... dropped {tag} ...")
+                logger.info(f"... dropped tag {tag} due to low size ...")
 
         logger.info(
             f"[MixedPartition] Created {len(filtered_tag_clusters)} clusters from tags. "
             f"Nodes grouped by tags: {len(assigned_ids)} / {len(nodes)}"
         )
 
-        # 5) Remaining nodes -> embedding clustering
+        # Remaining nodes -> embedding clustering
         remaining_nodes = [n for n in nodes if n.id not in assigned_ids]
         logger.info(
             f"[MixedPartition] Remaining nodes for embedding clustering: {len(remaining_nodes)}"
         )
 
         embedding_clusters = []
-        if remaining_nodes:
-            x = np.array([n.metadata.embedding for n in remaining_nodes if n.metadata.embedding])
-            k = max(1, min(len(remaining_nodes) // min_cluster_size, 20))
-            if len(x) < k:
-                k = len(x)
 
-            if 1 < k <= len(x):
+        def recursive_clustering(nodes_list):
+            """Recursively split clusters until each is <= max_cluster_size."""
+            if len(nodes_list) <= max_cluster_size:
+                return [nodes_list]
+
+            # Try kmeans with k = ceil(len(nodes) / max_cluster_size)
+            x = np.array([n.metadata.embedding for n in nodes_list if n.metadata.embedding])
+            if len(x) < 2:
+                return [nodes_list]
+
+            k = min(len(x), (len(nodes_list) + max_cluster_size - 1) // max_cluster_size)
+            k = max(1, min(k, len(x)))
+
+            try:
                 kmeans = MiniBatchKMeans(n_clusters=k, batch_size=256, random_state=42)
                 labels = kmeans.fit_predict(x)
 
                 label_groups = defaultdict(list)
-                for node, label in zip(remaining_nodes, labels, strict=False):
+                for node, label in zip(nodes_list, labels, strict=False):
                     label_groups[label].append(node)
 
-                embedding_clusters = list(label_groups.values())
-                logger.info(
-                    f"[MixedPartition] Created {len(embedding_clusters)} clusters from embedding."
-                )
-            else:
-                embedding_clusters = [remaining_nodes]
+                result = []
+                for sub_group in label_groups.values():
+                    result.extend(recursive_clustering(sub_group))
+                return result
+            except Exception as e:
+                logger.warning(f"Clustering failed: {e}, falling back to single cluster.")
+                return [nodes_list]
 
-        # Merge all & handle small clusters
+        if remaining_nodes:
+            clusters = recursive_clustering(remaining_nodes)
+            embedding_clusters.extend(clusters)
+            logger.info(
+                f"[MixedPartition] Created {len(embedding_clusters)} clusters from embeddings."
+            )
+
+        # Merge all clusters
         all_clusters = filtered_tag_clusters + embedding_clusters
 
-        # Optional: merge tiny clusters
+        # Handle small clusters (< min_cluster_size)
         final_clusters = []
         small_nodes = []
         for group in all_clusters:
@@ -484,18 +509,15 @@ class GraphStructureReorganizer:
         if not cluster_nodes:
             raise ValueError("Cluster nodes cannot be empty.")
 
-        joined_keys = "\n".join(f"- {n.metadata.key}" for n in cluster_nodes if n.metadata.key)
-        joined_values = "\n".join(f"- {n.memory}" for n in cluster_nodes)
-        joined_backgrounds = "\n".join(
-            f"- {n.metadata.background}" for n in cluster_nodes if n.metadata.background
+        memories_items_text = "\n\n".join(
+            [
+                f"{i}. key: {n.metadata.key}\nvalue: {n.memory}\nsummary:{n.metadata.background}"
+                for i, n in enumerate(cluster_nodes)
+            ]
         )
 
         # Build prompt
-        prompt = REORGANIZE_PROMPT.format(
-            joined_keys=joined_keys,
-            joined_values=joined_values,
-            joined_backgrounds=joined_backgrounds,
-        )
+        prompt = REORGANIZE_PROMPT.replace("{memory_items_text}", memories_items_text)
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
@@ -505,7 +527,7 @@ class GraphStructureReorganizer:
         parent_key = response_json.get("key", "").strip()
         parent_value = response_json.get("value", "").strip()
         parent_tags = response_json.get("tags", [])
-        parent_background = response_json.get("background", "").strip()
+        parent_background = response_json.get("summary", "").strip()
 
         embedding = self.embedder.embed([parent_value])[0]
 
@@ -561,7 +583,7 @@ class GraphStructureReorganizer:
 
     def _preprocess_message(self, message: QueueMessage) -> bool:
         message = self._convert_id_to_node(message)
-        if None in message.after_node:
+        if message.after_node is None or None in message.after_node:
             logger.debug(
                 f"Found non-existent node in after_node in message: {message}, skip this message."
             )

@@ -1,4 +1,5 @@
-import torch
+from collections.abc import Generator
+from typing import Any
 
 from transformers import (
     AutoModelForCausalLM,
@@ -71,6 +72,26 @@ class HFLLM(BaseLLM):
         else:
             return self._generate_with_cache(prompt, past_key_values)
 
+    def generate_stream(
+        self, messages: MessageList, past_key_values: DynamicCache | None = None
+    ) -> Generator[str, None, None]:
+        """
+        Generate a streaming response from the model.
+        Args:
+            messages (MessageList): Chat messages for prompt construction.
+            past_key_values (DynamicCache | None): Optional KV cache for fast generation.
+        Yields:
+            str: Streaming model response chunks.
+        """
+        prompt = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=self.config.add_generation_prompt
+        )
+        logger.info(f"HFLLM streaming prompt: {prompt}")
+        if past_key_values is None:
+            yield from self._generate_full_stream(prompt)
+        else:
+            yield from self._generate_with_cache_stream(prompt, past_key_values)
+
     def _generate_full(self, prompt: str) -> str:
         """
         Generate output from scratch using the full prompt.
@@ -104,6 +125,73 @@ class HFLLM(BaseLLM):
             else response
         )
 
+    def _generate_full_stream(self, prompt: str) -> Generator[str, None, None]:
+        """
+        Generate output from scratch using the full prompt with streaming.
+        Args:
+            prompt (str): The input prompt string.
+        Yields:
+            str: Streaming response chunks.
+        """
+        import torch
+
+        inputs = self.tokenizer([prompt], return_tensors="pt").to(self.model.device)
+
+        # Get generation parameters
+        max_new_tokens = getattr(self.config, "max_tokens", 128)
+        remove_think_prefix = getattr(self.config, "remove_think_prefix", False)
+
+        # Manual streaming generation
+        generated_ids = inputs.input_ids.clone()
+        accumulated_text = ""
+
+        for _ in range(max_new_tokens):
+            # Forward pass
+            with torch.no_grad():
+                outputs = self.model(
+                    input_ids=generated_ids,
+                    use_cache=True,
+                    return_dict=True,
+                )
+
+            # Get next token logits
+            next_token_logits = outputs.logits[:, -1, :]
+
+            # Apply logits processors if sampling
+            if getattr(self.config, "do_sample", True):
+                batch_size, _ = next_token_logits.size()
+                dummy_ids = torch.zeros(
+                    (batch_size, 1), dtype=torch.long, device=next_token_logits.device
+                )
+                filtered_logits = self.logits_processors(dummy_ids, next_token_logits)
+                probs = torch.softmax(filtered_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+
+            # Check for EOS token
+            if self._should_stop(next_token):
+                break
+
+            # Append new token
+            generated_ids = torch.cat([generated_ids, next_token], dim=-1)
+
+            # Decode and yield the new token
+            new_token_text = self.tokenizer.decode(next_token[0], skip_special_tokens=True)
+            if new_token_text:  # Only yield non-empty tokens
+                accumulated_text += new_token_text
+
+                # Apply thinking tag removal if enabled
+                if remove_think_prefix:
+                    processed_text = remove_thinking_tags(accumulated_text)
+                    # Only yield the difference (new content)
+                    if len(processed_text) > len(accumulated_text) - len(new_token_text):
+                        yield processed_text[len(accumulated_text) - len(new_token_text) :]
+                    else:
+                        yield new_token_text
+                else:
+                    yield new_token_text
+
     def _generate_with_cache(self, query: str, kv: DynamicCache) -> str:
         """
         Generate output incrementally using an existing KV cache.
@@ -113,6 +201,8 @@ class HFLLM(BaseLLM):
         Returns:
             str: Model response.
         """
+        import torch
+
         query_ids = self.tokenizer(
             query, return_tensors="pt", add_special_tokens=False
         ).input_ids.to(self.model.device)
@@ -137,10 +227,70 @@ class HFLLM(BaseLLM):
             else response
         )
 
-    @torch.no_grad()
-    def _prefill(
-        self, input_ids: torch.Tensor, kv: DynamicCache
-    ) -> tuple[torch.Tensor, DynamicCache]:
+    def _generate_with_cache_stream(
+        self, query: str, kv: DynamicCache
+    ) -> Generator[str, None, None]:
+        """
+        Generate output incrementally using an existing KV cache with streaming.
+        Args:
+            query (str): The new user query string.
+            kv (DynamicCache): The prefilled KV cache.
+        Yields:
+            str: Streaming response chunks.
+        """
+        query_ids = self.tokenizer(
+            query, return_tensors="pt", add_special_tokens=False
+        ).input_ids.to(self.model.device)
+
+        max_new_tokens = getattr(self.config, "max_tokens", 128)
+        remove_think_prefix = getattr(self.config, "remove_think_prefix", False)
+
+        # Initial forward pass
+        logits, kv = self._prefill(query_ids, kv)
+        next_token = self._select_next_token(logits)
+
+        # Yield first token
+        first_token_text = self.tokenizer.decode(next_token[0], skip_special_tokens=True)
+        accumulated_text = ""
+        if first_token_text:
+            accumulated_text += first_token_text
+            if remove_think_prefix:
+                processed_text = remove_thinking_tags(accumulated_text)
+                if len(processed_text) > len(accumulated_text) - len(first_token_text):
+                    yield processed_text[len(accumulated_text) - len(first_token_text) :]
+                else:
+                    yield first_token_text
+            else:
+                yield first_token_text
+
+        generated = [next_token]
+
+        # Continue generation
+        for _ in range(max_new_tokens - 1):
+            if self._should_stop(next_token):
+                break
+            logits, kv = self._prefill(next_token, kv)
+            next_token = self._select_next_token(logits)
+
+            # Decode and yield the new token
+            new_token_text = self.tokenizer.decode(next_token[0], skip_special_tokens=True)
+            if new_token_text:
+                accumulated_text += new_token_text
+
+                # Apply thinking tag removal if enabled
+                if remove_think_prefix:
+                    processed_text = remove_thinking_tags(accumulated_text)
+                    # Only yield the difference (new content)
+                    if len(processed_text) > len(accumulated_text) - len(new_token_text):
+                        yield processed_text[len(accumulated_text) - len(new_token_text) :]
+                    else:
+                        yield new_token_text
+                else:
+                    yield new_token_text
+
+            generated.append(next_token)
+
+    def _prefill(self, input_ids: Any, kv: DynamicCache) -> tuple[Any, DynamicCache]:
         """
         Forward the model once, returning last-step logits and updated KV cache.
         Args:
@@ -149,15 +299,18 @@ class HFLLM(BaseLLM):
         Returns:
             tuple[torch.Tensor, DynamicCache]: (last-step logits, updated KV cache)
         """
-        out = self.model(
-            input_ids=input_ids,
-            use_cache=True,
-            past_key_values=kv,
-            return_dict=True,
-        )
+        import torch
+
+        with torch.no_grad():
+            out = self.model(
+                input_ids=input_ids,
+                use_cache=True,
+                past_key_values=kv,
+                return_dict=True,
+            )
         return out.logits[:, -1, :], out.past_key_values
 
-    def _select_next_token(self, logits: torch.Tensor) -> torch.Tensor:
+    def _select_next_token(self, logits: Any) -> Any:
         """
         Select the next token from logits using sampling or argmax, depending on config.
         Args:
@@ -165,6 +318,8 @@ class HFLLM(BaseLLM):
         Returns:
             torch.Tensor: Selected token ID(s).
         """
+        import torch
+
         if getattr(self.config, "do_sample", True):
             batch_size, _ = logits.size()
             dummy_ids = torch.zeros((batch_size, 1), dtype=torch.long, device=logits.device)
@@ -173,7 +328,7 @@ class HFLLM(BaseLLM):
             return torch.multinomial(probs, num_samples=1)
         return torch.argmax(logits, dim=-1, keepdim=True)
 
-    def _should_stop(self, token: torch.Tensor) -> bool:
+    def _should_stop(self, token: Any) -> bool:
         """
         Check if the given token is the EOS (end-of-sequence) token.
         Args:
@@ -197,6 +352,8 @@ class HFLLM(BaseLLM):
         Returns:
             DynamicCache: The constructed KV cache object.
         """
+        import torch
+
         # Accept multiple input types and convert to standard chat messages
         if isinstance(messages, str):
             messages = [

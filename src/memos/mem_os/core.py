@@ -1,4 +1,6 @@
+import json
 import os
+import uuid
 
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +13,11 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
+from memos.mem_scheduler.modules.schemas import (
+    ADD_LABEL,
+    ANSWER_LABEL,
+    ScheduleMessageItem,
+)
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
@@ -30,7 +36,7 @@ class MOSCore:
     MOSCore acts as an operating system layer for handling and orchestrating MemCube instances.
     """
 
-    def __init__(self, config: MOSConfig):
+    def __init__(self, config: MOSConfig, user_manager: UserManager | None = None):
         self.config = config
         self.user_id = config.user_id
         self.session_id = config.session_id
@@ -39,7 +45,12 @@ class MOSCore:
         self.mem_reader = MemReaderFactory.from_config(config.mem_reader)
         self.chat_history_manager: dict[str, ChatHistory] = {}
         self._register_chat_history()
-        self.user_manager = UserManager(user_id=self.user_id if self.user_id else "root")
+
+        # Use provided user_manager or create a new one
+        if user_manager is not None:
+            self.user_manager = user_manager
+        else:
+            self.user_manager = UserManager(user_id=self.user_id if self.user_id else "root")
 
         # Validate user exists
         if not self.user_manager.validate_user(self.user_id):
@@ -50,7 +61,7 @@ class MOSCore:
         # Lazy initialization marker
         self._mem_scheduler_lock = Lock()
         self.enable_mem_scheduler = self.config.get("enable_mem_scheduler", False)
-        self._mem_scheduler = None
+        self._mem_scheduler: GeneralScheduler = None
         logger.info(f"MOS initialized for user: {self.user_id}")
 
     @property
@@ -58,6 +69,7 @@ class MOSCore:
         """Lazy-loaded property for memory scheduler."""
         if self.enable_mem_scheduler and self._mem_scheduler is None:
             self._initialize_mem_scheduler()
+        self._mem_scheduler.mem_cubes = self.mem_cubes
         return self._mem_scheduler
 
     @mem_scheduler.setter
@@ -74,6 +86,7 @@ class MOSCore:
                 raise TypeError(f"Expected GeneralScheduler or None, got {type(value)}")
 
             self._mem_scheduler = value
+            self._mem_scheduler.mem_cubes = self.mem_cubes
 
             if value:
                 logger.info("Memory scheduler manually set")
@@ -92,7 +105,18 @@ class MOSCore:
             logger.info("Initializing memory scheduler...")
             scheduler_config = self.config.mem_scheduler
             self._mem_scheduler = SchedulerFactory.from_config(scheduler_config)
-            self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
+            # Validate required components
+            if not hasattr(self.mem_reader, "llm"):
+                raise AttributeError(
+                    f"Memory reader of type {type(self.mem_reader).__name__} "
+                    "missing required 'llm' attribute"
+                )
+                self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
+            else:
+                # Configure scheduler modules
+                self._mem_scheduler.initialize_modules(
+                    chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
+                )
             self._mem_scheduler.start()
 
     def mem_scheduler_on(self) -> bool:
@@ -186,12 +210,16 @@ class MOSCore:
                 documents.append(str(file_path))
         return documents
 
-    def chat(self, query: str, user_id: str | None = None) -> str:
+    def chat(self, query: str, user_id: str | None = None, base_prompt: str | None = None) -> str:
         """
         Chat with the MOS.
 
         Args:
             query (str): The user's query.
+            user_id (str, optional): The user ID for the chat session. Defaults to the user ID from the config.
+            base_prompt (str, optional): A custom base prompt to use for the chat.
+                It can be a template string with a `{memories}` placeholder.
+                If not provided, a default prompt is used.
 
         Returns:
             str: The response from the MOS.
@@ -218,7 +246,7 @@ class MOSCore:
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=mem_cube,
-                        label=QUERY_LABEL,
+                        label=ADD_LABEL,
                         content=query,
                         timestamp=datetime.now(),
                     )
@@ -227,9 +255,9 @@ class MOSCore:
                 memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
                 memories_all.extend(memories)
             logger.info(f"🧠 [Memory] Searched memories:\n{self._str_memories(memories_all)}\n")
-            system_prompt = self._build_system_prompt(memories_all)
+            system_prompt = self._build_system_prompt(memories_all, base_prompt=base_prompt)
         else:
-            system_prompt = self._build_system_prompt()
+            system_prompt = self._build_system_prompt(base_prompt=base_prompt)
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
@@ -261,8 +289,8 @@ class MOSCore:
         self.chat_history_manager[user_id] = chat_history
 
         # submit message to scheduler
-        if len(accessible_cubes) == 1:
-            mem_cube_id = accessible_cubes[0].cube_id
+        for accessible_mem_cube in accessible_cubes:
+            mem_cube_id = accessible_mem_cube.cube_id
             mem_cube = self.mem_cubes[mem_cube_id]
             if self.enable_mem_scheduler and self.mem_scheduler is not None:
                 message_item = ScheduleMessageItem(
@@ -277,20 +305,39 @@ class MOSCore:
 
         return response
 
-    def _build_system_prompt(self, memories: list | None = None) -> str:
+    def _build_system_prompt(
+        self,
+        memories: list[TextualMemoryItem] | list[str] | None = None,
+        base_prompt: str | None = None,
+    ) -> str:
         """Build system prompt with optional memories context."""
-        base_prompt = (
-            "You are a knowledgeable and helpful AI assistant. "
-            "You have access to conversation memories that help you provide more personalized responses. "
-            "Use the memories to understand the user's context, preferences, and past interactions. "
-            "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
-        )
+        if base_prompt is None:
+            base_prompt = (
+                "You are a knowledgeable and helpful AI assistant. "
+                "You have access to conversation memories that help you provide more personalized responses. "
+                "Use the memories to understand the user's context, preferences, and past interactions. "
+                "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
+            )
 
+        memory_context = ""
         if memories:
-            memory_context = "\n\n## Memories:\n"
+            memory_list = []
             for i, memory in enumerate(memories, 1):
-                memory_context += f"{i}. {memory.memory}\n"
-            return base_prompt + memory_context
+                if isinstance(memory, TextualMemoryItem):
+                    text_memory = memory.memory
+                else:
+                    if not isinstance(memory, str):
+                        logger.error("Unexpected memory type.")
+                    text_memory = memory
+                memory_list.append(f"{i}. {text_memory}")
+            memory_context = "\n".join(memory_list)
+
+        if "{memories}" in base_prompt:
+            return base_prompt.format(memories=memory_context)
+        elif memories:
+            # For backward compatibility, append memories if no placeholder is found
+            memory_context_with_header = "\n\n## Memories:\n" + memory_context
+            return base_prompt + memory_context_with_header
         return base_prompt
 
     def _str_memories(
@@ -364,7 +411,10 @@ class MOSCore:
         return self.user_manager.create_cube(cube_name, owner_id, cube_path, cube_id)
 
     def register_mem_cube(
-        self, mem_cube_name_or_path: str, mem_cube_id: str | None = None, user_id: str | None = None
+        self,
+        mem_cube_name_or_path: str | GeneralMemCube,
+        mem_cube_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         """
         Register a MemCube with the MOS.
@@ -377,12 +427,18 @@ class MOSCore:
         self._validate_user_exists(target_user_id)
 
         if mem_cube_id is None:
-            mem_cube_id = mem_cube_name_or_path
+            if isinstance(mem_cube_name_or_path, GeneralMemCube):
+                mem_cube_id = f"cube_{target_user_id}"
+            else:
+                mem_cube_id = mem_cube_name_or_path
 
         if mem_cube_id in self.mem_cubes:
             logger.info(f"MemCube with ID {mem_cube_id} already in MOS, skip install.")
         else:
-            if os.path.exists(mem_cube_name_or_path):
+            if isinstance(mem_cube_name_or_path, GeneralMemCube):
+                self.mem_cubes[mem_cube_id] = mem_cube_name_or_path
+                logger.info(f"register new cube {mem_cube_id} for user {target_user_id}")
+            elif os.path.exists(mem_cube_name_or_path):
                 self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_dir(mem_cube_name_or_path)
             else:
                 logger.warning(
@@ -393,6 +449,14 @@ class MOSCore:
                 )
         # Check if cube already exists in database
         existing_cube = self.user_manager.get_cube(mem_cube_id)
+
+        # check the embedder is it consistent with MOSConfig
+        if self.config.mem_reader.config.embedder != (
+            cube_embedder := self.mem_cubes[mem_cube_id].text_mem.config.embedder
+        ):
+            logger.warning(
+                f"Cube Embedder is not consistent with MOSConfig for cube: {mem_cube_id}, will use Cube Embedder: {cube_embedder}"
+            )
 
         if existing_cube:
             # Cube exists, just add user to cube if not already associated
@@ -407,10 +471,14 @@ class MOSCore:
         else:
             # Cube doesn't exist, create it
             self.create_cube_for_user(
-                cube_name=mem_cube_name_or_path,
+                cube_name=mem_cube_name_or_path
+                if not isinstance(mem_cube_name_or_path, GeneralMemCube)
+                else mem_cube_id,
                 owner_id=target_user_id,
                 cube_id=mem_cube_id,
-                cube_path=mem_cube_name_or_path,
+                cube_path=mem_cube_name_or_path
+                if not isinstance(mem_cube_name_or_path, GeneralMemCube)
+                else "init",
             )
             logger.info(f"register new cube {mem_cube_id} for user {target_user_id}")
 
@@ -427,7 +495,11 @@ class MOSCore:
             raise ValueError(f"MemCube with ID {mem_cube_id} does not exist.")
 
     def search(
-        self, query: str, user_id: str | None = None, install_cube_ids: list[str] | None = None
+        self,
+        query: str,
+        user_id: str | None = None,
+        install_cube_ids: list[str] | None = None,
+        top_k: int | None = None,
     ) -> MOSSearchResult:
         """
         Search for textual memories across all registered MemCubes.
@@ -464,18 +536,10 @@ class MOSCore:
                 and (mem_cube.text_mem is not None)
                 and self.config.enable_textual_memory
             ):
-                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
-                result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
-                logger.info(
-                    f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                memories = mem_cube.text_mem.search(
+                    query, top_k=top_k if top_k else self.config.top_k
                 )
-            if (
-                (mem_cube_id in install_cube_ids)
-                and (mem_cube.act_mem is not None)
-                and self.config.enable_activation_memory
-            ):
-                memories = mem_cube.act_mem.extract(query)
-                result["act_mem"].append({"cube_id": mem_cube_id, "memories": [memories]})
+                result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
                     f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
                 )
@@ -538,10 +602,25 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id},
+                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
                 )
                 for mem in memories:
                     self.mem_cubes[mem_cube_id].text_mem.add(mem)
+
+                # submit messages for scheduler
+                mem_cube = self.mem_cubes[mem_cube_id]
+                if self.enable_mem_scheduler and self.mem_scheduler is not None:
+                    text_messages = [message["content"] for message in messages]
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        label=ADD_LABEL,
+                        content=json.dumps(text_messages),
+                        timestamp=datetime.now(),
+                    )
+                    self.mem_scheduler.submit_messages(messages=[message_item])
+
         if (
             (memory_content is not None)
             and self.config.enable_textual_memory
@@ -567,7 +646,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id},
+                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
                 )
                 for mem in memories:
                     self.mem_cubes[mem_cube_id].text_mem.add(mem)
@@ -580,7 +659,7 @@ class MOSCore:
             doc_memory = self.mem_reader.get_memory(
                 documents,
                 type="doc",
-                info={"user_id": target_user_id, "session_id": self.session_id},
+                info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
             )
             for mem in doc_memory:
                 self.mem_cubes[mem_cube_id].text_mem.add(mem)

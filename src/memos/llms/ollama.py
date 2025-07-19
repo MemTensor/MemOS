@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from typing import Any
 
 from ollama import Client
@@ -80,3 +81,6 @@ class OllamaLLM(BaseLLM):
             return remove_thinking_tags(str_response)
         else:
             return str_response
+
+    def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
+        raise NotImplementedError

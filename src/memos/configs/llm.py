@@ -27,6 +27,40 @@ class OpenAILLMConfig(BaseLLMConfig):
     extra_body: Any = Field(default=None, description="extra body")
 
 
+class QwenLLMConfig(BaseLLMConfig):
+    api_key: str = Field(..., description="API key for DashScope (Qwen)")
+    api_base: str = Field(
+        default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        description="Base URL for Qwen OpenAI-compatible API",
+    )
+    extra_body: Any = Field(default=None, description="extra body")
+    model_name_or_path: str = Field(..., description="Model name for Qwen, e.g., 'qwen-plus'")
+
+
+class DeepSeekLLMConfig(BaseLLMConfig):
+    api_key: str = Field(..., description="API key for DeepSeek")
+    api_base: str = Field(
+        default="https://api.deepseek.com",
+        description="Base URL for DeepSeek OpenAI-compatible API",
+    )
+    extra_body: Any = Field(default=None, description="Extra options for API")
+    model_name_or_path: str = Field(
+        ..., description="Model name: 'deepseek-chat' or 'deepseek-reasoner'"
+    )
+
+
+class AzureLLMConfig(BaseLLMConfig):
+    base_url: str = Field(
+        default="https://api.openai.azure.com/",
+        description="Base URL for Azure OpenAI API",
+    )
+    api_version: str = Field(
+        default="2024-03-01-preview",
+        description="API version for Azure OpenAI",
+    )
+    api_key: str = Field(..., description="API key for Azure OpenAI")
+
+
 class OllamaLLMConfig(BaseLLMConfig):
     api_base: str = Field(
         default="http://localhost:11434",
@@ -45,6 +79,14 @@ class HFLLMConfig(BaseLLMConfig):
     )
 
 
+class VLLMLLMConfig(BaseLLMConfig):
+    api_key: str = Field(default="", description="API key for vLLM (optional for local server)")
+    api_base: str = Field(
+        default="http://localhost:8088/v1",
+        description="Base URL for vLLM API",
+    )
+
+
 class LLMConfigFactory(BaseConfig):
     """Factory class for creating LLM configurations."""
 
@@ -54,7 +96,12 @@ class LLMConfigFactory(BaseConfig):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "openai": OpenAILLMConfig,
         "ollama": OllamaLLMConfig,
+        "azure": AzureLLMConfig,
         "huggingface": HFLLMConfig,
+        "vllm": VLLMLLMConfig,
+        "huggingface_singleton": HFLLMConfig,  # Add singleton support
+        "qwen": QwenLLMConfig,
+        "deepseek": DeepSeekLLMConfig,
     }
 
     @field_validator("backend")

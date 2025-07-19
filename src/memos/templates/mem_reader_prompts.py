@@ -1,7 +1,5 @@
 SIMPLE_STRUCT_MEM_READER_PROMPT = """You are a memory extraction expert.
-
 Your task is to extract memories from the perspective of user, based on a conversation between user and assistant. This means identifying what user would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as assistant) that impacted or were acknowledged by user.
-
 Please perform:
 1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
 2. Resolve all time, person, and event references clearly:
@@ -35,7 +33,7 @@ Return a single valid JSON object with the following structure:
 }
 
 Language rules:
-- The `key`, `value`, `tags`, `summary` fields must match the language of the input conversation.
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input conversation.  **如果输入是中文，请输出中文**
 - Keep `memory_type` in English.
 
 Example:
@@ -66,33 +64,63 @@ Output:
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
+Another Example in Chinese (注意: 当user的语言为中文时，你就需要也输出中文)：
+{
+  "memory list": [
+    {
+      "key": "项目会议",
+      "memory_type": "LongTermMemory",
+      "value": "在2025年6月25日下午3点，Tom与团队开会讨论了新项目，涉及时间表，并提出了对12月15日截止日期可行性的担忧。",
+      "tags": ["项目", "时间表", "会议", "截止日期"]
+    },
+    ...
+  ],
+  "summary": "Tom 目前专注于管理一个进度紧张的新项目..."
+}
+
+Always respond in the same language as the conversation.
+
 Conversation:
 ${conversation}
 
 Your Output:"""
 
-SIMPLE_STRUCT_DOC_READER_PROMPT = """
-You are an expert text analyst for a search and retrieval system. Your task is to process a document chunk and generate a single, structured JSON object.
-The input is a single piece of text: `[DOCUMENT_CHUNK]`.
-You must generate a single JSON object with two top-level keys: `summary` and `tags`.
-1. `summary`:
-   - A dense, searchable summary of the ENTIRE `[DOCUMENT_CHUNK]`.
-   - The purpose is for semantic search embedding.
-   - A clear and accurate sentence that comprehensively summarizes the main points, arguments, and information within the `[DOCUMENT_CHUNK]`.
-   - The goal is to create a standalone overview that allows a reader to fully understand the essence of the chunk without reading the original text.
-   - The summary should be **no more than 50 words**.
-2. `tags`:
-   - A concise list of **3 to 5 high-level, summative tags**.
-   - **Each tag itself should be a short phrase, ideally 2 to 4 words long.**
-   - These tags must represent the core abstract themes of the text, suitable for broad categorization.
-   - **Crucially, prioritize abstract concepts** over specific entities or phrases mentioned in the text. For example, prefer "Supply Chain Resilience" over "Reshoring Strategies".
+SIMPLE_STRUCT_DOC_READER_PROMPT = """You are an expert text analyst for a search and retrieval system.
+Your task is to process a document chunk and generate a single, structured JSON object.
 
-Here is the document chunk to process:
-`[DOCUMENT_CHUNK]`
+Please perform:
+1. Identify key information that reflects factual content, insights, decisions, or implications from the documents — including any notable themes, conclusions, or data points. Allow a reader to fully understand the essence of the chunk without reading the original text.
+2. Resolve all time, person, location, and event references clearly:
+   - Convert relative time expressions (e.g., “last year,” “next quarter”) into absolute dates if context allows.
+   - Clearly distinguish between event time and document time.
+   - If uncertainty exists, state it explicitly (e.g., “around 2024,” “exact date unclear”).
+   - Include specific locations if mentioned.
+   - Resolve all pronouns, aliases, and ambiguous references into full names or identities.
+   - Disambiguate entities with the same name if applicable.
+3. Always write from a third-person perspective, referring to the subject or content clearly rather than using first-person ("I", "me", "my").
+4. Do not omit any information that is likely to be important or memorable from the document summaries.
+   - Include all key facts, insights, emotional tones, and plans — even if they seem minor.
+   - Prioritize completeness and fidelity over conciseness.
+   - Do not generalize or skip details that could be contextually meaningful.
+
+Return a single valid JSON object with the following structure:
+
+Return valid JSON:
+{
+  "key": <string, a concise title of the `value` field>,
+  "memory_type": "LongTermMemory",
+  "value": <A clear and accurate paragraph that comprehensively summarizes the main points, arguments, and information within the document chunk — written in English if the input memory items are in English, or in Chinese if the input is in Chinese>,
+  "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>
+}
+
+Language rules:
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input document summaries.  **如果输入是中文，请输出中文**
+- Keep `memory_type` in English.
+
+Document chunk:
 {chunk_text}
 
-Produce ONLY the JSON object as your response.
-"""
+Your Output:"""
 
 SIMPLE_STRUCT_MEM_READER_EXAMPLE = """Example:
 Conversation:
@@ -120,6 +148,20 @@ Output:
     },
   ],
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
+}
+
+Another Example in Chinese (注意: 你的输出必须和输入的user语言一致)：
+{
+  "memory list": [
+    {
+      "key": "项目会议",
+      "memory_type": "LongTermMemory",
+      "value": "在2025年6月25日下午3点，Tom与团队开会讨论了新项目，涉及时间表，并提出了对12月15日截止日期可行性的担忧。",
+      "tags": ["项目", "时间表", "会议", "截止日期"]
+    },
+    ...
+  ],
+  "summary": "Tom 目前专注于管理一个进度紧张的新项目..."
 }
 
 """

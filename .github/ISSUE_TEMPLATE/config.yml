@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "\U0001F527 GitHub Pull Requests"
+    url: https://github.com/MemTensor/MemOS/pulls
+    about: Contribute code improvements via Pull Requests | 通过 Pull Requests 贡献代码改进
+  - name: "\U0001F4AC GitHub Discussions"
+    url: https://github.com/MemTensor/MemOS/discussions
+    about: Participate in our GitHub Discussions to ask questions or share ideas | 加入 GitHub Discussions，提出问题或分享想法
+  - name: "\U0001F3AE Discord Server"
+    url: https://discord.gg/Txbx3gebZR
+    about: Join our Discord Server for real-time community chat | 加入我们的 Discord 服务器进行实时社区聊天
+  - name: "\U0001F4F1 WeChat Group"
+    url: https://statics.memtensor.com.cn/memos/qr-code.png
+    about: Scan the QR code to join our WeChat group for more discussions | 扫描二维码加入我们的微信群，进行更多讨论

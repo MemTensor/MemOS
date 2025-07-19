@@ -1,7 +1,7 @@
 import concurrent.futures
 import copy
 import json
-import re
+
 from abc import ABC
 from typing import Any
 
@@ -16,8 +16,8 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
-    SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+    SIMPLE_STRUCT_MEM_READER_PROMPT,
 )
 
 
@@ -208,15 +208,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         for i, chunk_res in enumerate(processed_chunks):
             if chunk_res:
                 node_i = TextualMemoryItem(
-                    memory=chunk_res["summary"],
+                    memory=chunk_res["value"],
                     metadata=TreeNodeTextualMemoryMetadata(
                         user_id=info.get("user_id"),
                         session_id=info.get("session_id"),
                         memory_type="LongTermMemory",
                         status="activated",
                         tags=chunk_res["tags"],
-                        key="",
-                        embedding=self.embedder.embed([chunk_res["summary"]])[0],
+                        key=chunk_res["key"],
+                        embedding=self.embedder.embed([chunk_res["value"]])[0],
                         usage=[],
                         sources=[f"{scene_data_info['file']}_{i}"],
                         background="",

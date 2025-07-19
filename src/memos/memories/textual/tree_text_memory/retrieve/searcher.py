@@ -5,7 +5,7 @@ from datetime import datetime
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
-from memos.llms.factory import OllamaLLM, OpenAILLM
+from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 
 from .internet_retriever_factory import InternetRetrieverFactory
@@ -18,7 +18,7 @@ from .task_goal_parser import TaskGoalParser
 class Searcher:
     def __init__(
         self,
-        dispatcher_llm: OpenAILLM | OllamaLLM,
+        dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         internet_retriever: InternetRetrieverFactory | None = None,
@@ -176,9 +176,10 @@ class Searcher:
         for item, score in sorted(deduped_result.values(), key=lambda pair: pair[1], reverse=True)[
             :top_k
         ]:
-            new_meta = SearchedTreeNodeTextualMemoryMetadata(
-                **item.metadata.model_dump(), relativity=score
-            )
+            meta_data = item.metadata.model_dump()
+            if "relativity" not in meta_data:
+                meta_data["relativity"] = score
+            new_meta = SearchedTreeNodeTextualMemoryMetadata(**meta_data)
             searched_res.append(
                 TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)
             )

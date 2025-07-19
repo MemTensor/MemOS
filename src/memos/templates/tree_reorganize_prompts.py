@@ -2,32 +2,80 @@ REORGANIZE_PROMPT = """You are a memory clustering and summarization expert.
 
 Given the following child memory items:
 
-Keys:
-{joined_keys}
+{memory_items_text}
 
-Values:
-{joined_values}
+Please perform:
+1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
+2. Resolve all time, person, and event references clearly:
+   - Convert relative time expressions (e.g., “yesterday,” “next Friday”) into absolute dates using the message timestamp if possible.
+   - Clearly distinguish between event time and message time.
+   - If uncertainty exists, state it explicitly (e.g., “around June 2025,” “exact date unclear”).
+   - Include specific locations if mentioned.
+   - Resolve all pronouns, aliases, and ambiguous references into full names or identities.
+   - Disambiguate people with the same name if applicable.
+3. Always write from a third-person perspective, referring to user as
+"The user" or by name if name mentioned, rather than using first-person ("I", "me", "my").
+For example, write "The user felt exhausted..." instead of "I felt exhausted...".
+4. Do not omit any information that user is likely to remember.
+   - Include all key experiences, thoughts, emotional responses, and plans — even if they seem minor.
+   - Prioritize completeness and fidelity over conciseness.
+   - Do not generalize or skip details that could be personally meaningful to user.
+5. Summarize all child memory items into one memory item.
 
-Backgrounds:
-{joined_backgrounds}
-
-Your task:
-- Generate a single clear English `key` (5–10 words max).
-- Write a detailed `value` that merges the key points into a single, complete, well-structured text. This must stand alone and convey what the user should remember.
-- Provide a list of 5–10 relevant English `tags`.
-- Write a short `background` note (50–100 words) covering any extra context, sources, or traceability info.
+Language rules:
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input memory items.  **如果输入是中文，请输出中文**
+- Keep `memory_type` in English.
 
 Return valid JSON:
-{{
-  "key": "<concise topic>",
-  "value": "<full memory text>",
-  "tags": ["tag1", "tag2", ...],
-  "background": "<extra context>"
-}}
+{
+  "key": <string, a concise title of the `value` field>,
+  "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
+  "value": <A detailed, self-contained, and unambiguous memory statement, only contain detailed, unaltered information extracted and consolidated from the input `value` fields, do not include summary content — written in English if the input memory items are in English, or in Chinese if the input is in Chinese>,
+  "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
+  "summary": <a natural paragraph summarizing the above memories from user's perspective, only contain information from the input `summary` fields, 120–200 words, same language as the input>
+}
+
 """
 
-LOCAL_SUBCLUSTER_PROMPT = """
-You are a memory organization expert.
+DOC_REORGANIZE_PROMPT = """You are a document summarization and knowledge extraction expert.
+
+Given the following summarized document items:
+
+{memory_items_text}
+
+Please perform:
+1. Identify key information that reflects factual content, insights, decisions, or implications from the documents — including any notable themes, conclusions, or data points.
+2. Resolve all time, person, location, and event references clearly:
+   - Convert relative time expressions (e.g., “last year,” “next quarter”) into absolute dates if context allows.
+   - Clearly distinguish between event time and document time.
+   - If uncertainty exists, state it explicitly (e.g., “around 2024,” “exact date unclear”).
+   - Include specific locations if mentioned.
+   - Resolve all pronouns, aliases, and ambiguous references into full names or identities.
+   - Disambiguate entities with the same name if applicable.
+3. Always write from a third-person perspective, referring to the subject or content clearly rather than using first-person ("I", "me", "my").
+4. Do not omit any information that is likely to be important or memorable from the document summaries.
+   - Include all key facts, insights, emotional tones, and plans — even if they seem minor.
+   - Prioritize completeness and fidelity over conciseness.
+   - Do not generalize or skip details that could be contextually meaningful.
+5. Summarize all document summaries into one integrated memory item.
+
+Language rules:
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input document summaries.  **如果输入是中文，请输出中文**
+- Keep `memory_type` in English.
+
+Return valid JSON:
+{
+  "key": <string, a concise title of the `value` field>,
+  "memory_type": "LongTermMemory",
+  "value": <A detailed, self-contained, and unambiguous memory statement, only contain detailed, unaltered information extracted and consolidated from the input `value` fields, do not include summary content — written in English if the input memory items are in English, or in Chinese if the input is in Chinese>,
+  "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
+  "summary": <a natural paragraph summarizing the above memories from user's perspective, only contain information from the input `summary` fields, 120–200 words, same language as the input>
+}
+
+"""
+
+
+LOCAL_SUBCLUSTER_PROMPT = """You are a memory organization expert.
 
 You are given a cluster of memory items, each with an ID and content.
 Your task is to divide these into smaller, semantically meaningful sub-clusters.
@@ -36,21 +84,25 @@ Instructions:
 - Identify natural topics by analyzing common time, place, people, and event elements.
 - Each sub-cluster must reflect a coherent theme that helps retrieval.
 - Each sub-cluster should have 2–10 items. Discard singletons.
-- Each item ID must appear in exactly one sub-cluster.
+- Each item ID must appear in exactly one sub-cluster or be discarded. No duplicates are allowed.
+- All IDs in the output must be from the provided Memory items.
 - Return strictly valid JSON only.
 
 Example: If you have items about a project across multiple phases, group them by milestone, team, or event.
 
+Language rules:
+- The `key` fields must match the mostly used language of the clustered memories. **如果输入是中文，请输出中文**
+
 Return valid JSON:
-{{
+{
   "clusters": [
-    {{
-      "ids": ["id1", "id2", ...],
-      "theme": "<short label>"
-    }},
+    {
+      "ids": ["<id1>", "<id2>", ...],
+      "key": "<string, a unique, concise memory title>"
+    },
     ...
   ]
-}}
+}
 
 Memory items:
 {joined_scene}
@@ -70,7 +122,7 @@ Your task:
 Valid options:
 - CAUSE: One clearly leads to the other.
 - CONDITION: One happens only if the other condition holds.
-- RELATE_TO: They are semantically related by shared people, time, place, or event, but neither causes the other.
+- RELATE: They are semantically related by shared people, time, place, or event, but neither causes the other.
 - CONFLICT: They logically contradict each other.
 - NONE: No clear useful connection.
 
@@ -84,7 +136,7 @@ Another Example:
 - Node 2: "The venue was booked for a wedding in August."
 Answer: CONFLICT
 
-Always respond with ONE word: [CAUSE | CONDITION | RELATE_TO | CONFLICT | NONE]
+Always respond with ONE word, no matter what language is for the input nodes: [CAUSE | CONDITION | RELATE | CONFLICT | NONE]
 """
 
 INFER_FACT_PROMPT = """
@@ -125,13 +177,16 @@ Input Memories:
 - "Mary organized the 2023 sustainability summit in Berlin."
 - "Mary presented a keynote on renewable energy at the same summit."
 
+Language rules:
+- The `key`, `value`, `tags`, `background` fields must match the language of the input.
+
 Good Aggregate:
-{{
+{
   "key": "Mary's Sustainability Summit Role",
   "value": "Mary organized and spoke at the 2023 sustainability summit in Berlin, highlighting renewable energy initiatives.",
   "tags": ["Mary", "summit", "Berlin", "2023"],
   "background": "Combined from multiple memories about Mary's activities at the summit."
-}}
+}
 
 If you find NO useful higher-level concept, reply exactly: "None".
 """

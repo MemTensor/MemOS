@@ -1,38 +1,64 @@
-name: "\U0001F41B Bug / help"
-description: Create a report to help us improve MemOS
+name: "\U0001F41B Bug Report"
+description: Report a bug to help us improve MemOS | 报告错误以帮助我们改进 MemOS
+title: "fix: "
 labels: ["bug", "pending"]
 body:
 
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission checklist | 提交前检查
+      options:
+        - label: I have searched existing issues and this hasn't been mentioned before | 我已搜索现有问题，确认此问题尚未被提及
+          required: true
+        - label: I have read the project documentation and confirmed this issue doesn't already exist | 我已阅读项目文档并确认此问题尚未存在
+          required: true
+        - label: This issue is specific to MemOS and not a general software issue | 该问题是针对 MemOS 的，而不是一般软件问题
+          required: true
+
   - type: textarea
-    id: system-info
+    id: description
+    attributes:
+      label: "Bug Description | 问题描述"
+      placeholder: "Describe what happened and what you expected to happen"
     validations:
       required: true
-    attributes:
-      label: System Info
-      description: |
-        Please share your system info with us. You can run the command **pip show MemoryOS** and copy-paste its output below.
-        请提供您的系统信息。您可以在命令行运行 **pip show MemoryOS** 并将其输出复制到该文本框中。
-
-      placeholder: MemoryOS version, platform, python version, ...
 
   - type: textarea
     id: reproduction
+    attributes:
+      label: "How to Reproduce | 如何重现"
+      placeholder: |
+        1. Import/run '...'
+        2. Call function '...'
+        3. See error
     validations:
       required: true
-    attributes:
-      label: Reproduction
-      description: |
-        Please provide entry arguments, error messages and stack traces that reproduces the problem.
-        请提供入口参数，错误日志以及异常堆栈以便于我们复现问题。
 
-      value: |
-        ```text
-        Put your message here.
-        ```
+  - type: textarea
+    id: environment
+    attributes:
+      label: "Environment | 环境信息"
+      placeholder: |
+        - Python version:
+        - Operating System:
+        - MemOS version: (run `pip show memoryos`)
+    validations:
+      required: true
 
   - type: textarea
     id: others
     validations:
       required: false
     attributes:
-      label: Others
+      label: "Additional Context | 其他信息"
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to Implement | 实现意愿
+      options:
+        - label: I'm willing to implement this myself | 我愿意自己解决
+          required: false
+        - label: I would like someone else to implement this | 我希望其他人来解决
+          required: false
