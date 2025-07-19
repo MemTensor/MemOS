@@ -6,11 +6,8 @@ import time
 from pathlib import Path
 from queue import Queue
 
-import pika
-
-from pika.adapters.select_connection import SelectConnection
-
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
+from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
 from memos.mem_scheduler.modules.schemas import DIRECT_EXCHANGE_TYPE, FANOUT_EXCHANGE_TYPE
@@ -20,6 +17,11 @@ logger = get_logger(__name__)
 
 
 class RabbitMQSchedulerModule(BaseSchedulerModule):
+    @require_python_package(
+        import_name="pika",
+        install_command="pip install pika",
+        install_link="https://pika.readthedocs.io/en/stable/index.html",
+    )
     def __init__(self):
         """
         Initialize RabbitMQ connection settings.
@@ -63,6 +65,8 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         """
         Establish connection to RabbitMQ using pika.
         """
+        from pika.adapters.select_connection import SelectConnection
+
         if config is None:
             if config_path is None and AuthConfig.default_config_exists():
                 auth_config = AuthConfig.from_local_yaml()
@@ -125,6 +129,8 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             return result.method.message_count
 
     def get_rabbitmq_connection_param(self):
+        import pika
+
         credentials = pika.PlainCredentials(
             username=self.rabbitmq_config.user_name,
             password=self.rabbitmq_config.password,
@@ -241,6 +247,8 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         """
         Publish a message to RabbitMQ.
         """
+        import pika
+
         with self._rabbitmq_lock:
             if not self.is_rabbitmq_connected():
                 logger.error("Cannot publish - no active connection")

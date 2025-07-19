@@ -26,6 +26,7 @@ jobs:
         os:
           - "ubuntu-latest"
           - "windows-latest"
+          - "macos-13"
           - "macos-14"
           - "macos-15"
           # Ref: https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-where-your-workflow-runs/choosing-the-runner-for-a-job
@@ -46,13 +47,54 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'poetry'
-    - name: Install dependencies
+
+    # Dependency and building tests
+    - name: Install main dependencies
       run: |
-        poetry install --no-interaction --with dev --with test
-    - name: Test with ruff
+        poetry install --no-root --no-interaction
+    - name: Check no top-level optional dependencies
+      run: |
+        poetry run python scripts/check_dependencies.py
+    - name: Build sdist and wheel
+      run: poetry build
+    - name: Test wheel installation on Windows
+      if: startsWith(matrix.os, 'windows')
+      run: |
+        Get-ChildItem dist/*.whl | ForEach-Object { pip install $_.FullName }
+        pip uninstall -y memoryos
+    - name: Test wheel installation on Linux / Mac
+      if: ${{ !startsWith(matrix.os, 'windows') }}
+      run: |
+        pip install dist/*.whl
+        pip uninstall -y memoryos
+    - name: Test sdist installation on Windows
+      if: startsWith(matrix.os, 'windows')
+      run: |
+        Get-ChildItem dist/*.tar.gz | ForEach-Object { pip install $_.FullName }
+        pip uninstall -y memoryos
+    - name: Test sdist installation on Linux / Mac
+      if: ${{ !startsWith(matrix.os, 'windows') }}
+      run: |
+        pip install dist/*.tar.gz
+        pip uninstall -y memoryos
+
+    # Ruff checks
+    - name: Install test group dependencies
+      run: |
+        poetry install --no-interaction --with test
+    - name: Ruff checks
       run: |
         poetry run ruff check
         poetry run ruff format --check
-    - name: Test with pytest
+
+    # PyTest checks
+    - name: Install all extra dependencies
+      # macos-13 doesn't support torch==2.7.1
+      # So, pytest won't work
+      if: ${{ !startsWith(matrix.os, 'macos-13') }}
       run: |
-        poetry run pytest tests -vv
+        poetry install --no-interaction --extras all
+    - name: PyTest unit tests
+      if: ${{ !startsWith(matrix.os, 'macos-13') }}
+      run: |
+        poetry run pytest tests -vv --durations=10
