@@ -272,6 +272,7 @@ def generate_response_file(file_path):
     )
     parser.add_argument("--chunk_size", type=int, default=2000, help="Chunk size for processing")
     parser.add_argument("--num_chunks", type=int, default=2, help="Number of chunks to process")
+    parser.add_argument("--frame", type=str, default="rag")
 
     args = parser.parse_args()
     with open(file_path) as f:
