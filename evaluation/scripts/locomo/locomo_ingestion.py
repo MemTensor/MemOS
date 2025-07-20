@@ -1,7 +1,24 @@
+import os
+import sys
+
+
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+)
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ),
+        "evaluation",
+        "scripts",
+    ),
+)
+
 import argparse
 import concurrent.futures
 import json
-import os
 import time
 
 from datetime import datetime, timezone
@@ -11,6 +28,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from mem0 import MemoryClient
 from tqdm import tqdm
+from utils.client import memos_client
 from zep_cloud.client import Zep
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
@@ -93,7 +111,7 @@ def get_client(frame: str, user_id: str | None = None, version: str = "default")
         return mos
 
 
-def ingest_session(client, session, frame, metadata, revised_client=None):
+def ingest_session(client, session, frame, version, metadata, revised_client=None):
     session_date = metadata["session_date"]
     date_format = "%I:%M %p on %d %B, %Y UTC"
     date_string = datetime.strptime(session_date, date_format).replace(tzinfo=timezone.utc)
@@ -125,7 +143,7 @@ def ingest_session(client, session, frame, metadata, revised_client=None):
                 group_id=conv_id,
             )
 
-    elif frame == "memos":
+    elif frame == "memos" or frame == "memos-api":
         messages = []
         messages_reverse = []
 
@@ -149,16 +167,22 @@ def ingest_session(client, session, frame, metadata, revised_client=None):
 
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
+        if frame == "memos-api":
+            client.add(messages=messages, user_id=f"{speaker_a_user_id.replace('_', '')}{version}")
 
-        client.add(
-            messages=messages,
-            user_id=speaker_a_user_id,
-        )
+            revised_client.add(
+                messages=messages_reverse, user_id=f"{speaker_b_user_id.replace('_', '')}{version}"
+            )
+        elif frame == "memos":
+            client.add(
+                messages=messages,
+                user_id=speaker_a_user_id,
+            )
 
-        revised_client.add(
-            messages=messages_reverse,
-            user_id=speaker_b_user_id,
-        )
+            revised_client.add(
+                messages=messages_reverse,
+                user_id=speaker_b_user_id,
+            )
         print(f"Added messages for {speaker_a_user_id} and {speaker_b_user_id} successfully.")
 
     elif frame == "mem0" or frame == "mem0_graph":
@@ -246,6 +270,12 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
             speaker_b_user_id = conv_id + "_speaker_b"
             client = get_client("memos", speaker_a_user_id, version)
             revised_client = get_client("memos", speaker_b_user_id, version)
+        elif frame == "memos-api":
+            conv_id = "locomo_exp_user_" + str(conv_idx)
+            speaker_a_user_id = conv_id + "_speaker_a"
+            speaker_b_user_id = conv_id + "_speaker_b"
+            client = memos_client(mode="api")
+            revised_client = memos_client(mode="api")
 
         sessions_to_process = []
         for session_idx in range(max_session_count):
@@ -272,7 +302,7 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {
                 executor.submit(
-                    ingest_session, client, session, frame, metadata, revised_client
+                    ingest_session, client, session, frame, version, metadata, revised_client
                 ): metadata["session_key"]
                 for session, metadata in sessions_to_process
             }
@@ -340,7 +370,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph"],
+        choices=["zep", "memos", "mem0", "mem0_graph", "memos-api"],
         help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
     )
     parser.add_argument(

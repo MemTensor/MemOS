@@ -14,6 +14,7 @@ from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
 from utils.mem0_local import Mem0Client
+from utils.memos_api import MemOSAPI
 from utils.memos_filters import filter_memory_data
 
 
@@ -81,7 +82,7 @@ def memos_client(
         )
 
     elif mode == "api":
-        pass
+        memos = MemOSAPI(base_url=os.getenv("MEMOS_BASE_URL"))
 
     return memos
 

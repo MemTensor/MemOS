@@ -32,7 +32,6 @@ try:
 except Exception as e:
     print(f"Warning: Failed to download NLTK resources: {e}")
 
-
 try:
     sentence_model_name = "Qwen/Qwen3-Embedding-0.6B"
     sentence_model = SentenceTransformer(sentence_model_name)
@@ -363,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "langmem", "openai"],
+        choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api"],
         help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
     )
     parser.add_argument(

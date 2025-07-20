@@ -53,7 +53,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
         print(
             f"\033[90m[{frame}]\033[0m ✅ Session \033[1;94m{session_id}\033[0m: Ingested \033[93m{len(messages)}\033[0m messages at \033[92m{date.isoformat()}\033[0m"
         )
-    elif frame == "memos-local":
+    elif frame == "memos-local" or frame == "memos-api":
         for idx, msg in enumerate(session):
             messages.append(
                 {
@@ -126,7 +126,8 @@ def ingest_conv(lme_df, version, conv_idx, frame, num_workers=2):
             addorsearch="add",
         )
         print("🔌 \033[1mUsing \033[94mMemos Local client\033[0m \033[1mfor ingestion...\033[0m")
-
+    elif frame == "memos-api":
+        client = memos_client(mode="api")
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = []
 
@@ -193,7 +194,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local"],
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api"],
     )
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."
