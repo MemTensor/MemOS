@@ -12,7 +12,7 @@ async def main():
     print("Working FastMCP Client")
     print("=" * 40)
 
-    async with Client("http://127.0.0.1:9003/mcp") as client:
+    async with Client("http://127.0.0.1:8000/mcp") as client:
         print("Connected to MOS MCP server!")
 
         print("Available tools:")
