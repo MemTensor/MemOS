@@ -411,7 +411,10 @@ class MOSCore:
         return self.user_manager.create_cube(cube_name, owner_id, cube_path, cube_id)
 
     def register_mem_cube(
-        self, mem_cube_name_or_path: str, mem_cube_id: str | None = None, user_id: str | None = None
+        self,
+        mem_cube_name_or_path: str | GeneralMemCube,
+        mem_cube_id: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         """
         Register a MemCube with the MOS.
@@ -424,12 +427,18 @@ class MOSCore:
         self._validate_user_exists(target_user_id)
 
         if mem_cube_id is None:
-            mem_cube_id = mem_cube_name_or_path
+            if isinstance(mem_cube_name_or_path, GeneralMemCube):
+                mem_cube_id = f"cube_{target_user_id}"
+            else:
+                mem_cube_id = mem_cube_name_or_path
 
         if mem_cube_id in self.mem_cubes:
             logger.info(f"MemCube with ID {mem_cube_id} already in MOS, skip install.")
         else:
-            if os.path.exists(mem_cube_name_or_path):
+            if isinstance(mem_cube_name_or_path, GeneralMemCube):
+                self.mem_cubes[mem_cube_id] = mem_cube_name_or_path
+                logger.info(f"register new cube {mem_cube_id} for user {target_user_id}")
+            elif os.path.exists(mem_cube_name_or_path):
                 self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_dir(mem_cube_name_or_path)
             else:
                 logger.warning(
@@ -462,10 +471,14 @@ class MOSCore:
         else:
             # Cube doesn't exist, create it
             self.create_cube_for_user(
-                cube_name=mem_cube_name_or_path,
+                cube_name=mem_cube_name_or_path
+                if not isinstance(mem_cube_name_or_path, GeneralMemCube)
+                else mem_cube_id,
                 owner_id=target_user_id,
                 cube_id=mem_cube_id,
-                cube_path=mem_cube_name_or_path,
+                cube_path=mem_cube_name_or_path
+                if not isinstance(mem_cube_name_or_path, GeneralMemCube)
+                else "init",
             )
             logger.info(f"register new cube {mem_cube_id} for user {target_user_id}")
 

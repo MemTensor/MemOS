@@ -28,7 +28,7 @@ def config():
 
 @pytest.fixture
 def mock_qdrant_client():
-    with patch("memos.vec_dbs.qdrant.QdrantClient") as mockclient:
+    with patch("qdrant_client.QdrantClient") as mockclient:
         yield mockclient
 
 

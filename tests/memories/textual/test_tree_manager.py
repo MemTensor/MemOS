@@ -145,3 +145,14 @@ def test_ensure_structure_path_reuses_existing(memory_manager, mock_graph_store)
     meta = TreeNodeTextualMemoryMetadata(key="hobby")
     node_id = memory_manager._ensure_structure_path("UserMemory", meta)
     assert node_id == "existing_node_id"
+
+
+def test_add_returns_written_node_ids(memory_manager):
+    memory = TextualMemoryItem(
+        memory="test memory",
+        metadata=TreeNodeTextualMemoryMetadata(embedding=[0.1] * 5, memory_type="UserMemory"),
+    )
+    ids = memory_manager.add([memory])
+    assert isinstance(ids, list)
+    assert all(isinstance(i, str) for i in ids)
+    assert len(ids) > 0

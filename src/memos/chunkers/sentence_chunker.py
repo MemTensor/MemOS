@@ -1,6 +1,5 @@
-from chonkie import SentenceChunker as ChonkieSentenceChunker
-
 from memos.configs.chunker import SentenceChunkerConfig
+from memos.dependency import require_python_package
 from memos.log import get_logger
 
 from .base import BaseChunker, Chunk
@@ -12,7 +11,14 @@ logger = get_logger(__name__)
 class SentenceChunker(BaseChunker):
     """Sentence-based text chunker."""
 
+    @require_python_package(
+        import_name="chonkie",
+        install_command="pip install chonkie",
+        install_link="https://docs.chonkie.ai/python-sdk/getting-started/installation",
+    )
     def __init__(self, config: SentenceChunkerConfig):
+        from chonkie import SentenceChunker as ChonkieSentenceChunker
+
         self.config = config
         self.chunker = ChonkieSentenceChunker(
             tokenizer_or_token_counter=config.tokenizer_or_token_counter,

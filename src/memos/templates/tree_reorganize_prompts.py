@@ -37,6 +37,44 @@ Return valid JSON:
 
 """
 
+DOC_REORGANIZE_PROMPT = """You are a document summarization and knowledge extraction expert.
+
+Given the following summarized document items:
+
+{memory_items_text}
+
+Please perform:
+1. Identify key information that reflects factual content, insights, decisions, or implications from the documents — including any notable themes, conclusions, or data points.
+2. Resolve all time, person, location, and event references clearly:
+   - Convert relative time expressions (e.g., “last year,” “next quarter”) into absolute dates if context allows.
+   - Clearly distinguish between event time and document time.
+   - If uncertainty exists, state it explicitly (e.g., “around 2024,” “exact date unclear”).
+   - Include specific locations if mentioned.
+   - Resolve all pronouns, aliases, and ambiguous references into full names or identities.
+   - Disambiguate entities with the same name if applicable.
+3. Always write from a third-person perspective, referring to the subject or content clearly rather than using first-person ("I", "me", "my").
+4. Do not omit any information that is likely to be important or memorable from the document summaries.
+   - Include all key facts, insights, emotional tones, and plans — even if they seem minor.
+   - Prioritize completeness and fidelity over conciseness.
+   - Do not generalize or skip details that could be contextually meaningful.
+5. Summarize all document summaries into one integrated memory item.
+
+Language rules:
+- The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input document summaries.  **如果输入是中文，请输出中文**
+- Keep `memory_type` in English.
+
+Return valid JSON:
+{
+  "key": <string, a concise title of the `value` field>,
+  "memory_type": "LongTermMemory",
+  "value": <A detailed, self-contained, and unambiguous memory statement, only contain detailed, unaltered information extracted and consolidated from the input `value` fields, do not include summary content — written in English if the input memory items are in English, or in Chinese if the input is in Chinese>,
+  "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
+  "summary": <a natural paragraph summarizing the above memories from user's perspective, only contain information from the input `summary` fields, 120–200 words, same language as the input>
+}
+
+"""
+
+
 LOCAL_SUBCLUSTER_PROMPT = """You are a memory organization expert.
 
 You are given a cluster of memory items, each with an ID and content.

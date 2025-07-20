@@ -2,11 +2,9 @@ import asyncio
 import threading
 
 from collections.abc import Callable
+from typing import Any
 
-import redis
-
-from redis import Redis
-
+from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
 
@@ -15,6 +13,11 @@ logger = get_logger(__name__)
 
 
 class RedisSchedulerModule(BaseSchedulerModule):
+    @require_python_package(
+        import_name="redis",
+        install_command="pip install redis",
+        install_link="https://redis.readthedocs.io/en/stable/",
+    )
     def __init__(self):
         """
         intent_detector: Object used for intent recognition (such as the above IntentDetector)
@@ -35,23 +38,25 @@ class RedisSchedulerModule(BaseSchedulerModule):
         self._redis_listener_loop: asyncio.AbstractEventLoop | None = None
 
     @property
-    def redis(self) -> Redis:
+    def redis(self) -> Any:
         return self._redis_conn
 
     @redis.setter
-    def redis(self, value: Redis) -> None:
+    def redis(self, value: Any) -> None:
         self._redis_conn = value
 
     def initialize_redis(
         self, redis_host: str = "localhost", redis_port: int = 6379, redis_db: int = 0
     ):
+        import redis
+
         self.redis_host = redis_host
         self.redis_port = redis_port
         self.redis_db = redis_db
 
         try:
             logger.debug(f"Connecting to Redis at {redis_host}:{redis_port}/{redis_db}")
-            self._redis_conn = Redis(
+            self._redis_conn = redis.Redis(
                 host=self.redis_host, port=self.redis_port, db=self.redis_db, decode_responses=True
             )
             # test conn
@@ -89,6 +94,8 @@ class RedisSchedulerModule(BaseSchedulerModule):
         self, handler=None, last_id: str = "$", block_time: int = 2000
     ):
         """Internal async stream listener"""
+        import redis
+
         self._redis_listener_running = True
         while self._redis_listener_running:
             try:

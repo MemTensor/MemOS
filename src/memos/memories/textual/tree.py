@@ -57,7 +57,7 @@ class TreeTextMemory(BaseTextMemory):
         else:
             logger.info("No internet retriever configured")
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> None:
+    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
@@ -67,7 +67,7 @@ class TreeTextMemory(BaseTextMemory):
             plan = plan_memory_operations(memory_items, metadata, self.graph_store)
             execute_plan(memory_items, metadata, plan, self.graph_store)
         """
-        self.memory_manager.add(memories)
+        return self.memory_manager.add(memories)
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         self.memory_manager.replace_working_memory(memories)
