@@ -28,7 +28,7 @@ def load_default_config(user_id="default_user"):
     return config, cube
 
 
-class MOSMCPServer:
+class MOSMCPStdioServer:
     def __init__(self):
         self.mcp = FastMCP("MOS Memory System")
         config, cube = load_default_config()
@@ -449,25 +449,54 @@ class MOSMCPServer:
             except Exception as e:
                 return f"Error controlling memory scheduler: {e!s}"
 
-    def run(self, host: str = "localhost", port: int = 8000):
-        """Run MCP server"""
-        # 运行 HTTP 模式的 MCP 服务器
-        asyncio.run(self.mcp.run_http_async(host=host, port=port))
+    def run(self, transport: str = "stdio", **kwargs):
+        """Run MCP server with specified transport"""
+        if transport == "stdio":
+            # Run stdio mode (default for local usage)
+            self.mcp.run(transport="stdio")
+        elif transport == "http":
+            # Run HTTP mode
+            host = kwargs.get("host", "localhost")
+            port = kwargs.get("port", 8000)
+            asyncio.run(self.mcp.run_http_async(host=host, port=port))
+        elif transport == "sse":
+            # Run SSE mode (deprecated but still supported)
+            host = kwargs.get("host", "localhost")
+            port = kwargs.get("port", 8000)
+            self.mcp.run(transport="sse", host=host, port=port)
+        else:
+            raise ValueError(f"Unsupported transport: {transport}")
 
 
 # Usage example
 if __name__ == "__main__":
+    import argparse
+
     from dotenv import load_dotenv
 
     load_dotenv()
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="MOS MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "sse"],
+        default="stdio",
+        help="Transport method (default: stdio)",
+    )
+    parser.add_argument("--host", default="localhost", help="Host for HTTP/SSE transport")
+    parser.add_argument("--port", type=int, default=8000, help="Port for HTTP/SSE transport")
+
+    args = parser.parse_args()
+
+    # Set environment variables
     os.environ["OPENAI_API_BASE"] = os.getenv("OPENAI_API_BASE")
     os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-
     os.environ["MOS_TEXT_MEM_TYPE"] = "tree_text"  # "tree_text" need set neo4j
     os.environ["NEO4J_URI"] = os.getenv("NEO4J_URI")
     os.environ["NEO4J_USER"] = os.getenv("NEO4J_USER")
     os.environ["NEO4J_PASSWORD"] = os.getenv("NEO4J_PASSWORD")
 
     # Create and run MCP server
-    server = MOSMCPServer()
-    server.run(host="0.0.0.0", port=9003)
+    server = MOSMCPStdioServer()
+    server.run(transport=args.transport, host=args.host, port=args.port)
