@@ -43,6 +43,7 @@ dependencies = [
     "fastapi[all] (>=0.115.12,<0.116.0)",  # Web framework for building APIs
     "sqlalchemy (>=2.0.41,<3.0.0)",  # SQL toolkit
     "scikit-learn (>=1.7.0,<2.0.0)",  # Machine learning
+    "fastmcp (>=2.10.5,<3.0.0)",
 ]
 
 [project.urls]
