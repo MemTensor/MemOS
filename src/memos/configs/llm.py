@@ -27,6 +27,28 @@ class OpenAILLMConfig(BaseLLMConfig):
     extra_body: Any = Field(default=None, description="extra body")
 
 
+class QwenLLMConfig(BaseLLMConfig):
+    api_key: str = Field(..., description="API key for DashScope (Qwen)")
+    api_base: str = Field(
+        default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        description="Base URL for Qwen OpenAI-compatible API",
+    )
+    extra_body: Any = Field(default=None, description="extra body")
+    model_name_or_path: str = Field(..., description="Model name for Qwen, e.g., 'qwen-plus'")
+
+
+class DeepSeekLLMConfig(BaseLLMConfig):
+    api_key: str = Field(..., description="API key for DeepSeek")
+    api_base: str = Field(
+        default="https://api.deepseek.com",
+        description="Base URL for DeepSeek OpenAI-compatible API",
+    )
+    extra_body: Any = Field(default=None, description="Extra options for API")
+    model_name_or_path: str = Field(
+        ..., description="Model name: 'deepseek-chat' or 'deepseek-reasoner'"
+    )
+
+
 class AzureLLMConfig(BaseLLMConfig):
     base_url: str = Field(
         default="https://api.openai.azure.com/",
@@ -78,6 +100,8 @@ class LLMConfigFactory(BaseConfig):
         "huggingface": HFLLMConfig,
         "vllm": VLLMLLMConfig,
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
+        "qwen": QwenLLMConfig,
+        "deepseek": DeepSeekLLMConfig,
     }
 
     @field_validator("backend")

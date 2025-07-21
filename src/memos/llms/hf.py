@@ -1,6 +1,5 @@
 from collections.abc import Generator
-
-import torch
+from typing import Any
 
 from transformers import (
     AutoModelForCausalLM,
@@ -134,6 +133,8 @@ class HFLLM(BaseLLM):
         Yields:
             str: Streaming response chunks.
         """
+        import torch
+
         inputs = self.tokenizer([prompt], return_tensors="pt").to(self.model.device)
 
         # Get generation parameters
@@ -200,6 +201,8 @@ class HFLLM(BaseLLM):
         Returns:
             str: Model response.
         """
+        import torch
+
         query_ids = self.tokenizer(
             query, return_tensors="pt", add_special_tokens=False
         ).input_ids.to(self.model.device)
@@ -287,10 +290,7 @@ class HFLLM(BaseLLM):
 
             generated.append(next_token)
 
-    @torch.no_grad()
-    def _prefill(
-        self, input_ids: torch.Tensor, kv: DynamicCache
-    ) -> tuple[torch.Tensor, DynamicCache]:
+    def _prefill(self, input_ids: Any, kv: DynamicCache) -> tuple[Any, DynamicCache]:
         """
         Forward the model once, returning last-step logits and updated KV cache.
         Args:
@@ -299,15 +299,18 @@ class HFLLM(BaseLLM):
         Returns:
             tuple[torch.Tensor, DynamicCache]: (last-step logits, updated KV cache)
         """
-        out = self.model(
-            input_ids=input_ids,
-            use_cache=True,
-            past_key_values=kv,
-            return_dict=True,
-        )
+        import torch
+
+        with torch.no_grad():
+            out = self.model(
+                input_ids=input_ids,
+                use_cache=True,
+                past_key_values=kv,
+                return_dict=True,
+            )
         return out.logits[:, -1, :], out.past_key_values
 
-    def _select_next_token(self, logits: torch.Tensor) -> torch.Tensor:
+    def _select_next_token(self, logits: Any) -> Any:
         """
         Select the next token from logits using sampling or argmax, depending on config.
         Args:
@@ -315,6 +318,8 @@ class HFLLM(BaseLLM):
         Returns:
             torch.Tensor: Selected token ID(s).
         """
+        import torch
+
         if getattr(self.config, "do_sample", True):
             batch_size, _ = logits.size()
             dummy_ids = torch.zeros((batch_size, 1), dtype=torch.long, device=logits.device)
@@ -323,7 +328,7 @@ class HFLLM(BaseLLM):
             return torch.multinomial(probs, num_samples=1)
         return torch.argmax(logits, dim=-1, keepdim=True)
 
-    def _should_stop(self, token: torch.Tensor) -> bool:
+    def _should_stop(self, token: Any) -> bool:
         """
         Check if the given token is the EOS (end-of-sequence) token.
         Args:
@@ -347,6 +352,8 @@ class HFLLM(BaseLLM):
         Returns:
             DynamicCache: The constructed KV cache object.
         """
+        import torch
+
         # Accept multiple input types and convert to standard chat messages
         if isinstance(messages, str):
             messages = [

@@ -12,7 +12,7 @@ This repository provides tools and scripts for evaluating the LoCoMo dataset usi
 
 2. Install the required dependencies:
    ```bash
-   poetry install --with eval
+   poetry install --extras all --with eval
    ```
 
 ## Configuration

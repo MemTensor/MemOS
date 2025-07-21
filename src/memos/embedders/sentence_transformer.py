@@ -1,6 +1,5 @@
-from sentence_transformers import SentenceTransformer
-
 from memos.configs.embedder import SenTranEmbedderConfig
+from memos.dependency import require_python_package
 from memos.embedders.base import BaseEmbedder
 from memos.log import get_logger
 
@@ -11,7 +10,14 @@ logger = get_logger(__name__)
 class SenTranEmbedder(BaseEmbedder):
     """Sentence Transformer Embedder class."""
 
+    @require_python_package(
+        import_name="sentence_transformers",
+        install_command="pip install sentence-transformers",
+        install_link="https://www.sbert.net/docs/installation.html",
+    )
     def __init__(self, config: SenTranEmbedderConfig):
+        from sentence_transformers import SentenceTransformer
+
         self.config = config
         self.model = SentenceTransformer(
             self.config.model_name_or_path, trust_remote_code=self.config.trust_remote_code
