@@ -24,28 +24,19 @@ with open("evaluation/data/locomo/locomo10.json", encoding="utf-8") as f:
     speaker_b = data["conversation"]["speaker_b"]
     conversation_i = data["conversation"]
 
+db_name = "shared-db-locomo-case"
+
+openapi_config = {
+    "model_name_or_path": "gpt-4o-mini",
+    "temperature": 0.8,
+    "max_tokens": 1024,
+    "api_key": "your-api-key-here",
+    "api_base": "https://api.openai.com/v1",
+}
+
 
 # === Create MOS Config ===
-def get_user_configs(db_name, user_name):
-    openapi_config = {
-        "model_name_or_path": "gpt-4o-mini",
-        "temperature": 0.8,
-        "max_tokens": 1024,
-        "api_key": "your-api-key-here",
-        "api_base": "https://api.openai.com/v1",
-    }
-    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    neo4j_config = {
-        "uri": neo4j_uri,
-        "user": "neo4j",
-        "password": "12345678",
-        "db_name": db_name,
-        "user_name": user_name,
-        "use_multi_db": False,
-        "embedding_dimension": 3072,
-        "auto_create": True,
-    }
-
+def get_user_configs(user_name):
     mos_config = MOSConfig(
         user_id=user_name,
         chat_model={"backend": "openai", "config": openapi_config},
@@ -80,6 +71,22 @@ def get_user_configs(db_name, user_name):
         max_turns_window=20,
     )
 
+    return mos_config
+
+
+# === Get Memory Cube Config ===
+def get_mem_cube_config(user_name):
+    neo4j_uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    neo4j_config = {
+        "uri": neo4j_uri,
+        "user": "neo4j",
+        "password": "12345678",
+        "db_name": db_name,
+        "user_name": "will be updated",
+        "use_multi_db": False,
+        "embedding_dimension": 3072,
+        "auto_create": True,
+    }
     cube_config = GeneralMemCubeConfig.model_validate(
         {
             "user_id": user_name,
@@ -106,12 +113,11 @@ def get_user_configs(db_name, user_name):
     )
 
     mem_cube = GeneralMemCube(cube_config)
-    return mos_config, mem_cube
+    return mem_cube
 
 
 # === Initialize MOSProduct ===
-db_name = "shared-db-locomo-case"
-root_config, _ = get_user_configs(db_name=db_name, user_name="system")
+root_config = get_user_configs(user_name="system")
 mos_product = MOSProduct(default_config=root_config)
 
 
@@ -119,7 +125,8 @@ mos_product = MOSProduct(default_config=root_config)
 users = {}
 for speaker in [speaker_a, speaker_b]:
     user_id = speaker.lower() + "_test"
-    config, mem_cube = get_user_configs(db_name, user_id)
+    config = get_user_configs(user_id)
+    mem_cube = get_mem_cube_config(user_id)
     result = mos_product.user_register(
         user_id=user_id,
         user_name=speaker,
