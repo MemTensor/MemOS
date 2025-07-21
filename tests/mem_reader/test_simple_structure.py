@@ -75,7 +75,9 @@ class TestSimpleStructMemReader(unittest.TestCase):
         info = {"user_id": "user1", "session_id": "session1"}
 
         # Mock LLM response
-        mock_response = '{"summary": "A sample document about testing.", "tags": ["document"]}'
+        mock_response = (
+            '{"value": "A sample document about testing.", "tags": ["document"], "key": "title"}'
+        )
         self.reader.llm.generate.return_value = mock_response
         self.reader.chunker.chunk.return_value = [
             Chunk(text="Parsed document text", token_count=3, sentences=["Parsed document text"])
