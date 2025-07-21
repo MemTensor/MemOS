@@ -184,8 +184,16 @@ while (
     print(f"\n[Session {i}] {speaker_a} will add {len(role1_msgs)} messages.")
     print(f"[Session {i}] {speaker_b} will add {len(role2_msgs)} messages.")
 
-    mos_product.add(user_id=users[speaker_a]["user_id"], messages=role1_msgs)
-    mos_product.add(user_id=users[speaker_b]["user_id"], messages=role2_msgs)
+    mos_product.add(
+        user_id=users[speaker_a]["user_id"],
+        messages=role1_msgs,
+        mem_cube_id=users[speaker_a]["default_cube_id"],
+    )
+    mos_product.add(
+        user_id=users[speaker_b]["user_id"],
+        messages=role2_msgs,
+        mem_cube_id=users[speaker_b]["default_cube_id"],
+    )
 
     print(f"[Session {i}] Added messages for both roles")
 
