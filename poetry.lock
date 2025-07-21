@@ -1100,7 +1100,7 @@ description = "Lightweight in-process concurrent programming"
 optional = false
 python-versions = ">=3.9"
 groups = ["main", "eval"]
-markers = "platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\""
+markers = "(platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\") and python_version < \"3.14\""
 files = [
     {file = "greenlet-3.2.3-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:1afd685acd5597349ee6d7a88a8bec83ce13c106ac78c196ee9dde7c04fe87be"},
     {file = "greenlet-3.2.3-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:761917cac215c61e9dc7324b2606107b3b292a8349bdebb31503ab4de3f559ac"},
@@ -3962,7 +3962,7 @@ files = [
     {file = "pywin32-311-cp39-cp39-win_amd64.whl", hash = "sha256:e0c4cfb0621281fe40387df582097fd796e80430597cb9944f0ae70447bacd91"},
     {file = "pywin32-311-cp39-cp39-win_arm64.whl", hash = "sha256:62ea666235135fee79bb154e695f3ff67370afefd71bd7fea7512fc70ef31e3d"},
 ]
-markers = {main = "(platform_system == \"Windows\" or sys_platform == \"win32\") and (extra == \"all\" or sys_platform == \"win32\")", eval = "platform_system == \"Windows\""}
+markers = {main = "platform_system == \"Windows\" and extra == \"all\" or sys_platform == \"win32\"", eval = "platform_system == \"Windows\""}
 
 [[package]]
 name = "pyyaml"
@@ -6294,5 +6294,5 @@ tree-mem = ["neo4j", "schedule"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = ">=3.10,<3.14"
-content-hash = "598ed9abac532e0ed3ad37b8fb560428827901cbcad46ab0cfa0bfb3df0963c6"
+python-versions = ">=3.10,<4.0"
+content-hash = "d3a7dda79ef4954155ed988794a560458db3c410d280a88cabafb469f6bf3613"
