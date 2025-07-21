@@ -56,6 +56,10 @@ class BaseVecDB(ABC):
         """Get an item from the vector database."""
 
     @abstractmethod
+    def get_by_ids(self, ids: list[str]) -> list[VecDBItem]:
+        """Get multiple items by their IDs."""
+
+    @abstractmethod
     def get_by_filter(self, filter: dict[str, Any]) -> list[VecDBItem]:
         """
         Retrieve all items that match the given filter criteria.
@@ -103,3 +107,11 @@ class BaseVecDB(ABC):
     @abstractmethod
     def delete(self, ids: list[str]) -> None:
         """Delete items from the vector database."""
+
+    @abstractmethod
+    def ensure_payload_indexes(self, fields: list[str]) -> None:
+        """
+        Create payload indexes for specified fields in the collection.
+        Args:
+            fields (list[str]): List of field names to index (as keyword).
+        """

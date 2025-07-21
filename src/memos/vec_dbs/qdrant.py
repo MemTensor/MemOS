@@ -278,6 +278,25 @@ class QdrantVecDB(BaseVecDB):
                 collection_name=self.config.collection_name, payload=data.payload, points=[id]
             )
 
+    def ensure_payload_indexes(self, fields: list[str]) -> None:
+        """
+        Create payload indexes for specified fields in the collection.
+        This is idempotent: it will skip if index already exists.
+
+        Args:
+            fields (list[str]): List of field names to index (as keyword).
+        """
+        for field in fields:
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.config.collection_name,
+                    field_name=field,
+                    field_schema="keyword",  # Could be extended in future
+                )
+                logger.debug(f"Qdrant payload index on '{field}' ensured.")
+            except Exception as e:
+                logger.warning(f"Failed to create payload index on '{field}': {e}")
+
     def upsert(self, data: list[VecDBItem | dict[str, Any]]) -> None:
         """
         Add or update data in the vector database.
