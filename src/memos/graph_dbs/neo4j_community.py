@@ -273,7 +273,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Step 2: VectorDB indexes
         try:
             if hasattr(self.vec_db, "ensure_payload_indexes"):
-                self.vec_db.ensure_payload_indexes(["user_name", "memory_type"])
+                self.vec_db.ensure_payload_indexes(["user_name", "memory_type", "status"])
             else:
                 logger.debug("VecDB does not support payload index creation; skipping.")
         except Exception as e:
