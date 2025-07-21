@@ -56,7 +56,6 @@ class GraphMemoryRetriever:
         # Step 3: Merge and deduplicate results
         combined = {item.id: item for item in graph_results + vector_results}
 
-        # Debug: 打印在 graph_results 中但不在 combined 中的 id
         graph_ids = {item.id for item in graph_results}
         combined_ids = set(combined.keys())
         lost_ids = graph_ids - combined_ids

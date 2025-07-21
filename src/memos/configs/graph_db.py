@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
+from memos.configs.vec_db import VectorDBConfigFactory
 
 
 class BaseGraphDBConfig(BaseConfig):
@@ -79,12 +80,36 @@ class Neo4jGraphDBConfig(BaseGraphDBConfig):
         return self
 
 
+class Neo4jCommunityGraphDBConfig(Neo4jGraphDBConfig):
+    """
+    Community edition config for Neo4j.
+
+    Notes:
+    - Must set `use_multi_db = False`
+    - Must provide `user_name` for logical isolation
+    - Embedding vector DB config is required
+    """
+
+    vec_config: VectorDBConfigFactory = Field(
+        ..., description="Vector DB config for embedding search"
+    )
+
+    @model_validator(mode="after")
+    def validate_community(self):
+        if self.use_multi_db:
+            raise ValueError("Neo4j Community Edition does not support use_multi_db=True.")
+        if not self.user_name:
+            raise ValueError("Neo4j Community config requires user_name for logical isolation.")
+        return self
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "neo4j": Neo4jGraphDBConfig,
+        "neo4j-community": Neo4jCommunityGraphDBConfig,
     }
 
     @field_validator("backend")
