@@ -10,14 +10,14 @@ from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.modules.monitor import SchedulerMonitor
 from memos.mem_scheduler.modules.retriever import SchedulerRetriever
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
     ScheduleLogForWebItem,
     ScheduleMessageItem,
     TreeTextMemory_SEARCH_METHOD,
 )
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 

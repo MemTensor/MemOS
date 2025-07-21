@@ -23,7 +23,7 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
+from memos.mem_scheduler.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
 from memos.mem_user.persistent_user_manager import PersistentUserManager
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (

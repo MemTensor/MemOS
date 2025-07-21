@@ -10,13 +10,13 @@ from memos.configs.mem_scheduler import AuthConfig, SchedulerConfigFactory
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    ScheduleMessageItem,
 )
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.utils import parse_yaml
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.utils.misc_utils import parse_yaml
 
 
 FILE_PATH = Path(__file__).absolute()

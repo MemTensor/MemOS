@@ -13,12 +13,12 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
-    ScheduleMessageItem,
 )
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem

@@ -15,7 +15,7 @@ from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
 
 
 if TYPE_CHECKING:
-    from memos.mem_scheduler.modules.schemas import (
+    from memos.mem_scheduler.schemas import (
         ScheduleLogForWebItem,
     )
 
@@ -169,11 +169,12 @@ if __name__ == "__main__":
     mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
 
     for item in questions:
+        print("===== Chat Start =====")
         query = item["question"]
-
+        print(f"Query:\n {query}\n")
         response = mos.chat(query=query, user_id=user_id)
-        print(f"Query:\n {query}\n\nAnswer:\n {response}")
-
+        print(f"Answer:\n {response}")
+        print("===== Chat End =====")
     show_web_logs(mos.mem_scheduler)
 
     mos.mem_scheduler.stop()

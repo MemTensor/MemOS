@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from memos.log import get_logger
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
-from memos.mem_scheduler.modules.schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 logger = get_logger(__name__)

@@ -7,7 +7,7 @@ from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.utils import parse_yaml
+from memos.mem_scheduler.utils.misc_utils import parse_yaml
 
 
 # init MOS

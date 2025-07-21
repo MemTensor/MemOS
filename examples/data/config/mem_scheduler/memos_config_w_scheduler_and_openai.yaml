@@ -34,10 +34,10 @@ mem_reader:
 mem_scheduler:
   backend: "general_scheduler"
   config:
-    top_k: 2
-    top_n: 5
+    top_k: 10
+    top_n: 10
     act_mem_update_interval: 30
-    context_window_size: 5
+    context_window_size: 10
     thread_pool_max_workers: 10
     consume_interval_seconds: 1
     enable_parallel_dispatch: true

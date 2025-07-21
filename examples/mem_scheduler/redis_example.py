@@ -8,8 +8,9 @@ from uuid import uuid4
 
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.schemas import QUERY_LABEL, ScheduleMessageItem
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.general_schemas import QUERY_LABEL
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 if TYPE_CHECKING:

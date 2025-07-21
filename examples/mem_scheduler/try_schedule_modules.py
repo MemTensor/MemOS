@@ -14,16 +14,16 @@ from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
+from memos.mem_scheduler.schemas.general_schemas import (
     NOT_APPLICABLE_TYPE,
     QUERY_LABEL,
-    ScheduleMessageItem,
 )
-from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 if TYPE_CHECKING:
-    from memos.mem_scheduler.modules.schemas import (
+    from memos.mem_scheduler.schemas import (
         ScheduleLogForWebItem,
     )
 
@@ -180,14 +180,14 @@ if __name__ == "__main__":
         query = item["question"]
 
         # test process_session_turn
-        mos.mem_scheduler.process_session_turn(
+        working_memory, new_candidates = mos.mem_scheduler.process_session_turn(
             queries=[query],
             user_id=user_id,
             mem_cube_id=mem_cube_id,
             mem_cube=mem_cube,
             top_k=10,
-            query_history=None,
         )
+        print(f"\nnew_candidates: {[one.memory for one in new_candidates]}")
 
         # test query_consume
         message_item = ScheduleMessageItem(
@@ -198,7 +198,13 @@ if __name__ == "__main__":
             content=query,
             timestamp=datetime.now(),
         )
+        print(
+            f"\nworking memories before: {[one.memory for one in mos.mem_scheduler.mem_cubes[mem_cube_id].text_mem.get_working_memory()]}"
+        )
         mos.mem_scheduler._query_message_consumer(messages=[message_item])
+        print(
+            f"\nworking memories after: {[one.memory for one in mos.mem_scheduler.mem_cubes[mem_cube_id].text_mem.get_working_memory()]}"
+        )
 
         # test activation memory update
         mos.mem_scheduler.update_activation_memory_periodically(

@@ -4,12 +4,14 @@ from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.base_scheduler import BaseScheduler
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    DEFAULT_MAX_QUERY_KEY_WORDS,
     QUERY_LABEL,
-    ScheduleMessageItem,
 )
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 
@@ -41,7 +43,7 @@ class GeneralScheduler(BaseScheduler):
         # Process the query in a session turn
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
 
-        self._validate_messages(messages=messages, label=QUERY_LABEL)
+        self.validate_schedule_messages(messages=messages, label=QUERY_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
@@ -49,16 +51,51 @@ class GeneralScheduler(BaseScheduler):
                 if len(messages) == 0:
                     return
 
+                mem_cube = messages[0].mem_cube
+
                 # for status update
                 self._set_current_context_from_message(msg=messages[0])
 
-                self.process_session_turn(
-                    queries=[msg.content for msg in messages],
+                # update query monitors
+                for msg in messages:
+                    query = msg.content
+                    query_keywords = self.monitor.extract_query_keywords(query=query)
+                    logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
+
+                    item = QueryMonitorItem(
+                        query_text=query,
+                        keywords=query_keywords,
+                        max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
+                    )
+                    self.monitor.query_monitors.put(item=item)
+                logger.debug(
+                    f"Queries in monitor are {self.monitor.query_monitors.get_queries_with_timesort()}."
+                )
+
+                queries = [msg.content for msg in messages]
+
+                # recall
+                cur_working_memory, new_candidates = self.process_session_turn(
+                    queries=queries,
                     user_id=user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=messages[0].mem_cube,
+                    mem_cube=mem_cube,
                     top_k=self.top_k,
                 )
+                logger.info(
+                    f"Processed {queries} and get {len(new_candidates)} new candidate memories."
+                )
+
+                # rerank
+                new_order_working_memory = self.replace_working_memory(
+                    queries=queries,
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    mem_cube=mem_cube,
+                    original_memory=cur_working_memory,
+                    new_memory=new_candidates,
+                )
+                logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
 
     def _answer_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
@@ -71,7 +108,7 @@ class GeneralScheduler(BaseScheduler):
         # Process the query in a session turn
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
 
-        self._validate_messages(messages=messages, label=ANSWER_LABEL)
+        self.validate_schedule_messages(messages=messages, label=ANSWER_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
@@ -84,6 +121,16 @@ class GeneralScheduler(BaseScheduler):
 
                 # update acivation memories
                 if self.enable_act_memory_update:
+                    if (
+                        len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories)
+                        == 0
+                    ):
+                        self.initialize_working_memory_monitors(
+                            user_id=user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=messages[0].mem_cube,
+                        )
+
                     self.update_activation_memory_periodically(
                         interval_seconds=self.monitor.act_mem_update_interval,
                         label=ANSWER_LABEL,
@@ -97,7 +144,7 @@ class GeneralScheduler(BaseScheduler):
         # Process the query in a session turn
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
 
-        self._validate_messages(messages=messages, label=ADD_LABEL)
+        self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
@@ -116,6 +163,7 @@ class GeneralScheduler(BaseScheduler):
                         user_id=msg.user_id,
                         mem_cube_id=msg.mem_cube_id,
                         mem_cube=msg.mem_cube,
+                        log_func_callback=self._submit_web_logs,
                     )
 
                 # update acivation memories
@@ -135,20 +183,12 @@ class GeneralScheduler(BaseScheduler):
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
         top_k: int = 10,
-        query_history: list[str] | None = None,
-    ) -> None:
+    ) -> list[TreeTextMemory]:
         """
         Process a dialog turn:
         - If q_list reaches window size, trigger retrieval;
         - Immediately switch to the new memory if retrieval is triggered.
         """
-        if isinstance(queries, str):
-            queries = [queries]
-
-        if query_history is None:
-            query_history = queries
-        else:
-            query_history.extend(queries)
 
         text_mem_base = mem_cube.text_mem
         if not isinstance(text_mem_base, TreeTextMemory):
@@ -157,10 +197,10 @@ class GeneralScheduler(BaseScheduler):
 
         logger.info(f"Processing {len(queries)} queries.")
 
-        working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
-        text_working_memory: list[str] = [w_m.memory for w_m in working_memory]
+        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
+        text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         intent_result = self.monitor.detect_intent(
-            q_list=query_history, text_working_memory=text_working_memory
+            q_list=queries, text_working_memory=text_working_memory
         )
 
         time_trigger_flag = False
@@ -188,26 +228,17 @@ class GeneralScheduler(BaseScheduler):
         k_per_evidence = max(1, top_k // max(1, num_evidence))
         new_candidates = []
         for item in missing_evidences:
-            logger.debug(f"missing_evidences: {item}")
-            results = self.retriever.search(
+            logger.info(f"missing_evidences: {item}")
+            results: list[TextualMemoryItem] = self.retriever.search(
                 query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
             )
-            logger.debug(f"search results for {missing_evidences}: {results}")
+            logger.info(f"search results for {missing_evidences}: {results}")
             new_candidates.extend(results)
 
-        new_order_working_memory = self.retriever.replace_working_memory(
-            queries=queries,
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-            original_memory=working_memory,
-            new_memory=new_candidates,
-            top_k=top_k,
-        )
-        logger.debug(f"size of new_order_working_memory: {len(new_order_working_memory)}")
-
-        self.monitor.update_memory_monitors(
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-        )
+        if len(new_candidates) == 0:
+            logger.warning(
+                f"As new_candidates is empty, new_candidates is set same to working_memory.\n"
+                f"time_trigger_flag: {time_trigger_flag}; intent_result: {intent_result}"
+            )
+            new_candidates = cur_working_memory
+        return cur_working_memory, new_candidates

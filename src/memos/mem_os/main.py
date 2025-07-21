@@ -208,7 +208,7 @@ class MOS(MOSCore):
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
                     from datetime import datetime
 
-                    from memos.mem_scheduler.modules.schemas import (
+                    from memos.mem_scheduler.schemas import (
                         ANSWER_LABEL,
                         ScheduleMessageItem,
                     )

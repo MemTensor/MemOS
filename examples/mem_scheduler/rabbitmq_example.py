@@ -8,7 +8,7 @@ from memos.mem_scheduler.modules.rabbitmq_service import RabbitMQSchedulerModule
 def publish_message(rabbitmq_module, message):
     """Function to publish a message."""
     rabbitmq_module.rabbitmq_publish_message(message)
-    print(f"Published message: {message}")
+    print(f"Published message: {message}\n")
 
 
 def main():
@@ -24,8 +24,7 @@ def main():
         rabbitmq_module.initialize_rabbitmq(config=AuthConfig.from_local_yaml().rabbitmq)
 
     try:
-        # Start consumer
-        rabbitmq_module.rabbitmq_start_consuming()
+        rabbitmq_module.wait_for_connection_ready()
 
         # === Publish some test messages ===
         # List to hold thread references
@@ -38,6 +37,9 @@ def main():
             thread.start()
             threads.append(thread)
 
+        # Start consumer
+        rabbitmq_module.rabbitmq_start_consuming()
+
         # Join threads to ensure all messages are published before proceeding
         for thread in threads:
             thread.join()
@@ -47,7 +49,7 @@ def main():
 
     finally:
         # Give some time for cleanup
-        time.sleep(5)
+        time.sleep(3)
 
         # Close connections
         rabbitmq_module.rabbitmq_close()

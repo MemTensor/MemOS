@@ -3,12 +3,12 @@ from datetime import datetime
 from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     MONITOR_WORKING_MEMORY_TYPE,
     QUERY_LABEL,
-    ScheduleMessageItem,
 )
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 logger = get_logger(__name__)
@@ -44,7 +44,7 @@ class MOSForTestScheduler(MOS):
 
         chat_history = self.chat_history_manager[target_user_id]
 
-        topk_for_scheduler = 5
+        topk_for_scheduler = 2
 
         if self.config.enable_textual_memory and self.mem_cubes:
             memories_all = []
@@ -64,6 +64,10 @@ class MOSForTestScheduler(MOS):
                         content=query,
                         timestamp=datetime.now(),
                     )
+                    cur_working_memories = [
+                        m.memory for m in mem_cube.text_mem.get_working_memory()
+                    ]
+                    print(f"Working memories before schedule: {cur_working_memories}")
 
                     # --- force to run mem_scheduler ---
                     self.mem_scheduler.monitor.query_trigger_interval = 0
@@ -76,11 +80,13 @@ class MOSForTestScheduler(MOS):
                     memory_type=MONITOR_WORKING_MEMORY_TYPE,
                     top_k=topk_for_scheduler,
                 )
-                print(f"Memories from the scheduler: {scheduler_memories}")
+                print(f"Working memories after schedule: {scheduler_memories}")
                 memories_all.extend(scheduler_memories)
 
                 # from mem_cube
-                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
+                memories = mem_cube.text_mem.search(
+                    query, top_k=self.config.top_k - topk_for_scheduler
+                )
                 text_memories = [m.memory for m in memories]
                 print(f"Memories from search: {text_memories}")
                 memories_all.extend(text_memories)
@@ -135,5 +141,4 @@ class MOSForTestScheduler(MOS):
                     timestamp=datetime.now(),
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item])
-
         return response
