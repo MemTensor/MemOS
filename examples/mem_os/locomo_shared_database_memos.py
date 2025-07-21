@@ -185,3 +185,4 @@ while (
     i += 1
 
 print("\n✅ All messages added for both roles.\n")
+mos_product.mem_reorganizer_off()
