@@ -58,7 +58,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 metadata=TreeNodeTextualMemoryMetadata(
                     user_id=info.get("user_id"),
                     session_id=info.get("session_id"),
-                    memory_type=memory_i_raw.get("memory_type", ""),
+                    memory_type=memory_i_raw.get("memory_type", "")
+                    .replace("长期记忆", "LongTermMemory")
+                    .replace("用户记忆", "UserMemory"),
                     status="activated",
                     tags=memory_i_raw.get("tags", [])
                     if type(memory_i_raw.get("tags", [])) is list
