@@ -1,0 +1,50 @@
+{
+  "extractor_llm": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "qwen3:0.6b",
+      "temperature": 0.0,
+      "remove_think_prefix": true,
+      "max_tokens": 8192
+    }
+  },
+  "dispatcher_llm": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "qwen3:0.6b",
+      "temperature": 0.0,
+      "remove_think_prefix": true,
+      "max_tokens": 8192
+    }
+  },
+  "embedder": {
+    "backend": "ollama",
+    "config": {
+      "model_name_or_path": "nomic-embed-text:latest"
+    }
+  },
+  "graph_db": {
+    "backend": "neo4j-community",
+    "config": {
+      "uri": "bolt://localhost:7687",
+      "user": "neo4j",
+      "password": "12345678",
+      "db_name": "neo4j",
+      "user_name": "alice",
+      "use_multi_db": false,
+      "auto_create": false,
+      "embedding_dimension": 768,
+      "vec_config": {
+        "backend": "qdrant",
+        "config": {
+          "collection_name": "neo4j_vec_db",
+          "vector_dimension": 768,
+          "distance_metric": "cosine",
+          "host": "localhost",
+          "port": 6333
+        }
+      }
+    }
+  },
+  "reorganize": true
+}
