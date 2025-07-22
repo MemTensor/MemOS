@@ -3,7 +3,9 @@ import json
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Full, Queue
-from typing import TYPE_CHECKING, ClassVar, TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+from pydantic import field_serializer
 
 
 if TYPE_CHECKING:
@@ -15,36 +17,60 @@ BaseModelType = TypeVar("T", bound="BaseModel")
 
 
 class DictConversionMixin:
+    """
+    Provides conversion functionality between Pydantic models and dictionaries,
+    including datetime serialization handling.
+    """
+
+    @field_serializer("timestamp", check_fields=False)
+    def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
+        """
+        Custom datetime serialization logic.
+        - Supports timezone-aware datetime objects
+        - Compatible with models without timestamp field (via check_fields=False)
+        """
+        if dt is None:
+            return None
+        return dt.isoformat()
+
     def to_dict(self) -> dict:
-        """Convert the instance to a dictionary."""
-        return {
-            **self.model_dump(),  # 替换 self.dict()
-            "timestamp": self.timestamp.isoformat() if hasattr(self, "timestamp") else None,
-        }
+        """
+        Convert model instance to dictionary.
+        - Uses model_dump to ensure field consistency
+        - Prioritizes custom serializer for timestamp handling
+        """
+        dump_data = self.model_dump()
+        if hasattr(self, "timestamp") and self.timestamp is not None:
+            dump_data["timestamp"] = self.serialize_datetime(self.timestamp, None)
+        return dump_data
 
     @classmethod
     def from_dict(cls: type[BaseModelType], data: dict) -> BaseModelType:
-        """Create an instance from a dictionary."""
-        if "timestamp" in data:
-            data["timestamp"] = datetime.fromisoformat(data["timestamp"])
-        return cls(**data)
+        """
+        Create model instance from dictionary.
+        - Automatically converts timestamp strings to datetime objects
+        """
+        data_copy = data.copy()  # Avoid modifying original dictionary
+        if "timestamp" in data_copy and isinstance(data_copy["timestamp"], str):
+            try:
+                data_copy["timestamp"] = datetime.fromisoformat(data_copy["timestamp"])
+            except ValueError:
+                # Handle invalid time formats - adjust as needed (e.g., log warning or set to None)
+                data_copy["timestamp"] = None
+
+        return cls(**data_copy)
 
     def __str__(self) -> str:
-        """Convert the instance to a JSON string with indentation of 4 spaces.
-        This will be used when str() or print() is called on the instance.
-
-        Returns:
-            str: A JSON string representation of the instance with 4-space indentation.
+        """
+        Convert to formatted JSON string.
+        - Used for user-friendly display in print() or str() calls
         """
         return json.dumps(
             self.to_dict(),
             indent=4,
             ensure_ascii=False,
-            default=str,  # 处理无法序列化的对象
+            default=lambda o: str(o),  # Handle other non-serializable objects
         )
-
-    class Config:
-        json_encoders: ClassVar[dict[type, object]] = {datetime: lambda v: v.isoformat()}
 
 
 class AutoDroppingQueue(Queue[T]):

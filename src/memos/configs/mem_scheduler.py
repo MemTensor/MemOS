@@ -106,7 +106,20 @@ class RabbitMQConfig(
 
 
 class GraphDBAuthConfig(BaseConfig):
-    uri: str = Field(default="localhost", description="URI for graph database access")
+    uri: str = Field(
+        default="bolt://localhost:7687",
+        description="URI for graph database access (e.g., bolt://host:port)",
+    )
+    user: str = Field(default="neo4j", description="Username for graph database authentication")
+    password: str = Field(
+        default="",
+        description="Password for graph database authentication",
+        min_length=8,  # 建议密码最小长度
+    )
+    db_name: str = Field(default="neo4j", description="Database name to connect to")
+    auto_create: bool = Field(
+        default=True, description="Whether to automatically create the database if it doesn't exist"
+    )
 
 
 class OpenAIConfig(BaseConfig):

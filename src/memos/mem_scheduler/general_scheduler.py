@@ -157,16 +157,23 @@ class GeneralScheduler(BaseScheduler):
 
                 # submit logs
                 for msg in messages:
-                    user_inputs = json.loads(msg.content)
-                    self.log_adding_user_inputs(
-                        user_inputs=user_inputs,
-                        user_id=msg.user_id,
-                        mem_cube_id=msg.mem_cube_id,
-                        mem_cube=msg.mem_cube,
-                        log_func_callback=self._submit_web_logs,
-                    )
+                    userinput_memory_ids = json.loads(msg.content)
+                    mem_cube = msg.mem_cube
+                    for memory_id in userinput_memory_ids:
+                        mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
+                        mem_type = mem_item.meta_data.memory_type
+                        mem_content = mem_item.memory
 
-                # update acivation memories
+                        self.log_adding_memory(
+                            memory=mem_content,
+                            memory_type=mem_type,
+                            user_id=msg.user_id,
+                            mem_cube_id=msg.mem_cube_id,
+                            mem_cube=msg.mem_cube,
+                            log_func_callback=self._submit_web_logs,
+                        )
+
+                # update activation memories
                 if self.enable_act_memory_update:
                     self.update_activation_memory_periodically(
                         interval_seconds=self.monitor.act_mem_update_interval,
@@ -183,7 +190,7 @@ class GeneralScheduler(BaseScheduler):
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
         top_k: int = 10,
-    ) -> list[TreeTextMemory]:
+    ) -> tuple[list[TextualMemoryItem], list[TextualMemoryItem]] | None:
         """
         Process a dialog turn:
         - If q_list reaches window size, trigger retrieval;
@@ -205,11 +212,10 @@ class GeneralScheduler(BaseScheduler):
 
         time_trigger_flag = False
         if self.monitor.timed_trigger(
-            last_time=self.monitor._last_query_consume_time,
+            last_time=self.monitor.last_query_consume_time,
             interval_seconds=self.monitor.query_trigger_interval,
         ):
             time_trigger_flag = True
-            self._query_consume_time = True
 
         if (not intent_result["trigger_retrieval"]) and (not time_trigger_flag):
             logger.info(f"Query schedule not triggered. Intent_result: {intent_result}")
@@ -220,7 +226,8 @@ class GeneralScheduler(BaseScheduler):
             intent_result["missing_evidences"] = queries
         else:
             logger.info(
-                f"Query schedule is triggered, and missing_evidences: {intent_result['missing_evidences']}"
+                f'Query schedule triggered for user "{user_id}" and mem_cube "{mem_cube_id}".'
+                f" Missing evidences: {intent_result['missing_evidences']}"
             )
 
         missing_evidences = intent_result["missing_evidences"]

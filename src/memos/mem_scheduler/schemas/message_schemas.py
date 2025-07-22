@@ -1,8 +1,8 @@
-from datetime import datetime
-from typing import ClassVar
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from typing_extensions import TypedDict
 
 from memos.log import get_logger
@@ -39,15 +39,36 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     mem_cube: GeneralMemCube | str = Field(..., description="memcube for schedule")
     content: str = Field(..., description="Content of the schedule message")
     timestamp: datetime = Field(
-        default_factory=datetime.now, description="submit time for schedule_messages"
+        default_factory=lambda: datetime.now(UTC), description="submit time for schedule_messages"
     )
 
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders: ClassVar[dict[type, object]] = {
-            datetime: lambda v: v.isoformat(),
-            GeneralMemCube: lambda v: f"<GeneralMemCube:{id(v)}>",
-        }
+    # Pydantic V2 model configuration
+    model_config = ConfigDict(
+        # Allows arbitrary Python types as model fields without validation
+        # Required when using custom types like GeneralMemCube that aren't Pydantic models
+        arbitrary_types_allowed=True,
+        # Additional metadata for JSON Schema generation
+        json_schema_extra={
+            # Example payload demonstrating the expected structure and sample values
+            # Used for API documentation, testing, and developer reference
+            "example": {
+                "item_id": "123e4567-e89b-12d3-a456-426614174000",  # Sample UUID
+                "user_id": "user123",  # Example user identifier
+                "mem_cube_id": "cube456",  # Sample memory cube ID
+                "label": "sample_label",  # Demonstration label value
+                "mem_cube": "obj of GeneralMemCube",  # Added mem_cube example
+                "content": "sample content",  # Example message content
+                "timestamp": "2024-07-22T12:00:00Z",  # Added timestamp example
+            }
+        },
+    )
+
+    @field_serializer("mem_cube")
+    def serialize_mem_cube(self, cube: GeneralMemCube | str, _info) -> str:
+        """Custom serializer for GeneralMemCube objects to string representation"""
+        if isinstance(cube, str):
+            return cube
+        return f"<GeneralMemCube:{id(cube)}>"
 
     def to_dict(self) -> dict:
         """Convert model to dictionary suitable for Redis Stream"""
@@ -110,6 +131,18 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         description="Maximum capacities of memory partitions",
     )
     timestamp: datetime = Field(
-        default_factory=datetime.now,
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp indicating when the log entry was created",
     )
+
+    def debug_info(self) -> dict[str, Any]:
+        """Return structured debug information for logging purposes."""
+        return {
+            "log_id": self.item_id,
+            "user_id": self.user_id,
+            "mem_cube_id": self.mem_cube_id,
+            "operation": f"{self.from_memory_type} → {self.to_memory_type}",
+            "label": self.label,
+            "content_length": len(self.log_content),
+            "timestamp": self.timestamp.isoformat(),
+        }

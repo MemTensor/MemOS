@@ -54,8 +54,8 @@ class SchedulerMonitor(BaseSchedulerModule):
         self.activation_memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]] = {}
 
         # Lifecycle monitor
-        self._last_activation_mem_update_time = datetime.min
-        self._last_query_consume_time = datetime.min
+        self.last_activation_mem_update_time = datetime.min
+        self.last_query_consume_time = datetime.min
 
         self._process_llm = process_llm
 

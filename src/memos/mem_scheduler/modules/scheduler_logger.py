@@ -116,19 +116,19 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         added_memories = list(new_set - original_set)  # Present in new but not original
 
         # recording messages
-        for mem in added_memories:
-            normalized_mem = transform_name_to_key(name=mem)
+        for memory in added_memories:
+            normalized_mem = transform_name_to_key(name=memory)
             if normalized_mem not in memory_type_map:
-                logger.error(f"Memory text not found in type mapping: {mem[:50]}...")
+                logger.error(f"Memory text not found in type mapping: {memory[:50]}...")
             # Get the memory type from the map, default to LONG_TERM_MEMORY_TYPE if not found
             mem_type = memory_type_map.get(normalized_mem, LONG_TERM_MEMORY_TYPE)
 
             if mem_type == WORKING_MEMORY_TYPE:
-                logger.warning(f"Memory already in working memory: {mem[:50]}...")
+                logger.warning(f"Memory already in working memory: {memory[:50]}...")
                 continue
 
             log_message = self.create_autofilled_log_item(
-                log_content=mem,
+                log_content=memory,
                 label=QUERY_LABEL,
                 from_memory_type=mem_type,
                 to_memory_type=WORKING_MEMORY_TYPE,
@@ -136,7 +136,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
-            log_func_callback(messages=[log_message])
+            log_func_callback([log_message])
             logger.info(
                 f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
                 f"transformed to {WORKING_MEMORY_TYPE} memories."
@@ -152,12 +152,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         mem_cube: GeneralMemCube,
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
-        """Log changes when activation memory is updated.
-
-        Args:
-            original_text_memories: List of original memory texts
-            new_text_memories: List of new memory texts
-        """
+        """Log changes when activation memory is updated."""
         original_set = set(original_text_memories)
         new_set = set(new_text_memories)
 
@@ -184,38 +179,36 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
-            log_func_callback(messages=[log_message_a, log_message_b])
+            log_func_callback([log_message_a, log_message_b])
             logger.info(
                 f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
                 f"transformed to {WORKING_MEMORY_TYPE} memories."
             )
 
-    def log_adding_user_inputs(
+    def log_adding_memory(
         self,
-        user_inputs: list[str],
+        memory: str,
+        memory_type: str,
         user_id: str,
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
         """Log changes when working memory is replaced."""
-
-        # recording messages
-        for input_str in user_inputs:
-            log_message = self.create_autofilled_log_item(
-                log_content=input_str,
-                label=ADD_LABEL,
-                from_memory_type=USER_INPUT_TYPE,
-                to_memory_type=TEXT_MEMORY_TYPE,
-                user_id=user_id,
-                mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube,
-            )
-            log_func_callback(messages=[log_message])
-            logger.info(
-                f"{len(user_inputs)} {USER_INPUT_TYPE} memorie(s) "
-                f"transformed to {TEXT_MEMORY_TYPE} memories."
-            )
+        log_message = self.create_autofilled_log_item(
+            log_content=memory,
+            label=ADD_LABEL,
+            from_memory_type=USER_INPUT_TYPE,
+            to_memory_type=memory_type,
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+        )
+        log_func_callback([log_message])
+        logger.info(
+            f"{USER_INPUT_TYPE} memory for user {user_id} "
+            f"converted to {memory_type} memory in mem_cube {mem_cube_id}: {memory}"
+        )
 
     def validate_schedule_message(self, message: ScheduleMessageItem, label: str):
         """Validate if the message matches the expected label.
@@ -244,6 +237,6 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         """
         for message in messages:
             if not self.validate_schedule_message(message, label):
-                return False
                 logger.error("Message batch contains invalid labels, aborting processing")
+                return False
         return True

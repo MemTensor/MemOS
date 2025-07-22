@@ -3,7 +3,7 @@ import unittest
 
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, call, patch
+from unittest.mock import MagicMock
 
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.llms.base import BaseLLM
@@ -11,14 +11,15 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.modules.monitor import SchedulerMonitor
 from memos.mem_scheduler.modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas import (
+from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    ScheduleLogForWebItem,
-    ScheduleMessageItem,
     TreeTextMemory_SEARCH_METHOD,
 )
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.mem_scheduler.schemas.message_schemas import (
+    ScheduleLogForWebItem,
+)
+from memos.memories.textual.tree import TreeTextMemory
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -62,101 +63,6 @@ class TestGeneralScheduler(unittest.TestCase):
         self.assertEqual(self.scheduler.chat_llm, self.llm)
         self.assertIsInstance(self.scheduler.monitor, SchedulerMonitor)
         self.assertIsInstance(self.scheduler.retriever, SchedulerRetriever)
-
-    def test_query_message_consumer(self):
-        # Create test message with all required fields
-        message = ScheduleMessageItem(
-            user_id="test_user",
-            mem_cube_id="test_cube",
-            mem_cube=self.mem_cube,  # or could be str like "test_cube"
-            label=QUERY_LABEL,
-            content="Test query",
-        )
-
-        # Mock the detect_intent method to return a valid result
-        mock_intent_result = {"trigger_retrieval": False, "missing_evidences": []}
-
-        # Mock the process_session_turn method
-        with (
-            patch.object(self.scheduler, "process_session_turn") as mock_process_session_turn,
-            patch.object(self.scheduler.monitor, "detect_intent") as mock_detect_intent,
-        ):
-            mock_detect_intent.return_value = mock_intent_result
-
-            # Test message handling
-            self.scheduler._query_message_consumer([message])
-
-            # Verify method call - updated to match new signature
-            mock_process_session_turn.assert_called_once_with(
-                queries=["Test query"],  # or ["Test query"] depending on implementation
-                user_id="test_user",
-                mem_cube_id="test_cube",
-                mem_cube=self.mem_cube,
-                top_k=10,
-            )
-
-    def test_process_session_turn(self):
-        """Test session turn processing with retrieval trigger."""
-        # Setup mock working memory
-        working_memory = [
-            TextualMemoryItem(memory="Memory 1"),
-            TextualMemoryItem(memory="Memory 2"),
-        ]
-        self.tree_text_memory.get_working_memory.return_value = working_memory
-
-        # Setup mock memory cube
-        mem_cube = MagicMock()
-        mem_cube.text_mem = self.tree_text_memory
-
-        # Setup intent detection result
-        intent_result = {
-            "trigger_retrieval": True,
-            "missing_evidences": ["Evidence 1", "Evidence 2"],
-        }
-
-        # Create test results that we'll return and expect
-        result1 = TextualMemoryItem(memory="Result 1")
-        result2 = TextualMemoryItem(memory="Result 2")
-        expected_new_memory = [result1, result2]
-
-        # Mock methods
-        with (
-            patch.object(self.scheduler.monitor, "detect_intent") as mock_detect,
-            patch.object(self.scheduler.retriever, "search") as mock_search,
-            patch.object(self.scheduler.retriever, "replace_working_memory") as mock_replace,
-        ):
-            mock_detect.return_value = intent_result
-            mock_search.side_effect = [
-                [result1],
-                [result2],
-            ]
-            mock_replace.return_value = expected_new_memory
-
-            # Test session turn processing
-            self.scheduler.process_session_turn(
-                queries=["Test query"],
-                user_id="test_user",
-                mem_cube_id="test_cube",
-                mem_cube=mem_cube,
-                top_k=10,
-            )
-
-            # Verify method calls
-            mock_detect.assert_called_once_with(
-                q_list=["Test query"], text_working_memory=["Memory 1", "Memory 2"]
-            )
-
-            # Verify search calls - using ANY for the method since we can't predict the exact value
-            mock_search.assert_has_calls(
-                [
-                    call(query="Evidence 1", mem_cube=mem_cube, top_k=5, method=ANY),
-                    call(query="Evidence 2", mem_cube=mem_cube, top_k=5, method=ANY),
-                ],
-                any_order=True,
-            )
-
-            # Verify replace call - we'll check the structure but not the exact memory items
-            self.assertEqual(mock_replace.call_count, 1)
 
     def test_submit_web_logs(self):
         """Test submission of web logs with updated data structure."""

@@ -351,7 +351,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         new_activation_memories = []
 
         if self.monitor.timed_trigger(
-            last_time=self.monitor._last_activation_mem_update_time,
+            last_time=self.monitor.last_activation_mem_update_time,
             interval_seconds=interval_seconds,
         ):
             logger.info(f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}")
@@ -387,15 +387,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 mem_cube=mem_cube,
             )
 
-            self.monitor._last_activation_mem_update_time = datetime.now()
+            self.monitor.last_activation_mem_update_time = datetime.now()
 
             logger.debug(
-                f"Activation memory update completed at {self.monitor._last_activation_mem_update_time}"
+                f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
             )
         else:
             logger.info(
                 f"Skipping update - {interval_seconds} second interval not yet reached. "
-                f"Last update time is {self.monitor._last_activation_mem_update_time} and now is"
+                f"Last update time is {self.monitor.last_activation_mem_update_time} and now is"
                 f"{datetime.now()}"
             )
 
@@ -421,10 +421,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         for message in messages:
             self._web_log_message_queue.put(message)
-            logger.info(f"Submitted Scheduling log for web: {message.log_content}")
+            message_info = message.debug_info()
+            logger.debug(f"Submitted Scheduling log for web: {message_info}")
 
             if self.is_rabbitmq_connected():
-                logger.info("Submitted Scheduling log to rabbitmq")
+                logger.info(f"Submitted Scheduling log to rabbitmq: {message_info}")
                 self.rabbitmq_publish_message(message=message.to_dict())
         logger.debug(f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue.")
 

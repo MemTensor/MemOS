@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import ClassVar
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, computed_field, validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 from memos.log import get_logger
 from memos.mem_scheduler.modules.misc import AutoDroppingQueue, DictConversionMixin
@@ -35,7 +35,7 @@ class QueryMonitorItem(BaseModel, DictConversionMixin):
     )
     keywords: list[str] | None = Field(
         default=None,
-        min_items=1,  # If provided, shouldn't be empty
+        min_length=1,  # If provided, shouldn't be empty
         description="Semantic keywords extracted from the query text",
     )
     max_keywords: ClassVar[int] = DEFAULT_MAX_QUERY_KEY_WORDS
@@ -44,8 +44,9 @@ class QueryMonitorItem(BaseModel, DictConversionMixin):
         default_factory=datetime.now, description="Timestamp indicating when query was submitted"
     )
 
-    @validator("keywords", pre=True)
-    def validate_keywords(cls, v, values):  # noqa: N805
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def validate_keywords(cls, v, values):
         if v is None:
             return None
 
@@ -69,7 +70,7 @@ class QueryMonitorItem(BaseModel, DictConversionMixin):
         return type(f"{cls.__name__}_MaxKeywords{limit}", (cls,), {"max_keywords": limit})
 
 
-class QueryMonitorQueue(AutoDroppingQueue[dict]):
+class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
     """
     A thread-safe queue for monitoring queries with timestamp and keyword tracking.
     Each item is expected to be a dictionary containing:
@@ -161,7 +162,7 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
         ge=1,  # Greater than or equal to 1
     )
 
-    @validator("tree_memory_item_mapping_key", pre=True, always=True)
+    @field_validator("tree_memory_item_mapping_key", mode="before")
     def generate_mapping_key(cls, v, values):  # noqa: N805
         if v is None and "memory_text" in values:
             return transform_name_to_key(values["memory_text"])
