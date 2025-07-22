@@ -27,7 +27,7 @@ class TextualMemoryMetadata(BaseModel):
         default="activated",
         description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
     )
-    type: Literal["procedure", "fact", "event", "opinion", "topic", "reasoning"] | None = Field(
+    type: str | None = Field(
         default=None
     )
     memory_time: str | None = Field(
