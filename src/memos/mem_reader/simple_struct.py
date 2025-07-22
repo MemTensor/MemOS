@@ -60,7 +60,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     session_id=info.get("session_id"),
                     memory_type=memory_i_raw.get("memory_type", ""),
                     status="activated",
-                    tags=memory_i_raw.get("tags", []) if type(memory_i_raw.get("tags", [])) == list else [],
+                    tags=memory_i_raw.get("tags", [])
+                    if type(memory_i_raw.get("tags", [])) == list
+                    else [],
                     key=memory_i_raw.get("key", ""),
                     embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
                     usage=[],
