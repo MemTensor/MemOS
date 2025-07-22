@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -39,7 +39,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     mem_cube: GeneralMemCube | str = Field(..., description="memcube for schedule")
     content: str = Field(..., description="Content of the schedule message")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), description="submit time for schedule_messages"
+        default_factory=lambda: datetime.utcnow(), description="submit time for schedule_messages"
     )
 
     # Pydantic V2 model configuration
@@ -131,7 +131,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         description="Maximum capacities of memory partitions",
     )
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(UTC),
+        default_factory=lambda: datetime.utcnow(),
         description="Timestamp indicating when the log entry was created",
     )
 
