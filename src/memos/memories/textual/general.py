@@ -7,16 +7,13 @@ from typing import Any
 from tenacity import retry, retry_if_exception_type, stop_after_attempt
 
 from memos.configs.memory import GeneralTextMemoryConfig
-from memos.embedders.base import BaseEmbedder
 from memos.embedders.factory import ArkEmbedder, EmbedderFactory, OllamaEmbedder
-from memos.llms.base import BaseLLM
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.mem_reader_prompts import SIMPLE_STRUCT_MEM_READER_PROMPT
 from memos.types import MessageList
-from memos.vec_dbs.base import BaseVecDB
 from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory
 from memos.vec_dbs.item import VecDBItem
 
@@ -29,11 +26,11 @@ class GeneralTextMemory(BaseTextMemory):
     def __init__(self, config: GeneralTextMemoryConfig):
         """Initialize memory with the given configuration."""
         self.config: GeneralTextMemoryConfig = config
-        self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM | BaseLLM = LLMFactory.from_config(
+        self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
         )
-        self.vector_db: QdrantVecDB | BaseVecDB = VecDBFactory.from_config(config.vector_db)
-        self.embedder: OllamaEmbedder | ArkEmbedder | BaseEmbedder = EmbedderFactory.from_config(
+        self.vector_db: QdrantVecDB = VecDBFactory.from_config(config.vector_db)
+        self.embedder: OllamaEmbedder | ArkEmbedder = EmbedderFactory.from_config(
             config.embedder
         )
 
