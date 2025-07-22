@@ -1,7 +1,8 @@
 import re
 
-from memos.log import get_logger
 from memos.dependency import require_python_package
+from memos.log import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -52,6 +53,7 @@ def is_all_chinese(input_string: str) -> bool:
         or char.isspace()  # Spaces
         for char in input_string
     )
+
 
 @require_python_package(
     import_name="sklearn",
