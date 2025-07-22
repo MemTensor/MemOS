@@ -61,7 +61,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     memory_type=memory_i_raw.get("memory_type", ""),
                     status="activated",
                     tags=memory_i_raw.get("tags", [])
-                    if type(memory_i_raw.get("tags", [])) == list
+                    if type(memory_i_raw.get("tags", [])) is list
                     else [],
                     key=memory_i_raw.get("key", ""),
                     embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
@@ -216,7 +216,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         session_id=info.get("session_id"),
                         memory_type="LongTermMemory",
                         status="activated",
-                        tags=chunk_res["tags"] if type(chunk_res["tags"]) == list else [],
+                        tags=chunk_res["tags"] if type(chunk_res["tags"]) is list else [],
                         key=chunk_res["key"],
                         embedding=self.embedder.embed([chunk_res["value"]])[0],
                         usage=[],
