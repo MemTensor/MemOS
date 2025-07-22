@@ -30,9 +30,7 @@ class GeneralTextMemory(BaseTextMemory):
             config.extractor_llm
         )
         self.vector_db: QdrantVecDB = VecDBFactory.from_config(config.vector_db)
-        self.embedder: OllamaEmbedder | ArkEmbedder = EmbedderFactory.from_config(
-            config.embedder
-        )
+        self.embedder: OllamaEmbedder | ArkEmbedder = EmbedderFactory.from_config(config.embedder)
 
     @retry(
         stop=stop_after_attempt(3),
