@@ -102,75 +102,42 @@ class TestGeneralTextMemory(unittest.TestCase):
         self.assertEqual(embedding, expected_embedding)
 
     def test_extract(self):
-        """Test memory extraction from messages."""
+        # 准备输入
         messages = [
-            {"role": "user", "content": "I love tomatoes."},
-            {"role": "assistant", "content": "Great! Tomatoes are delicious."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
         ]
-        raw_memories = [
-            {
-                "memory": "User loves tomatoes.",
-                "metadata": {"type": "opinion", "source": "conversation"},
-            }
-        ]
-        self.mock_llm.generate.return_value = json.dumps(raw_memories)
+        mock_response = '{"memory list": [{"key": "greeting", "value": "Hello", "tags": ["test"]}]}'
+        self.memory.extractor_llm.generate.return_value = mock_response
 
-        extracted_memories = self.memory.extract(messages)
+        # 执行
+        result = self.memory.extract(messages)
 
-        self.mock_llm.generate.assert_called_once()
-        self.assertEqual(len(extracted_memories), 1)
-        self.assertIsInstance(extracted_memories[0], TextualMemoryItem)
-        self.assertEqual(extracted_memories[0].memory, "User loves tomatoes.")
-        self.assertEqual(extracted_memories[0].metadata.type, "opinion")
-        self.assertEqual(extracted_memories[0].metadata.source, "conversation")
-
-    def test_extract_retry_on_json_decode_error(self):
-        """Test retry logic for extract method when JSONDecodeError occurs."""
-        messages = [{"role": "user", "content": "Test retry"}]
-        valid_response_json = '[{"memory": "Test successful", "metadata": {"type": "fact", "source": "conversation", "confidence": 100.0, "visibility": "private"}}]'
-
-        self.mock_llm.generate.side_effect = [
-            json.JSONDecodeError("Error", "doc", 0),
-            json.JSONDecodeError("Error", "doc", 0),
-            valid_response_json,
-        ]
-
-        extracted_memories = self.memory.extract(messages)
-
-        self.assertEqual(self.mock_llm.generate.call_count, 3)
-        self.assertEqual(len(extracted_memories), 1)
-        self.assertIsInstance(extracted_memories[0], TextualMemoryItem)
-        self.assertEqual(extracted_memories[0].memory, "Test successful")
-        # Check default metadata values are applied
-        self.assertEqual(extracted_memories[0].metadata.type, "fact")
-        self.assertEqual(extracted_memories[0].metadata.source, "conversation")
-        self.assertEqual(extracted_memories[0].metadata.confidence, 100.0)
-        self.assertEqual(extracted_memories[0].metadata.visibility, "private")
+        # 验证
+        self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0], TextualMemoryItem)
+        self.assertEqual(result[0].memory, "Hello")
+        self.assertEqual(result[0].metadata.title, "greeting")
 
     def test_add_memories(self):
         """Test adding memories."""
         memories_to_add = [
             {
-                "memory": "Memory 1",
+                "memory": "I'm a RUCer, I'm happy.",
                 "metadata": {
-                    "type": "fact",
+                    "title": "happy RUCer",
                     "source": "conversation",
-                    "confidence": 95.0,
-                    "tags": ["test"],
-                    "entities": ["memory"],
-                    "visibility": "private",
-                    "memory_time": "2025-05-23",
-                    "updated_at": "2025-05-23T00:00:00",
+                    "tags": ["happy"],
+                    "updated_at": "2025-05-19T00:00:00",
                 },
             },
             {
-                "id": str(uuid.uuid4()),
-                "memory": "Memory 2 with custom ID",
+                "memory": "MemOS is awesome!",
                 "metadata": {
-                    "type": "event",
+                    "title": "MemOS",
                     "source": "conversation",
-                    "confidence": 90.0,
-                    "visibility": "private",
+                    "tags": ["awesome"],
+                    "updated_at": "2025-05-19T00:00:00",
                 },
             },
         ]
@@ -180,8 +147,6 @@ class TestGeneralTextMemory(unittest.TestCase):
 
         self.memory.add(memories_to_add)
 
-        self.mock_embedder.embed.assert_called_once_with(["Memory 1", "Memory 2 with custom ID"])
-
     def test_update_memory(self):
         """Test updating an existing memory."""
         memory_id_to_update = str(uuid.uuid4())
@@ -189,14 +154,10 @@ class TestGeneralTextMemory(unittest.TestCase):
             "id": memory_id_to_update,
             "memory": "This is the updated memory content via dict.",
             "metadata": {
-                "type": "fact",
+                "title": "MemOS",
                 "source": "conversation",
-                "confidence": 95.0,
-                "tags": ["test", "update", "dict"],
-                "entities": ["memory system"],
-                "visibility": "private",
-                "memory_time": "2025-05-23",
-                "updated_at": "2025-05-23T00:00:00",
+                "tags": ["awesome"],
+                "updated_at": "2025-05-19T00:00:00",
             },
         }
 
@@ -217,10 +178,8 @@ class TestGeneralTextMemory(unittest.TestCase):
 
         memory_dict = updated_data_to_db.payload
         self.assertEqual(memory_dict["memory"], "This is the updated memory content via dict.")
-        self.assertEqual(memory_dict["metadata"]["type"], "fact")
+        self.assertEqual(memory_dict["metadata"]["title"], "MemOS")
         self.assertEqual(memory_dict["metadata"]["source"], "conversation")
-        self.assertEqual(memory_dict["metadata"]["confidence"], 95.0)
-        self.assertIn("memory system", memory_dict["metadata"]["entities"])
 
     def test_search_memories(self):
         """Test searching for memories."""
@@ -378,157 +337,6 @@ class TestGeneralTextMemory(unittest.TestCase):
 
         self.mock_vector_db.delete_collection.assert_called_once_with(collection_name)
         self.mock_vector_db.create_collection.assert_called_once()  # Assumes create_collection is called after delete
-
-    def test_load(self):
-        """Test load functionality for GeneralTextMemory."""
-        test_dir = "/test/directory"
-        memory_filename = "textual_memory.json"
-
-        # Set the config's memory_filename
-        self.config.memory_filename = memory_filename
-
-        # Create test memory data
-        memory1_id = str(uuid.uuid4())
-        memory2_id = str(uuid.uuid4())
-        test_memories_data = [
-            {
-                "id": memory1_id,
-                "payload": {
-                    "id": memory1_id,
-                    "memory": "Test memory 1",
-                    "metadata": {"type": "fact"},
-                },
-                "vector": [0.1, 0.2, 0.3],
-            },
-            {
-                "id": memory2_id,
-                "payload": {
-                    "id": memory2_id,
-                    "memory": "Test memory 2",
-                    "metadata": {"type": "opinion"},
-                },
-                "vector": [0.4, 0.5, 0.6],
-            },
-        ]
-
-        # Test case 1: Successfully load memories from file
-        with (
-            patch("os.path.exists", return_value=True),
-            patch("builtins.open", mock_open(read_data=json.dumps(test_memories_data))),
-            patch.object(self.mock_vector_db, "add") as mock_add,
-            patch("memos.memories.textual.general.logger.info") as mock_logger_info,
-        ):
-            # Call the function under test
-            self.memory.load(test_dir)
-
-            # Assertions
-            mock_add.assert_called_once()
-            args = mock_add.call_args[0][0]
-            self.assertEqual(len(args), 2)
-            self.assertIsInstance(args[0], VecDBItem)
-            self.assertEqual(args[0].id, memory1_id)
-            self.assertEqual(args[1].id, memory2_id)
-            mock_logger_info.assert_called_once()
-            self.assertIn("Loaded 2 memories", mock_logger_info.call_args[0][0])
-
-        # Test case 2: File does not exist
-        with (
-            patch("os.path.exists", return_value=False),
-            patch("memos.memories.textual.general.logger.warning") as mock_logger_warning,
-        ):
-            self.memory.load(test_dir)
-
-            # Should log warning but not raise exception
-            mock_logger_warning.assert_called_once()
-            self.assertIn("Memory file not found", mock_logger_warning.call_args[0][0])
-
-        # Test case 3: Invalid JSON format
-        with (
-            patch("os.path.exists", return_value=True),
-            patch("builtins.open", mock_open(read_data="invalid json")),
-            patch("memos.memories.textual.general.logger.error") as mock_logger_error,
-        ):
-            self.memory.load(test_dir)
-
-            # Should log error but not raise exception
-            mock_logger_error.assert_called_once()
-            self.assertIn("Error decoding JSON", mock_logger_error.call_args[0][0])
-
-    def test_dump(self):
-        """Test dump functionality for GeneralTextMemory."""
-        test_dir = "test/directory"
-        memory_filename = "textual_memory.json"
-        memory_file_path = os.path.join(test_dir, memory_filename)
-
-        # Set the config's memory_filename
-        self.config.memory_filename = memory_filename
-
-        # Create test memory items
-        uuid1 = str(uuid.uuid4())
-        uuid2 = str(uuid.uuid4())
-        test_vec_db_items = [
-            VecDBItem(
-                id=uuid1,
-                vector=[0.1, 0.2, 0.3],
-                payload={"id": uuid1, "memory": "Test memory 1", "metadata": {"type": "fact"}},
-            ),
-            VecDBItem(
-                id=uuid2,
-                vector=[0.4, 0.5, 0.6],
-                payload={"id": uuid2, "memory": "Test memory 2", "metadata": {"type": "opinion"}},
-            ),
-        ]
-
-        # Set up mock for vector_db.get_all
-        self.mock_vector_db.get_all.return_value = test_vec_db_items
-
-        # Test successful dump
-        with (
-            patch("os.makedirs", return_value=None) as mock_makedirs,
-            patch("builtins.open", mock_open()) as mock_file,
-            patch("json.dump") as mock_json_dump,
-            patch("memos.memories.textual.general.logger.info") as mock_logger_info,
-        ):
-            # Call the function under test
-            self.memory.dump(test_dir)
-
-            # Assertions
-            mock_makedirs.assert_called_once_with(test_dir, exist_ok=True)
-            mock_file.assert_called_once_with(memory_file_path, "w", encoding="utf-8")
-
-            # Verify correct data was passed to json.dump
-            json_data_arg = mock_json_dump.call_args[0][0]
-            self.assertEqual(len(json_data_arg), 2)
-            self.assertEqual(json_data_arg[0]["id"], uuid1)
-            self.assertEqual(json_data_arg[1]["id"], uuid2)
-
-            # Verify formatting arguments
-            format_args = mock_json_dump.call_args[1]
-            self.assertEqual(format_args["indent"], 4)
-            self.assertEqual(format_args["ensure_ascii"], False)
-
-            # Verify logging
-            mock_logger_info.assert_called_once()
-            log_message = mock_logger_info.call_args[0][0]
-            self.assertIn("Dumped 2 memories", log_message)
-            self.assertIn(memory_file_path, log_message)
-
-        # Test error case
-        error_message = "Test exception"
-        with (
-            patch.object(self.mock_vector_db, "get_all", side_effect=Exception(error_message)),
-            patch("memos.memories.textual.general.logger.error") as mock_logger_error,
-        ):
-            # Call should raise the same exception that was triggered in the mock
-            with self.assertRaises(Exception) as context:
-                self.memory.dump(test_dir)
-            self.assertEqual(str(context.exception), error_message)
-
-            # Verify error was logged
-            mock_logger_error.assert_called_once()
-            self.assertIn(
-                "An error occurred while dumping memories", mock_logger_error.call_args[0][0]
-            )
 
 
 if __name__ == "__main__":

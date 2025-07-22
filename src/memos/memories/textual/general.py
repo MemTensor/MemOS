@@ -33,7 +33,9 @@ class GeneralTextMemory(BaseTextMemory):
             config.extractor_llm
         )
         self.vector_db: QdrantVecDB | BaseVecDB = VecDBFactory.from_config(config.vector_db)
-        self.embedder: OllamaEmbedder | ArkEmbedder | BaseEmbedder = EmbedderFactory.from_config(config.embedder)
+        self.embedder: OllamaEmbedder | ArkEmbedder | BaseEmbedder = EmbedderFactory.from_config(
+            config.embedder
+        )
 
     @retry(
         stop=stop_after_attempt(3),
@@ -56,23 +58,26 @@ class GeneralTextMemory(BaseTextMemory):
             List of TextualMemoryItem objects representing the extracted memories.
         """
 
-        str_messages = '\n'.join([message["role"] + ":" + message["content"] for message in messages])
-
-        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace(
-            "${conversation}", str_messages
+        str_messages = "\n".join(
+            [message["role"] + ":" + message["content"] for message in messages]
         )
 
+        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", str_messages)
         messages = [{"role": "user", "content": prompt}]
         response_text = self.extractor_llm.generate(messages)
         response_json = self.parse_json_result(response_text)
 
         extracted_memories = [
-            TextualMemoryItem(memory=memory_dict['value'],
-                              metadata={"title": memory_dict['key'],
-                                        "source": "conversation",
-                                        "tags": memory_dict['tags'],
-                                        "updated_at": datetime.now().isoformat()}) for memory_dict in
-            response_json['memory list']
+            TextualMemoryItem(
+                memory=memory_dict["value"],
+                metadata={
+                    "title": memory_dict["key"],
+                    "source": "conversation",
+                    "tags": memory_dict["tags"],
+                    "updated_at": datetime.now().isoformat(),
+                },
+            )
+            for memory_dict in response_json["memory list"]
         ]
 
         return extracted_memories
@@ -211,7 +216,7 @@ class GeneralTextMemory(BaseTextMemory):
             raise
 
     def drop(
-            self,
+        self,
     ) -> None:
         pass
 

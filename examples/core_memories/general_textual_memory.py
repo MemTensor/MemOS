@@ -74,7 +74,8 @@ m.add(
                 "title": "User Nationality",
                 "source": "conversation",
                 "tags": ["Nationality"],
-                "updated_at": "2025-05-18T00:00:00"},
+                "updated_at": "2025-05-18T00:00:00",
+            },
         }
     ]
 )

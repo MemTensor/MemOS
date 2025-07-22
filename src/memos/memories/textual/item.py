@@ -27,8 +27,10 @@ class TextualMemoryMetadata(BaseModel):
         default="activated",
         description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
     )
-    title: str | None = Field(
-        default=None
+    title: str | None = Field(default=None)
+    confidence: float | None = Field(
+        default=None,
+        description="A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.",
     )
     source: Literal["conversation", "retrieved", "web", "file"] | None = Field(
         default=None, description="The origin of the memory"
