@@ -21,6 +21,7 @@ from memos.mem_scheduler.schemas.message_schemas import (
 from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
 )
+from memos.mem_scheduler.utils.misc_utils import log_exceptions
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 
@@ -34,6 +35,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         """
         super().__init__()
 
+    @log_exceptions(logger=logger)
     def create_autofilled_log_item(
         self,
         log_content: str,
@@ -47,9 +49,9 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         text_mem_base: TreeTextMemory = mem_cube.text_mem
         current_memory_sizes = text_mem_base.get_current_memory_size()
         current_memory_sizes = {
-            "long_term_memory_size": current_memory_sizes["LongTermMemory"],
-            "user_memory_size": current_memory_sizes["UserMemory"],
-            "working_memory_size": current_memory_sizes["WorkingMemory"],
+            "long_term_memory_size": current_memory_sizes.get("LongTermMemory", 0),
+            "user_memory_size": current_memory_sizes.get("UserMemory", 0),
+            "working_memory_size": current_memory_sizes.get("WorkingMemory", 0),
             "transformed_act_memory_size": NOT_INITIALIZED,
             "parameter_memory_size": NOT_INITIALIZED,
         }
@@ -96,6 +98,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         )
         return log_message
 
+    @log_exceptions(logger=logger)
     def log_working_memory_replacement(
         self,
         original_memory: list[TextualMemoryItem],
@@ -148,6 +151,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 f"transformed to {WORKING_MEMORY_TYPE} memories."
             )
 
+    @log_exceptions(logger=logger)
     def log_activation_memory_update(
         self,
         original_text_memories: list[str],
@@ -191,6 +195,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 f"transformed to {WORKING_MEMORY_TYPE} memories."
             )
 
+    @log_exceptions(logger=logger)
     def log_adding_memory(
         self,
         memory: str,
@@ -216,6 +221,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             f"converted to {memory_type} memory in mem_cube {mem_cube_id}: {memory}"
         )
 
+    @log_exceptions(logger=logger)
     def validate_schedule_message(self, message: ScheduleMessageItem, label: str):
         """Validate if the message matches the expected label.
 
@@ -231,6 +237,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             return False
         return True
 
+    @log_exceptions(logger=logger)
     def validate_schedule_messages(self, messages: list[ScheduleMessageItem], label: str):
         """Validate if all messages match the expected label.
 
