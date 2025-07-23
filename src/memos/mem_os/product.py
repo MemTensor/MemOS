@@ -16,12 +16,14 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
 from memos.mem_os.utils.format_utils import (
+    clean_json_response,
     convert_graph_to_tree_forworkmem,
+    ensure_unique_tree_ids,
     filter_nodes_by_tree_ids,
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
-from memos.mem_scheduler.modules.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
+from memos.mem_scheduler.schemas import ANSWER_LABEL, QUERY_LABEL, ScheduleMessageItem
 from memos.mem_user.persistent_user_manager import PersistentUserManager
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
@@ -656,7 +658,7 @@ class MOSProduct(MOSCore):
             you should generate some suggestion query, the query should be user what to query,
             user recently memories is:
             {memories}
-            please generate 3 suggestion query in English,
+            if the user recently memories is empty, please generate 3 suggestion query in English,
             output should be a json format, the key is "query", the value is a list of suggestion query.
 
             example:
@@ -664,7 +666,7 @@ class MOSProduct(MOSCore):
                 "query": ["query1", "query2", "query3"]
             }}
             """
-        text_mem_result = super().search("my recently memories", user_id=user_id, top_k=10)[
+        text_mem_result = super().search("my recently memories", user_id=user_id, top_k=3)[
             "text_mem"
         ]
         if text_mem_result:
@@ -673,8 +675,8 @@ class MOSProduct(MOSCore):
             memories = ""
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
         response = self.chat_llm.generate(message_list)
-        response_json = json.loads(response)
-
+        clean_response = clean_json_response(response)
+        response_json = json.loads(clean_response)
         return response_json["query"]
 
     def chat(
@@ -762,11 +764,10 @@ class MOSProduct(MOSCore):
         system_prompt = self._build_system_prompt(user_id, memories_list)
 
         # Get chat history
-        target_user_id = user_id if user_id is not None else self.user_id
-        if target_user_id not in self.chat_history_manager:
-            self._register_chat_history(target_user_id)
+        if user_id not in self.chat_history_manager:
+            self._register_chat_history(user_id)
 
-        chat_history = self.chat_history_manager[target_user_id]
+        chat_history = self.chat_history_manager[user_id]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
@@ -918,8 +919,10 @@ class MOSProduct(MOSCore):
                     "UserMemory": 0.40,
                 }
                 tree_result, node_type_count = convert_graph_to_tree_forworkmem(
-                    memories, target_node_count=150, type_ratios=custom_type_ratios
+                    memories, target_node_count=200, type_ratios=custom_type_ratios
                 )
+                # Ensure all node IDs are unique in the tree structure
+                tree_result = ensure_unique_tree_ids(tree_result)
                 memories_filtered = filter_nodes_by_tree_ids(tree_result, memories)
                 children = tree_result["children"]
                 children_sort = sort_children_by_memory_type(children)
@@ -1009,6 +1012,8 @@ class MOSProduct(MOSCore):
             tree_result, node_type_count = convert_graph_to_tree_forworkmem(
                 memories, target_node_count=150, type_ratios=custom_type_ratios
             )
+            # Ensure all node IDs are unique in the tree structure
+            tree_result = ensure_unique_tree_ids(tree_result)
             memories_filtered = filter_nodes_by_tree_ids(tree_result, memories)
             children = tree_result["children"]
             children_sort = sort_children_by_memory_type(children)
