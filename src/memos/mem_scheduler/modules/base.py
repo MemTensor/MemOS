@@ -17,8 +17,8 @@ class BaseSchedulerModule:
 
         self._chat_llm = None
         self._process_llm = None
-        self._current_mem_cube_id: str | None = None
-        self._current_mem_cube: GeneralMemCube | None = None
+        self.current_mem_cube_id: str | None = None
+        self.current_mem_cube: GeneralMemCube | None = None
         self.mem_cubes: dict[str, GeneralMemCube] = {}
 
     def load_template(self, template_name: str) -> str:
@@ -75,9 +75,9 @@ class BaseSchedulerModule:
     @property
     def mem_cube(self) -> GeneralMemCube:
         """The memory cube associated with this MemChat."""
-        return self._current_mem_cube
+        return self.current_mem_cube
 
     @mem_cube.setter
     def mem_cube(self, value: GeneralMemCube) -> None:
         """The memory cube associated with this MemChat."""
-        self._current_mem_cube = value
+        self.current_mem_cube = value

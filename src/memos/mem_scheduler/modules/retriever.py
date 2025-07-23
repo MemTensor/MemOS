@@ -83,21 +83,22 @@ class SchedulerRetriever(BaseSchedulerModule):
             If LLM reranking fails, falls back to original order (truncated to top_k)
         """
         success_flag = False
+
+        logger.info(f"Starting memory reranking for {len(original_memories)} memories")
+
+        # Build LLM prompt for memory reranking
+        prompt = self.build_prompt(
+            "memory_reranking",
+            queries=[f"[0] {queries[0]}"],
+            current_order=[f"[{i}] {mem}" for i, mem in enumerate(original_memories)],
+        )
+        logger.debug(f"Generated reranking prompt: {prompt[:200]}...")  # Log first 200 chars
+
+        # Get LLM response
+        response = self.process_llm.generate([{"role": "user", "content": prompt}])
+        logger.debug(f"Received LLM response: {response[:200]}...")  # Log first 200 chars
+
         try:
-            logger.info(f"Starting memory reranking for {len(original_memories)} memories")
-
-            # Build LLM prompt for memory reranking
-            prompt = self.build_prompt(
-                "memory_reranking",
-                queries=[f"[0] {queries[0]}"],
-                current_order=[f"[{i}] {mem}" for i, mem in enumerate(original_memories)],
-            )
-            logger.debug(f"Generated reranking prompt: {prompt[:200]}...")  # Log first 200 chars
-
-            # Get LLM response
-            response = self.process_llm.generate([{"role": "user", "content": prompt}])
-            logger.debug(f"Received LLM response: {response[:200]}...")  # Log first 200 chars
-
             # Parse JSON response
             response = extract_json_dict(response)
             new_order = response["new_order"][:top_k]
@@ -109,7 +110,7 @@ class SchedulerRetriever(BaseSchedulerModule):
             success_flag = True
         except Exception as e:
             logger.error(
-                f"Failed to rerank memories with LLM;\nException: {e}. ",
+                f"Failed to rerank memories with LLM. Exception: {e}. Raw response: {response} ",
                 exc_info=True,
             )
             text_memories_with_new_order = original_memories[:top_k]

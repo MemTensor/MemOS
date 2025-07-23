@@ -68,8 +68,14 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             ):
                 activation_monitor = self.monitor.activation_memory_monitors[user_id][mem_cube_id]
                 transformed_act_memory_size = len(activation_monitor.memories)
+                logger.info(
+                    f'activation_memory_monitors currently has "{transformed_act_memory_size}" transformed memory size'
+                )
             else:
                 transformed_act_memory_size = 0
+                logger.info(
+                    f'activation_memory_monitors is not initialized for user "{user_id}" and mem_cube "{mem_cube_id}'
+                )
             current_memory_sizes["transformed_act_memory_size"] = transformed_act_memory_size
             current_memory_sizes["parameter_memory_size"] = 1
 

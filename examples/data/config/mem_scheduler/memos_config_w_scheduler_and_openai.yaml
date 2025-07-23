@@ -41,6 +41,7 @@ mem_scheduler:
     thread_pool_max_workers: 10
     consume_interval_seconds: 1
     enable_parallel_dispatch: true
+    enable_act_memory_update: false
 max_turns_window: 20
 top_k: 5
 enable_textual_memory: true

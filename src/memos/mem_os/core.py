@@ -17,6 +17,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_user.user_manager import UserManager, UserRole
@@ -267,7 +268,7 @@ class MOSCore:
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=mem_cube,
-                        label=ADD_LABEL,
+                        label=QUERY_LABEL,
                         content=query,
                         timestamp=datetime.now(),
                     )
