@@ -142,7 +142,11 @@ def main(frame, version, num_workers=4):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LongMemeval Response Generation Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local"])
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+    )
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."
     )

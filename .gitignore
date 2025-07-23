@@ -6,6 +6,8 @@ tmp/
 **/tmp_data/
 
 # evaluation data
+*.csv
+*.jsonl
 evaluation/*tmp/
 evaluation/results
 evaluation/.env
@@ -13,6 +15,7 @@ evaluation/.env
 evaluation/configs/*
 **tree_textual_memory_locomo**
 .env
+evaluation/scripts/personamem
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 
 
 sys.path.insert(
@@ -19,6 +20,7 @@ sys.path.insert(
 import argparse
 import concurrent.futures
 import json
+import threading
 import time
 
 from datetime import datetime, timezone
@@ -27,8 +29,9 @@ import pandas as pd
 
 from dotenv import load_dotenv
 from mem0 import MemoryClient
+from memobase import ChatBlob
 from tqdm import tqdm
-from utils.client import memos_client
+from utils.client import memobase_client, memos_client
 from zep_cloud.client import Zep
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
@@ -109,6 +112,33 @@ def get_client(frame: str, user_id: str | None = None, version: str = "default")
         )
 
         return mos
+
+
+def string_to_uuid(s: str, salt="memobase_client") -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
+
+
+def memobase_add_memory(user, message, retries=3):
+    for attempt in range(retries):
+        try:
+            _ = user.insert(ChatBlob(messages=message), sync=True)
+            return
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(1)
+                continue
+            else:
+                raise e
+
+
+def memobase_add_memories_for_speaker(client, speaker, messages):
+    real_uid = string_to_uuid(speaker)
+    u = client.get_or_create_user(real_uid)
+    for i in range(0, len(messages), 2):
+        batch_messages = messages[i : i + 2]
+        memobase_add_memory(u, batch_messages)
+        print(f"[{i + 1}/{len(messages)}] Added messages for {speaker} successfully.")
+    u.flush(sync=True)
 
 
 def ingest_session(client, session, frame, version, metadata, revised_client=None):
@@ -241,6 +271,77 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                     version="v2",
                     enable_graph=True,
                 )
+    elif frame == "memobase":
+        print(f"Processing abc for {metadata['session_key']}")
+        messages = []
+        messages_reverse = []
+
+        for chat in tqdm(session, desc=f"{metadata['session_key']}"):
+            data = chat.get("speaker") + ": " + chat.get("text")
+
+            if chat.get("speaker") == metadata["speaker_a"]:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": chat.get("text"),
+                        "alias": metadata["speaker_a"],
+                        "created_at": iso_date,
+                    }
+                )
+                messages_reverse.append(
+                    {
+                        "role": "assistant",
+                        "content": chat.get("text"),
+                        "alias": metadata["speaker_b"],
+                        "created_at": iso_date,
+                    }
+                )
+            elif chat.get("speaker") == metadata["speaker_b"]:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": chat.get("text"),
+                        "alias": metadata["speaker_b"],
+                        "created_at": iso_date,
+                    }
+                )
+                messages_reverse.append(
+                    {
+                        "role": "user",
+                        "content": chat.get("text"),
+                        "alias": metadata["speaker_a"],
+                        "created_at": iso_date,
+                    }
+                )
+            else:
+                raise ValueError(
+                    f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
+                )
+
+            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
+
+        thread_a = threading.Thread(
+            target=memobase_add_memories_for_speaker,
+            args=(
+                client,
+                metadata["speaker_a_user_id"],
+                messages,
+            ),
+        )
+
+        thread_b = threading.Thread(
+            target=memobase_add_memories_for_speaker,
+            args=(
+                client,
+                metadata["speaker_b_user_id"],
+                messages_reverse,
+            ),
+        )
+
+        thread_a.start()
+        thread_b.start()
+        thread_a.join()
+        thread_b.join()
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -276,7 +377,13 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
             speaker_b_user_id = conv_id + "_speaker_b"
             client = memos_client(mode="api")
             revised_client = memos_client(mode="api")
-
+        elif frame == "memobase":
+            client = memobase_client()
+            conv_id = "locomo_exp_user_" + str(conv_idx)
+            speaker_a_user_id = conv_id + "_speaker_a"
+            speaker_b_user_id = conv_id + "_speaker_b"
+            client.delete_user(string_to_uuid(speaker_a_user_id))
+            client.delete_user(string_to_uuid(speaker_b_user_id))
         sessions_to_process = []
         for session_idx in range(max_session_count):
             session_key = f"session_{session_idx}"
@@ -370,8 +477,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "memos-api"],
-        help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
+        choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
     )
     parser.add_argument(
         "--version",

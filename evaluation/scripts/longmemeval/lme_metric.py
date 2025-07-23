@@ -255,7 +255,11 @@ def calculate_scores(data, grade_path, output_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("LongMemeval Analysis Eval Metric Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local"])
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+    )
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."
     )
