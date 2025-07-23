@@ -1,5 +1,7 @@
+# Base image
 FROM python:3.11-slim
 
+# Install dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -9,17 +11,25 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Set working directory
 WORKDIR /app
 
+# Set Hugging Face mirror
 ENV HF_ENDPOINT=https://hf-mirror.com
 
-COPY requirements.txt .
+# Install Python packages
+COPY docker/requirements.txt .
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-RUN pip install chonkie
+# Copy application code
+COPY docker/ ./docker/
+COPY src/ ./src/
 
-COPY ../. .
+# Set Python import path
 ENV PYTHONPATH=/app/src
 
+# Expose port
 EXPOSE 8000
+
+# Start the docker
 CMD ["uvicorn", "memos.api.product_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

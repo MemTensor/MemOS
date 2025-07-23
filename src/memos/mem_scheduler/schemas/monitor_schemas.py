@@ -107,7 +107,7 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
             all_keywords = [kw for item in self.queue for kw in item.keywords]
             return Counter(all_keywords)
 
-    def get_queries_with_timesort(self, reverse: bool = True) -> list[dict]:
+    def get_queries_with_timesort(self, reverse: bool = True) -> list[str]:
         """
         Retrieve all queries sorted by timestamp.
 

@@ -20,7 +20,9 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_THREAD__POOL_MAX_WORKERS,
+    MemCubeID,
     TreeTextMemory_SEARCH_METHOD,
+    UserID,
 )
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
@@ -81,7 +83,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         # other attributes
         self._context_lock = threading.Lock()
-        self._current_user_id: str | None = None
+        self.current_user_id: UserID | str | None = None
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
@@ -113,20 +115,20 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
     @property
     def mem_cube(self) -> GeneralMemCube:
         """The memory cube associated with this MemChat."""
-        return self._current_mem_cube
+        return self.current_mem_cube
 
     @mem_cube.setter
     def mem_cube(self, value: GeneralMemCube) -> None:
         """The memory cube associated with this MemChat."""
-        self._current_mem_cube = value
+        self.current_mem_cube = value
         self.retriever.mem_cube = value
 
     def _set_current_context_from_message(self, msg: ScheduleMessageItem) -> None:
         """Update current user/cube context from the incoming message (thread-safe)."""
         with self._context_lock:
-            self._current_user_id = msg.user_id
-            self._current_mem_cube_id = msg.mem_cube_id
-            self._current_mem_cube = msg.mem_cube
+            self.current_user_id = msg.user_id
+            self.current_mem_cube_id = msg.mem_cube_id
+            self.current_mem_cube = msg.mem_cube
 
     def transform_memories_to_monitors(
         self, memories: list[TextualMemoryItem]
@@ -181,9 +183,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
     def replace_working_memory(
         self,
-        queries: list[str],
-        user_id: str,
-        mem_cube_id: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
         original_memory: list[TextualMemoryItem],
         new_memory: list[TextualMemoryItem],
@@ -246,8 +247,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
     def initialize_working_memory_monitors(
         self,
-        user_id: str,
-        mem_cube_id: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
     ):
         text_mem_base: TreeTextMemory = mem_cube.text_mem
@@ -267,8 +268,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self,
         new_memories: list[str | TextualMemoryItem],
         label: str,
-        user_id: str,
-        mem_cube_id: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
     ) -> None:
         """
@@ -344,16 +345,17 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self,
         interval_seconds: int,
         label: str,
-        user_id: str,
-        mem_cube_id: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
     ):
-        new_activation_memories = []
-
         try:
-            if self.monitor.timed_trigger(
-                last_time=self.monitor.last_activation_mem_update_time,
-                interval_seconds=interval_seconds,
+            if (
+                self.monitor.last_activation_mem_update_time == datetime.min
+                or self.monitor.timed_trigger(
+                    last_time=self.monitor.last_activation_mem_update_time,
+                    interval_seconds=interval_seconds,
+                )
             ):
                 logger.info(
                     f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}"
