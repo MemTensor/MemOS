@@ -194,6 +194,7 @@ async def search_memories(search_req: SearchRequest):
             query=search_req.query,
             user_id=search_req.user_id,
             install_cube_ids=[search_req.mem_cube_id] if search_req.mem_cube_id else None,
+            top_k=search_req.top_k,
         )
         return SearchResponse(message="Search completed successfully", data=result)
 

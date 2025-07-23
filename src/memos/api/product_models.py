@@ -150,6 +150,7 @@ class SearchRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Search query")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    top_k: int = Field(10, description="Number of results to return")
 
 
 class SuggestionRequest(BaseRequest):

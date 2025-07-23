@@ -631,6 +631,9 @@ class MOSCore:
                 for mem in memories:
                     mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
                     mem_ids.extend(mem_id_list)
+                    logger.info(
+                        f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
+                    )
 
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
@@ -671,6 +674,9 @@ class MOSCore:
                 mem_ids = []
                 for mem in memories:
                     mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                    logger.info(
+                        f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
+                    )
                     mem_ids.extend(mem_id_list)
 
                 # submit messages for scheduler

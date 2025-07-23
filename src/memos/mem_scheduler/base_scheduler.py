@@ -194,10 +194,10 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             text_mem_base: TreeTextMemory = text_mem_base
 
             # process rerank memories with llm
-            quey_history = self.monitor.query_monitors.get_queries_with_timesort()
+            query_history = self.monitor.query_monitors.get_queries_with_timesort()
             memories_with_new_order, rerank_success_flag = (
                 self.retriever.process_and_rerank_memories(
-                    queries=quey_history,
+                    queries=query_history,
                     original_memory=original_memory,
                     new_memory=new_memory,
                     top_k=self.top_k,
@@ -350,54 +350,63 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
     ):
         new_activation_memories = []
 
-        if self.monitor.timed_trigger(
-            last_time=self.monitor.last_activation_mem_update_time,
-            interval_seconds=interval_seconds,
-        ):
-            logger.info(f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}")
-
-            if len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories) == 0:
-                logger.warning(
-                    "No memories found in working_memory_monitors, initializing from current working_memories"
+        try:
+            if self.monitor.timed_trigger(
+                last_time=self.monitor.last_activation_mem_update_time,
+                interval_seconds=interval_seconds,
+            ):
+                logger.info(
+                    f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}"
                 )
-                self.initialize_working_memory_monitors(
+
+                if (
+                    user_id not in self.monitor.working_memory_monitors
+                    or mem_cube_id not in self.monitor.working_memory_monitors[user_id]
+                    or len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories) == 0
+                ):
+                    logger.warning(
+                        "No memories found in working_memory_monitors, initializing from current working_memories"
+                    )
+                    self.initialize_working_memory_monitors(
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                    )
+
+                self.monitor.update_activation_memory_monitors(
+                    user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
+                )
+
+                new_activation_memories = [
+                    m.memory_text
+                    for m in self.monitor.activation_memory_monitors[user_id][mem_cube_id].memories
+                ]
+
+                logger.info(
+                    f"Collected {len(new_activation_memories)} new memory entries for processing"
+                )
+
+                self.update_activation_memory(
+                    new_memories=new_activation_memories,
+                    label=label,
                     user_id=user_id,
                     mem_cube_id=mem_cube_id,
                     mem_cube=mem_cube,
                 )
 
-            self.monitor.update_activation_memory_monitors(
-                user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
-            )
+                self.monitor.last_activation_mem_update_time = datetime.now()
 
-            new_activation_memories = [
-                m.memory_text
-                for m in self.monitor.activation_memory_monitors[user_id][mem_cube_id].memories
-            ]
-
-            logger.info(
-                f"Collected {len(new_activation_memories)} new memory entries for processing"
-            )
-
-            self.update_activation_memory(
-                new_memories=new_activation_memories,
-                label=label,
-                user_id=user_id,
-                mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube,
-            )
-
-            self.monitor.last_activation_mem_update_time = datetime.now()
-
-            logger.debug(
-                f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
-            )
-        else:
-            logger.info(
-                f"Skipping update - {interval_seconds} second interval not yet reached. "
-                f"Last update time is {self.monitor.last_activation_mem_update_time} and now is"
-                f"{datetime.now()}"
-            )
+                logger.debug(
+                    f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
+                )
+            else:
+                logger.info(
+                    f"Skipping update - {interval_seconds} second interval not yet reached. "
+                    f"Last update time is {self.monitor.last_activation_mem_update_time} and now is"
+                    f"{datetime.now()}"
+                )
+        except Exception as e:
+            logger.error(f"Error: {e}", exc_info=True)
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit multiple messages to the message queue."""

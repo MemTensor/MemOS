@@ -145,43 +145,45 @@ class GeneralScheduler(BaseScheduler):
         grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
+        try:
+            for user_id in grouped_messages:
+                for mem_cube_id in grouped_messages[user_id]:
+                    messages = grouped_messages[user_id][mem_cube_id]
+                    if len(messages) == 0:
+                        return
 
-        for user_id in grouped_messages:
-            for mem_cube_id in grouped_messages[user_id]:
-                messages = grouped_messages[user_id][mem_cube_id]
-                if len(messages) == 0:
-                    return
+                    # for status update
+                    self._set_current_context_from_message(msg=messages[0])
 
-                # for status update
-                self._set_current_context_from_message(msg=messages[0])
+                    # submit logs
+                    for msg in messages:
+                        userinput_memory_ids = json.loads(msg.content)
+                        mem_cube = msg.mem_cube
+                        for memory_id in userinput_memory_ids:
+                            mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
+                            mem_type = mem_item.metadata.memory_type
+                            mem_content = mem_item.memory
 
-                # submit logs
-                for msg in messages:
-                    userinput_memory_ids = json.loads(msg.content)
-                    mem_cube = msg.mem_cube
-                    for memory_id in userinput_memory_ids:
-                        mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
-                        mem_type = mem_item.meta_data.memory_type
-                        mem_content = mem_item.memory
+                            self.log_adding_memory(
+                                memory=mem_content,
+                                memory_type=mem_type,
+                                user_id=msg.user_id,
+                                mem_cube_id=msg.mem_cube_id,
+                                mem_cube=msg.mem_cube,
+                                log_func_callback=self._submit_web_logs,
+                            )
 
-                        self.log_adding_memory(
-                            memory=mem_content,
-                            memory_type=mem_type,
-                            user_id=msg.user_id,
-                            mem_cube_id=msg.mem_cube_id,
-                            mem_cube=msg.mem_cube,
-                            log_func_callback=self._submit_web_logs,
+                    # update activation memories
+                    if self.enable_act_memory_update:
+                        self.update_activation_memory_periodically(
+                            interval_seconds=self.monitor.act_mem_update_interval,
+                            label=ADD_LABEL,
+                            user_id=user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=messages[0].mem_cube,
                         )
-
-                # update activation memories
-                if self.enable_act_memory_update:
-                    self.update_activation_memory_periodically(
-                        interval_seconds=self.monitor.act_mem_update_interval,
-                        label=ADD_LABEL,
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=messages[0].mem_cube,
-                    )
+        except Exception as e:
+            logger.error(f"Error: {e}", exc_info=True)
 
     def process_session_turn(
         self,
