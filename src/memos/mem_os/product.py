@@ -704,7 +704,9 @@ class MOSProduct(MOSCore):
         """
 
         self._load_user_cubes(user_id, self.default_cube_config)
-
+        self._send_message_to_scheduler(
+            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
+        )
         time_start = time.time()
         memories_list = []
         memories_result = super().search(
@@ -808,9 +810,6 @@ class MOSProduct(MOSCore):
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         total_time = round(float(time_end - time_start), 1)
         yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': '23%'}})}\n\n"
-        self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
-        )
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=full_response, label=ANSWER_LABEL
         )

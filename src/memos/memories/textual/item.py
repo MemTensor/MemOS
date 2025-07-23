@@ -27,23 +27,14 @@ class TextualMemoryMetadata(BaseModel):
         default="activated",
         description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
     )
-    type: Literal["procedure", "fact", "event", "opinion", "topic", "reasoning"] | None = Field(
-        default=None
-    )
-    memory_time: str | None = Field(
-        default=None,
-        description='The time the memory occurred or refers to. Must be in standard `YYYY-MM-DD` format. Relative expressions such as "yesterday" or "tomorrow" are not allowed.',
-    )
-    source: Literal["conversation", "retrieved", "web", "file"] | None = Field(
-        default=None, description="The origin of the memory"
-    )
+    type: str | None = Field(default=None)
+    key: str | None = Field(default=None, description="Memory key or title.")
     confidence: float | None = Field(
         default=None,
         description="A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.",
     )
-    entities: list[str] | None = Field(
-        default=None,
-        description='A list of key entities mentioned in the memory, e.g., people, places, organizations, e.g., `["Alice", "Paris", "OpenAI"]`.',
+    source: Literal["conversation", "retrieved", "web", "file"] | None = Field(
+        default=None, description="The origin of the memory"
     )
     tags: list[str] | None = Field(
         default=None,
@@ -59,23 +50,6 @@ class TextualMemoryMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    @field_validator("memory_time")
-    @classmethod
-    def validate_memory_time(cls, v):
-        try:
-            if v:
-                datetime.strptime(v, "%Y-%m-%d")
-        except ValueError as e:
-            raise ValueError("Invalid date format. Use YYYY-MM-DD.") from e
-        return v
-
-    @field_validator("confidence")
-    @classmethod
-    def validate_confidence(cls, v):
-        if v is not None and (v < 0 or v > 100):
-            raise ValueError("Confidence must be between 0 and 100.")
-        return v
-
     def __str__(self) -> str:
         """Pretty string representation of the metadata."""
         meta = self.model_dump(exclude_none=True)
@@ -88,7 +62,6 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory"] = Field(
         default="WorkingMemory", description="Memory lifecycle type."
     )
-    key: str | None = Field(default=None, description="Memory key or title.")
     sources: list[str] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )
@@ -148,7 +121,6 @@ class TextualMemoryItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("id")
     @classmethod
     def validate_id(cls, v):
         try:

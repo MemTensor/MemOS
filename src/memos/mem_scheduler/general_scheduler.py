@@ -9,6 +9,8 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
     QUERY_LABEL,
+    MemCubeID,
+    UserID,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
@@ -30,6 +32,51 @@ class GeneralScheduler(BaseScheduler):
             ADD_LABEL: self._add_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
+
+    # for evaluation
+    def search_for_eval(
+        self,
+        query: str,
+        user_id: UserID | str,
+        top_k: int,
+    ) -> list[str]:
+        query_keywords = self.monitor.extract_query_keywords(query=query)
+        logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
+
+        item = QueryMonitorItem(
+            query_text=query,
+            keywords=query_keywords,
+            max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
+        )
+        self.monitor.query_monitors.put(item=item)
+        logger.debug(
+            f"Queries in monitor are {self.monitor.query_monitors.get_queries_with_timesort()}."
+        )
+
+        queries = [query]
+
+        # recall
+        cur_working_memory, new_candidates = self.process_session_turn(
+            queries=queries,
+            user_id=user_id,
+            mem_cube_id=self.current_mem_cube_id,
+            mem_cube=self.current_mem_cube,
+            top_k=self.top_k,
+        )
+        logger.info(f"Processed {queries} and get {len(new_candidates)} new candidate memories.")
+
+        # rerank
+        new_order_working_memory = self.replace_working_memory(
+            user_id=user_id,
+            mem_cube_id=self.current_mem_cube_id,
+            mem_cube=self.current_mem_cube,
+            original_memory=cur_working_memory,
+            new_memory=new_candidates,
+        )
+        new_order_working_memory = new_order_working_memory[:top_k]
+        logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
+
+        return [m.memory for m in new_order_working_memory]
 
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
@@ -88,7 +135,6 @@ class GeneralScheduler(BaseScheduler):
 
                 # rerank
                 new_order_working_memory = self.replace_working_memory(
-                    queries=queries,
                     user_id=user_id,
                     mem_cube_id=mem_cube_id,
                     mem_cube=mem_cube,
@@ -119,7 +165,7 @@ class GeneralScheduler(BaseScheduler):
                 # for status update
                 self._set_current_context_from_message(msg=messages[0])
 
-                # update acivation memories
+                # update activation memories
                 if self.enable_act_memory_update:
                     if (
                         len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories)
@@ -157,7 +203,12 @@ class GeneralScheduler(BaseScheduler):
 
                     # submit logs
                     for msg in messages:
-                        userinput_memory_ids = json.loads(msg.content)
+                        try:
+                            userinput_memory_ids = json.loads(msg.content)
+                        except Exception as e:
+                            logger.error(f"Error: {e}. Content: {msg.content}", exc_info=True)
+                            userinput_memory_ids = []
+
                         mem_cube = msg.mem_cube
                         for memory_id in userinput_memory_ids:
                             mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
@@ -188,8 +239,8 @@ class GeneralScheduler(BaseScheduler):
     def process_session_turn(
         self,
         queries: str | list[str],
-        user_id: str,
-        mem_cube_id: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
         top_k: int = 10,
     ) -> tuple[list[TextualMemoryItem], list[TextualMemoryItem]] | None:
@@ -241,7 +292,9 @@ class GeneralScheduler(BaseScheduler):
             results: list[TextualMemoryItem] = self.retriever.search(
                 query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
             )
-            logger.info(f"search results for {missing_evidences}: {results}")
+            logger.info(
+                f"search results for {missing_evidences}: {[one.memory for one in results]}"
+            )
             new_candidates.extend(results)
 
         if len(new_candidates) == 0:
