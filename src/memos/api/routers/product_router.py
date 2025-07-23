@@ -37,14 +37,14 @@ def get_mos_product_instance():
     global MOS_PRODUCT_INSTANCE
     if MOS_PRODUCT_INSTANCE is None:
         default_config = APIConfig.get_product_default_config()
-        print(default_config)
+        logger.info("*********default_config*********", default_config)
         from memos.configs.mem_os import MOSConfig
 
         mos_config = MOSConfig(**default_config)
 
         # Get default cube config from APIConfig (may be None if disabled)
         default_cube_config = APIConfig.get_default_cube_config()
-        print("*********default_cube_config*********", default_cube_config)
+        logger.info("*********default_cube_config********", default_cube_config)
         MOS_PRODUCT_INSTANCE = MOSProduct(
             default_config=mos_config, default_cube_config=default_cube_config
         )

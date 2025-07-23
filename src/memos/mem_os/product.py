@@ -52,7 +52,7 @@ class MOSProduct(MOSCore):
     def __init__(
         self,
         default_config: MOSConfig | None = None,
-        max_user_instances: int = 100,
+        max_user_instances: int = 1,
         default_cube_config: GeneralMemCubeConfig | None = None,
     ):
         """
