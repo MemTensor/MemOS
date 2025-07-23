@@ -66,7 +66,7 @@ class GeneralTextMemory(BaseTextMemory):
             TextualMemoryItem(
                 memory=memory_dict["value"],
                 metadata={
-                    "title": memory_dict["key"],
+                    "key": memory_dict["key"],
                     "source": "conversation",
                     "tags": memory_dict["tags"],
                     "updated_at": datetime.now().isoformat(),

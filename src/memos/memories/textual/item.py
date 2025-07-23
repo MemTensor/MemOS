@@ -27,7 +27,8 @@ class TextualMemoryMetadata(BaseModel):
         default="activated",
         description="The status of the memory, e.g., 'activated', 'archived', 'deleted'.",
     )
-    title: str | None = Field(default=None)
+    type: str | None = Field(default=None)
+    key: str | None = Field(default=None, description="Memory key or title.")
     confidence: float | None = Field(
         default=None,
         description="A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.",
@@ -38,6 +39,9 @@ class TextualMemoryMetadata(BaseModel):
     tags: list[str] | None = Field(
         default=None,
         description='A list of keywords or thematic labels associated with the memory for categorization or retrieval, e.g., `["travel", "health", "project-x"]`.',
+    )
+    visibility: Literal["private", "public", "session"] | None = Field(
+        default=None, description="e.g., 'private', 'public', 'session'"
     )
     updated_at: str | None = Field(
         default_factory=lambda: datetime.now().isoformat(),
@@ -58,7 +62,6 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory"] = Field(
         default="WorkingMemory", description="Memory lifecycle type."
     )
-    key: str | None = Field(default=None, description="Memory key or title.")
     sources: list[str] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )

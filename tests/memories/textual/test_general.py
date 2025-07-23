@@ -117,7 +117,7 @@ class TestGeneralTextMemory(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertIsInstance(result[0], TextualMemoryItem)
         self.assertEqual(result[0].memory, "Hello")
-        self.assertEqual(result[0].metadata.title, "greeting")
+        self.assertEqual(result[0].metadata.key, "greeting")
 
     def test_add_memories(self):
         """Test adding memories."""
@@ -125,7 +125,7 @@ class TestGeneralTextMemory(unittest.TestCase):
             {
                 "memory": "I'm a RUCer, I'm happy.",
                 "metadata": {
-                    "title": "happy RUCer",
+                    "key": "happy RUCer",
                     "source": "conversation",
                     "tags": ["happy"],
                     "updated_at": "2025-05-19T00:00:00",
@@ -134,7 +134,7 @@ class TestGeneralTextMemory(unittest.TestCase):
             {
                 "memory": "MemOS is awesome!",
                 "metadata": {
-                    "title": "MemOS",
+                    "key": "MemOS",
                     "source": "conversation",
                     "tags": ["awesome"],
                     "updated_at": "2025-05-19T00:00:00",
@@ -154,7 +154,7 @@ class TestGeneralTextMemory(unittest.TestCase):
             "id": memory_id_to_update,
             "memory": "This is the updated memory content via dict.",
             "metadata": {
-                "title": "MemOS",
+                "key": "MemOS",
                 "source": "conversation",
                 "tags": ["awesome"],
                 "updated_at": "2025-05-19T00:00:00",
@@ -178,7 +178,7 @@ class TestGeneralTextMemory(unittest.TestCase):
 
         memory_dict = updated_data_to_db.payload
         self.assertEqual(memory_dict["memory"], "This is the updated memory content via dict.")
-        self.assertEqual(memory_dict["metadata"]["title"], "MemOS")
+        self.assertEqual(memory_dict["metadata"]["key"], "MemOS")
         self.assertEqual(memory_dict["metadata"]["source"], "conversation")
 
     def test_search_memories(self):

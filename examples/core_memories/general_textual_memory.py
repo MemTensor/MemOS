@@ -35,7 +35,7 @@ example_memories = [
     {
         "memory": "I'm a RUCer, I'm happy.",
         "metadata": {
-            "title": "happy RUCer",
+            "key": "happy RUCer",
             "source": "conversation",
             "tags": ["happy"],
             "updated_at": "2025-05-19T00:00:00",
@@ -44,7 +44,7 @@ example_memories = [
     {
         "memory": "MemOS is awesome!",
         "metadata": {
-            "title": "MemOS",
+            "key": "MemOS",
             "source": "conversation",
             "tags": ["awesome"],
             "updated_at": "2025-05-19T00:00:00",
@@ -71,7 +71,7 @@ m.add(
             "id": example_id,
             "memory": "User is Chinese.",
             "metadata": {
-                "title": "User Nationality",
+                "key": "User Nationality",
                 "source": "conversation",
                 "tags": ["Nationality"],
                 "updated_at": "2025-05-18T00:00:00",
@@ -98,7 +98,7 @@ m.update(
         "id": example_id,
         "memory": "User is Canadian.",
         "metadata": {
-            "title": "User Nationality",
+            "key": "User Nationality",
             "source": "conversation",
             "tags": ["Nationality"],
             "updated_at": "2025-05-19T00:00:00",
