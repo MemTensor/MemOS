@@ -1,7 +1,6 @@
 from memos.configs.memory import MemoryConfigFactory
 from memos.memories.factory import MemoryFactory
 
-
 config = MemoryConfigFactory(
     backend="general_text",
     config={
@@ -36,32 +35,23 @@ example_memories = [
     {
         "memory": "I'm a RUCer, I'm happy.",
         "metadata": {
-            "type": "self-introduction",
-            "memory_time": "2025-05-26",
+            "key": "happy RUCer",
             "source": "conversation",
-            "confidence": 90.0,
-            "entities": ["RUCer"],
             "tags": ["happy"],
-            "visibility": "private",
             "updated_at": "2025-05-19T00:00:00",
         },
     },
     {
         "memory": "MemOS is awesome!",
         "metadata": {
-            "type": "fact",
-            "memory_time": "2025-05-19",
+            "key": "MemOS",
             "source": "conversation",
-            "confidence": 100.0,
-            "entities": ["MemOS"],
             "tags": ["awesome"],
-            "visibility": "public",
             "updated_at": "2025-05-19T00:00:00",
         },
     },
 ]
 example_id = "a19b6caa-5d59-42ad-8c8a-e4f7118435b4"
-
 
 print("===== Extract memories =====")
 memories = m.extract(
@@ -80,7 +70,12 @@ m.add(
         {
             "id": example_id,
             "memory": "User is Chinese.",
-            "metadata": {"type": "opinion"},
+            "metadata": {
+                "key": "User Nationality",
+                "source": "conversation",
+                "tags": ["Nationality"],
+                "updated_at": "2025-05-18T00:00:00",
+            },
         }
     ]
 )
@@ -103,13 +98,9 @@ m.update(
         "id": example_id,
         "memory": "User is Canadian.",
         "metadata": {
-            "type": "opinion",
-            "confidence": 85,
-            "memory_time": "2025-05-24",
+            "key": "User Nationality",
             "source": "conversation",
-            "entities": ["Canadian"],
-            "tags": ["happy"],
-            "visibility": "private",
+            "tags": ["Nationality"],
             "updated_at": "2025-05-19T00:00:00",
         },
     },

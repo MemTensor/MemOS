@@ -58,9 +58,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 metadata=TreeNodeTextualMemoryMetadata(
                     user_id=info.get("user_id"),
                     session_id=info.get("session_id"),
-                    memory_type=memory_i_raw.get("memory_type", ""),
+                    memory_type=memory_i_raw.get("memory_type", "")
+                    .replace("长期记忆", "LongTermMemory")
+                    .replace("用户记忆", "UserMemory"),
                     status="activated",
-                    tags=memory_i_raw.get("tags", ""),
+                    tags=memory_i_raw.get("tags", [])
+                    if type(memory_i_raw.get("tags", [])) is list
+                    else [],
                     key=memory_i_raw.get("key", ""),
                     embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
                     usage=[],
@@ -214,7 +218,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         session_id=info.get("session_id"),
                         memory_type="LongTermMemory",
                         status="activated",
-                        tags=chunk_res["tags"],
+                        tags=chunk_res["tags"] if type(chunk_res["tags"]) is list else [],
                         key=chunk_res["key"],
                         embedding=self.embedder.embed([chunk_res["value"]])[0],
                         usage=[],
