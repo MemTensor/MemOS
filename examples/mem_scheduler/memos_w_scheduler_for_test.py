@@ -1,23 +1,15 @@
+import json
 import shutil
 import sys
 
 from pathlib import Path
-from queue import Queue
-from typing import TYPE_CHECKING
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
-
-
-if TYPE_CHECKING:
-    from memos.mem_scheduler.modules.schemas import (
-        ScheduleLogForWebItem,
-    )
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -90,41 +82,6 @@ def init_task():
     return conversations, questions
 
 
-def show_web_logs(mem_scheduler: GeneralScheduler):
-    """Display all web log entries from the scheduler's log queue.
-
-    Args:
-        mem_scheduler: The scheduler instance containing web logs to display
-    """
-    if mem_scheduler._web_log_message_queue.empty():
-        print("Web log queue is currently empty.")
-        return
-
-    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
-
-    # Create a temporary queue to preserve the original queue contents
-    temp_queue = Queue()
-    log_count = 0
-
-    while not mem_scheduler._web_log_message_queue.empty():
-        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
-        temp_queue.put(log_item)
-        log_count += 1
-
-        # Print log entry details
-        print(f"\nLog Entry #{log_count}:")
-        print(f'- "{log_item.label}" log: {log_item}')
-
-        print("-" * 50)
-
-    # Restore items back to the original queue
-    while not temp_queue.empty():
-        mem_scheduler._web_log_message_queue.put(temp_queue.get())
-
-    print(f"\nTotal {log_count} web log entries displayed.")
-    print("=" * 110 + "\n")
-
-
 if __name__ == "__main__":
     # set up data
     conversations, questions = init_task()
@@ -168,12 +125,18 @@ if __name__ == "__main__":
 
     mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
 
+    # Add interfering conversations
+    file_path = Path(f"{BASE_DIR}/examples/data/mem_scheduler/scene_data.json")
+    scene_data = json.load(file_path.open("r", encoding="utf-8"))
+    mos.add(scene_data[0], user_id=user_id, mem_cube_id=mem_cube_id)
+    mos.add(scene_data[1], user_id=user_id, mem_cube_id=mem_cube_id)
+
     for item in questions:
+        print("===== Chat Start =====")
         query = item["question"]
-
+        print(f"Query:\n {query}\n")
         response = mos.chat(query=query, user_id=user_id)
-        print(f"Query:\n {query}\n\nAnswer:\n {response}")
-
-    show_web_logs(mos.mem_scheduler)
+        print(f"Answer:\n {response}")
+        print("===== Chat End =====")
 
     mos.mem_scheduler.stop()

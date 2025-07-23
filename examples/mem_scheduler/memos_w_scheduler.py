@@ -3,6 +3,8 @@ import sys
 
 from datetime import datetime
 from pathlib import Path
+from queue import Queue
+from typing import TYPE_CHECKING
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
@@ -10,13 +12,20 @@ from memos.configs.mem_scheduler import AuthConfig, SchedulerConfigFactory
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.general_scheduler import GeneralScheduler
+from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    ScheduleMessageItem,
 )
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.utils import parse_yaml
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.utils.misc_utils import parse_yaml
+
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas import (
+        ScheduleLogForWebItem,
+    )
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -109,6 +118,8 @@ def run_with_automatic_scheduler_init():
         response = mos.chat(query, user_id=user_id)
         print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
+    show_web_logs(mem_scheduler=mos.mem_scheduler)
+
     mos.mem_scheduler.stop()
 
 
@@ -184,7 +195,44 @@ def run_with_manual_scheduler_init():
         mos.mem_scheduler.submit_messages(messages=message_item)
         print(f"Query:\n {query}\n\nAnswer:\n {response}")
 
+    show_web_logs(mem_scheduler=mos.mem_scheduler)
+
     mos.mem_scheduler.stop()
+
+
+def show_web_logs(mem_scheduler: GeneralScheduler):
+    """Display all web log entries from the scheduler's log queue.
+
+    Args:
+        mem_scheduler: The scheduler instance containing web logs to display
+    """
+    if mem_scheduler._web_log_message_queue.empty():
+        print("Web log queue is currently empty.")
+        return
+
+    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
+
+    # Create a temporary queue to preserve the original queue contents
+    temp_queue = Queue()
+    log_count = 0
+
+    while not mem_scheduler._web_log_message_queue.empty():
+        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
+        temp_queue.put(log_item)
+        log_count += 1
+
+        # Print log entry details
+        print(f"\nLog Entry #{log_count}:")
+        print(f'- "{log_item.label}" log: {log_item}')
+
+        print("-" * 50)
+
+    # Restore items back to the original queue
+    while not temp_queue.empty():
+        mem_scheduler._web_log_message_queue.put(temp_queue.get())
+
+    print(f"\nTotal {log_count} web log entries displayed.")
+    print("=" * 110 + "\n")
 
 
 if __name__ == "__main__":

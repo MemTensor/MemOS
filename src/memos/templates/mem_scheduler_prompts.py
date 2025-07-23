@@ -72,13 +72,18 @@ Reorganize the provided memory evidence list by:
 3. Sorting evidence in descending order of relevance
 4. Maintaining all original items (no additions or deletions)
 
+## Temporal Priority Rules
+- Query recency matters: Index 0 is the MOST RECENT query
+- Evidence matching recent queries gets higher priority
+- For equal relevance scores: Favor items matching newer queries
+
 ## Input Format
 - Queries: Recent user questions/requests (list)
-- Current Order: Existing memory sequence (list)
+- Current Order: Existing memory sequence (list of strings with indices)
 
 ## Output Requirements
 Return a JSON object with:
-- "new_order": The reordered list (maintaining all original items)
+- "new_order": The reordered indices (array of integers)
 - "reasoning": Brief explanation of your ranking logic (1-2 sentences)
 
 ## Processing Guidelines
@@ -89,26 +94,55 @@ Return a JSON object with:
    - Shows temporal relevance (newer > older)
 2. For ambiguous cases, maintain original relative ordering
 
+## Scoring Priorities (Descending Order)
+1. Direct matches to newer queries
+2. Exact keyword matches in recent queries
+3. Contextual support for recent topics
+4. General relevance to older queries
+
 ## Example
-Input queries: ["python threading best practices"]
-Input order: ["basic python syntax", "thread safety patterns", "data structures"]
+Input queries: ["[0] python threading", "[1] data visualization"]
+Input order: ["[0] syntax", "[1] matplotlib", "[2] threading"]
 
 Output:
 {{
-  "new_order": ["thread safety patterns", "data structures", "basic python syntax"],
-  "reasoning": "Prioritized threading-related content while maintaining general python references"
+  "new_order": [2, 1, 0],
+  "reasoning": "Threading (2) prioritized for matching newest query, followed by matplotlib (1) for older visualization query",
 }}
 
 ## Current Task
-Queries: {queries}
+Queries: {queries} (recency-ordered)
 Current order: {current_order}
 
 Please provide your reorganization:
 """
 
+QUERY_KEYWORDS_EXTRACTION_PROMPT = """
+## Role
+You are an intelligent keyword extraction system. Your task is to identify and extract the most important words or short phrases from user queries.
+
+## Instructions
+- They have to be single words or short phrases that make sense.
+- Only nouns (naming words) or verbs (action words) are allowed.
+- Don't include stop words (like "the", "is") or adverbs (words that describe verbs, like "quickly").
+- Keep them as the smallest possible units that still have meaning.
+
+## Example
+- Input Query: "What breed is Max?"
+- Output Keywords (list of string): ["breed", "Max"]
+
+## Current Task
+- Query: {query}
+- Output Format: A Json list of keywords.
+
+Answer:
+"""
+
+
 PROMPT_MAPPING = {
     "intent_recognizing": INTENT_RECOGNIZING_PROMPT,
     "memory_reranking": MEMORY_RERANKING_PROMPT,
+    "query_keywords_extraction": QUERY_KEYWORDS_EXTRACTION_PROMPT,
 }
 
 MEMORY_ASSEMBLY_TEMPLATE = """The retrieved memories are listed as follows:\n\n {memory_text}"""

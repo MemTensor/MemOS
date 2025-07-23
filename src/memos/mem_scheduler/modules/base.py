@@ -3,7 +3,7 @@ from pathlib import Path
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.schemas import BASE_DIR
+from memos.mem_scheduler.schemas.general_schemas import BASE_DIR
 from memos.templates.mem_scheduler_prompts import PROMPT_MAPPING
 
 
