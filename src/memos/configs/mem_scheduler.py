@@ -6,12 +6,12 @@ from typing import Any, ClassVar
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.modules.misc import DictConversionMixin
+from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_THREAD__POOL_MAX_WORKERS,
-    DictConversionMixin,
 )
 
 
@@ -21,6 +21,7 @@ class BaseSchedulerConfig(BaseConfig):
     top_k: int = Field(
         default=10, description="Number of top candidates to consider in initial retrieval"
     )
+    # TODO: The 'top_n' field is deprecated and will be removed in future versions.
     top_n: int = Field(default=5, description="Number of final results to return after processing")
     enable_parallel_dispatch: bool = Field(
         default=True, description="Whether to enable parallel message processing using thread pool"
@@ -48,7 +49,7 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=300, description="Interval in seconds for updating activation memory"
     )
     context_window_size: int | None = Field(
-        default=5, description="Size of the context window for conversation history"
+        default=10, description="Size of the context window for conversation history"
     )
     act_mem_dump_path: str | None = Field(
         default=DEFAULT_ACT_MEM_DUMP_PATH,  # Replace with DEFAULT_ACT_MEM_DUMP_PATH
@@ -105,7 +106,20 @@ class RabbitMQConfig(
 
 
 class GraphDBAuthConfig(BaseConfig):
-    uri: str = Field(default="localhost", description="URI for graph database access")
+    uri: str = Field(
+        default="bolt://localhost:7687",
+        description="URI for graph database access (e.g., bolt://host:port)",
+    )
+    user: str = Field(default="neo4j", description="Username for graph database authentication")
+    password: str = Field(
+        default="",
+        description="Password for graph database authentication",
+        min_length=8,  # 建议密码最小长度
+    )
+    db_name: str = Field(default="neo4j", description="Database name to connect to")
+    auto_create: bool = Field(
+        default=True, description="Whether to automatically create the database if it doesn't exist"
+    )
 
 
 class OpenAIConfig(BaseConfig):

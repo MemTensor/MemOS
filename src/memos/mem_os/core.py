@@ -13,12 +13,12 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
-    ScheduleMessageItem,
 )
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
@@ -58,10 +58,15 @@ class MOSCore:
                 f"User '{self.user_id}' does not exist or is inactive. Please create user first."
             )
 
-        # Lazy initialization marker
+        # Initialize mem_scheduler
         self._mem_scheduler_lock = Lock()
         self.enable_mem_scheduler = self.config.get("enable_mem_scheduler", False)
-        self._mem_scheduler: GeneralScheduler = None
+        if self.enable_mem_scheduler:
+            self._mem_scheduler = self._initialize_mem_scheduler()
+            self._mem_scheduler.mem_cubes = self.mem_cubes
+        else:
+            self._mem_scheduler: GeneralScheduler = None
+
         logger.info(f"MOS initialized for user: {self.user_id}")
 
     @property
@@ -93,14 +98,16 @@ class MOSCore:
             else:
                 logger.debug("Memory scheduler cleared")
 
-    def _initialize_mem_scheduler(self):
+    def _initialize_mem_scheduler(self) -> GeneralScheduler:
         """Initialize the memory scheduler on first access."""
         if not self.config.enable_mem_scheduler:
             logger.debug("Memory scheduler is disabled in config")
             self._mem_scheduler = None
+            return self._mem_scheduler
         elif not hasattr(self.config, "mem_scheduler"):
             logger.error("Config of Memory scheduler is not available")
             self._mem_scheduler = None
+            return self._mem_scheduler
         else:
             logger.info("Initializing memory scheduler...")
             scheduler_config = self.config.mem_scheduler
@@ -111,13 +118,16 @@ class MOSCore:
                     f"Memory reader of type {type(self.mem_reader).__name__} "
                     "missing required 'llm' attribute"
                 )
-                self._mem_scheduler.initialize_modules(chat_llm=self.chat_llm)
+                self._mem_scheduler.initialize_modules(
+                    chat_llm=self.chat_llm, process_llm=self.chat_llm
+                )
             else:
                 # Configure scheduler modules
                 self._mem_scheduler.initialize_modules(
                     chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
                 )
             self._mem_scheduler.start()
+            return self._mem_scheduler
 
     def mem_scheduler_on(self) -> bool:
         if not self.config.enable_mem_scheduler or self._mem_scheduler is None:
@@ -576,6 +586,7 @@ class MOSCore:
             user_id (str, optional): The identifier of the user to add the memories to.
                 If None, the default user is used.
         """
+        # user input messages
         assert (messages is not None) or (memory_content is not None) or (doc_path is not None), (
             "messages_or_doc_path or memory_content or doc_path must be provided."
         )
@@ -615,23 +626,26 @@ class MOSCore:
                     type="chat",
                     info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
                 )
+
+                mem_ids = []
                 for mem in memories:
-                    self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                    mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                    mem_ids.extend(mem_id_list)
 
                 # submit messages for scheduler
-                mem_cube = self.mem_cubes[mem_cube_id]
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                    text_messages = [message["content"] for message in messages]
+                    mem_cube = self.mem_cubes[mem_cube_id]
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=mem_cube,
                         label=ADD_LABEL,
-                        content=json.dumps(text_messages),
+                        content=json.dumps(mem_ids),
                         timestamp=datetime.now(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
+        # user profile
         if (
             (memory_content is not None)
             and self.config.enable_textual_memory
@@ -646,34 +660,63 @@ class MOSCore:
                 )
             else:
                 messages_list = [
-                    [
-                        {"role": "user", "content": memory_content},
-                        {
-                            "role": "assistant",
-                            "content": "",
-                        },  # add by str to keep the format,assistant role is empty
-                    ]
-                ]
+                    [{"role": "user", "content": memory_content}]
+                ]  # for only user-str input and convert message
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
                     info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
                 )
+
+                mem_ids = []
                 for mem in memories:
-                    self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                    mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                    mem_ids.extend(mem_id_list)
+
+                # submit messages for scheduler
+                if self.enable_mem_scheduler and self.mem_scheduler is not None:
+                    mem_cube = self.mem_cubes[mem_cube_id]
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        label=ADD_LABEL,
+                        content=json.dumps(mem_ids),
+                        timestamp=datetime.now(),
+                    )
+                    self.mem_scheduler.submit_messages(messages=[message_item])
+
+        # user doc input
         if (
             (doc_path is not None)
             and self.config.enable_textual_memory
             and self.mem_cubes[mem_cube_id].text_mem
         ):
             documents = self._get_all_documents(doc_path)
-            doc_memory = self.mem_reader.get_memory(
+            doc_memories = self.mem_reader.get_memory(
                 documents,
                 type="doc",
                 info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
             )
-            for mem in doc_memory:
-                self.mem_cubes[mem_cube_id].text_mem.add(mem)
+
+            mem_ids = []
+            for mem in doc_memories:
+                mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                mem_ids.extend(mem_id_list)
+
+            # submit messages for scheduler
+            if self.enable_mem_scheduler and self.mem_scheduler is not None:
+                mem_cube = self.mem_cubes[mem_cube_id]
+                message_item = ScheduleMessageItem(
+                    user_id=target_user_id,
+                    mem_cube_id=mem_cube_id,
+                    mem_cube=mem_cube,
+                    label=ADD_LABEL,
+                    content=json.dumps(mem_ids),
+                    timestamp=datetime.now(),
+                )
+                self.mem_scheduler.submit_messages(messages=[message_item])
+
         logger.info(f"Add memory to {mem_cube_id} successfully")
 
     def get(

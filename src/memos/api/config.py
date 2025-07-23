@@ -116,6 +116,32 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_neo4j_community_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get Neo4j community configuration."""
+        return {
+            "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            "user": os.getenv("NEO4J_USER", "neo4j"),
+            "db_name": os.getenv("NEO4J_DB_NAME", "shared-tree-textual-memory"),
+            "password": os.getenv("NEO4J_PASSWORD", "12345678"),
+            "user_name": f"memos{user_id.replace('-', '')}",
+            "auto_create": True,
+            "use_multi_db": False,
+            "embedding_dimension": 3072,
+            "vec_config": {
+                # Pass nested config to initialize external vector DB
+                # If you use qdrant, please use Server instead of local mode.
+                "backend": "qdrant",
+                "config": {
+                    "collection_name": "neo4j_vec_db",
+                    "vector_dimension": 3072,
+                    "distance_metric": "cosine",
+                    "host": "localhost",
+                    "port": 6333,
+                },
+            },
+        }
+
+    @staticmethod
     def get_neo4j_config(user_id: str | None = None) -> dict[str, Any]:
         """Get Neo4j configuration."""
         if os.getenv("MOS_NEO4J_SHARED_DB", "false").lower() == "true":
@@ -274,7 +300,6 @@ class APIConfig:
     def create_user_config(user_name: str, user_id: str) -> tuple[MOSConfig, GeneralMemCube]:
         """Create configuration for a specific user."""
         openai_config = APIConfig.get_openai_config()
-        neo4j_config = APIConfig.get_neo4j_config(user_id)
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
@@ -325,29 +350,40 @@ class APIConfig:
 
         default_config = MOSConfig(**config_dict)
 
-        # Create MemCube config
-        default_cube_config = GeneralMemCubeConfig.model_validate(
-            {
-                "user_id": user_id,
-                "cube_id": f"{user_name}_default_cube",
-                "text_mem": {
-                    "backend": "tree_text",
-                    "config": {
-                        "extractor_llm": {"backend": "openai", "config": openai_config},
-                        "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                        "graph_db": {
-                            "backend": "neo4j",
-                            "config": neo4j_config,
+        neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
+        neo4j_config = APIConfig.get_neo4j_config(user_id)
+
+        graph_db_backend_map = {
+            "neo4j-community": neo4j_community_config,
+            "neo4j": neo4j_config,
+        }
+        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        if graph_db_backend in graph_db_backend_map:
+            # Create MemCube config
+            default_cube_config = GeneralMemCubeConfig.model_validate(
+                {
+                    "user_id": user_id,
+                    "cube_id": f"{user_name}_default_cube",
+                    "text_mem": {
+                        "backend": "tree_text",
+                        "config": {
+                            "extractor_llm": {"backend": "openai", "config": openai_config},
+                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                            "graph_db": {
+                                "backend": graph_db_backend,
+                                "config": graph_db_backend_map[graph_db_backend],
+                            },
+                            "embedder": APIConfig.get_embedder_config(),
                         },
-                        "embedder": APIConfig.get_embedder_config(),
                     },
-                },
-                "act_mem": {}
-                if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                else APIConfig.get_activation_vllm_config(),
-                "para_mem": {},
-            }
-        )
+                    "act_mem": {}
+                    if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_activation_vllm_config(),
+                    "para_mem": {},
+                }
+            )
+        else:
+            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
 
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
@@ -363,28 +399,37 @@ class APIConfig:
             return None
 
         openai_config = APIConfig.get_openai_config()
+        neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
-
-        return GeneralMemCubeConfig.model_validate(
-            {
-                "user_id": "default",
-                "cube_id": "default_cube",
-                "text_mem": {
-                    "backend": "tree_text",
-                    "config": {
-                        "extractor_llm": {"backend": "openai", "config": openai_config},
-                        "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                        "graph_db": {
-                            "backend": "neo4j",
-                            "config": neo4j_config,
+        graph_db_backend_map = {
+            "neo4j-community": neo4j_community_config,
+            "neo4j": neo4j_config,
+        }
+        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        if graph_db_backend in graph_db_backend_map:
+            return GeneralMemCubeConfig.model_validate(
+                {
+                    "user_id": "default",
+                    "cube_id": "default_cube",
+                    "text_mem": {
+                        "backend": "tree_text",
+                        "config": {
+                            "extractor_llm": {"backend": "openai", "config": openai_config},
+                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
+                            "graph_db": {
+                                "backend": graph_db_backend,
+                                "config": graph_db_backend_map[graph_db_backend],
+                            },
+                            "embedder": APIConfig.get_embedder_config(),
+                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
+                            == "true",
                         },
-                        "embedder": APIConfig.get_embedder_config(),
-                        "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower() == "true",
                     },
-                },
-                "act_mem": {}
-                if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                else APIConfig.get_activation_vllm_config(),
-                "para_mem": {},
-            }
-        )
+                    "act_mem": {}
+                    if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_activation_vllm_config(),
+                    "para_mem": {},
+                }
+            )
+        else:
+            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
