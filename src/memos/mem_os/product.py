@@ -715,12 +715,13 @@ class MOSProduct(MOSCore):
 
         # Prepare reference data
         reference = []
-        for memories in memories_list:
-            memories_json = memories.model_dump()
-            memories_json["metadata"]["ref_id"] = f"[{memories.id.split('-')[0]}]"
-            memories_json["metadata"]["embedding"] = []
-            memories_json["metadata"]["sources"] = []
-            reference.append(memories_json)
+        for memories_dict in memories_list:
+            for memory_item in memories_dict["memories"]:
+                memory_json = memory_item.model_dump()
+                memory_json["metadata"]["ref_id"] = f"[{memory_item.id.split('-')[0]}]"
+                memory_json["metadata"]["embedding"] = []
+                memory_json["metadata"]["sources"] = []
+                reference.append(memory_json)
 
         yield f"data: {json.dumps({'type': 'reference', 'content': reference})}\n\n"
         total_time = round(float(time_end - time_start), 1)
@@ -841,13 +842,14 @@ class MOSProduct(MOSCore):
 
         # Prepare reference data
         reference = []
-        for memories in memories_list:
-            memories_json = memories.model_dump()
-            memories_json["metadata"]["ref_id"] = f"{memories.id.split('-')[0]}"
-            memories_json["metadata"]["embedding"] = []
-            memories_json["metadata"]["sources"] = []
-            memories_json["metadata"]["memory"] = memories.memory
-            reference.append({"metadata": memories_json["metadata"]})
+        for memories_dict in memories_list:
+            for memory_item in memories_dict["memories"]:
+                memory_json = memory_item.model_dump()  
+                memory_json["metadata"]["ref_id"] = f"[{memory_item.id.split('-')[0]}]"
+                memory_json["metadata"]["embedding"] = []
+                memory_json["metadata"]["sources"] = []
+                memory_json["metadata"]["memory"] = memory_item.memory
+                reference.append({"metadata": memory_json["metadata"]})
 
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         total_time = round(float(time_end - time_start), 1)
