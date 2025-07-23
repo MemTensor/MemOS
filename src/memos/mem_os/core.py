@@ -23,6 +23,7 @@ from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
+from memos.templates.mos_prompts import QUERY_REWRITING_PROMPT
 from memos.types import ChatHistory, MessageList, MOSSearchResult
 
 
@@ -250,6 +251,11 @@ class MOSCore:
         user_cube_ids = [cube.cube_id for cube in accessible_cubes]
         if target_user_id not in self.chat_history_manager:
             self._register_chat_history(target_user_id)
+
+        rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
+        logger.info(
+            f"Original query: {query}. Rewritten query: {rewritten_query}"
+        )
 
         chat_history = self.chat_history_manager[target_user_id]
 
@@ -544,6 +550,12 @@ class MOSCore:
         logger.info(
             f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
         )
+
+        rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
+        logger.info(
+            f"Original query: {query}. Rewritten query: {rewritten_query}"
+        )
+
         result: MOSSearchResult = {
             "text_mem": [],
             "act_mem": [],
@@ -558,7 +570,7 @@ class MOSCore:
                 and self.config.enable_textual_memory
             ):
                 memories = mem_cube.text_mem.search(
-                    query, top_k=top_k if top_k else self.config.top_k
+                    rewritten_query, top_k=top_k if top_k else self.config.top_k
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
@@ -624,7 +636,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
+                    info={"user_id": target_user_id, "session_id": self.session_id},
                 )
 
                 mem_ids = []
@@ -668,7 +680,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
+                    info={"user_id": target_user_id, "session_id": self.session_id},
                 )
 
                 mem_ids = []
@@ -702,7 +714,7 @@ class MOSCore:
             doc_memories = self.mem_reader.get_memory(
                 documents,
                 type="doc",
-                info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
+                info={"user_id": target_user_id, "session_id": self.session_id},
             )
 
             mem_ids = []
@@ -956,3 +968,27 @@ class MOSCore:
             raise ValueError(f"Target user '{target_user_id}' does not exist or is inactive.")
 
         return self.user_manager.add_user_to_cube(target_user_id, cube_id)
+    
+    def get_query_rewrite(self, query: str, user_id: str | None = None):
+        """
+        Rewrite user's query according the context.
+        Args:
+            query (str): The search query that needs rewriting.
+            user_id(str, optional): The identifier of the user that the query belongs to.
+                If None, the default user is used.
+        
+        Returns:
+            str: query after rewriting process.
+        """
+        target_user_id = user_id if user_id is not None else self.user_id
+        chat_history = self.chat_history_manager[target_user_id]
+
+        dialogue = "————{}".format("\n————".join(chat_history.chat_history))
+        user_prompt = QUERY_REWRITING_PROMPT.format(dialogue=dialogue, query=query)
+        messages = {"role": "user", "content": user_prompt}
+
+        rewritten_result = self.chat_llm.generate(messages=messages)
+        if rewritten_result.get("former_dialogue_related", False):
+            rewritten_query = rewritten_result.get("rewritten_question")
+            return rewritten_query if len(rewritten_query) > 0 else query
+        return query
