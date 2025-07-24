@@ -810,6 +810,8 @@ class MOSProduct(MOSCore):
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         total_time = round(float(time_end - time_start), 1)
         yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': '23%'}})}\n\n"
+        logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
+        logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=full_response, label=ANSWER_LABEL
         )
