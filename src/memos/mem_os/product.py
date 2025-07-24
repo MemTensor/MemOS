@@ -844,7 +844,7 @@ class MOSProduct(MOSCore):
         reference = []
         for memories_dict in memories_list:
             for memory_item in memories_dict["memories"]:
-                memory_json = memory_item.model_dump()  
+                memory_json = memory_item.model_dump()
                 memory_json["metadata"]["ref_id"] = f"[{memory_item.id.split('-')[0]}]"
                 memory_json["metadata"]["embedding"] = []
                 memory_json["metadata"]["sources"] = []
