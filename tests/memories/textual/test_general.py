@@ -1,10 +1,8 @@
 # TODO: Overcomplex. Use pytest fixtures instead of setUp/tearDown.
-import json
-import os
 import unittest
 import uuid
 
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.llm import LLMConfigFactory

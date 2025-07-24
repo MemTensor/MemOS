@@ -203,6 +203,18 @@ for i, r in enumerate(results):
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results)} memories")
 
+# try this when use 'fine' mode (Note that you should pass the internet Config, refer to examples/core_memories/textual_internet_memoy.py)
+results_fine_search = my_tree_textual_memory.search(
+    "Recent news in NewYork",
+    top_k=10,
+    mode="fine",
+    info={"query": "Recent news in NewYork", "user_id": "111", "session": "2234"},
+)
+for i, r in enumerate(results_fine_search):
+    r = r.to_dict()
+    print(f"{i}'th similar result is: " + str(r["memory"]))
+print(f"Successfully search {len(results_fine_search)} memories")
+
 # find related nodes
 related_nodes = my_tree_textual_memory.get_relevant_subgraph("Painting")
 
@@ -234,7 +246,6 @@ print(f"Successfully search {len(results)} memories")
 
 # close the synchronous thread in memory manager
 my_tree_textual_memory.memory_manager.close()
-
 
 # my_tree_textual_memory.dump
 my_tree_textual_memory.dump("tmp/my_tree_textual_memory")

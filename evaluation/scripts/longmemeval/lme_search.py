@@ -13,11 +13,13 @@ from time import time
 import pandas as pd
 
 from tqdm import tqdm
-from utils.client import mem0_client, memos_client, zep_client
+from utils.client import mem0_client, memobase_client, memos_client, zep_client
+from utils.memobase_utils import memobase_search_memory
 from utils.memos_filters import filter_memory_data
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
+    MEMOBASE_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
     ZEP_CONTEXT_TEMPLATE,
 )
@@ -111,17 +113,33 @@ def mem0_search(client, user_id, query, top_k=20, enable_graph=False, frame="mem
     return context, duration_ms
 
 
-def memos_search(client, user_id, query, frame="memos-local"):
+def memos_search(client, user_id, query, top_k, frame="memos-local"):
     start = time()
+    if frame == "memos-local":
+        results = client.search(
+            query=query,
+            user_id=user_id,
+        )
 
-    results = client.search(
-        query=query,
-        user_id=user_id,
-    )
+        results = filter_memory_data(results)["text_mem"][0]["memories"]
+        search_memories = "\n".join([f"  - {item['memory']}" for item in results])
 
-    search_memories = filter_memory_data(results)["text_mem"][0]["memories"]
+    elif frame == "memos-api":
+        results = client.search(query=query, user_id=user_id, top_k=top_k)
+        search_memories = "\n".join([f"  - {item}" for item in results])
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
+def memobase_search(client, user_id, query, top_k=20):
+    start = time()
+    memories = memobase_search_memory(client, user_id, query, max_memory_context_size=top_k * 100)
+    context = MEMOBASE_CONTEXT_TEMPLATE.format(
+        user_id=user_id,
+        memories=memories,
+    )
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -175,17 +193,27 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
     elif frame == "memos-local":
         client = memos_client(
             mode="local",
-            db_name=f"lme_{frame}-{version}-{user_id.replace('_', '')}",
+            db_name=f"lme_{frame}-{version}",
             user_id=user_id,
-            top_k=20,
+            top_k=top_k,
             mem_cube_path=f"results/lme/{frame}-{version}/storages/{user_id}",
-            mem_cube_config_path="configs/mem_cube_config.json",
+            mem_cube_config_path="configs/mu_mem_cube_config.json",
             mem_os_config_path="configs/mos_memos_config.json",
             addorsearch="search",
         )
         print("🔌 \033[1mUsing \033[94mMemos Local client\033[0m \033[1mfor search...\033[0m")
         context, duration_ms = memos_search(client, user_id, question, frame=frame)
+    elif frame == "memobase":
+        client = memobase_client()
+        print("🔌 \033[1mUsing \033[94mMemobase client\033[0m \033[1mfor search...\033[0m")
+        context, duration_ms = memobase_search_memory(client, user_id, question, top_k=top_k)
 
+    elif frame == "memos-api":
+        client = memos_client(
+            mode="api",
+        )
+        print("🔌 \033[1mUsing \033[94mMemos API client\033[0m \033[1mfor search...\033[0m")
+        context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
     search_results[user_id].append(
         {
             "question": question,
@@ -282,7 +310,11 @@ def main(frame, version, top_k=20, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LongMemeval Search Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local"])
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+    )
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."
     )

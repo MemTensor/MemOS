@@ -4,6 +4,7 @@ from typing import Any, ClassVar
 
 from pydantic import Field, field_validator, model_validator
 
+from memos.chunkers.factory import ChunkerConfigFactory
 from memos.configs.base import BaseConfig
 from memos.exceptions import ConfigurationError
 
@@ -46,6 +47,11 @@ class XinyuSearchConfig(BaseInternetRetrieverConfig):
     max_results: int = Field(default=20, description="Maximum number of results to retrieve")
     num_per_request: int = Field(
         default=10, description="Number of results per API request (not used for Xinyu)"
+    )
+    chunker: ChunkerConfigFactory = Field(
+        ...,
+        default_factory=ChunkerConfigFactory,
+        description="Chunker configuration",
     )
 
 
