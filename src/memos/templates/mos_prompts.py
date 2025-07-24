@@ -73,8 +73,8 @@ Requirements:
 
 Here are some examples:
 
-Former dialogue: 
-————How's the weather in ShangHai today? 
+Former dialogue:
+————How's the weather in ShangHai today?
 ————It's great. The weather in Shanghai is sunny right now. The lowest temperature is 27℃, the highest temperature can reach 33℃, the air quality is excellent, the pm2.5 index is 13, the humidity is 60%, and the northerly wind is at level 1.
 Current question: What should I wear today?
 Answer: {{"former_dialogue_related": True, "rewritten_question": "Considering the weather in Shanghai today, what should I wear?"}}
@@ -89,12 +89,11 @@ Answer: {{"former_dialogue_related": False, "rewritten_question": ""}}
 
 Former dialogue:
 ————I am an entry-level learner of large language models. Please recommend me three papers suitable for reading.
-————For an entry-level learner of large language models (LLMs), here are three foundational papers that provide essential insights into the core concepts, architectures, and advancements in the field: "Attention Is All You Need", "Improving Language Understanding by Generative Pre-Training (GPT-1)", and "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding". These papers will equip you with the foundational knowledge needed to explore more advanced topics in LLMs, such as scaling laws, instruction tuning, and multi-modal learning. 
+————For an entry-level learner of large language models (LLMs), here are three foundational papers that provide essential insights into the core concepts, architectures, and advancements in the field: "Attention Is All You Need", "Improving Language Understanding by Generative Pre-Training (GPT-1)", and "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding". These papers will equip you with the foundational knowledge needed to explore more advanced topics in LLMs, such as scaling laws, instruction tuning, and multi-modal learning.
 Current question: Of these three papers, which one do you recommend I start reading?
 Answer: {{"former_dialogue_related": True, "rewritten_question": "Among the three papers \"Attention Is All You Need\", \"Improving Language Understanding by Generative Pre-Training (GPT-1)\" and \"BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding\", which one do you recommend I start reading?"}}
 
 Former dialogue:
 {dialogue}
 Current question: {query}
-Answer:
-"""
+Answer:"""
