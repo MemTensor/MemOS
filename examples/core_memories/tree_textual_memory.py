@@ -244,6 +244,7 @@ for i, r in enumerate(results):
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results)} memories")
 
+# close the synchronous thread in memory manager
 my_tree_textual_memory.memory_manager.close()
 
 # my_tree_textual_memory.dump
