@@ -2,10 +2,14 @@ import json
 import logging
 import traceback
 
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from memos.api.config import APIConfig
+from memos.api.context.dependencies import G, get_g_object
 from memos.api.product_models import (
     BaseResponse,
     ChatRequest,
@@ -64,9 +68,18 @@ async def set_config(config):
 
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
-async def register_user(user_req: UserRegisterRequest):
+async def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
     """Register a new user with configuration and default cube."""
     try:
+        # Set request-related information in g object
+        g.user_id = user_req.user_id
+        g.action = "user_register"
+        g.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        logger.info(f"Starting user registration for user_id: {user_req.user_id}")
+        logger.info(f"Request trace_id: {g.trace_id}")
+        logger.info(f"Request timestamp: {g.timestamp}")
+
         # Get configuration for the user
         user_config, default_mem_cube = APIConfig.create_user_config(
             user_name=user_req.user_id, user_id=user_req.user_id

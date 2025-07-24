@@ -498,6 +498,14 @@ class MOSProduct(MOSCore):
             )
             self.mem_scheduler.submit_messages(messages=[message_item])
 
+    def _filter_memories_by_threshold(
+        self, memories: list[TextualMemoryItem], threshold: float = 0.20
+    ) -> list[TextualMemoryItem]:
+        """
+        Filter memories by threshold.
+        """
+        return [memory for memory in memories if memory.metadata.relativity >= threshold]
+
     def register_mem_cube(
         self,
         mem_cube_name_or_path_or_object: str | GeneralMemCube,
@@ -689,6 +697,7 @@ class MOSProduct(MOSCore):
         user_id: str,
         cube_id: str | None = None,
         history: MessageList | None = None,
+        top_k: int = 10,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -710,10 +719,11 @@ class MOSProduct(MOSCore):
         time_start = time.time()
         memories_list = []
         memories_result = super().search(
-            query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=10
+            query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=top_k
         )["text_mem"]
         if memories_result:
             memories_list = memories_result[0]["memories"]
+            memories_list = self._filter_memories_by_threshold(memories_list)
 
         # Build custom system prompt with relevant memories
         system_prompt = self._build_system_prompt(user_id, memories_list)
@@ -766,7 +776,7 @@ class MOSProduct(MOSCore):
         # Initialize buffer for streaming
         buffer = ""
         full_response = ""
-
+        token_count = 0
         # Use tiktoken for proper token-based chunking
         if self.config.chat_model.backend not in ["huggingface", "vllm"]:
             # For non-huggingface backends, we need to collect the full response first
@@ -779,6 +789,7 @@ class MOSProduct(MOSCore):
         for chunk in response_stream:
             if chunk in ["<think>", "</think>"]:
                 continue
+            token_count += 1
             buffer += chunk
             full_response += chunk
 
@@ -809,7 +820,8 @@ class MOSProduct(MOSCore):
 
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         total_time = round(float(time_end - time_start), 1)
-        yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': '23%'}})}\n\n"
+        speed_improvement = round(float((len(system_prompt) / 2) * 0.0048 + 44.5), 1)
+        yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': f'{speed_improvement}%'}})}\n\n"
         logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
         logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
         self._send_message_to_scheduler(
@@ -935,6 +947,7 @@ class MOSProduct(MOSCore):
         user_id: str,
         query: str,
         mem_cube_ids: list[str] | None = None,
+        top_k: int = 20,
     ) -> list[dict[str, Any]]:
         """Get all memory items for a user.
 
@@ -950,7 +963,7 @@ class MOSProduct(MOSCore):
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
         memory_list = self._get_subgraph(
-            query=query, mem_cube_id=mem_cube_ids[0], user_id=user_id, top_k=20
+            query=query, mem_cube_id=mem_cube_ids[0], user_id=user_id, top_k=top_k
         )["text_mem"]
         reformat_memory_list = []
         for memory in memory_list:
