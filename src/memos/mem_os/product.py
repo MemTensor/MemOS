@@ -729,7 +729,11 @@ class MOSProduct(MOSCore):
         memories_list = []
         yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
         memories_result = super().search(
-            query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=top_k
+            query,
+            user_id,
+            install_cube_ids=[cube_id] if cube_id else None,
+            top_k=top_k,
+            mode="fine",
         )["text_mem"]
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
         self._send_message_to_scheduler(
@@ -1008,13 +1012,18 @@ class MOSProduct(MOSCore):
         return reformat_memory_list
 
     def search(
-        self, query: str, user_id: str, install_cube_ids: list[str] | None = None, top_k: int = 10
+        self,
+        query: str,
+        user_id: str,
+        install_cube_ids: list[str] | None = None,
+        top_k: int = 10,
+        mode: Literal["fast", "fine"] = "fast",
     ):
         """Search memories for a specific user."""
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-        search_result = super().search(query, user_id, install_cube_ids, top_k)
+        search_result = super().search(query, user_id, install_cube_ids, top_k, mode=mode)
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
         for memory in text_memory_list:

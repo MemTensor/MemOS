@@ -116,6 +116,28 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_internet_config() -> dict[str, Any]:
+        """Get embedder configuration."""
+        return {
+            "backend": "xinyu",
+            "config": {
+                "api_key": os.getenv("XINYU_API_KEY"),
+                "search_engine_id": os.getenv("XINYU_SEARCH_ENGINE_ID"),
+                "max_results": 15,
+                "num_per_request": 10,
+                "chunker": {
+                    "backend": "sentence",
+                    "config": {
+                        "tokenizer_or_token_counter": "gpt2",
+                        "chunk_size": 150,
+                        "chunk_overlap": 50,
+                        "min_sentences_per_chunk": 1,
+                    },
+                },
+            },
+        }
+
+    @staticmethod
     def get_neo4j_community_config(user_id: str | None = None) -> dict[str, Any]:
         """Get Neo4j community configuration."""
         return {
@@ -340,7 +362,6 @@ class APIConfig:
             "top_k": 30,
             "max_turns_window": 20,
         }
-
         # Add scheduler configuration if enabled
         if APIConfig.is_scheduler_enabled():
             config_dict["mem_scheduler"] = APIConfig.get_scheduler_config()
@@ -352,7 +373,11 @@ class APIConfig:
 
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
-
+        internet_config = (
+            APIConfig.get_internet_config()
+            if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
+            else None
+        )
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
@@ -360,6 +385,7 @@ class APIConfig:
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
             # Create MemCube config
+
             default_cube_config = GeneralMemCubeConfig.model_validate(
                 {
                     "user_id": user_id,
@@ -374,6 +400,7 @@ class APIConfig:
                                 "config": graph_db_backend_map[graph_db_backend],
                             },
                             "embedder": APIConfig.get_embedder_config(),
+                            "internet_retriever": internet_config,
                         },
                     },
                     "act_mem": {}
@@ -384,7 +411,10 @@ class APIConfig:
             )
         else:
             raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
-
+        if os.getenv("ENABLE_INTERNET", "false").lower() == "true":
+            default_cube_config.text_mem.config["internet_retriever"] = (
+                APIConfig.get_internet_config()
+            )
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
@@ -405,6 +435,11 @@ class APIConfig:
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
         }
+        internet_config = (
+            APIConfig.get_internet_config()
+            if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
+            else None
+        )
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
             return GeneralMemCubeConfig.model_validate(
@@ -423,6 +458,7 @@ class APIConfig:
                             "embedder": APIConfig.get_embedder_config(),
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
+                            "internet_retriever": internet_config,
                         },
                     },
                     "act_mem": {}

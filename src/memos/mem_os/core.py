@@ -530,6 +530,7 @@ class MOSCore:
         user_id: str | None = None,
         install_cube_ids: list[str] | None = None,
         top_k: int | None = None,
+        mode: Literal["fast", "fine"] = "fast",
     ) -> MOSSearchResult:
         """
         Search for textual memories across all registered MemCubes.
@@ -567,7 +568,7 @@ class MOSCore:
                 and self.config.enable_textual_memory
             ):
                 memories = mem_cube.text_mem.search(
-                    query, top_k=top_k if top_k else self.config.top_k
+                    query, top_k=top_k if top_k else self.config.top_k, mode=mode
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
