@@ -3,10 +3,12 @@
 import json
 import uuid
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import requests
 
+from memos.chunkers.base import BaseChunker
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -93,8 +95,8 @@ class XinyuSearchAPI:
             "online_search": {
                 "max_entries": max_results,
                 "cache_switch": False,
-                "baidu_field": {"switch": True, "mode": "relevance", "type": "page"},
-                "bing_field": {"switch": False, "mode": "relevance", "type": "page_web"},
+                "baidu_field": {"switch": False, "mode": "relevance", "type": "page"},
+                "bing_field": {"switch": True, "mode": "relevance", "type": "page"},
                 "sogou_field": {"switch": False, "mode": "relevance", "type": "page"},
             },
             "request_id": "memos" + str(uuid.uuid4()),
@@ -112,6 +114,7 @@ class XinyuSearchRetriever:
         access_key: str,
         search_engine_id: str,
         embedder: OllamaEmbedder,
+        chunker: BaseChunker,
         max_results: int = 20,
     ):
         """
@@ -124,6 +127,7 @@ class XinyuSearchRetriever:
         """
         self.xinyu_api = XinyuSearchAPI(access_key, search_engine_id, max_results=max_results)
         self.embedder = embedder
+        self.chunker = chunker
 
     def retrieve_from_internet(
         self, query: str, top_k: int = 10, parsed_goal=None
@@ -143,63 +147,25 @@ class XinyuSearchRetriever:
         search_results = self.xinyu_api.search(query, max_results=top_k)
 
         # Convert to TextualMemoryItem format
-        memory_items = []
+        memory_items: list[TextualMemoryItem] = []
 
-        for _, result in enumerate(search_results):
-            # Extract basic information from Xinyu response format
-            title = result.get("title", "")
-            content = result.get("content", "")
-            summary = result.get("summary", "")
-            url = result.get("url", "")
-            publish_time = result.get("publish_time", "")
-            if publish_time:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [
+                executor.submit(self._process_result, result, query, parsed_goal)
+                for result in search_results
+            ]
+            for future in as_completed(futures):
                 try:
-                    publish_time = datetime.strptime(publish_time, "%Y-%m-%d %H:%M:%S").strftime(
-                        "%Y-%m-%d"
-                    )
+                    memory_items.extend(future.result())
                 except Exception as e:
-                    logger.error(f"xinyu search error: {e}")
-                    publish_time = datetime.now().strftime("%Y-%m-%d")
-            else:
-                publish_time = datetime.now().strftime("%Y-%m-%d")
-            source = result.get("source", "")
-            site = result.get("site", "")
-            if site:
-                site = site.split("|")[0]
+                    logger.error(f"Error processing search result: {e}")
 
-            # Combine memory content
-            memory_content = (
-                f"Title: {title}\nSummary: {summary}\nContent: {content[:200]}...\nSource: {url}"
-            )
+        unique_memory_items = {}
+        for item in memory_items:
+            if item.memory not in unique_memory_items:
+                unique_memory_items[item.memory] = item
 
-            # Create metadata
-            metadata = TreeNodeTextualMemoryMetadata(
-                user_id=None,
-                session_id=None,
-                status="activated",
-                type="fact",  # Search results are usually factual information
-                memory_time=publish_time,
-                source="web",
-                confidence=85.0,  # Confidence level for search information
-                entities=self._extract_entities(title, content, summary),
-                tags=self._extract_tags(title, content, summary, parsed_goal),
-                visibility="public",
-                memory_type="LongTermMemory",  # Search results as working memory
-                key=title,
-                sources=[url] if url else [],
-                embedding=self.embedder.embed([memory_content])[0],
-                created_at=datetime.now().isoformat(),
-                usage=[],
-                background=f"Xinyu search result from {site or source}",
-            )
-            # Create TextualMemoryItem
-            memory_item = TextualMemoryItem(
-                id=str(uuid.uuid4()), memory=memory_content, metadata=metadata
-            )
-
-            memory_items.append(memory_item)
-
-        return memory_items
+        return list(unique_memory_items.values())
 
     def _extract_entities(self, title: str, content: str, summary: str) -> list[str]:
         """
@@ -333,3 +299,74 @@ class XinyuSearchRetriever:
             tags.extend(parsed_goal.tags)
 
         return list(set(tags))[:15]  # Limit to 15 tags
+
+    def _process_result(
+        self, result: dict, query: str, parsed_goal: str
+    ) -> list[TextualMemoryItem]:
+        title = result.get("title", "")
+        content = result.get("content", "")
+        summary = result.get("summary", "")
+        url = result.get("url", "")
+        publish_time = result.get("publish_time", "")
+        if publish_time:
+            try:
+                publish_time = datetime.strptime(publish_time, "%Y-%m-%d %H:%M:%S").strftime(
+                    "%Y-%m-%d"
+                )
+            except Exception as e:
+                logger.error(f"xinyu search error: {e}")
+                publish_time = datetime.now().strftime("%Y-%m-%d")
+        else:
+            publish_time = datetime.now().strftime("%Y-%m-%d")
+        source = result.get("source", "")
+        site = result.get("site", "")
+        if site:
+            site = site.split("|")[0]
+
+        qualified_chunks = self._chunk(content)
+
+        memory_items = []
+        for chunk_text, chunk_emb, score in qualified_chunks:
+            memory_content = (
+                f"Title: {title}\nNewsTime: {publish_time}\nSummary: {summary}\n"
+                f"Content: {chunk_text}\nSource: {url}"
+            )
+            metadata = TreeNodeTextualMemoryMetadata(
+                user_id=None,
+                session_id=None,
+                status="activated",
+                type="fact",
+                source="web",
+                confidence=score,
+                entities=self._extract_entities(title, content, summary),
+                tags=self._extract_tags(title, content, summary, parsed_goal),
+                visibility="public",
+                memory_type="OuterMemory",
+                key=title,
+                sources=[url] if url else [],
+                embedding=chunk_emb,
+                created_at=datetime.now().isoformat(),
+                usage=[],
+                background=f"Xinyu search result from {site or source}",
+            )
+            memory_items.append(
+                TextualMemoryItem(id=str(uuid.uuid4()), memory=memory_content, metadata=metadata)
+            )
+
+        return memory_items
+
+    def _chunk(self, content: str) -> list[tuple[str, list[float], float]]:
+        """
+        Use SentenceChunker to split content into chunks and embed each.
+
+        Returns:
+            List of (chunk_text, chunk_embedding, dummy_score)
+        """
+        chunks = self.chunker.chunk(content)
+        if not chunks:
+            return []
+
+        chunk_texts = [c.text for c in chunks]
+        chunk_embeddings = self.embedder.embed(chunk_texts)
+
+        return [(text, emb, 1.0) for text, emb in zip(chunk_texts, chunk_embeddings, strict=False)]

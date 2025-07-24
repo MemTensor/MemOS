@@ -192,6 +192,7 @@ for m_list in memory:
     my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 time.sleep(60)
+my_tree_textual_memory.memory_manager.close()
 
 results = my_tree_textual_memory.search(
     "Talk about the user's childhood story?",
@@ -203,37 +204,17 @@ for i, r in enumerate(results):
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results)} memories")
 
-# find related nodes
-related_nodes = my_tree_textual_memory.get_relevant_subgraph("Painting")
-
-# get current memory_size
-print(f"Current Memory Size is {my_tree_textual_memory.get_current_memory_size()}")
-
-logger.info("Start doc search example...")
-# Processing Documents
-doc_paths = [
-    "./text1.txt",
-    "./text2.txt",
-]
-# Acquiring memories from documents
-doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"})
-
-for m_list in doc_memory:
-    added_ids = my_tree_textual_memory.add(m_list)
-    my_tree_textual_memory.memory_manager.wait_reorganizer()
-
-results = my_tree_textual_memory.search(
-    "Tell me about what memos consist of?",
-    top_k=30,
-    info={"query": "Tell me about what memos consist of?", "user_id": "111", "session": "2234"},
+# try this when use 'fine' mode (Note that you should pass the internet Config, refer to examples/core_memories/textual_internet_memoy.py)
+results_fine_search = my_tree_textual_memory.search(
+    "Recent news in NewYork",
+    top_k=10,
+    mode="fine",
+    info={"query": "Recent news in NewYork", "user_id": "111", "session": "2234"},
 )
-for i, r in enumerate(results):
+for i, r in enumerate(results_fine_search):
     r = r.to_dict()
     print(f"{i}'th similar result is: " + str(r["memory"]))
-print(f"Successfully search {len(results)} memories")
-
-# close the synchronous thread in memory manager
-my_tree_textual_memory.memory_manager.close()
+print(f"Successfully search {len(results_fine_search)} memories")
 
 
 # my_tree_textual_memory.dump
