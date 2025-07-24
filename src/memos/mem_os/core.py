@@ -1,6 +1,5 @@
 import json
 import os
-import uuid
 
 from datetime import datetime
 from pathlib import Path
@@ -253,9 +252,7 @@ class MOSCore:
             self._register_chat_history(target_user_id)
 
         rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
-        logger.info(
-            f"Original query: {query}. Rewritten query: {rewritten_query}"
-        )
+        logger.info(f"Original query: {query}. Rewritten query: {rewritten_query}")
 
         chat_history = self.chat_history_manager[target_user_id]
 
@@ -552,9 +549,7 @@ class MOSCore:
         )
 
         rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
-        logger.info(
-            f"Original query: {query}. Rewritten query: {rewritten_query}"
-        )
+        logger.info(f"Original query: {query}. Rewritten query: {rewritten_query}")
 
         result: MOSSearchResult = {
             "text_mem": [],
@@ -968,7 +963,7 @@ class MOSCore:
             raise ValueError(f"Target user '{target_user_id}' does not exist or is inactive.")
 
         return self.user_manager.add_user_to_cube(target_user_id, cube_id)
-    
+
     def get_query_rewrite(self, query: str, user_id: str | None = None):
         """
         Rewrite user's query according the context.
@@ -976,7 +971,7 @@ class MOSCore:
             query (str): The search query that needs rewriting.
             user_id(str, optional): The identifier of the user that the query belongs to.
                 If None, the default user is used.
-        
+
         Returns:
             str: query after rewriting process.
         """
@@ -986,8 +981,8 @@ class MOSCore:
         dialogue = "————{}".format("\n————".join(chat_history.chat_history))
         user_prompt = QUERY_REWRITING_PROMPT.format(dialogue=dialogue, query=query)
         messages = {"role": "user", "content": user_prompt}
-
         rewritten_result = self.chat_llm.generate(messages=messages)
+        rewritten_result = json.loads(rewritten_result)
         if rewritten_result.get("former_dialogue_related", False):
             rewritten_query = rewritten_result.get("rewritten_question")
             return rewritten_query if len(rewritten_query) > 0 else query
