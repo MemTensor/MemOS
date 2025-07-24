@@ -342,7 +342,7 @@ class XinyuSearchRetriever:
                 tags=self._extract_tags(title, content, summary, parsed_goal),
                 visibility="public",
                 memory_type="OuterMemory",
-                key=title,
+                key=f"[{source}]" + title,
                 sources=[url] if url else [],
                 embedding=chunk_emb,
                 created_at=datetime.now().isoformat(),
