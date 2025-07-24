@@ -192,7 +192,6 @@ for m_list in memory:
     my_tree_textual_memory.memory_manager.wait_reorganizer()
 
 time.sleep(60)
-my_tree_textual_memory.memory_manager.close()
 
 results = my_tree_textual_memory.search(
     "Talk about the user's childhood story?",
@@ -245,6 +244,7 @@ for i, r in enumerate(results):
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results)} memories")
 
+my_tree_textual_memory.memory_manager.close()
 
 # my_tree_textual_memory.dump
 my_tree_textual_memory.dump("tmp/my_tree_textual_memory")
