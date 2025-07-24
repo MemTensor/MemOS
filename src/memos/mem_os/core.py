@@ -251,9 +251,6 @@ class MOSCore:
         if target_user_id not in self.chat_history_manager:
             self._register_chat_history(target_user_id)
 
-        rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
-        logger.info(f"Original query: {query}. Rewritten query: {rewritten_query}")
-
         chat_history = self.chat_history_manager[target_user_id]
 
         if self.config.enable_textual_memory and self.mem_cubes:
@@ -277,7 +274,7 @@ class MOSCore:
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
                 memories = mem_cube.text_mem.search(
-                    rewritten_query,
+                    query,
                     top_k=self.config.top_k,
                     info={
                         "user_id": target_user_id,
@@ -558,9 +555,6 @@ class MOSCore:
 
         chat_history = self.chat_history_manager[target_user_id]
 
-        rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
-        logger.info(f"Original query: {query}. Rewritten query: {rewritten_query}")
-
         result: MOSSearchResult = {
             "text_mem": [],
             "act_mem": [],
@@ -575,7 +569,7 @@ class MOSCore:
                 and self.config.enable_textual_memory
             ):
                 memories = mem_cube.text_mem.search(
-                    rewritten_query,
+                    query,
                     top_k=top_k if top_k else self.config.top_k,
                     info={
                         "user_id": target_user_id,
