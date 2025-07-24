@@ -725,18 +725,19 @@ class MOSProduct(MOSCore):
         """
 
         self._load_user_cubes(user_id, self.default_cube_config)
-        self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
-        )
         time_start = time.time()
         memories_list = []
+        yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
         memories_result = super().search(
             query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=top_k
         )["text_mem"]
+        yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
+        self._send_message_to_scheduler(
+            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
+        )
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list)
-
         # Build custom system prompt with relevant memories
         system_prompt = self._build_system_prompt(user_id, memories_list)
 
@@ -752,7 +753,7 @@ class MOSProduct(MOSCore):
             *chat_history.chat_history,
             {"role": "user", "content": query},
         ]
-
+        yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
         # Generate response with custom prompt
         past_key_values = None
         response_stream = None
