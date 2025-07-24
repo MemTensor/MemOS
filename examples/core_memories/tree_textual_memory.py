@@ -216,6 +216,35 @@ for i, r in enumerate(results_fine_search):
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results_fine_search)} memories")
 
+# find related nodes
+related_nodes = my_tree_textual_memory.get_relevant_subgraph("Painting")
+
+# get current memory_size
+print(f"Current Memory Size is {my_tree_textual_memory.get_current_memory_size()}")
+
+logger.info("Start doc search example...")
+# Processing Documents
+doc_paths = [
+    "./text1.txt",
+    "./text2.txt",
+]
+# Acquiring memories from documents
+doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"})
+
+for m_list in doc_memory:
+    added_ids = my_tree_textual_memory.add(m_list)
+    my_tree_textual_memory.memory_manager.wait_reorganizer()
+
+results = my_tree_textual_memory.search(
+    "Tell me about what memos consist of?",
+    top_k=30,
+    info={"query": "Tell me about what memos consist of?", "user_id": "111", "session": "2234"},
+)
+for i, r in enumerate(results):
+    r = r.to_dict()
+    print(f"{i}'th similar result is: " + str(r["memory"]))
+print(f"Successfully search {len(results)} memories")
+
 
 # my_tree_textual_memory.dump
 my_tree_textual_memory.dump("tmp/my_tree_textual_memory")
