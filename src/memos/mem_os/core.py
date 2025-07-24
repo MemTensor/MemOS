@@ -572,7 +572,6 @@ class MOSCore:
                     query,
                     top_k=top_k if top_k else self.config.top_k,
                     mode=mode,
-                    manual_close_internet=not internet_search,
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
