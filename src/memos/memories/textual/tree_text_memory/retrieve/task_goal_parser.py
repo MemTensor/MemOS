@@ -18,7 +18,9 @@ class TaskGoalParser:
         self.llm = llm
         self.mode = mode
 
-    def parse(self, task_description: str, context: str = "") -> ParsedTaskGoal:
+    def parse(
+        self, task_description: str, context: str = "", conversation: list[dict] | None = None
+    ) -> ParsedTaskGoal:
         """
         Parse user input into structured semantic layers.
         Returns:
@@ -31,7 +33,7 @@ class TaskGoalParser:
         elif self.mode == "fine":
             if not self.llm:
                 raise ValueError("LLM not provided for slow mode.")
-            return self._parse_fine(task_description, context)
+            return self._parse_fine(task_description, context, conversation)
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
@@ -40,14 +42,29 @@ class TaskGoalParser:
         Fast mode: simple jieba word split.
         """
         return ParsedTaskGoal(
-            memories=[task_description], keys=[task_description], tags=[], goal_type="default"
+            memories=[task_description],
+            keys=[task_description],
+            tags=[],
+            goal_type="default",
+            rephrased_query=task_description,
+            internet_search=False,
         )
 
-    def _parse_fine(self, query: str, context: str = "") -> ParsedTaskGoal:
+    def _parse_fine(
+        self, query: str, context: str = "", conversation: list[dict] | None = None
+    ) -> ParsedTaskGoal:
         """
         Slow mode: LLM structured parse.
         """
-        prompt = Template(TASK_PARSE_PROMPT).substitute(task=query.strip(), context=context)
+        if conversation:
+            conversation_prompt = "\n".join(
+                [f"{each['role']}: {each['content']}" for each in conversation]
+            )
+        else:
+            conversation_prompt = ""
+        prompt = Template(TASK_PARSE_PROMPT).substitute(
+            task=query.strip(), context=context, conversation=conversation_prompt
+        )
         response = self.llm.generate(messages=[{"role": "user", "content": prompt}])
         return self._parse_response(response)
 
@@ -62,6 +79,8 @@ class TaskGoalParser:
                 memories=response_json.get("memories", []),
                 keys=response_json.get("keys", []),
                 tags=response_json.get("tags", []),
+                rephrased_query=response_json.get("rephrased_instruction", None),
+                internet_search=response_json.get("internet_search", False),
                 goal_type=response_json.get("goal_type", "default"),
             )
         except Exception as e:

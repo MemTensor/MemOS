@@ -276,7 +276,15 @@ class MOSCore:
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
-                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
+                memories = mem_cube.text_mem.search(
+                    rewritten_query,
+                    top_k=self.config.top_k,
+                    info={
+                        "user_id": target_user_id,
+                        "session_id": self.session_id,
+                        "chat_history": chat_history,
+                    },
+                )
                 memories_all.extend(memories)
             logger.info(f"🧠 [Memory] Searched memories:\n{self._str_memories(memories_all)}\n")
             system_prompt = self._build_system_prompt(memories_all, base_prompt=base_prompt)
@@ -548,6 +556,8 @@ class MOSCore:
             f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
         )
 
+        chat_history = self.chat_history_manager[target_user_id]
+
         rewritten_query = self.get_query_rewrite(query=query, user_id=target_user_id)
         logger.info(f"Original query: {query}. Rewritten query: {rewritten_query}")
 
@@ -565,7 +575,13 @@ class MOSCore:
                 and self.config.enable_textual_memory
             ):
                 memories = mem_cube.text_mem.search(
-                    rewritten_query, top_k=top_k if top_k else self.config.top_k
+                    rewritten_query,
+                    top_k=top_k if top_k else self.config.top_k,
+                    info={
+                        "user_id": target_user_id,
+                        "session_id": self.session_id,
+                        "chat_history": chat_history,
+                    },
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(

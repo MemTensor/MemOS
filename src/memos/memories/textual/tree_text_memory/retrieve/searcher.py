@@ -67,7 +67,17 @@ class Searcher:
             context = list(set(context))
 
         # Step 1a: Parse task structure into topic, concept, and fact levels
-        parsed_goal = self.task_goal_parser.parse(query, "\n".join(context))
+        parsed_goal = self.task_goal_parser.parse(
+            task_description=query,
+            context="\n".join(context),
+            conversation=info.get("chat_history", []),
+        )
+
+        query = (
+            parsed_goal.rephrased_query
+            if parsed_goal.rephrased_query and len(parsed_goal.rephrased_query) > 0
+            else query
+        )
 
         if parsed_goal.memories:
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
@@ -154,16 +164,25 @@ class Searcher:
             )
             return ranked_memories
 
-        # Step 3: Parallel execution of all paths
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            future_working = executor.submit(retrieve_from_working_memory)
-            future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
-            future_internet = executor.submit(retrieve_from_internet)
+        # Step 3: Parallel execution of all paths (enable internet search accoeding to parameter in the parsed goal)
+        if parsed_goal.internet_search:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                future_working = executor.submit(retrieve_from_working_memory)
+                future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
+                future_internet = executor.submit(retrieve_from_internet)
 
-            working_results = future_working.result()
-            hybrid_results = future_hybrid.result()
-            internet_results = future_internet.result()
-            searched_res = working_results + hybrid_results + internet_results
+                working_results = future_working.result()
+                hybrid_results = future_hybrid.result()
+                internet_results = future_internet.result()
+                searched_res = working_results + hybrid_results + internet_results
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_working = executor.submit(retrieve_from_working_memory)
+                future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
+
+                working_results = future_working.result()
+                hybrid_results = future_hybrid.result()
+                searched_res = working_results + hybrid_results
 
         # Deduplicate by item.memory, keep higher score
         deduped_result = {}
