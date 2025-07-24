@@ -362,7 +362,7 @@ class XinyuSearchRetriever:
         Returns:
             List of (chunk_text, chunk_embedding, dummy_score)
         """
-        chunks = self.chunker.chunk(content)
+        chunks = self.chunker.chunk(content[:3000])
         if not chunks:
             return []
 
