@@ -423,27 +423,39 @@ class MOSProduct(MOSCore):
         # No reference tags found, return all text
         return text_buffer, ""
 
-    def _extract_references_from_response(self, response: str) -> list[dict]:
+    def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
-        Extract reference information from the response.
+        Extract reference information from the response and return clean text.
 
         Args:
             response (str): The complete response text.
 
         Returns:
-            list[dict]: List of reference information.
+            tuple[str, list[dict]]: A tuple containing:
+                - clean_text: Text with reference markers removed
+                - references: List of reference information
         """
         import re
 
-        references = []
-        # Pattern to match [refid:memoriesID]
-        pattern = r"\[(\d+):([^\]]+)\]"
+        try:
+            references = []
+            # Pattern to match [refid:memoriesID]
+            pattern = r"\[(\d+):([^\]]+)\]"
 
-        matches = re.findall(pattern, response)
-        for ref_number, memory_id in matches:
-            references.append({"memory_id": memory_id, "reference_number": int(ref_number)})
+            matches = re.findall(pattern, response)
+            for ref_number, memory_id in matches:
+                references.append({"memory_id": memory_id, "reference_number": int(ref_number)})
 
-        return references
+            # Remove all reference markers from the text to get clean text
+            clean_text = re.sub(pattern, "", response)
+
+            # Clean up any extra whitespace that might be left after removing markers
+            clean_text = re.sub(r"\s+", " ", clean_text).strip()
+
+            return clean_text, references
+        except Exception as e:
+            logger.error(f"Error extracting references from response: {e}", exc_info=True)
+            return response, []
 
     def _chunk_response_with_tiktoken(
         self, response: str, chunk_size: int = 5
@@ -819,16 +831,21 @@ class MOSProduct(MOSCore):
             reference.append({"metadata": memories_json["metadata"]})
 
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
-        total_time = round(float(time_end - time_start), 1)
+        # set kvcache improve speed
         speed_improvement = round(float((len(system_prompt) / 2) * 0.0048 + 44.5), 1)
+        total_time = round(float(time_end - time_start), 1)
+
         yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': f'{speed_improvement}%'}})}\n\n"
+        yield f"data: {json.dumps({'type': 'end'})}\n\n"
+
         logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
         logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
-        self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=full_response, label=ANSWER_LABEL
-        )
 
-        yield f"data: {json.dumps({'type': 'end'})}\n\n"
+        clean_response, extracted_references = self._extract_references_from_response(full_response)
+        logger.info(f"Extracted {len(extracted_references)} references from response")
+        self._send_message_to_scheduler(
+            user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
+        )
         self.add(
             user_id=user_id,
             messages=[
@@ -839,7 +856,7 @@ class MOSProduct(MOSCore):
                 },
                 {
                     "role": "assistant",
-                    "content": full_response,
+                    "content": clean_response,  # Store clean text without reference markers
                     "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
                 },
             ],
