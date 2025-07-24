@@ -833,6 +833,7 @@ class MOSProduct(MOSCore):
             memories_json["metadata"]["embedding"] = []
             memories_json["metadata"]["sources"] = []
             memories_json["metadata"]["memory"] = memories.memory
+            memories_json["metadata"]["id"] = memories.id
             reference.append({"metadata": memories_json["metadata"]})
 
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
