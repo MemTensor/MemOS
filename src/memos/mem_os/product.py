@@ -710,7 +710,7 @@ class MOSProduct(MOSCore):
         cube_id: str | None = None,
         history: MessageList | None = None,
         top_k: int = 10,
-        internal_search: bool = False,
+        internet_search: bool = False,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -735,7 +735,7 @@ class MOSProduct(MOSCore):
             install_cube_ids=[cube_id] if cube_id else None,
             top_k=top_k,
             mode="fine",
-            internal_search=internal_search,
+            internet_search=internet_search,
         )["text_mem"]
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
         self._send_message_to_scheduler(
