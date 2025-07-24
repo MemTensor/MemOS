@@ -17,6 +17,7 @@ from memos.types import MessageList
 from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory
 from memos.vec_dbs.item import VecDBItem
 
+
 logger = get_logger(__name__)
 
 
@@ -36,11 +37,7 @@ class GeneralTextMemory(BaseTextMemory):
         stop=stop_after_attempt(3),
         retry=retry_if_exception_type(json.JSONDecodeError),
         before_sleep=lambda retry_state: logger.warning(
-            "Extracting memory failed due to JSON decode error: {error}, Attempt retry: {attempt_number} / {max_attempt_number}".format(
-                error=retry_state.outcome.exception(),
-                attempt_number=retry_state.attempt_number,
-                max_attempt_number=3,
-            )
+            f"Extracting memory failed due to JSON decode error: {retry_state.outcome.exception()}, Attempt retry: {retry_state.attempt_number} / {3}"
         ),
     )
     def extract(self, messages: MessageList) -> list[TextualMemoryItem]:
