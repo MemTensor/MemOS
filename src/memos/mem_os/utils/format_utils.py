@@ -533,7 +533,7 @@ def convert_graph_to_tree_forworkmem(
         node_name = extract_node_name(memory)
         memory_key = node.get("metadata", {}).get("key", node_name)
         usage = node.get("metadata", {}).get("usage", [])
-        frequency = len(usage)
+        frequency = len(usage) if len(usage) < 100 else 100
         node_map[node["id"]] = {
             "id": node["id"],
             "value": memory,

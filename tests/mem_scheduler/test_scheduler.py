@@ -49,8 +49,8 @@ class TestGeneralScheduler(unittest.TestCase):
         self.scheduler.mem_cube = self.mem_cube
 
         # Set current user and memory cube ID for testing
-        self.scheduler._current_user_id = "test_user"
-        self.scheduler._current_mem_cube_id = "test_cube"
+        self.scheduler.current_user_id = "test_user"
+        self.scheduler.current_mem_cube_id = "test_cube"
 
     def test_initialization(self):
         """Test that scheduler initializes with correct default values and handlers."""

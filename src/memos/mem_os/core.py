@@ -16,6 +16,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_user.user_manager import UserManager, UserRole
@@ -167,6 +168,14 @@ class MOSCore:
             if mem_cube.text_mem and mem_cube.text_mem.is_reorganize:
                 logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
                 mem_cube.text_mem.memory_manager.close()
+                mem_cube.text_mem.memory_manager.wait_reorganizer()
+
+    def mem_reorganizer_wait(self) -> bool:
+        for mem_cube in self.mem_cubes.values():
+            logger.info(f"try to close reorganizer for {mem_cube.text_mem.config.cube_id}")
+            if mem_cube.text_mem and mem_cube.text_mem.is_reorganize:
+                logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
+                mem_cube.text_mem.memory_manager.wait_reorganizer()
 
     def _register_chat_history(self, user_id: str | None = None) -> None:
         """Initialize chat history with user ID."""
@@ -267,7 +276,7 @@ class MOSCore:
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
                         mem_cube=mem_cube,
-                        label=ADD_LABEL,
+                        label=QUERY_LABEL,
                         content=query,
                         timestamp=datetime.now(),
                     )

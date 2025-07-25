@@ -146,12 +146,12 @@ class Searcher:
             """
             Retrieve information from the internet using Google Custom Search API.
             """
-            if not self.internet_retriever:
+            if not self.internet_retriever or mode == "fast":
                 return []
             if memory_type not in ["All"]:
                 return []
             internet_items = self.internet_retriever.retrieve_from_internet(
-                query=query, top_k=top_k, parsed_goal=parsed_goal
+                query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
             )
 
             # Convert to the format expected by reranker
@@ -159,7 +159,7 @@ class Searcher:
                 query=query,
                 query_embedding=query_embedding[0],
                 graph_results=internet_items,
-                top_k=top_k * 2,
+                top_k=max(top_k, 10),
                 parsed_goal=parsed_goal,
             )
             return ranked_memories
@@ -201,14 +201,6 @@ class Searcher:
             new_meta = SearchedTreeNodeTextualMemoryMetadata(**meta_data)
             searched_res.append(
                 TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)
-            )
-
-        # Step 4: Reasoning over all retrieved and ranked memory
-        if mode == "fine":
-            searched_res = self.reasoner.reason(
-                query=query,
-                ranked_memories=searched_res,
-                parsed_goal=parsed_goal,
             )
 
         # Step 5: Update usage history with current timestamp

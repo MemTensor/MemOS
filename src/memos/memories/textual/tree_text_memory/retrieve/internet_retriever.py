@@ -127,7 +127,7 @@ class InternetGoogleRetriever:
         self.embedder = embedder
 
     def retrieve_from_internet(
-        self, query: str, top_k: int = 10, parsed_goal=None
+        self, query: str, top_k: int = 10, parsed_goal=None, info=None
     ) -> list[TextualMemoryItem]:
         """
         Retrieve information from the internet and convert to TextualMemoryItem format
@@ -136,6 +136,7 @@ class InternetGoogleRetriever:
             query: Search query
             top_k: Number of results to return
             parsed_goal: Parsed task goal (optional)
+            info (dict): Leave a record of memory consumption.
 
         Returns:
             List of TextualMemoryItem
@@ -157,8 +158,8 @@ class InternetGoogleRetriever:
             memory_content = f"Title: {title}\nSummary: {snippet}\nSource: {link}"
             # Create metadata
             metadata = TreeNodeTextualMemoryMetadata(
-                user_id=None,
-                session_id=None,
+                user_id=info.get("user_id", ""),
+                session_id=info.get("session_id", ""),
                 status="activated",
                 type="fact",  # Internet search results are usually factual information
                 memory_time=datetime.now().strftime("%Y-%m-%d"),

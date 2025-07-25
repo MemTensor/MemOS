@@ -1,6 +1,7 @@
 from memos.configs.memory import MemoryConfigFactory
 from memos.memories.factory import MemoryFactory
 
+
 config = MemoryConfigFactory(
     backend="general_text",
     config={

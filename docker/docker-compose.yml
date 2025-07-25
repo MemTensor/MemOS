@@ -2,10 +2,10 @@ name: memos-dev
 
 services:
   memos:
-    container_name: memos-api-server
+    container_name: memos-api-docker
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -15,14 +15,16 @@ services:
       - qdrant
     environment:
       - PYTHONPATH=/app/src
+      - HF_ENDPOINT=https://hf-mirror.com
     volumes:
-      - .:/app
+      - ../src:/app/src
+      - .:/app/docker
     networks:
       - memos_network
 
   neo4j:
     image: neo4j:5.26.4
-    container_name: neo4j-server
+    container_name: neo4j-docker
     ports:
       - "7474:7474"   # HTTP
       - "7687:7687"   # Bolt
@@ -43,7 +45,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.15.0
-    container_name: qdrant-server
+    container_name: qdrant-docker
     ports:
       - "6333:6333"  # REST API
       - "6334:6334"  # gRPC API
