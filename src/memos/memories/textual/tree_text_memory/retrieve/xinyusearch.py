@@ -302,8 +302,10 @@ class XinyuSearchRetriever:
         return list(set(tags))[:15]  # Limit to 15 tags
 
     def _process_result(
-        self, result: dict, query: str, parsed_goal: str, info: dict
+        self, result: dict, query: str, parsed_goal: str, info: None
     ) -> list[TextualMemoryItem]:
+        if not info:
+            info = {"user_id": "", "session_id": ""}
         title = result.get("title", "")
         content = result.get("content", "")
         summary = result.get("summary", "")
