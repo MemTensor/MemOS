@@ -97,6 +97,9 @@ def get_logger(name: str | None = None) -> logging.Logger:
 
 
 def logOpenTelemetry(message: str):
+    if (os.getenv("LOGGER_URL") is None):
+      return
+    
     trace_id = requests.headers.get("traceId")
     
     headers = {
