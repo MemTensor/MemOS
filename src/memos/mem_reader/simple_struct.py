@@ -180,8 +180,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         elif type == "doc":
             for item in scene_data:
                 try:
-                    parsed_text = parser.parse(item)
-                    results.append({"file": item, "text": parsed_text})
+                    if not isinstance(item, str):
+                        parsed_text = parser.parse(item)
+                        results.append({"file": "pure_text", "text": parsed_text})
+                    else:
+                        parsed_text = item
+                        results.append({"file": item, "text": parsed_text})
                 except Exception as e:
                     print(f"Error parsing file {item}: {e!s}")
 
