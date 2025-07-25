@@ -128,7 +128,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
         result = self.reader.get_scene_data_info(scene_data, type="doc")
 
         self.assertIsInstance(result, list)
-        self.assertEqual(result[0]["text"], "Parsed document text\n")
+        self.assertEqual(result[0]["text"], "Parsed document text.\n")
 
     def test_parse_json_result_success(self):
         """Test successful JSON parsing."""
