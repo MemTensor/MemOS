@@ -125,13 +125,33 @@ class APIConfig:
                 "search_engine_id": os.getenv("XINYU_SEARCH_ENGINE_ID"),
                 "max_results": 15,
                 "num_per_request": 10,
-                "chunker": {
-                    "backend": "sentence",
+                "reader": {
+                    "backend": "simple_struct",
                     "config": {
-                        "tokenizer_or_token_counter": "gpt2",
-                        "chunk_size": 150,
-                        "chunk_overlap": 50,
-                        "min_sentences_per_chunk": 1,
+                        "llm": {
+                            "backend": "openai",
+                            "config": {
+                                "model_name_or_path": os.getenv("MEMRADER_MODEL"),
+                                "temperature": 0.6,
+                                "max_tokens": 5000,
+                                "top_p": 0.95,
+                                "top_k": 20,
+                                "api_key": "EMPTY",
+                                "api_base": os.getenv("MEMRADER_API_BASE"),
+                                "remove_think_prefix": True,
+                                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                            },
+                        },
+                        "embedder": APIConfig.get_embedder_config(),
+                        "chunker": {
+                            "backend": "sentence",
+                            "config": {
+                                "tokenizer_or_token_counter": "gpt2",
+                                "chunk_size": 512,
+                                "chunk_overlap": 128,
+                                "min_sentences_per_chunk": 1,
+                            },
+                        },
                     },
                 },
             },
