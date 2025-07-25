@@ -24,6 +24,7 @@ from memos.api.product_models import (
     UserRegisterRequest,
     UserRegisterResponse,
 )
+from memos.api.tools.notification_service import get_online_bot_function, get_error_bot_function
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.product import MOSProduct
 
@@ -49,11 +50,23 @@ def get_mos_product_instance():
         # Get default cube config from APIConfig (may be None if disabled)
         default_cube_config = APIConfig.get_default_cube_config()
         logger.info(f"*********initdefault_cube_config******** {default_cube_config}")
+        
+        # Get DingDing bot functions
+        dingding_enabled = APIConfig.is_dingding_bot_enabled()
+        online_bot = get_online_bot_function() if dingding_enabled else None
+        error_bot = get_error_bot_function() if dingding_enabled else None
+        
         MOS_PRODUCT_INSTANCE = MOSProduct(
-            default_config=mos_config, default_cube_config=default_cube_config
+            default_config=mos_config, 
+            default_cube_config=default_cube_config,
+            online_bot=online_bot,
+            error_bot=error_bot,
         )
         logger.info("MOSProduct instance created successfully with inheritance architecture")
     return MOS_PRODUCT_INSTANCE
+
+
+
 
 
 get_mos_product_instance()
@@ -227,7 +240,6 @@ async def chat(chat_req: ChatRequest):
         async def generate_chat_response():
             """Generate chat response as SSE stream."""
             try:
-                import asyncio
 
                 for chunk in mos_product.chat_with_references(
                     query=chat_req.query,
@@ -237,7 +249,6 @@ async def chat(chat_req: ChatRequest):
                     internet_search=chat_req.internet_search,
                 ):
                     yield chunk
-                    await asyncio.sleep(0.00001)  # 50ms delay between chunks
             except Exception as e:
                 logger.error(f"Error in chat stream: {e}")
                 error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
