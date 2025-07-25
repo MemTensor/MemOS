@@ -8,7 +8,6 @@ from datetime import datetime
 
 import requests
 
-from memos.chunkers.base import BaseChunker
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
@@ -115,7 +114,6 @@ class XinyuSearchRetriever:
         access_key: str,
         search_engine_id: str,
         embedder: OllamaEmbedder,
-        chunker: BaseChunker,
         reader: BaseMemReader,
         max_results: int = 20,
     ):
@@ -126,10 +124,10 @@ class XinyuSearchRetriever:
             access_key: Xinyu API access key
             embedder: Embedder instance for generating embeddings
             max_results: Maximum number of results to retrieve
+            reader: MemReader Moduel to deal with internet contents
         """
         self.xinyu_api = XinyuSearchAPI(access_key, search_engine_id, max_results=max_results)
         self.embedder = embedder
-        self.chunker = chunker
         self.reader = reader
 
     def retrieve_from_internet(
