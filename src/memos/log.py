@@ -4,10 +4,13 @@ import os
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
+
 import requests
 
-from memos import settings
 from dotenv import load_dotenv
+
+from memos import settings
+
 
 # Load environment variables
 load_dotenv()
