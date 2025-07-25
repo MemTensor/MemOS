@@ -125,8 +125,8 @@ class GraphStructureReorganizer:
         """
         import schedule
 
-        schedule.every(20).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(20).seconds.do(self.optimize_structure, scope="UserMemory")
+        schedule.every(600).seconds.do(self.optimize_structure, scope="LongTermMemory")
+        schedule.every(600).seconds.do(self.optimize_structure, scope="UserMemory")
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
