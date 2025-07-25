@@ -5,6 +5,7 @@ from typing import Any, ClassVar
 from memos.chunkers.factory import ChunkerFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.embedders.base import BaseEmbedder
+from memos.mem_reader.factory import MemReaderFactory
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever import (
     InternetGoogleRetriever,
 )
@@ -68,6 +69,7 @@ class InternetRetrieverFactory:
                 search_engine_id=config.search_engine_id,
                 embedder=embedder,
                 chunker=ChunkerFactory.from_config(config.chunker),
+                reader=MemReaderFactory.from_config(config.reader),
                 max_results=config.max_results,
             )
         else:

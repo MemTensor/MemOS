@@ -141,7 +141,7 @@ class Searcher:
             if memory_type not in ["All"]:
                 return []
             internet_items = self.internet_retriever.retrieve_from_internet(
-                query=query, top_k=top_k, parsed_goal=parsed_goal
+                query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
             )
 
             # Convert to the format expected by reranker
