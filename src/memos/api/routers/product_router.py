@@ -73,7 +73,7 @@ get_mos_product_instance()
 
 
 @router.post("/configure", summary="Configure MOSProduct", response_model=SimpleResponse)
-async def set_config(config):
+def set_config(config):
     """Set MOSProduct configuration."""
     global MOS_PRODUCT_INSTANCE
     MOS_PRODUCT_INSTANCE = MOSProduct(default_config=config)
@@ -81,7 +81,7 @@ async def set_config(config):
 
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
-async def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
+def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
     """Register a new user with configuration and default cube."""
     try:
         # Set request-related information in g object
@@ -126,7 +126,7 @@ async def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(g
 @router.get(
     "/suggestions/{user_id}", summary="Get suggestion queries", response_model=SuggestionResponse
 )
-async def get_suggestion_queries(user_id: str):
+def get_suggestion_queries(user_id: str):
     """Get suggestion queries for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -146,7 +146,7 @@ async def get_suggestion_queries(user_id: str):
     summary="Get suggestion queries with language",
     response_model=SuggestionResponse,
 )
-async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
+def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
     """Get suggestion queries for a specific user with language preference."""
     try:
         mos_product = get_mos_product_instance()
@@ -164,7 +164,7 @@ async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-async def get_all_memories(memory_req: GetMemoryRequest):
+def get_all_memories(memory_req: GetMemoryRequest):
     """Get all memories for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -191,7 +191,7 @@ async def get_all_memories(memory_req: GetMemoryRequest):
 
 
 @router.post("/add", summary="add a new memory", response_model=SimpleResponse)
-async def create_memory(memory_req: MemoryCreateRequest):
+def create_memory(memory_req: MemoryCreateRequest):
     """Create a new memory for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -212,7 +212,7 @@ async def create_memory(memory_req: MemoryCreateRequest):
 
 
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
-async def search_memories(search_req: SearchRequest):
+def search_memories(search_req: SearchRequest):
     """Search memories for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -232,7 +232,7 @@ async def search_memories(search_req: SearchRequest):
 
 
 @router.post("/chat", summary="Chat with MemOS")
-async def chat(chat_req: ChatRequest):
+def chat(chat_req: ChatRequest):
     """Chat with MemOS for a specific user. Returns SSE stream."""
     try:
         mos_product = get_mos_product_instance()
@@ -272,7 +272,7 @@ async def chat(chat_req: ChatRequest):
 
 
 @router.get("/users", summary="List all users", response_model=BaseResponse[list])
-async def list_users():
+def list_users():
     """List all registered users."""
     try:
         mos_product = get_mos_product_instance()
@@ -300,7 +300,7 @@ async def get_user_info(user_id: str):
 @router.get(
     "/configure/{user_id}", summary="Get MOSProduct configuration", response_model=SimpleResponse
 )
-async def get_config(user_id: str):
+def get_config(user_id: str):
     """Get MOSProduct configuration."""
     global MOS_PRODUCT_INSTANCE
     config = MOS_PRODUCT_INSTANCE.default_config
@@ -310,7 +310,7 @@ async def get_config(user_id: str):
 @router.get(
     "/users/{user_id}/config", summary="Get user configuration", response_model=BaseResponse[dict]
 )
-async def get_user_config(user_id: str):
+def get_user_config(user_id: str):
     """Get user-specific configuration."""
     try:
         mos_product = get_mos_product_instance()
@@ -334,7 +334,7 @@ async def get_user_config(user_id: str):
 @router.put(
     "/users/{user_id}/config", summary="Update user configuration", response_model=SimpleResponse
 )
-async def update_user_config(user_id: str, config_data: dict):
+def update_user_config(user_id: str, config_data: dict):
     """Update user-specific configuration."""
     try:
         mos_product = get_mos_product_instance()
@@ -359,7 +359,7 @@ async def update_user_config(user_id: str, config_data: dict):
 @router.get(
     "/instances/status", summary="Get user configuration status", response_model=BaseResponse[dict]
 )
-async def get_instance_status():
+def get_instance_status():
     """Get information about active user configurations in memory."""
     try:
         mos_product = get_mos_product_instance()
@@ -373,7 +373,7 @@ async def get_instance_status():
 
 
 @router.get("/instances/count", summary="Get active user count", response_model=BaseResponse[int])
-async def get_active_user_count():
+def get_active_user_count():
     """Get the number of active user configurations in memory."""
     try:
         mos_product = get_mos_product_instance()
