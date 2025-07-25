@@ -117,7 +117,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0][0], "user: [3 May 2025]: I'm feeling a bit down today.")
 
-    @patch("memos.parsers.factory.ParserFactory")
+    @patch("memos.mem_reader.simple_struct.ParserFactory")
     def test_get_scene_data_info_with_doc(self, mock_parser_factory):
         """Test parsing document files."""
         parser_instance = MagicMock()
