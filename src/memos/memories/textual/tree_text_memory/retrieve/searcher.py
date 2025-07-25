@@ -71,6 +71,7 @@ class Searcher:
             task_description=query,
             context="\n".join(context),
             conversation=info.get("chat_history", []),
+            mode=mode,
         )
 
         query = (
@@ -146,7 +147,7 @@ class Searcher:
             """
             Retrieve information from the internet using Google Custom Search API.
             """
-            if not self.internet_retriever or mode == "fast":
+            if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
                 return []
             if memory_type not in ["All"]:
                 return []

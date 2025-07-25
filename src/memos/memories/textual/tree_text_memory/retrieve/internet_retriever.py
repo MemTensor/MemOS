@@ -141,6 +141,8 @@ class InternetGoogleRetriever:
         Returns:
             List of TextualMemoryItem
         """
+        if not info:
+            info = {"user_id": "", "session_id": ""}
         # Get search results
         search_results = self.google_api.get_all_results(query, max_results=top_k)
 
