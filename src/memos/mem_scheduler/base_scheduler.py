@@ -84,6 +84,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # other attributes
         self._context_lock = threading.Lock()
         self.current_user_id: UserID | str | None = None
+        self.current_mem_cube_id: MemCubeID | str | None = None
+        self.current_mem_cube: GeneralMemCube | None = None
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
@@ -131,7 +133,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.current_mem_cube = msg.mem_cube
 
     def transform_memories_to_monitors(
-        self, memories: list[TextualMemoryItem]
+        self, query_keywords, memories: list[TextualMemoryItem]
     ) -> list[MemoryMonitorItem]:
         """
         Convert a list of TextualMemoryItem objects into MemoryMonitorItem objects
@@ -143,10 +145,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Returns:
             List of MemoryMonitorItem objects with computed importance scores.
         """
-        query_keywords = self.monitor.query_monitors.get_keywords_collections()
-        logger.debug(
-            f"Processing {len(memories)} memories with {len(query_keywords)} query keywords"
-        )
 
         result = []
         mem_length = len(memories)
@@ -195,7 +193,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             text_mem_base: TreeTextMemory = text_mem_base
 
             # process rerank memories with llm
-            query_history = self.monitor.query_monitors.get_queries_with_timesort()
+            query_history = self.monitor.query_monitors[user_id][
+                mem_cube_id
+            ].get_queries_with_timesort()
             memories_with_new_order, rerank_success_flag = (
                 self.retriever.process_and_rerank_memories(
                     queries=query_history,
@@ -206,8 +206,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
 
             # update working memory monitors
+            query_keywords = self.monitor.query_monitors[user_id][
+                mem_cube_id
+            ].get_keywords_collections()
+            logger.debug(
+                f"Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
+            )
             new_working_memory_monitors = self.transform_memories_to_monitors(
-                memories=memories_with_new_order
+                query_keywords=query_keywords,
+                memories=memories_with_new_order,
             )
 
             if not rerank_success_flag:

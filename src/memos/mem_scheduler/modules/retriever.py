@@ -4,6 +4,7 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
+    TreeTextMemory_FINE_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
 )
 from memos.mem_scheduler.utils.filter_utils import (
@@ -46,13 +47,14 @@ class SchedulerRetriever(BaseSchedulerModule):
         """
         text_mem_base = mem_cube.text_mem
         try:
-            if method == TreeTextMemory_SEARCH_METHOD:
+            if method == [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
                 assert isinstance(text_mem_base, TreeTextMemory)
+                mode = "fast" if method == TreeTextMemory_SEARCH_METHOD else "fine"
                 results_long_term = text_mem_base.search(
-                    query=query, top_k=top_k, memory_type="LongTermMemory"
+                    query=query, top_k=top_k, memory_type="LongTermMemory", mode=mode
                 )
                 results_user = text_mem_base.search(
-                    query=query, top_k=top_k, memory_type="UserMemory"
+                    query=query, top_k=top_k, memory_type="UserMemory", mode=mode
                 )
                 results = results_long_term + results_user
             else:
