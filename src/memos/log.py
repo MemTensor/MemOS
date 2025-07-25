@@ -1,11 +1,16 @@
 import logging
+import os
 
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
+import requests
 
 from memos import settings
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 
 selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
 
@@ -19,6 +24,15 @@ def _setup_logfile() -> Path:
     logfile.parent.mkdir(parents=True, exist_ok=True)
     logfile.touch(exist_ok=True)
     return logfile
+
+
+class OpenTelemetryHandler(logging.Handler):    
+    def emit(self, record):
+        if record.levelno == logging.INFO or record.levelno == logging.ERROR: 
+            try:
+                logOpenTelemetry(record.getMessage())
+            except Exception as e:
+                pass
 
 
 LOGGING_CONFIG = {
@@ -51,10 +65,14 @@ LOGGING_CONFIG = {
             "backupCount": 3,
             "formatter": "standard",
         },
+        "opentelemetry": {
+            "level": "INFO",
+            "class": "memos.log.OpenTelemetryHandler",
+        },
     },
     "root": {  # Root logger handles all logs
         "level": logging.DEBUG if settings.DEBUG else logging.INFO,
-        "handlers": ["console", "file"],
+        "handlers": ["console", "file", "opentelemetry"],
     },
     "loggers": {
         "memos": {
@@ -76,3 +94,29 @@ def get_logger(name: str | None = None) -> logging.Logger:
     if name:
         return parent_logger.getChild(name)
     return parent_logger
+
+
+def logOpenTelemetry(message: str):
+    trace_id = requests.headers.get("traceId")
+    
+    headers = {
+      "Content-Type": "application/json",
+      "Authorization": f"Bearer {os.getenv('LOGGER_TOKEN')}"
+    }
+
+    post_content = {
+      "trace_id": trace_id,
+      "action": "memos",
+      "message": message,
+    }
+
+    logger_url = os.getenv("LOGGER_URL")
+    if not logger_url:
+        return 
+
+    requests.post(
+      url=logger_url,
+      headers=headers,
+      json=post_content,
+      timeout=5
+    )
