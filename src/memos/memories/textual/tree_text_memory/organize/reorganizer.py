@@ -198,7 +198,7 @@ class GraphStructureReorganizer:
             logger.info(f"Already optimizing for {scope}. Skipping.")
             return
 
-        if self.graph_store.count_nodes(scope) == 0:
+        if self.graph_store.node_not_exist(scope):
             logger.debug(f"[GraphStructureReorganize] No nodes for scope={scope}. Skip.")
             return
 

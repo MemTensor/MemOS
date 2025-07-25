@@ -114,14 +114,14 @@ class Neo4jGraphDB(BaseGraphDB):
             )
             return result.single()["count"]
 
-    def count_nodes(self, scope: str) -> int:
+    def node_not_exist(self, scope: str) -> int:
         query = """
         MATCH (n:Memory)
         WHERE n.memory_type = $scope
         """
         if not self.config.use_multi_db and self.config.user_name:
             query += "\nAND n.user_name = $user_name"
-        query += "\nRETURN count(n) AS count"
+        query += "\nRETURN n LIMIT 1"
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(
@@ -131,7 +131,7 @@ class Neo4jGraphDB(BaseGraphDB):
                     "user_name": self.config.user_name if self.config.user_name else None,
                 },
             )
-            return result.single()["count"]
+            return result.single() is None
 
     def remove_oldest_memory(self, memory_type: str, keep_latest: int) -> None:
         """
