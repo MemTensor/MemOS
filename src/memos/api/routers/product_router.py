@@ -234,17 +234,18 @@ def chat(chat_req: ChatRequest):
     try:
         mos_product = get_mos_product_instance()
 
-        async def generate_chat_response():
+        def generate_chat_response():
             """Generate chat response as SSE stream."""
             try:
-                for chunk in mos_product.chat_with_references(
+                # Directly yield from the generator without async wrapper
+                yield from mos_product.chat_with_references(
                     query=chat_req.query,
                     user_id=chat_req.user_id,
                     cube_id=chat_req.mem_cube_id,
                     history=chat_req.history,
                     internet_search=chat_req.internet_search,
-                ):
-                    yield chunk
+                )
+
             except Exception as e:
                 logger.error(f"Error in chat stream: {e}")
                 error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
@@ -252,11 +253,14 @@ def chat(chat_req: ChatRequest):
 
         return StreamingResponse(
             generate_chat_response(),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "Content-Type": "text/event-stream",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Methods": "*",
             },
         )
 
