@@ -4,9 +4,9 @@ from typing import Any, ClassVar
 
 from pydantic import Field, field_validator, model_validator
 
-from memos.chunkers.factory import ChunkerConfigFactory
 from memos.configs.base import BaseConfig
 from memos.exceptions import ConfigurationError
+from memos.mem_reader.factory import MemReaderConfigFactory
 
 
 class BaseInternetRetrieverConfig(BaseConfig):
@@ -48,10 +48,10 @@ class XinyuSearchConfig(BaseInternetRetrieverConfig):
     num_per_request: int = Field(
         default=10, description="Number of results per API request (not used for Xinyu)"
     )
-    chunker: ChunkerConfigFactory = Field(
+    reader: MemReaderConfigFactory = Field(
         ...,
-        default_factory=ChunkerConfigFactory,
-        description="Chunker configuration",
+        default_factory=MemReaderConfigFactory,
+        description="Reader configuration",
     )
 
 
