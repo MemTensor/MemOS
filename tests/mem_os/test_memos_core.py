@@ -326,7 +326,9 @@ class TestMOSMemoryOperations:
         assert "para_mem" in result
         assert len(result["text_mem"]) == 1
         assert result["text_mem"][0]["cube_id"] == "test_cube_1"
-        mock_mem_cube.text_mem.search.assert_called_once_with("football", top_k=5)
+        mock_mem_cube.text_mem.search.assert_called_once_with(
+            "football", top_k=5, mode="fast", internet_search=True
+        )
 
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
