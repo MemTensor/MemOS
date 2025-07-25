@@ -124,7 +124,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
         parser_instance.parse.return_value = "Parsed document text.\n"
         mock_parser_factory.from_config.return_value = parser_instance
 
-        scene_data = ["tests/mem_reader/test.txt"]
+        scene_data = [{"fake_file_like": "should trigger parse"}]
         result = self.reader.get_scene_data_info(scene_data, type="doc")
 
         self.assertIsInstance(result, list)
