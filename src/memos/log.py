@@ -29,10 +29,10 @@ def _setup_logfile() -> Path:
     return logfile
 
 
-class OpenTelemetryHandler(logging.Handler):    
+class OpenTelemetryHandler(logging.Handler):
     def emit(self, record):
-      if record.levelno == logging.INFO or record.levelno == logging.ERROR: 
-        log_opentelemetry(record.getMessage())
+        if record.levelno == logging.INFO or record.levelno == logging.ERROR:
+            log_opentelemetry(record.getMessage())
 
 
 LOGGING_CONFIG = {
@@ -97,27 +97,22 @@ def get_logger(name: str | None = None) -> logging.Logger:
 
 
 def log_opentelemetry(message: str):
-    if (os.getenv("LOGGER_URL") is None):
-      return
-    
+    if os.getenv("LOGGER_URL") is None:
+        return
+
     trace_id = requests.headers.get("traceId")
-    
+
     headers = {
-      "Content-Type": "application/json",
-      "Authorization": f"Bearer {os.getenv('LOGGER_TOKEN')}"
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.getenv('LOGGER_TOKEN')}",
     }
 
     post_content = {
-      "trace_id": trace_id,
-      "action": "memos",
-      "message": message,
+        "trace_id": trace_id,
+        "action": "memos",
+        "message": message,
     }
 
     logger_url = os.getenv("LOGGER_URL")
 
-    requests.post(
-      url=logger_url,
-      headers=headers,
-      json=post_content,
-      timeout=5
-    )
+    requests.post(url=logger_url, headers=headers, json=post_content, timeout=5)
