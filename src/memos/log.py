@@ -29,7 +29,7 @@ def _setup_logfile() -> Path:
 class OpenTelemetryHandler(logging.Handler):    
     def emit(self, record):
       if record.levelno == logging.INFO or record.levelno == logging.ERROR: 
-        logOpenTelemetry(record.getMessage())
+        log_opentelemetry(record.getMessage())
 
 
 LOGGING_CONFIG = {
@@ -93,7 +93,7 @@ def get_logger(name: str | None = None) -> logging.Logger:
     return parent_logger
 
 
-def logOpenTelemetry(message: str):
+def log_opentelemetry(message: str):
     if (os.getenv("LOGGER_URL") is None):
       return
     
