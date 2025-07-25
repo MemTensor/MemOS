@@ -363,7 +363,7 @@ class MOSProduct(MOSCore):
             for i, memory in enumerate(memories_all, 1):
                 # Format: [memory_id]: memory_content
                 memory_id = f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                memory_content = memory.memory if hasattr(memory, "memory") else str(memory)
+                memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
                 memory_context += f"{memory_id}: {memory_content}\n"
             return base_prompt + memory_context
 
@@ -694,7 +694,7 @@ class MOSProduct(MOSCore):
             "text_mem"
         ]
         if text_mem_result:
-            memories = "\n".join([m.memory for m in text_mem_result[0]["memories"]])
+            memories = "\n".join([m.memory[:200] for m in text_mem_result[0]["memories"]])
         else:
             memories = ""
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
