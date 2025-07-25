@@ -264,7 +264,7 @@ class APIConfig:
         """Get DingDing bot configuration if enabled."""
         if not APIConfig.is_dingding_bot_enabled():
             return None
-        
+
         return {
             "enabled": True,
             "access_token_user": os.getenv("DINGDING_ACCESS_TOKEN_USER", ""),

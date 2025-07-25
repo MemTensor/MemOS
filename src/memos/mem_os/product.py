@@ -802,7 +802,6 @@ class MOSProduct(MOSCore):
         buffer = ""
         full_response = ""
         token_count = 0
-        memories_count = len(memories_list)
         # Use tiktoken for proper token-based chunking
         if self.config.chat_model.backend not in ["huggingface", "vllm"]:
             # For non-huggingface backends, we need to collect the full response first
@@ -858,32 +857,29 @@ class MOSProduct(MOSCore):
 
         clean_response, extracted_references = self._extract_references_from_response(full_response)
         logger.info(f"Extracted {len(extracted_references)} references from response")
-        
+
         # Send chat report if online_bot is available
         try:
             from memos.mem_os.utils.notification_utils import send_online_bot_notification
-            
+
             # Prepare data for online_bot
             chat_data = {
                 "query": query,
                 "user_id": user_id,
-                "cube_id": cube_id ,
+                "cube_id": cube_id,
                 "system_prompt": system_prompt,
                 "full_response": full_response,
             }
-            
+
             system_data = {
                 "references": extracted_references,
                 "time_start": time_start,
                 "time_end": time_end,
                 "speed_improvement": speed_improvement,
             }
-            
-            emoji_config = {
-                "chat": "💬",
-                "system_info": "📊"
-            }
-            
+
+            emoji_config = {"chat": "💬", "system_info": "📊"}
+
             send_online_bot_notification(
                 online_bot=self.online_bot,
                 header_name="MemOS Chat Report",
@@ -895,7 +891,7 @@ class MOSProduct(MOSCore):
             )
         except Exception as e:
             logger.warning(f"Failed to send chat notification: {e}")
-        
+
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
         )

@@ -3,23 +3,26 @@ Notification utilities for MemOS product.
 """
 
 import logging
-from typing import Any, Dict, Optional, Callable
+
+from collections.abc import Callable
+from typing import Any
+
 
 logger = logging.getLogger(__name__)
 
 
 def send_online_bot_notification(
-    online_bot: Optional[Callable],
+    online_bot: Callable | None,
     header_name: str,
     sub_title_name: str,
     title_color: str,
-    other_data1: Dict[str, Any],
-    other_data2: Dict[str, Any],
-    emoji: Dict[str, str],
+    other_data1: dict[str, Any],
+    other_data2: dict[str, Any],
+    emoji: dict[str, str],
 ) -> None:
     """
     Send notification via online_bot if available.
-    
+
     Args:
         online_bot: The online_bot function or None
         header_name: Header name for the report
@@ -31,7 +34,7 @@ def send_online_bot_notification(
     """
     if online_bot is None:
         return
-    
+
     try:
         online_bot(
             header_name=header_name,
@@ -41,23 +44,23 @@ def send_online_bot_notification(
             other_data2=other_data2,
             emoji=emoji,
         )
-        
+
         logger.info(f"Online bot notification sent successfully: {header_name}")
-        
+
     except Exception as e:
         logger.warning(f"Failed to send online bot notification: {e}")
 
 
 def send_error_bot_notification(
-    error_bot: Optional[Callable],
+    error_bot: Callable | None,
     err: str,
     title: str = "MemOS Error",
     level: str = "P2",
-    user_ids: Optional[list] = None,
+    user_ids: list | None = None,
 ) -> None:
     """
     Send error alert if error_bot is available.
-    
+
     Args:
         error_bot: The error_bot function or None
         err: Error message
@@ -67,7 +70,7 @@ def send_error_bot_notification(
     """
     if error_bot is None:
         return
-    
+
     try:
         error_bot(
             err=err,
@@ -82,7 +85,7 @@ def send_error_bot_notification(
 
 # Keep backward compatibility
 def send_error_alert(
-    error_bot: Optional[Callable],
+    error_bot: Callable | None,
     error_message: str,
     title: str = "MemOS Error",
     level: str = "P2",
@@ -90,4 +93,4 @@ def send_error_alert(
     """
     Send error alert if error_bot is available (backward compatibility).
     """
-    send_error_bot_notification(error_bot, error_message, title, level) 
+    send_error_bot_notification(error_bot, error_message, title, level)
