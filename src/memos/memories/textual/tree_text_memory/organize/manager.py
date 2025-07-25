@@ -1,6 +1,6 @@
 import uuid
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime
 
 from memos.embedders.factory import OllamaEmbedder
@@ -12,6 +12,7 @@ from memos.memories.textual.tree_text_memory.organize.reorganizer import (
     GraphStructureReorganizer,
     QueueMessage,
 )
+from memos.memories.textual.tree_text_memory.organize.thread_pool import get_global_pool
 
 
 logger = get_logger(__name__)
@@ -55,14 +56,15 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(self._process_memory, m): m for m in memories}
-            for future in as_completed(futures):
-                try:
-                    ids = future.result()
-                    added_ids.extend(ids)
-                except Exception as e:
-                    logger.exception("Memory processing error: ", exc_info=e)
+        # 使用全局线程池提交任务
+        global_pool = get_global_pool()
+        futures = {global_pool.submit(self._process_memory, m): m for m in memories}
+        for future in as_completed(futures):
+            try:
+                ids = future.result()
+                added_ids.extend(ids)
+            except Exception as e:
+                logger.exception("Memory processing error: ", exc_info=e)
 
         self.graph_store.remove_oldest_memory(
             memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
@@ -82,16 +84,17 @@ class MemoryManager:
         Replace WorkingMemory
         """
         working_memory_top_k = memories[: self.memory_size["WorkingMemory"]]
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [
-                executor.submit(self._add_memory_to_db, memory, "WorkingMemory")
-                for memory in working_memory_top_k
-            ]
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.exception("Memory processing error: ", exc_info=e)
+        # use global thread pool to submit tasks
+        global_pool = get_global_pool()
+        futures = [
+            global_pool.submit(self._add_memory_to_db, memory, "WorkingMemory")
+            for memory in working_memory_top_k
+        ]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.exception("Memory processing error: ", exc_info=e)
 
         self.graph_store.remove_oldest_memory(
             memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]

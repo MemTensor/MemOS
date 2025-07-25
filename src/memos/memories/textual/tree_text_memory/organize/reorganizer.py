@@ -22,6 +22,9 @@ from memos.memories.textual.tree_text_memory.organize.redundancy import Redundan
 from memos.memories.textual.tree_text_memory.organize.relation_reason_detector import (
     RelationAndReasoningDetector,
 )
+
+# import global thread pool
+from memos.memories.textual.tree_text_memory.organize.thread_pool import get_global_pool
 from memos.templates.tree_reorganize_prompts import LOCAL_SUBCLUSTER_PROMPT, REORGANIZE_PROMPT
 
 
@@ -234,25 +237,26 @@ class GraphStructureReorganizer:
                 f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )
 
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = []
-                for cluster_nodes in partitioned_groups:
-                    futures.append(
-                        executor.submit(
-                            self._process_cluster_and_write,
-                            cluster_nodes,
-                            scope,
-                            local_tree_threshold,
-                            min_cluster_size,
-                        )
+            # use global thread pool to submit tasks
+            global_pool = get_global_pool()
+            futures = []
+            for cluster_nodes in partitioned_groups:
+                futures.append(
+                    global_pool.submit(
+                        self._process_cluster_and_write,
+                        cluster_nodes,
+                        scope,
+                        local_tree_threshold,
+                        min_cluster_size,
                     )
+                )
 
-                for f in as_completed(futures):
-                    try:
-                        f.result()
-                    except Exception as e:
-                        logger.warning(f"[Reorganize] Cluster processing failed: {e}")
-                logger.info("[GraphStructure Reorganize] Structure optimization finished.")
+            for f in as_completed(futures):
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.warning(f"[Reorganize] Cluster processing failed: {e}")
+            logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
         finally:
             self._is_optimizing[scope] = False
