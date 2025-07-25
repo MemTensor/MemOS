@@ -28,11 +28,8 @@ def _setup_logfile() -> Path:
 
 class OpenTelemetryHandler(logging.Handler):    
     def emit(self, record):
-        if record.levelno == logging.INFO or record.levelno == logging.ERROR: 
-            try:
-                logOpenTelemetry(record.getMessage())
-            except Exception as e:
-                pass
+      if record.levelno == logging.INFO or record.levelno == logging.ERROR: 
+        logOpenTelemetry(record.getMessage())
 
 
 LOGGING_CONFIG = {
@@ -114,8 +111,6 @@ def logOpenTelemetry(message: str):
     }
 
     logger_url = os.getenv("LOGGER_URL")
-    if not logger_url:
-        return 
 
     requests.post(
       url=logger_url,
