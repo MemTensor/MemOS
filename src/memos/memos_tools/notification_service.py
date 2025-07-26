@@ -18,7 +18,7 @@ def get_online_bot_function() -> Callable | None:
         online_bot function if available, None otherwise
     """
     try:
-        from .dinding_report_bot import online_bot
+        from memos.memos_tools.dinding_report_bot import online_bot
 
         logger.info("online_bot function loaded successfully")
         return online_bot
@@ -35,7 +35,7 @@ def get_error_bot_function() -> Callable | None:
         error_bot function if available, None otherwise
     """
     try:
-        from .dinding_report_bot import error_bot
+        from memos.memos_tools.dinding_report_bot import error_bot
 
         logger.info("error_bot function loaded successfully")
         return error_bot

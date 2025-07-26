@@ -860,7 +860,7 @@ class MOSProduct(MOSCore):
 
         # Send chat report if online_bot is available
         try:
-            from memos.mem_os.utils.notification_utils import send_online_bot_notification
+            from memos.memos_tools.notification_utils import send_online_bot_notification
 
             # Prepare data for online_bot
             chat_data = {

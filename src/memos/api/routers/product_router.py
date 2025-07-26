@@ -24,9 +24,9 @@ from memos.api.product_models import (
     UserRegisterRequest,
     UserRegisterResponse,
 )
-from memos.api.tools.notification_service import get_error_bot_function, get_online_bot_function
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.product import MOSProduct
+from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 
 
 logger = logging.getLogger(__name__)
