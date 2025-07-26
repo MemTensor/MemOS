@@ -219,6 +219,18 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_mysql_config() -> dict[str, Any]:
+        """Get MySQL configuration."""
+        return {
+            "host": os.getenv("MYSQL_HOST", "localhost"),
+            "port": int(os.getenv("MYSQL_PORT", "3306")),
+            "username": os.getenv("MYSQL_USERNAME", "root"),
+            "password": os.getenv("MYSQL_PASSWORD", "12345678"),
+            "database": os.getenv("MYSQL_DATABASE", "memos_users"),
+            "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
+        }
+
+    @staticmethod
     def get_scheduler_config() -> dict[str, Any]:
         """Get scheduler configuration."""
         return {
@@ -294,6 +306,7 @@ class APIConfig:
             "vllm": vllm_config,
         }
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
+        mysql_config = APIConfig.get_mysql_config()
         config = {
             "user_id": os.getenv("MOS_USER_ID", "root"),
             "chat_model": {"backend": backend, "config": backend_model[backend]},
@@ -329,6 +342,13 @@ class APIConfig:
             config["enable_mem_scheduler"] = True
         else:
             config["enable_mem_scheduler"] = False
+
+        # Add user manager configuration if enabled
+        if os.getenv("MOS_USER_MANAGER_BACKEND", "sqlite").lower() == "mysql":
+            config["user_manager"] = {
+                "backend": "mysql",
+                "config": mysql_config,
+            }
 
         return config
 
@@ -372,6 +392,7 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        mysql_config = APIConfig.get_mysql_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         backend_model = {
             "openai": openai_config,
@@ -416,6 +437,13 @@ class APIConfig:
             config_dict["enable_mem_scheduler"] = True
         else:
             config_dict["enable_mem_scheduler"] = False
+
+        # Add user manager configuration if enabled
+        if os.getenv("MOS_USER_MANAGER_BACKEND", "sqlite").lower() == "mysql":
+            config_dict["user_manager"] = {
+                "backend": "mysql",
+                "config": mysql_config,
+            }
 
         default_config = MOSConfig(**config_dict)
 

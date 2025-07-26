@@ -28,7 +28,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_user.persistent_user_manager import PersistentUserManager
+from memos.mem_user.persistent_factory import PersistentUserManagerFactory
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
     TextualMemoryItem,
@@ -85,8 +85,13 @@ class MOSProduct(MOSCore):
             root_config.user_id = "root"
             root_config.session_id = "root_session"
 
-        # Initialize parent MOSCore with root config
-        super().__init__(root_config)
+        # Create persistent user manager BEFORE calling parent constructor
+        persistent_user_manager_client = PersistentUserManagerFactory.from_config(
+            config_factory=root_config.user_manager
+        )
+
+        # Initialize parent MOSCore with root config and persistent user manager
+        super().__init__(root_config, user_manager=persistent_user_manager_client)
 
         # Product-specific attributes
         self.default_config = default_config
@@ -100,8 +105,8 @@ class MOSProduct(MOSCore):
         self.user_cube_access: dict[str, set[str]] = {}  # user_id -> set of cube_ids
         self.user_chat_histories: dict[str, dict] = {}
 
-        # Use PersistentUserManager for user management
-        self.global_user_manager = PersistentUserManager(user_id="root")
+        # Note: self.user_manager is now the persistent user manager from parent class
+        # No need for separate global_user_manager as they are the same instance
 
         # Initialize tiktoken for streaming
         try:
@@ -128,10 +133,10 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get all user configurations from persistent storage
-            user_configs = self.global_user_manager.list_user_configs()
+            user_configs = self.user_manager.list_user_configs()
 
             # Get the raw database records for sorting by updated_at
-            session = self.global_user_manager._get_session()
+            session = self.user_manager._get_session()
             try:
                 from memos.mem_user.persistent_user_manager import UserConfig
 
@@ -177,7 +182,7 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get user's accessible cubes from persistent storage
-            accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
+            accessible_cubes = self.user_manager.get_user_cubes(user_id)
 
             for cube in accessible_cubes:
                 if cube.cube_id not in self.mem_cubes:
@@ -216,7 +221,7 @@ class MOSProduct(MOSCore):
             default_cube_config (GeneralMemCubeConfig | None, optional): Default cube configuration. Defaults to None.
         """
         # Get user's accessible cubes from persistent storage
-        accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
+        accessible_cubes = self.user_manager.get_user_cubes(user_id)
 
         for cube in accessible_cubes[:1]:
             if cube.cube_id not in self.mem_cubes:
@@ -250,7 +255,7 @@ class MOSProduct(MOSCore):
             return
 
         # Try to get config from persistent storage first
-        stored_config = self.global_user_manager.get_user_config(user_id)
+        stored_config = self.user_manager.get_user_config(user_id)
         if stored_config:
             self.user_configs[user_id] = stored_config
             self._load_user_cube_access(user_id)
@@ -280,7 +285,7 @@ class MOSProduct(MOSCore):
         """Load user's cube access permissions."""
         try:
             # Get user's accessible cubes from persistent storage
-            accessible_cubes = self.global_user_manager.get_user_cube_access(user_id)
+            accessible_cubes = self.user_manager.get_user_cube_access(user_id)
             self.user_cube_access[user_id] = set(accessible_cubes)
         except Exception as e:
             logger.warning(f"Failed to load cube access for user {user_id}: {e}")
@@ -316,7 +321,7 @@ class MOSProduct(MOSCore):
         user_config.session_id = f"{user_id}_session"
 
         # Save configuration to persistent storage
-        self.global_user_manager.save_user_config(user_id, user_config)
+        self.user_manager.save_user_config(user_id, user_config)
 
         return user_config
 
@@ -328,7 +333,7 @@ class MOSProduct(MOSCore):
             return self.user_configs[user_id]
 
         # Try to get config from persistent storage first
-        stored_config = self.global_user_manager.get_user_config(user_id)
+        stored_config = self.user_manager.get_user_config(user_id)
         if stored_config:
             return self._create_user_config(user_id, stored_config)
 
@@ -613,9 +618,7 @@ class MOSProduct(MOSCore):
                 user_name = user_id
 
             # Create user with configuration using persistent user manager
-            self.global_user_manager.create_user_with_config(
-                user_id, user_config, UserRole.USER, user_id
-            )
+            self.user_manager.create_user_with_config(user_id, user_config, UserRole.USER, user_id)
 
             # Create user configuration
             user_config = self._create_user_config(user_id, user_config)
@@ -1110,7 +1113,7 @@ class MOSProduct(MOSCore):
 
     def list_users(self) -> list:
         """List all registered users."""
-        return self.global_user_manager.list_users()
+        return self.user_manager.list_users()
 
     def get_user_info(self, user_id: str) -> dict:
         """Get user information including accessible cubes."""
@@ -1150,7 +1153,7 @@ class MOSProduct(MOSCore):
         """
         try:
             # Save to persistent storage
-            success = self.global_user_manager.save_user_config(user_id, config)
+            success = self.user_manager.save_user_config(user_id, config)
             if success:
                 # Update in-memory config
                 self.user_configs[user_id] = config
@@ -1170,7 +1173,7 @@ class MOSProduct(MOSCore):
         Returns:
             MOSConfig | None: The user's configuration or None if not found.
         """
-        return self.global_user_manager.get_user_config(user_id)
+        return self.user_manager.get_user_config(user_id)
 
     def get_active_user_count(self) -> int:
         """Get the number of active user configurations in memory."""

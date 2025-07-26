@@ -18,9 +18,6 @@ from sqlalchemy import (
     Table,
     create_engine,
 )
-from sqlalchemy import (
-    Enum as SQLEnum,
-)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
@@ -35,18 +32,18 @@ Base = declarative_base()
 class UserRole(Enum):
     """User roles enumeration."""
 
-    ROOT = "root"
-    ADMIN = "admin"
-    USER = "user"
-    GUEST = "guest"
+    ROOT = "ROOT"
+    ADMIN = "ADMIN"
+    USER = "USER"
+    GUEST = "GUEST"
 
 
 # Association table for many-to-many relationship between users and cubes
 user_cube_association = Table(
     "user_cube_association",
     Base.metadata,
-    Column("user_id", String, ForeignKey("users.user_id"), primary_key=True),
-    Column("cube_id", String, ForeignKey("cubes.cube_id"), primary_key=True),
+    Column("user_id", String(255), ForeignKey("users.user_id"), primary_key=True),
+    Column("cube_id", String(255), ForeignKey("cubes.cube_id"), primary_key=True),
     Column("created_at", DateTime, default=datetime.now),
 )
 
@@ -56,9 +53,9 @@ class User(Base):
 
     __tablename__ = "users"
 
-    user_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_name = Column(String, unique=True, nullable=False)
-    role = Column(SQLEnum(UserRole), default=UserRole.USER, nullable=False)
+    user_id = Column(String(255), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_name = Column(String(255), unique=True, nullable=False)
+    role = Column(String(20), default=UserRole.USER.value, nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -76,10 +73,10 @@ class Cube(Base):
 
     __tablename__ = "cubes"
 
-    cube_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    cube_name = Column(String, nullable=False)
-    cube_path = Column(String, nullable=True)  # Local path or remote repo
-    owner_id = Column(String, ForeignKey("users.user_id"), nullable=False)
+    cube_id = Column(String(255), primary_key=True, default=lambda: str(uuid.uuid4()))
+    cube_name = Column(String(255), nullable=False)
+    cube_path = Column(String(500), nullable=True)  # Local path or remote repo
+    owner_id = Column(String(255), ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -184,7 +181,7 @@ class MySQLUserManager:
             if existing_user:
                 logger.info(f"User with name '{user_name}' already exists")
                 return existing_user.user_id
-            user = User(user_name=user_name, role=role, user_id=user_id or str(uuid.uuid4()))
+            user = User(user_name=user_name, role=role.value, user_id=user_id or str(uuid.uuid4()))
             session.add(user)
             session.commit()
             logger.info(f"User '{user_name}' created with ID: {user.user_id}")
