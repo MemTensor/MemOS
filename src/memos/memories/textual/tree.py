@@ -117,13 +117,19 @@ class TreeTextMemory(BaseTextMemory):
             logger.warning(
                 "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
             )
-            self.internet_retriever = None
-        searcher = Searcher(
-            self.dispatcher_llm,
-            self.graph_store,
-            self.embedder,
-            internet_retriever=self.internet_retriever,
-        )
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                internet_retriever=None,
+            )
+        else:
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                internet_retriever=self.internet_retriever,
+            )
         return searcher.search(query, top_k, info, mode, memory_type)
 
     def get_relevant_subgraph(

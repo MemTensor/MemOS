@@ -363,7 +363,7 @@ class MOSProduct(MOSCore):
             for i, memory in enumerate(memories_all, 1):
                 # Format: [memory_id]: memory_content
                 memory_id = f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                memory_content = memory.memory if hasattr(memory, "memory") else str(memory)
+                memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
                 memory_context += f"{memory_id}: {memory_content}\n"
             return base_prompt + memory_context
 
@@ -694,7 +694,7 @@ class MOSProduct(MOSCore):
             "text_mem"
         ]
         if text_mem_result:
-            memories = "\n".join([m.memory for m in text_mem_result[0]["memories"]])
+            memories = "\n".join([m.memory[:200] for m in text_mem_result[0]["memories"]])
         else:
             memories = ""
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
@@ -710,6 +710,7 @@ class MOSProduct(MOSCore):
         cube_id: str | None = None,
         history: MessageList | None = None,
         top_k: int = 10,
+        internet_search: bool = False,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -729,7 +730,12 @@ class MOSProduct(MOSCore):
         memories_list = []
         yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
         memories_result = super().search(
-            query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=top_k
+            query,
+            user_id,
+            install_cube_ids=[cube_id] if cube_id else None,
+            top_k=top_k,
+            mode="fine",
+            internet_search=internet_search,
         )["text_mem"]
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
         self._send_message_to_scheduler(
@@ -829,6 +835,7 @@ class MOSProduct(MOSCore):
             memories_json["metadata"]["embedding"] = []
             memories_json["metadata"]["sources"] = []
             memories_json["metadata"]["memory"] = memories.memory
+            memories_json["metadata"]["id"] = memories.id
             reference.append({"metadata": memories_json["metadata"]})
 
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
@@ -1008,13 +1015,18 @@ class MOSProduct(MOSCore):
         return reformat_memory_list
 
     def search(
-        self, query: str, user_id: str, install_cube_ids: list[str] | None = None, top_k: int = 10
+        self,
+        query: str,
+        user_id: str,
+        install_cube_ids: list[str] | None = None,
+        top_k: int = 10,
+        mode: Literal["fast", "fine"] = "fast",
     ):
         """Search memories for a specific user."""
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-        search_result = super().search(query, user_id, install_cube_ids, top_k)
+        search_result = super().search(query, user_id, install_cube_ids, top_k, mode=mode)
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
         for memory in text_memory_list:

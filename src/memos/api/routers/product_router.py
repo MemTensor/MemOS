@@ -234,6 +234,7 @@ async def chat(chat_req: ChatRequest):
                     user_id=chat_req.user_id,
                     cube_id=chat_req.mem_cube_id,
                     history=chat_req.history,
+                    internet_search=chat_req.internet_search,
                 ):
                     yield chunk
                     await asyncio.sleep(0.00001)  # 50ms delay between chunks
