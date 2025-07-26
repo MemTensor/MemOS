@@ -54,6 +54,8 @@ class MOSProduct(MOSCore):
         default_config: MOSConfig | None = None,
         max_user_instances: int = 1,
         default_cube_config: GeneralMemCubeConfig | None = None,
+        online_bot=None,
+        error_bot=None,
     ):
         """
         Initialize MOSProduct with an optional default configuration.
@@ -62,6 +64,8 @@ class MOSProduct(MOSCore):
             default_config (MOSConfig | None): Default configuration for new users
             max_user_instances (int): Maximum number of user instances to keep in memory
             default_cube_config (GeneralMemCubeConfig | None): Default cube configuration for loading cubes
+            online_bot: DingDing online_bot function or None if disabled
+            error_bot: DingDing error_bot function or None if disabled
         """
         # Initialize with a root config for shared resources
         if default_config is None:
@@ -88,6 +92,8 @@ class MOSProduct(MOSCore):
         self.default_config = default_config
         self.default_cube_config = default_cube_config
         self.max_user_instances = max_user_instances
+        self.online_bot = online_bot
+        self.error_bot = error_bot
 
         # User-specific data structures
         self.user_configs: dict[str, MOSConfig] = {}
@@ -851,6 +857,41 @@ class MOSProduct(MOSCore):
 
         clean_response, extracted_references = self._extract_references_from_response(full_response)
         logger.info(f"Extracted {len(extracted_references)} references from response")
+
+        # Send chat report if online_bot is available
+        try:
+            from memos.mem_os.utils.notification_utils import send_online_bot_notification
+
+            # Prepare data for online_bot
+            chat_data = {
+                "query": query,
+                "user_id": user_id,
+                "cube_id": cube_id,
+                "system_prompt": system_prompt,
+                "full_response": full_response,
+            }
+
+            system_data = {
+                "references": extracted_references,
+                "time_start": time_start,
+                "time_end": time_end,
+                "speed_improvement": speed_improvement,
+            }
+
+            emoji_config = {"chat": "💬", "system_info": "📊"}
+
+            send_online_bot_notification(
+                online_bot=self.online_bot,
+                header_name="MemOS Chat Report",
+                sub_title_name="chat_with_references",
+                title_color="#00956D",
+                other_data1=chat_data,
+                other_data2=system_data,
+                emoji=emoji_config,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send chat notification: {e}")
+
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
         )
