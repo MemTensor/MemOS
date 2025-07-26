@@ -459,10 +459,6 @@ class APIConfig:
             )
         else:
             raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
-        if os.getenv("ENABLE_INTERNET", "false").lower() == "true":
-            default_cube_config.text_mem.config["internet_retriever"] = (
-                APIConfig.get_internet_config()
-            )
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
