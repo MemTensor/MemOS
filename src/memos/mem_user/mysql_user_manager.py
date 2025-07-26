@@ -191,7 +191,7 @@ class MySQLUserManager:
             return user.user_id
         except IntegrityError:
             session.rollback()
-            logger.info(f"failed to create user with name '{user_name}' already exists")
+            logger.info(f"Failed to create user with name '{user_name}' already exists")
         except Exception as e:
             session.rollback()
             logger.error(f"Error creating user: {e}")

@@ -35,20 +35,8 @@ class UserManagerFactory:
         user_manager_class = cls.backend_to_class[backend]
         config = config_factory.config
 
-        if backend == "sqlite":
-            return user_manager_class(db_path=config.db_path, user_id=config.user_id)
-        elif backend == "mysql":
-            return user_manager_class(
-                user_id=config.user_id,
-                host=config.host,
-                port=config.port,
-                username=config.username,
-                password=config.password,
-                database=config.database,
-                charset=config.charset,
-            )
-        else:
-            raise ValueError(f"Unsupported backend: {backend}")
+        # Use model_dump() to convert Pydantic model to dict and unpack as kwargs
+        return user_manager_class(**config.model_dump())
 
     @classmethod
     def create_sqlite(cls, db_path: str | None = None, user_id: str = "root") -> UserManager:

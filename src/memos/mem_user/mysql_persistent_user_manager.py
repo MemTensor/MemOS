@@ -105,8 +105,6 @@ class MySQLPersistentUserManager(MySQLUserManager):
             config_dict = config.model_dump(mode="json")
             config_json = json.dumps(config_dict, indent=2)
 
-            from datetime import datetime
-
             now = datetime.now().isoformat()
 
             # Check if config already exists
