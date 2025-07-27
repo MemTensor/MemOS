@@ -88,7 +88,7 @@ class ChatRequest(BaseRequest):
 
 class UserCreate(BaseRequest):
     user_name: str | None = Field(None, description="Name of the user")
-    role: str = Field("user", description="Role of the user")
+    role: str = Field("USER", description="Role of the user")
     user_id: str = Field(..., description="User ID")
 
 
