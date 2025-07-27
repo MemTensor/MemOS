@@ -205,11 +205,12 @@ class MOSProduct(MOSCore):
                             )
                     except Exception as e:
                         logger.error(
-                            f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}"
+                            f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}",
+                            exc_info=True,
                         )
 
         except Exception as e:
-            logger.error(f"Error pre-loading cubes for user {user_id}: {e}")
+            logger.error(f"Error pre-loading cubes for user {user_id}: {e}", exc_info=True)
 
     def _load_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
