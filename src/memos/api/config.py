@@ -223,7 +223,7 @@ class APIConfig:
     def get_nebular_config(user_id: str | None = None) -> dict[str, Any]:
         """Get Nebular configuration."""
         return {
-            "uri": json.loads(os.getenv("NEBULAR_HOSTS", "localhost")),
+            "uri": json.loads(os.getenv("NEBULAR_HOSTS", '["localhost"]')),
             "user": os.getenv("NEBULAR_USER", "root"),
             "password": os.getenv("NEBULAR_PASSWORD", "xxxxxx"),
             "space": os.getenv("NEBULAR_SPACE", "shared-tree-textual-memory"),
