@@ -92,9 +92,11 @@ def merge_config_with_default(
                     merged_graph_config["db_name"] = default_graph_config.get("db_name")
                 else:
                     logger.info("use_multi_db is already False, no need to change")
-
+            if "neo4j" not in (default_text_config["graph_db"]["backend"]):
+                merged_graph_config.pop("db_name")
+                logger.info("neo4j is not supported, remove db_name")
             preserved_graph_db = {
-                "backend": existing_text_config["graph_db"]["backend"],
+                "backend": default_text_config["graph_db"]["backend"],
                 "config": merged_graph_config,
             }
 

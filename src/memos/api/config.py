@@ -1,3 +1,4 @@
+import json
 import os
 
 from typing import Any
@@ -215,6 +216,20 @@ class APIConfig:
             "user_name": f"memos{user_id.replace('-', '')}",
             "auto_create": True,
             "use_multi_db": False,
+            "embedding_dimension": 3072,
+        }
+
+    @staticmethod
+    def get_nebular_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get Nebular configuration."""
+        return {
+            "uri": json.loads(os.getenv("NEBULAR_HOSTS", "localhost")),
+            "user": os.getenv("NEBULAR_USER", "root"),
+            "password": os.getenv("NEBULAR_PASSWORD", "xxxxxx"),
+            "space": os.getenv("NEBULAR_SPACE", "shared-tree-textual-memory"),
+            "user_name": f"memos{user_id.replace('-', '')}",
+            "use_multi_db": False,
+            "auto_create": True,
             "embedding_dimension": 3072,
         }
 
@@ -449,6 +464,7 @@ class APIConfig:
 
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
+        nebular_config = APIConfig.get_nebular_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
@@ -457,6 +473,7 @@ class APIConfig:
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
+            "nebular": nebular_config,
         }
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
@@ -503,9 +520,11 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
+        nebular_config = APIConfig.get_nebular_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
+            "nebular": nebular_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
