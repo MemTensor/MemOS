@@ -920,7 +920,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
-        if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory"}:
+        if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
         where_clause = "WHERE n.memory_type = $scope"
