@@ -251,7 +251,10 @@ class GraphStructureReorganizer:
                     try:
                         f.result()
                     except Exception as e:
-                        logger.warning(f"[Reorganize] Cluster processing failed: {e}")
+                        logger.warning(
+                            f"[Reorganize] Cluster processing "
+                            f"failed: {e}, trace: {traceback.format_exc()}"
+                        )
                 logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
         finally:
@@ -343,7 +346,7 @@ class GraphStructureReorganizer:
                         agg_node.metadata.model_dump(exclude_none=True),
                     )
                     for child_id in agg_node.metadata.sources:
-                        self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATES")
+                        self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATE_TO")
 
             logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
