@@ -2,10 +2,14 @@ import json
 import logging
 import traceback
 
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from memos.api.config import APIConfig
+from memos.api.context.dependencies import G, get_g_object
 from memos.api.product_models import (
     BaseResponse,
     ChatRequest,
@@ -22,6 +26,7 @@ from memos.api.product_models import (
 )
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.product import MOSProduct
+from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 
 
 logger = logging.getLogger(__name__)
@@ -37,16 +42,25 @@ def get_mos_product_instance():
     global MOS_PRODUCT_INSTANCE
     if MOS_PRODUCT_INSTANCE is None:
         default_config = APIConfig.get_product_default_config()
-        print(default_config)
+        logger.info(f"*********init_default_mos_config********* {default_config}")
         from memos.configs.mem_os import MOSConfig
 
         mos_config = MOSConfig(**default_config)
 
         # Get default cube config from APIConfig (may be None if disabled)
         default_cube_config = APIConfig.get_default_cube_config()
-        print("*********default_cube_config*********", default_cube_config)
+        logger.info(f"*********initdefault_cube_config******** {default_cube_config}")
+
+        # Get DingDing bot functions
+        dingding_enabled = APIConfig.is_dingding_bot_enabled()
+        online_bot = get_online_bot_function() if dingding_enabled else None
+        error_bot = get_error_bot_function() if dingding_enabled else None
+
         MOS_PRODUCT_INSTANCE = MOSProduct(
-            default_config=mos_config, default_cube_config=default_cube_config
+            default_config=mos_config,
+            default_cube_config=default_cube_config,
+            online_bot=online_bot,
+            error_bot=error_bot,
         )
         logger.info("MOSProduct instance created successfully with inheritance architecture")
     return MOS_PRODUCT_INSTANCE
@@ -56,7 +70,7 @@ get_mos_product_instance()
 
 
 @router.post("/configure", summary="Configure MOSProduct", response_model=SimpleResponse)
-async def set_config(config):
+def set_config(config):
     """Set MOSProduct configuration."""
     global MOS_PRODUCT_INSTANCE
     MOS_PRODUCT_INSTANCE = MOSProduct(default_config=config)
@@ -64,9 +78,18 @@ async def set_config(config):
 
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
-async def register_user(user_req: UserRegisterRequest):
+def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
     """Register a new user with configuration and default cube."""
     try:
+        # Set request-related information in g object
+        g.user_id = user_req.user_id
+        g.action = "user_register"
+        g.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        logger.info(f"Starting user registration for user_id: {user_req.user_id}")
+        logger.info(f"Request trace_id: {g.trace_id}")
+        logger.info(f"Request timestamp: {g.timestamp}")
+
         # Get configuration for the user
         user_config, default_mem_cube = APIConfig.create_user_config(
             user_name=user_req.user_id, user_id=user_req.user_id
@@ -100,7 +123,7 @@ async def register_user(user_req: UserRegisterRequest):
 @router.get(
     "/suggestions/{user_id}", summary="Get suggestion queries", response_model=SuggestionResponse
 )
-async def get_suggestion_queries(user_id: str):
+def get_suggestion_queries(user_id: str):
     """Get suggestion queries for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -120,7 +143,7 @@ async def get_suggestion_queries(user_id: str):
     summary="Get suggestion queries with language",
     response_model=SuggestionResponse,
 )
-async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
+def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
     """Get suggestion queries for a specific user with language preference."""
     try:
         mos_product = get_mos_product_instance()
@@ -138,7 +161,7 @@ async def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-async def get_all_memories(memory_req: GetMemoryRequest):
+def get_all_memories(memory_req: GetMemoryRequest):
     """Get all memories for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -165,7 +188,7 @@ async def get_all_memories(memory_req: GetMemoryRequest):
 
 
 @router.post("/add", summary="add a new memory", response_model=SimpleResponse)
-async def create_memory(memory_req: MemoryCreateRequest):
+def create_memory(memory_req: MemoryCreateRequest):
     """Create a new memory for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -186,7 +209,7 @@ async def create_memory(memory_req: MemoryCreateRequest):
 
 
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
-async def search_memories(search_req: SearchRequest):
+def search_memories(search_req: SearchRequest):
     """Search memories for a specific user."""
     try:
         mos_product = get_mos_product_instance()
@@ -194,6 +217,7 @@ async def search_memories(search_req: SearchRequest):
             query=search_req.query,
             user_id=search_req.user_id,
             install_cube_ids=[search_req.mem_cube_id] if search_req.mem_cube_id else None,
+            top_k=search_req.top_k,
         )
         return SearchResponse(message="Search completed successfully", data=result)
 
@@ -205,24 +229,23 @@ async def search_memories(search_req: SearchRequest):
 
 
 @router.post("/chat", summary="Chat with MemOS")
-async def chat(chat_req: ChatRequest):
+def chat(chat_req: ChatRequest):
     """Chat with MemOS for a specific user. Returns SSE stream."""
     try:
         mos_product = get_mos_product_instance()
 
-        async def generate_chat_response():
+        def generate_chat_response():
             """Generate chat response as SSE stream."""
             try:
-                import asyncio
-
-                for chunk in mos_product.chat_with_references(
+                # Directly yield from the generator without async wrapper
+                yield from mos_product.chat_with_references(
                     query=chat_req.query,
                     user_id=chat_req.user_id,
                     cube_id=chat_req.mem_cube_id,
                     history=chat_req.history,
-                ):
-                    yield chunk
-                    await asyncio.sleep(0.00001)  # 50ms delay between chunks
+                    internet_search=chat_req.internet_search,
+                )
+
             except Exception as e:
                 logger.error(f"Error in chat stream: {e}")
                 error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
@@ -230,11 +253,14 @@ async def chat(chat_req: ChatRequest):
 
         return StreamingResponse(
             generate_chat_response(),
-            media_type="text/plain",
+            media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "Content-Type": "text/event-stream",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Methods": "*",
             },
         )
 
@@ -246,7 +272,7 @@ async def chat(chat_req: ChatRequest):
 
 
 @router.get("/users", summary="List all users", response_model=BaseResponse[list])
-async def list_users():
+def list_users():
     """List all registered users."""
     try:
         mos_product = get_mos_product_instance()
@@ -274,7 +300,7 @@ async def get_user_info(user_id: str):
 @router.get(
     "/configure/{user_id}", summary="Get MOSProduct configuration", response_model=SimpleResponse
 )
-async def get_config(user_id: str):
+def get_config(user_id: str):
     """Get MOSProduct configuration."""
     global MOS_PRODUCT_INSTANCE
     config = MOS_PRODUCT_INSTANCE.default_config
@@ -284,7 +310,7 @@ async def get_config(user_id: str):
 @router.get(
     "/users/{user_id}/config", summary="Get user configuration", response_model=BaseResponse[dict]
 )
-async def get_user_config(user_id: str):
+def get_user_config(user_id: str):
     """Get user-specific configuration."""
     try:
         mos_product = get_mos_product_instance()
@@ -308,7 +334,7 @@ async def get_user_config(user_id: str):
 @router.put(
     "/users/{user_id}/config", summary="Update user configuration", response_model=SimpleResponse
 )
-async def update_user_config(user_id: str, config_data: dict):
+def update_user_config(user_id: str, config_data: dict):
     """Update user-specific configuration."""
     try:
         mos_product = get_mos_product_instance()
@@ -333,7 +359,7 @@ async def update_user_config(user_id: str, config_data: dict):
 @router.get(
     "/instances/status", summary="Get user configuration status", response_model=BaseResponse[dict]
 )
-async def get_instance_status():
+def get_instance_status():
     """Get information about active user configurations in memory."""
     try:
         mos_product = get_mos_product_instance()
@@ -347,7 +373,7 @@ async def get_instance_status():
 
 
 @router.get("/instances/count", summary="Get active user count", response_model=BaseResponse[int])
-async def get_active_user_count():
+def get_active_user_count():
     """Get the number of active user configurations in memory."""
     try:
         mos_product = get_mos_product_instance()

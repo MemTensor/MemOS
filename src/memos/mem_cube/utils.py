@@ -71,10 +71,6 @@ def merge_config_with_default(
 
             # Define graph_db fields to preserve (user-specific)
             preserve_graph_fields = {
-                "uri",
-                "user",
-                "password",
-                "db_name",
                 "auto_create",
                 "user_name",
                 "use_multi_db",

@@ -1,22 +1,23 @@
 import shutil
 import sys
 
-from datetime import datetime
 from pathlib import Path
+from queue import Queue
+from typing import TYPE_CHECKING
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
-from memos.configs.mem_scheduler import AuthConfig, SchedulerConfigFactory
+from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.modules.schemas import (
-    ANSWER_LABEL,
-    QUERY_LABEL,
-    ScheduleMessageItem,
-)
-from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.utils import parse_yaml
+from memos.mem_scheduler.general_scheduler import GeneralScheduler
+
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas import (
+        ScheduleLogForWebItem,
+    )
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -69,125 +70,96 @@ def init_task():
     return conversations, questions
 
 
-def run_with_automatic_scheduler_init():
+def run_with_scheduler_init():
     print("==== run_with_automatic_scheduler_init ====")
     conversations, questions = init_task()
 
-    config = parse_yaml(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml"
+    # set configs
+    mos_config = MOSConfig.from_yaml_file(
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler_and_openai.yaml"
     )
 
-    mos_config = MOSConfig(**config)
+    mem_cube_config = GeneralMemCubeConfig.from_yaml_file(
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
+    )
+
+    # default local graphdb uri
+    if AuthConfig.default_config_exists():
+        auth_config = AuthConfig.from_local_yaml()
+
+        mos_config.mem_reader.config.llm.config.api_key = auth_config.openai.api_key
+        mos_config.mem_reader.config.llm.config.api_base = auth_config.openai.base_url
+
+        mem_cube_config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
+
+    # Initialization
     mos = MOS(mos_config)
 
     user_id = "user_1"
     mos.create_user(user_id)
 
-    config = GeneralMemCubeConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
-    )
     mem_cube_id = "mem_cube_5"
     mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
+
     if Path(mem_cube_name_or_path).exists():
         shutil.rmtree(mem_cube_name_or_path)
         print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
 
-    # default local graphdb uri
-    if AuthConfig.default_config_exists():
-        auth_config = AuthConfig.from_local_yaml()
-        config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
-
-    mem_cube = GeneralMemCube(config)
-    mem_cube.dump(mem_cube_name_or_path)
-    mos.register_mem_cube(
-        mem_cube_name_or_path=mem_cube_name_or_path, mem_cube_id=mem_cube_id, user_id=user_id
-    )
-    mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
-
-    for item in questions:
-        query = item["question"]
-        response = mos.chat(query, user_id=user_id)
-        print(f"Query:\n {query}\n\nAnswer:\n {response}")
-
-    mos.mem_scheduler.stop()
-
-
-def run_with_manual_scheduler_init():
-    print("==== run_with_manual_scheduler_init ====")
-    conversations, questions = init_task()
-
-    config = parse_yaml(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_wo_scheduler.yaml"
-    )
-
-    mos_config = MOSConfig(**config)
-    mos = MOS(mos_config)
-
-    user_id = "user_1"
-    mos.create_user(user_id)
-
-    config = GeneralMemCubeConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
-    )
-    mem_cube_id = "mem_cube_5"
-    mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
-    if Path(mem_cube_name_or_path).exists():
-        shutil.rmtree(mem_cube_name_or_path)
-        print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
-
-    # default local graphdb uri
-    if AuthConfig.default_config_exists():
-        auth_config = AuthConfig.from_local_yaml()
-        config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
-
-    mem_cube = GeneralMemCube(config)
+    mem_cube = GeneralMemCube(mem_cube_config)
     mem_cube.dump(mem_cube_name_or_path)
     mos.register_mem_cube(
         mem_cube_name_or_path=mem_cube_name_or_path, mem_cube_id=mem_cube_id, user_id=user_id
     )
 
-    example_scheduler_config_path = (
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/general_scheduler_config.yaml"
-    )
-    scheduler_config = SchedulerConfigFactory.from_yaml_file(
-        yaml_path=example_scheduler_config_path
-    )
-    mem_scheduler = SchedulerFactory.from_config(scheduler_config)
-    mem_scheduler.initialize_modules(chat_llm=mos.chat_llm)
-
-    mos.mem_scheduler = mem_scheduler
-
-    mos.mem_scheduler.start()
-
     mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
 
     for item in questions:
+        print("===== Chat Start =====")
         query = item["question"]
-        message_item = ScheduleMessageItem(
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            label=QUERY_LABEL,
-            mem_cube=mos.mem_cubes[mem_cube_id],
-            content=query,
-            timestamp=datetime.now(),
-        )
-        mos.mem_scheduler.submit_messages(messages=message_item)
-        response = mos.chat(query, user_id=user_id)
-        message_item = ScheduleMessageItem(
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            label=ANSWER_LABEL,
-            mem_cube=mos.mem_cubes[mem_cube_id],
-            content=response,
-            timestamp=datetime.now(),
-        )
-        mos.mem_scheduler.submit_messages(messages=message_item)
-        print(f"Query:\n {query}\n\nAnswer:\n {response}")
+        print(f"Query:\n {query}\n")
+        response = mos.chat(query=query, user_id=user_id)
+        print(f"Answer:\n {response}")
+        print("===== Chat End =====")
+
+    show_web_logs(mem_scheduler=mos.mem_scheduler)
 
     mos.mem_scheduler.stop()
+
+
+def show_web_logs(mem_scheduler: GeneralScheduler):
+    """Display all web log entries from the scheduler's log queue.
+
+    Args:
+        mem_scheduler: The scheduler instance containing web logs to display
+    """
+    if mem_scheduler._web_log_message_queue.empty():
+        print("Web log queue is currently empty.")
+        return
+
+    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
+
+    # Create a temporary queue to preserve the original queue contents
+    temp_queue = Queue()
+    log_count = 0
+
+    while not mem_scheduler._web_log_message_queue.empty():
+        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
+        temp_queue.put(log_item)
+        log_count += 1
+
+        # Print log entry details
+        print(f"\nLog Entry #{log_count}:")
+        print(f'- "{log_item.label}" log: {log_item}')
+
+        print("-" * 50)
+
+    # Restore items back to the original queue
+    while not temp_queue.empty():
+        mem_scheduler._web_log_message_queue.put(temp_queue.get())
+
+    print(f"\nTotal {log_count} web log entries displayed.")
+    print("=" * 110 + "\n")
 
 
 if __name__ == "__main__":
-    run_with_automatic_scheduler_init()
-
-    run_with_manual_scheduler_init()
+    run_with_scheduler_init()

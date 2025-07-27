@@ -8,6 +8,10 @@ from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.mem_scheduler.utils.filter_utils import (
+    filter_similar_memories,
+    filter_too_short_memories,
+)
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -53,11 +57,8 @@ class TestSchedulerRetriever(unittest.TestCase):
 
     def test_filter_similar_memories_empty_input(self):
         """Test filter_similar_memories with empty input list."""
-        result = self.retriever.filter_similar_memories([])
+        result = filter_similar_memories([])
         self.assertEqual(result, [])
-        self.mock_logging_warning.assert_called_with(
-            "Received empty memories list - nothing to filter"
-        )
 
     def test_filter_similar_memories_no_duplicates(self):
         """Test filter_similar_memories with no duplicate memories."""
@@ -67,7 +68,7 @@ class TestSchedulerRetriever(unittest.TestCase):
             "And this third one has nothing in common with the others",
         ]
 
-        result = self.retriever.filter_similar_memories(memories)
+        result = filter_similar_memories(memories)
         self.assertEqual(len(result), 3)
         self.assertEqual(set(result), set(memories))
 
@@ -78,22 +79,19 @@ class TestSchedulerRetriever(unittest.TestCase):
             "The user is planning to move to Chicago next month, which reflects a significant change in their living situation.",
             "The user is planning to move to Chicago in the upcoming month, indicating a significant change in their living situation.",
         ]
-        result = self.retriever.filter_similar_memories(memories, similarity_threshold=0.75)
+        result = filter_similar_memories(memories, similarity_threshold=0.75)
         self.assertLess(len(result), len(memories))
-
-        # Verify logging was called for removed items
-        self.assertGreater(self.mock_logger_info.call_count, 0)
 
     def test_filter_similar_memories_error_handling(self):
         """Test filter_similar_memories error handling."""
         # Test with non-string input (should return original list due to error)
         memories = ["valid text", 12345, "another valid text"]
-        result = self.retriever.filter_similar_memories(memories)
+        result = filter_similar_memories(memories)
         self.assertEqual(result, memories)
 
     def test_filter_too_short_memories_empty_input(self):
         """Test filter_too_short_memories with empty input list."""
-        result = self.retriever.filter_too_short_memories([])
+        result = filter_too_short_memories([])
         self.assertEqual(result, [])
 
     def test_filter_too_short_memories_all_valid(self):
@@ -104,7 +102,7 @@ class TestSchedulerRetriever(unittest.TestCase):
             "And this third memory meets the minimum length requirements too",
         ]
 
-        result = self.retriever.filter_too_short_memories(memories, min_length_threshold=5)
+        result = filter_too_short_memories(memories, min_length_threshold=5)
         self.assertEqual(len(result), 3)
         self.assertEqual(result, memories)
 
@@ -119,7 +117,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         ]
 
         # Test with word count threshold of 3
-        result = self.retriever.filter_too_short_memories(memories, min_length_threshold=3)
+        result = filter_too_short_memories(memories, min_length_threshold=3)
         self.assertEqual(len(result), 3)
         self.assertNotIn("Too short", result)
         self.assertNotIn("Nope", result)
@@ -130,7 +128,7 @@ class TestSchedulerRetriever(unittest.TestCase):
 
         # Test with threshold exactly matching some memories
         # The implementation uses word count, not character count
-        result = self.retriever.filter_too_short_memories(memories, min_length_threshold=3)
+        result = filter_too_short_memories(memories, min_length_threshold=3)
         self.assertEqual(
             len(result), 3
         )  # "Exactly three words here", "Two words only", "Four words right here"

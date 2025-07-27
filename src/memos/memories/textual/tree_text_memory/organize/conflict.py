@@ -3,6 +3,8 @@ import re
 
 from datetime import datetime
 
+from dateutil import parser
+
 from memos.embedders.base import BaseEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
@@ -133,8 +135,8 @@ class ConflictHandler:
         """
         Hard update: compare updated_at, keep the newer one, overwrite the older one's metadata.
         """
-        time_a = datetime.fromisoformat(memory_a.metadata.updated_at)
-        time_b = datetime.fromisoformat(memory_b.metadata.updated_at)
+        time_a = parser.isoparse(memory_a.metadata.updated_at)
+        time_b = parser.isoparse(memory_b.metadata.updated_at)
 
         newer_mem = memory_a if time_a >= time_b else memory_b
         older_mem = memory_b if time_a >= time_b else memory_a

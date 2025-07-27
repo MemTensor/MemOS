@@ -4,13 +4,13 @@ import threading
 import time
 
 from pathlib import Path
-from queue import Queue
 
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.mem_scheduler.modules.base import BaseSchedulerModule
-from memos.mem_scheduler.modules.schemas import DIRECT_EXCHANGE_TYPE, FANOUT_EXCHANGE_TYPE
+from memos.mem_scheduler.modules.misc import AutoDroppingQueue
+from memos.mem_scheduler.schemas.general_schemas import DIRECT_EXCHANGE_TYPE, FANOUT_EXCHANGE_TYPE
 
 
 logger = get_logger(__name__)
@@ -38,7 +38,9 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
         # fixed params
         self.rabbitmq_message_cache_max_size = 10  # Max 10 messages
-        self.rabbitmq_message_cache = Queue(maxsize=self.rabbitmq_message_cache_max_size)
+        self.rabbitmq_message_cache = AutoDroppingQueue(
+            maxsize=self.rabbitmq_message_cache_max_size
+        )
         self.rabbitmq_connection_attempts = 3  # Max retry attempts on connection failure
         self.rabbitmq_retry_delay = 5  # Delay (seconds) between retries
         self.rabbitmq_heartbeat = 60  # Heartbeat interval (seconds) for connectio
@@ -214,12 +216,12 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
     def on_rabbitmq_message(self, channel, method, properties, body):
         """Handle incoming messages. Only for test."""
         try:
-            print(f"Received message: {body.decode()}")
-            self.rabbitmq_message_cache.put_nowait({"properties": properties, "body": body})
-            print(f"message delivery_tag: {method.delivery_tag}")
+            print(f"Received message: {body.decode()}\n")
+            self.rabbitmq_message_cache.put({"properties": properties, "body": body})
+            print(f"message delivery_tag: {method.delivery_tag}\n")
             channel.basic_ack(delivery_tag=method.delivery_tag)
         except Exception as e:
-            logger.error(f"Message handling failed: {e}")
+            logger.error(f"Message handling failed: {e}", exc_info=True)
 
     def wait_for_connection_ready(self):
         start_time = time.time()

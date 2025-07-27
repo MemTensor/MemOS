@@ -4,16 +4,20 @@ import sys
 
 from dotenv import load_dotenv
 from mem0 import MemoryClient
+from memobase import MemoBaseClient
 from zep_cloud.client import Zep
 from zep_cloud.types import Message
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from memobase import ChatBlob
+
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_os.main import MOS
+from memos.mem_os.product import MOSProduct
 from utils.mem0_local import Mem0Client
+from utils.memos_api import MemOSAPI
 from utils.memos_filters import filter_memory_data
 
 
@@ -57,7 +61,7 @@ def memos_client(
             mos_config_data = json.load(f)
         mos_config_data["top_k"] = top_k
         mos_config = MOSConfig(**mos_config_data)
-        memos = MOS(mos_config)
+        memos = MOSProduct(mos_config)
         memos.create_user(user_id=user_id)
 
         if addorsearch == "add":
@@ -68,22 +72,33 @@ def memos_client(
             mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["db_name"] = (
                 f"{db_name.replace('_', '')}"
             )
+            mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["user_name"] = user_id
+            mem_cube_config_data["text_mem"]["config"]["reorganize"] = True
             mem_cube_config = GeneralMemCubeConfig.model_validate(mem_cube_config_data)
             mem_cube = GeneralMemCube(mem_cube_config)
 
         if not os.path.exists(mem_cube_path):
             mem_cube.dump(mem_cube_path)
 
-        memos.register_mem_cube(
-            mem_cube_name_or_path=mem_cube_path,
-            mem_cube_id=user_id,
+        memos.user_register(
             user_id=user_id,
+            user_name=user_id,
+            interests=f"I'm {user_id}",
+            default_mem_cube=mem_cube,
         )
 
     elif mode == "api":
-        pass
+        memos = MemOSAPI(base_url=os.getenv("MEMOS_BASE_URL"))
 
     return memos
+
+
+def memobase_client():
+    client = MemoBaseClient(
+        project_url=os.getenv("MEMOBASE_PROJECT_URL"),
+        api_key=os.getenv("MEMOBASE_API_KEY"),
+    )
+    return client
 
 
 if __name__ == "__main__":
@@ -196,3 +211,25 @@ if __name__ == "__main__":
     search_result_b = memos_b.search(query="football", user_id="alice")
     filtered_search_result_b = filter_memory_data(search_result_b)["text_mem"][0]["memories"]
     print("Search results in Memos B:", filtered_search_result_b)
+
+    # Example usage of MemoBase client
+    client = memobase_client()
+    print("MemoBase client initialized successfully.")
+
+    # Example of adding a user and retrieving user information
+    user_id = client.add_user()
+    user = client.get_user(user_id)
+
+    # Example of adding a chat blob to the user
+    print(f"Adding chat blob for user {user_id}...")
+    b = ChatBlob(
+        messages=[
+            {"role": "user", "content": "Hi, I'm here again"},
+            {"role": "assistant", "content": "Hi, Gus! How can I help you?"},
+        ]
+    )
+    bid = user.insert(b)
+
+    # Example of retrieving the context of the user
+    context = user.context()
+    print(context)

@@ -27,7 +27,7 @@ Output:
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
-Another Example in Chinese (注意: 你的输出必须和输入的user语言一致)：
+Another Example in Chinese (注意: 当user的语言为中文时，你就需要也输出中文)：
 {
   "memory list": [
     {

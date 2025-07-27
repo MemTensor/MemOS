@@ -8,6 +8,7 @@ from memos.configs.base import BaseConfig
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.mem_scheduler import SchedulerConfigFactory
+from memos.configs.mem_user import UserManagerConfigFactory
 
 
 class MOSConfig(BaseConfig):
@@ -32,6 +33,10 @@ class MOSConfig(BaseConfig):
     mem_scheduler: SchedulerConfigFactory | None = Field(
         default=None,
         description="Memory scheduler configuration for managing memory operations",
+    )
+    user_manager: UserManagerConfigFactory = Field(
+        default_factory=lambda: UserManagerConfigFactory(backend="sqlite", config={}),
+        description="User manager configuration for database operations",
     )
     max_turns_window: int = Field(
         default=15,

@@ -1,6 +1,24 @@
+import os
+import sys
+import uuid
+
+
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+)
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ),
+        "evaluation",
+        "scripts",
+    ),
+)
+
 import argparse
 import json
-import os
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,7 +29,8 @@ import pandas as pd
 from dotenv import load_dotenv
 from mem0 import MemoryClient
 from tqdm import tqdm
-from utils import filter_memory_data
+from utils.client import memobase_client, memos_client
+from utils.memos_filters import filter_memory_data
 from zep_cloud.client import Zep
 
 from memos.configs.mem_os import MOSConfig
@@ -101,6 +120,15 @@ TEMPLATE_MEMOS = """Memories for user {speaker_1}:
     {speaker_2_memories}
 """
 
+TEMPLATE_MEMOBASE = """Memories for user {speaker_1_user_id}:
+
+    {speaker_1_memories}
+
+    Memories for user {speaker_2_user_id}:
+
+    {speaker_2_memories}
+"""
+
 
 def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k=20):
     start = time()
@@ -178,6 +206,38 @@ def memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client=N
     speaker_b_context = ""
     for item in filtered_search_b_results:
         speaker_b_context += f"{item['memory']}\n"
+
+    context = TEMPLATE_MEMOS.format(
+        speaker_1=speaker_a,
+        speaker_1_memories=speaker_a_context,
+        speaker_2=speaker_b,
+        speaker_2_memories=speaker_b_context,
+    )
+
+    print(query, context)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
+def memos_api_search(
+    client, query, conv_id, speaker_a, speaker_b, top_k, version, reversed_client=None
+):
+    start = time()
+    speaker_a_user_id = conv_id + "_speaker_a"
+    search_a_results = client.search(
+        query=query, user_id=f"{speaker_a_user_id.replace('_', '')}{version}", top_k=top_k
+    )
+    speaker_a_context = ""
+    for item in search_a_results:
+        speaker_a_context += f"{item}\n"
+
+    speaker_b_user_id = conv_id + "_speaker_b"
+    search_b_results = reversed_client.search(
+        query=query, user_id=f"{speaker_b_user_id.replace('_', '')}{version}", top_k=top_k
+    )
+    speaker_b_context = ""
+    for item in search_b_results:
+        speaker_b_context += f"{item}\n"
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,
@@ -297,7 +357,58 @@ def zep_search(client, query, group_id, top_k=20):
     return context, duration_ms
 
 
-def search_query(client, query, metadata, frame, reversed_client=None, top_k=20):
+def memobase_search(
+    client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k=20
+):
+    start = time()
+    speaker_a_memories = memobase_search_memory(
+        client, speaker_a_user_id, query, max_memory_context_size=top_k * 100
+    )
+    speaker_b_memories = memobase_search_memory(
+        client, speaker_b_user_id, query, max_memory_context_size=top_k * 100
+    )
+    context = TEMPLATE_MEMOBASE.format(
+        speaker_1_user_id=speaker_a,
+        speaker_1_memories=speaker_a_memories,
+        indent=4,
+        speaker_2_user_id=speaker_b,
+        speaker_2_memories=speaker_b_memories,
+    )
+    print(query, context)
+    duration_ms = (time() - start) * 1000
+    return (context, duration_ms)
+
+
+def string_to_uuid(s: str, salt="memobase_client") -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
+
+
+def memobase_search_memory(
+    client, user_id, query, max_memory_context_size, max_retries=3, retry_delay=1
+):
+    retries = 0
+    real_uid = string_to_uuid(user_id)
+    u = client.get_user(real_uid, no_get=True)
+
+    while retries < max_retries:
+        try:
+            memories = u.context(
+                max_token_size=max_memory_context_size,
+                chats=[{"role": "user", "content": query}],
+                event_similarity_threshold=0.2,
+                fill_window_with_events=True,
+            )
+            return memories
+        except Exception as e:
+            print(f"Error during memory search: {e}")
+            print("Retrying...")
+            retries += 1
+            if retries >= max_retries:
+                raise e
+            time.sleep(retry_delay)
+
+
+def search_query(client, query, metadata, frame, version, reversed_client=None, top_k=20):
     conv_id = metadata.get("conv_id")
     speaker_a = metadata.get("speaker_a")
     speaker_b = metadata.get("speaker_b")
@@ -316,7 +427,15 @@ def search_query(client, query, metadata, frame, reversed_client=None, top_k=20)
         )
     elif frame == "memos":
         context, duration_ms = memos_search(
-            client, query, conv_id, speaker_a, speaker_b, reversed_client
+            client, query, conv_id, speaker_a, speaker_b, version, reversed_client
+        )
+    elif frame == "memos-api":
+        context, duration_ms = memos_api_search(
+            client, query, conv_id, speaker_a, speaker_b, top_k, version, reversed_client
+        )
+    elif frame == "memobase":
+        context, duration_ms = memobase_search(
+            client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k
         )
     return context, duration_ms
 
@@ -364,6 +483,15 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         speaker_b_user_id = conv_id + "_speaker_b"
         client = get_client(frame, speaker_a_user_id, version, top_k=top_k)
         reversed_client = get_client(frame, speaker_b_user_id, version, top_k=top_k)
+    elif frame == "memos-api":
+        speaker_a_user_id = conv_id + "_speaker_a"
+        speaker_b_user_id = conv_id + "_speaker_b"
+        client = memos_client(mode="api")
+        reversed_client = memos_client(mode="api")
+        client.user_register(user_id=f"{speaker_a_user_id.replace('_', '')}{version}")
+        reversed_client.user_register(user_id=f"{speaker_b_user_id.replace('_', '')}{version}")
+    elif frame == "memobase":
+        client = memobase_client()
     else:
         client = get_client(frame, conv_id, version)
 
@@ -372,7 +500,7 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         if qa.get("category") == 5:
             return None
         context, duration_ms = search_query(
-            client, query, metadata, frame, reversed_client=reversed_client, top_k=top_k
+            client, query, metadata, frame, version, reversed_client=reversed_client, top_k=top_k
         )
 
         if not context:
@@ -439,8 +567,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "langmem"],
-        help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
+        choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
     )
     parser.add_argument(
         "--version",

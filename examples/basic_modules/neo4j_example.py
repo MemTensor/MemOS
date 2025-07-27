@@ -1,3 +1,5 @@
+import os
+
 from datetime import datetime
 
 from memos.configs.embedder import EmbedderConfigFactory
@@ -8,7 +10,15 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 
 
 embedder_config = EmbedderConfigFactory.model_validate(
-    {"backend": "ollama", "config": {"model_name_or_path": "nomic-embed-text:latest"}}
+    {
+        "backend": "universal_api",
+        "config": {
+            "provider": "openai",
+            "api_key": os.getenv("OPENAI_API_KEY", "sk-xxxxx"),
+            "model_name_or_path": "text-embedding-3-large",
+            "base_url": os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1"),
+        },
+    }
 )
 embedder = EmbedderFactory.from_config(embedder_config)
 
@@ -27,7 +37,7 @@ def example_multi_db(db_name: str = "paper"):
             "password": "12345678",
             "db_name": db_name,
             "auto_create": True,
-            "embedding_dimension": 768,
+            "embedding_dimension": 3072,
             "use_multi_db": True,
         },
     )
@@ -268,7 +278,7 @@ def example_shared_db(db_name: str = "shared-traval-group"):
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": True,
-                "embedding_dimension": 768,
+                "embedding_dimension": 3072,
             },
         )
         # Step 2: Instantiate graph store
@@ -331,7 +341,7 @@ def example_shared_db(db_name: str = "shared-traval-group"):
             "password": "12345678",
             "db_name": db_name,
             "user_name": user_list[0],
-            "embedding_dimension": 768,
+            "embedding_dimension": 3072,
         },
     )
     graph_alice = GraphStoreFactory.from_config(config_alice)
@@ -362,14 +372,14 @@ def run_user_session(
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": False,  # Neo4j Community does not allow auto DB creation
-                "embedding_dimension": 768,
+                "embedding_dimension": 3072,
                 "vec_config": {
                     # Pass nested config to initialize external vector DB
                     # If you use qdrant, please use Server instead of local mode.
                     "backend": "qdrant",
                     "config": {
                         "collection_name": "neo4j_vec_db",
-                        "vector_dimension": 768,
+                        "vector_dimension": 3072,
                         "distance_metric": "cosine",
                         "host": "localhost",
                         "port": 6333,
@@ -388,7 +398,7 @@ def run_user_session(
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": True,
-                "embedding_dimension": 768,
+                "embedding_dimension": 3072,
             },
         )
     graph = GraphStoreFactory.from_config(config)

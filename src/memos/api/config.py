@@ -116,6 +116,48 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_internet_config() -> dict[str, Any]:
+        """Get embedder configuration."""
+        return {
+            "backend": "xinyu",
+            "config": {
+                "api_key": os.getenv("XINYU_API_KEY"),
+                "search_engine_id": os.getenv("XINYU_SEARCH_ENGINE_ID"),
+                "max_results": 15,
+                "num_per_request": 10,
+                "reader": {
+                    "backend": "simple_struct",
+                    "config": {
+                        "llm": {
+                            "backend": "openai",
+                            "config": {
+                                "model_name_or_path": os.getenv("MEMRADER_MODEL"),
+                                "temperature": 0.6,
+                                "max_tokens": 5000,
+                                "top_p": 0.95,
+                                "top_k": 20,
+                                "api_key": "EMPTY",
+                                "api_base": os.getenv("MEMRADER_API_BASE"),
+                                "remove_think_prefix": True,
+                                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                            },
+                        },
+                        "embedder": APIConfig.get_embedder_config(),
+                        "chunker": {
+                            "backend": "sentence",
+                            "config": {
+                                "tokenizer_or_token_counter": "gpt2",
+                                "chunk_size": 512,
+                                "chunk_overlap": 128,
+                                "min_sentences_per_chunk": 1,
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+    @staticmethod
     def get_neo4j_community_config(user_id: str | None = None) -> dict[str, Any]:
         """Get Neo4j community configuration."""
         return {
@@ -213,6 +255,34 @@ class APIConfig:
         return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "false").lower() == "true"
 
     @staticmethod
+    def is_dingding_bot_enabled() -> bool:
+        """Check if DingDing bot is enabled via environment variable."""
+        return os.getenv("ENABLE_DINGDING_BOT", "false").lower() == "true"
+
+    @staticmethod
+    def get_dingding_bot_config() -> dict[str, Any] | None:
+        """Get DingDing bot configuration if enabled."""
+        if not APIConfig.is_dingding_bot_enabled():
+            return None
+
+        return {
+            "enabled": True,
+            "access_token_user": os.getenv("DINGDING_ACCESS_TOKEN_USER", ""),
+            "secret_user": os.getenv("DINGDING_SECRET_USER", ""),
+            "access_token_error": os.getenv("DINGDING_ACCESS_TOKEN_ERROR", ""),
+            "secret_error": os.getenv("DINGDING_SECRET_ERROR", ""),
+            "robot_code": os.getenv("DINGDING_ROBOT_CODE", ""),
+            "app_key": os.getenv("DINGDING_APP_KEY", ""),
+            "app_secret": os.getenv("DINGDING_APP_SECRET", ""),
+            "oss_endpoint": os.getenv("OSS_ENDPOINT", ""),
+            "oss_region": os.getenv("OSS_REGION", ""),
+            "oss_bucket_name": os.getenv("OSS_BUCKET_NAME", ""),
+            "oss_access_key_id": os.getenv("OSS_ACCESS_KEY_ID", ""),
+            "oss_access_key_secret": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+            "oss_public_base_url": os.getenv("OSS_PUBLIC_BASE_URL", ""),
+        }
+
+    @staticmethod
     def get_product_default_config() -> dict[str, Any]:
         """Get default configuration for Product API."""
         openai_config = APIConfig.get_openai_config()
@@ -300,7 +370,6 @@ class APIConfig:
     def create_user_config(user_name: str, user_id: str) -> tuple[MOSConfig, GeneralMemCube]:
         """Create configuration for a specific user."""
         openai_config = APIConfig.get_openai_config()
-
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
@@ -341,7 +410,6 @@ class APIConfig:
             "top_k": 30,
             "max_turns_window": 20,
         }
-
         # Add scheduler configuration if enabled
         if APIConfig.is_scheduler_enabled():
             config_dict["mem_scheduler"] = APIConfig.get_scheduler_config()
@@ -351,9 +419,21 @@ class APIConfig:
 
         default_config = MOSConfig(**config_dict)
 
-        if os.getenv("NEO4J_BACKEND", "neo4j_community").lower() == "neo4j_community":
-            neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
+        neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
+        neo4j_config = APIConfig.get_neo4j_config(user_id)
+        internet_config = (
+            APIConfig.get_internet_config()
+            if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
+            else None
+        )
+        graph_db_backend_map = {
+            "neo4j-community": neo4j_community_config,
+            "neo4j": neo4j_config,
+        }
+        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        if graph_db_backend in graph_db_backend_map:
             # Create MemCube config
+
             default_cube_config = GeneralMemCubeConfig.model_validate(
                 {
                     "user_id": user_id,
@@ -364,10 +444,11 @@ class APIConfig:
                             "extractor_llm": {"backend": "openai", "config": openai_config},
                             "dispatcher_llm": {"backend": "openai", "config": openai_config},
                             "graph_db": {
-                                "backend": "neo4j-community",
-                                "config": neo4j_community_config,
+                                "backend": graph_db_backend,
+                                "config": graph_db_backend_map[graph_db_backend],
                             },
                             "embedder": APIConfig.get_embedder_config(),
+                            "internet_retriever": internet_config,
                         },
                     },
                     "act_mem": {}
@@ -377,31 +458,7 @@ class APIConfig:
                 }
             )
         else:
-            neo4j_config = APIConfig.get_neo4j_config(user_id)
-            # Create MemCube config
-            default_cube_config = GeneralMemCubeConfig.model_validate(
-                {
-                    "user_id": user_id,
-                    "cube_id": f"{user_name}_default_cube",
-                    "text_mem": {
-                        "backend": "tree_text",
-                        "config": {
-                            "extractor_llm": {"backend": "openai", "config": openai_config},
-                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                            "graph_db": {
-                                "backend": "neo4j",
-                                "config": neo4j_config,
-                            },
-                            "embedder": APIConfig.get_embedder_config(),
-                        },
-                    },
-                    "act_mem": {}
-                    if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                    else APIConfig.get_activation_vllm_config(),
-                    "para_mem": {},
-                }
-            )
-
+            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
@@ -416,9 +473,19 @@ class APIConfig:
             return None
 
         openai_config = APIConfig.get_openai_config()
-
-        if os.getenv("NEO4J_BACKEND", "neo4j_community").lower() == "neo4j_community":
-            neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
+        neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
+        neo4j_config = APIConfig.get_neo4j_config(user_id="default")
+        graph_db_backend_map = {
+            "neo4j-community": neo4j_community_config,
+            "neo4j": neo4j_config,
+        }
+        internet_config = (
+            APIConfig.get_internet_config()
+            if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
+            else None
+        )
+        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        if graph_db_backend in graph_db_backend_map:
             return GeneralMemCubeConfig.model_validate(
                 {
                     "user_id": "default",
@@ -429,12 +496,13 @@ class APIConfig:
                             "extractor_llm": {"backend": "openai", "config": openai_config},
                             "dispatcher_llm": {"backend": "openai", "config": openai_config},
                             "graph_db": {
-                                "backend": "neo4j-community",
-                                "config": neo4j_community_config,
+                                "backend": graph_db_backend,
+                                "config": graph_db_backend_map[graph_db_backend],
                             },
                             "embedder": APIConfig.get_embedder_config(),
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
+                            "internet_retriever": internet_config,
                         },
                     },
                     "act_mem": {}
@@ -444,28 +512,4 @@ class APIConfig:
                 }
             )
         else:
-            neo4j_config = APIConfig.get_neo4j_config(user_id="default")
-            return GeneralMemCubeConfig.model_validate(
-                {
-                    "user_id": "default",
-                    "cube_id": "default_cube",
-                    "text_mem": {
-                        "backend": "tree_text",
-                        "config": {
-                            "extractor_llm": {"backend": "openai", "config": openai_config},
-                            "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                            "graph_db": {
-                                "backend": "neo4j",
-                                "config": neo4j_config,
-                            },
-                            "embedder": APIConfig.get_embedder_config(),
-                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
-                            == "true",
-                        },
-                    },
-                    "act_mem": {}
-                    if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
-                    else APIConfig.get_activation_vllm_config(),
-                    "para_mem": {},
-                }
-            )
+            raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")

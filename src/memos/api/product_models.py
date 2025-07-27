@@ -83,6 +83,7 @@ class ChatRequest(BaseRequest):
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
+    internet_search: bool = Field(True, description="Whether to use internet search")
 
 
 class UserCreate(BaseRequest):
@@ -150,6 +151,7 @@ class SearchRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Search query")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    top_k: int = Field(10, description="Number of results to return")
 
 
 class SuggestionRequest(BaseRequest):

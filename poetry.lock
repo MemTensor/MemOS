@@ -3869,7 +3869,6 @@ files = [
     {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
     {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
 ]
-markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [package.dependencies]
 six = ">=1.5"
@@ -4974,7 +4973,6 @@ files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
 ]
-markers = {main = "extra == \"mem-reader\" or extra == \"all\""}
 
 [[package]]
 name = "sniffio"
@@ -6295,4 +6293,4 @@ tree-mem = ["neo4j", "schedule"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "d3a7dda79ef4954155ed988794a560458db3c410d280a88cabafb469f6bf3613"
+content-hash = "94a3c4f97f0deda4c6ccbfd8ceda194f18dbc7525aa49004ffcc7846a1c40f7e"
