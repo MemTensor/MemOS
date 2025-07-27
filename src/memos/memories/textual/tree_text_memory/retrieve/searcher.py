@@ -6,6 +6,7 @@ from datetime import datetime
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
+from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 
 from .internet_retriever_factory import InternetRetrieverFactory
@@ -13,6 +14,9 @@ from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
 from .reranker import MemoryReranker
 from .task_goal_parser import TaskGoalParser
+
+
+logger = get_logger(__name__)
 
 
 class Searcher:
@@ -53,7 +57,12 @@ class Searcher:
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-
+        if not info:
+            logger.warning(
+                "Please input 'info' when use tree.search so that "
+                "the database would store the consume history."
+            )
+            info = {"user_id": "", "session_id": ""}
         # Step 1: Parse task structure into topic, concept, and fact levels
         context = []
         if mode == "fine":
