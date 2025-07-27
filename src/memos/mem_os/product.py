@@ -748,6 +748,10 @@ class MOSProduct(MOSCore):
             internet_search=internet_search,
         )["text_mem"]
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
+        search_time_end = time.time()
+        logger.info(
+            f"time chat: search text_mem time user_id: {user_id} time is: {search_time_end - time_start}"
+        )
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
         )
@@ -799,7 +803,10 @@ class MOSProduct(MOSCore):
                 response_stream = self.chat_llm.generate(current_messages)
 
         time_end = time.time()
-
+        chat_time_end = time.time()
+        logger.info(
+            f"time chat: chat time user_id: {user_id} time is: {chat_time_end - search_time_end}"
+        )
         # Simulate streaming output with proper reference handling using tiktoken
 
         # Initialize buffer for streaming
@@ -935,9 +942,14 @@ class MOSProduct(MOSCore):
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
+        time_start = time.time()
         memory_list = super().get_all(
             mem_cube_id=mem_cube_ids[0] if mem_cube_ids else None, user_id=user_id
         )[memory_type]
+        get_all_time_end = time.time()
+        logger.info(
+            f"time get_all: get_all time user_id: {user_id} time is: {get_all_time_end - time_start}"
+        )
         reformat_memory_list = []
         if memory_type == "text_mem":
             for memory in memory_list:
@@ -995,6 +1007,10 @@ class MOSProduct(MOSCore):
                     "memories": act_mem_params[0].model_dump(),
                 }
             )
+        make_format_time_end = time.time()
+        logger.info(
+            f"time get_all: make_format time user_id: {user_id} time is: {make_format_time_end - get_all_time_end}"
+        )
         return reformat_memory_list
 
     def _get_subgraph(
@@ -1070,8 +1086,17 @@ class MOSProduct(MOSCore):
         """Search memories for a specific user."""
 
         # Load user cubes if not already loaded
+        time_start = time.time()
         self._load_user_cubes(user_id, self.default_cube_config)
+        load_user_cubes_time_end = time.time()
+        logger.info(
+            f"time search: load_user_cubes time user_id: {user_id} time is: {load_user_cubes_time_end - time_start}"
+        )
         search_result = super().search(query, user_id, install_cube_ids, top_k, mode=mode)
+        search_time_end = time.time()
+        logger.info(
+            f"time search: search text_mem time user_id: {user_id} time is: {search_time_end - load_user_cubes_time_end}"
+        )
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
         for memory in text_memory_list:
@@ -1087,7 +1112,10 @@ class MOSProduct(MOSCore):
                 memories_list.append(memories)
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
         search_result["text_mem"] = reformat_memory_list
-
+        time_end = time.time()
+        logger.info(
+            f"time search: total time for user_id: {user_id} time is: {time_end - time_start}"
+        )
         return search_result
 
     def add(
