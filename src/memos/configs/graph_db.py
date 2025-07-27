@@ -9,7 +9,7 @@ from memos.configs.vec_db import VectorDBConfigFactory
 class BaseGraphDBConfig(BaseConfig):
     """Base class for all graph database configurations."""
 
-    uri: str
+    uri: str | list
     user: str
     password: str
 
@@ -103,6 +103,53 @@ class Neo4jCommunityGraphDBConfig(Neo4jGraphDBConfig):
         return self
 
 
+class NebulaGraphDBConfig(BaseGraphDBConfig):
+    """
+    NebulaGraph-specific configuration.
+
+    Key concepts:
+    - `space`: Equivalent to a database or namespace. All tag/edge/schema live within a space.
+    - `user_name`: Used for logical tenant isolation if needed.
+    - `auto_create`: Whether to automatically create the target space if it does not exist.
+
+    Example:
+    ---
+    hosts = ["127.0.0.1:9669"]
+    user = "root"
+    password = "nebula"
+    space = "shared_graph"
+    user_name = "alice"
+    """
+
+    space: str = Field(
+        ..., description="The name of the target NebulaGraph space (like a database)"
+    )
+    user_name: str | None = Field(
+        default=None,
+        description="Logical user or tenant ID for data isolation (optional, used in metadata tagging)",
+    )
+    auto_create: bool = Field(
+        default=False,
+        description="Whether to auto-create the space if it does not exist",
+    )
+    use_multi_db: bool = Field(
+        default=True,
+        description=(
+            "If True: use Neo4j's multi-database feature for physical isolation; "
+            "each user typically gets a separate database. "
+            "If False: use a single shared database with logical isolation by user_name."
+        ),
+    )
+    embedding_dimension: int = Field(default=3072, description="Dimension of vector embedding")
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        """Validate config."""
+        if not self.space:
+            raise ValueError("`space` must be provided")
+        return self
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
@@ -110,6 +157,7 @@ class GraphDBConfigFactory(BaseModel):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "neo4j": Neo4jGraphDBConfig,
         "neo4j-community": Neo4jCommunityGraphDBConfig,
+        "nebular": NebulaGraphDBConfig,
     }
 
     @field_validator("backend")
