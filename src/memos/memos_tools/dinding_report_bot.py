@@ -1,4 +1,4 @@
-"""dingding_report_bot.py"""
+"""dinding_report_bot.py"""
 
 import base64
 import contextlib
