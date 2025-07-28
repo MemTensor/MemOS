@@ -24,10 +24,10 @@ class UserConfig(Base):
 
     __tablename__ = "user_configs"
 
-    user_id = Column(String, primary_key=True)
+    user_id = Column(String(255), primary_key=True)
     config_data = Column(Text, nullable=False)  # JSON string of MOSConfig
-    created_at = Column(String, nullable=False)  # ISO format timestamp
-    updated_at = Column(String, nullable=False)  # ISO format timestamp
+    created_at = Column(String(50), nullable=False)  # ISO format timestamp
+    updated_at = Column(String(50), nullable=False)  # ISO format timestamp
 
     def __repr__(self):
         return f"<UserConfig(user_id='{self.user_id}')>"

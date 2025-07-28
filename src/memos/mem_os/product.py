@@ -28,7 +28,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_user.persistent_user_manager import PersistentUserManager
+from memos.mem_user.persistent_factory import PersistentUserManagerFactory
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
     TextualMemoryItem,
@@ -85,8 +85,13 @@ class MOSProduct(MOSCore):
             root_config.user_id = "root"
             root_config.session_id = "root_session"
 
-        # Initialize parent MOSCore with root config
-        super().__init__(root_config)
+        # Create persistent user manager BEFORE calling parent constructor
+        persistent_user_manager_client = PersistentUserManagerFactory.from_config(
+            config_factory=root_config.user_manager
+        )
+
+        # Initialize parent MOSCore with root config and persistent user manager
+        super().__init__(root_config, user_manager=persistent_user_manager_client)
 
         # Product-specific attributes
         self.default_config = default_config
@@ -100,8 +105,8 @@ class MOSProduct(MOSCore):
         self.user_cube_access: dict[str, set[str]] = {}  # user_id -> set of cube_ids
         self.user_chat_histories: dict[str, dict] = {}
 
-        # Use PersistentUserManager for user management
-        self.global_user_manager = PersistentUserManager(user_id="root")
+        # Note: self.user_manager is now the persistent user manager from parent class
+        # No need for separate global_user_manager as they are the same instance
 
         # Initialize tiktoken for streaming
         try:
@@ -128,10 +133,10 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get all user configurations from persistent storage
-            user_configs = self.global_user_manager.list_user_configs()
+            user_configs = self.user_manager.list_user_configs()
 
             # Get the raw database records for sorting by updated_at
-            session = self.global_user_manager._get_session()
+            session = self.user_manager._get_session()
             try:
                 from memos.mem_user.persistent_user_manager import UserConfig
 
@@ -177,7 +182,7 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get user's accessible cubes from persistent storage
-            accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
+            accessible_cubes = self.user_manager.get_user_cubes(user_id)
 
             for cube in accessible_cubes:
                 if cube.cube_id not in self.mem_cubes:
@@ -200,11 +205,12 @@ class MOSProduct(MOSCore):
                             )
                     except Exception as e:
                         logger.error(
-                            f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}"
+                            f"Failed to pre-load cube {cube.cube_id} for user {user_id}: {e}",
+                            exc_info=True,
                         )
 
         except Exception as e:
-            logger.error(f"Error pre-loading cubes for user {user_id}: {e}")
+            logger.error(f"Error pre-loading cubes for user {user_id}: {e}", exc_info=True)
 
     def _load_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
@@ -216,7 +222,7 @@ class MOSProduct(MOSCore):
             default_cube_config (GeneralMemCubeConfig | None, optional): Default cube configuration. Defaults to None.
         """
         # Get user's accessible cubes from persistent storage
-        accessible_cubes = self.global_user_manager.get_user_cubes(user_id)
+        accessible_cubes = self.user_manager.get_user_cubes(user_id)
 
         for cube in accessible_cubes[:1]:
             if cube.cube_id not in self.mem_cubes:
@@ -250,7 +256,7 @@ class MOSProduct(MOSCore):
             return
 
         # Try to get config from persistent storage first
-        stored_config = self.global_user_manager.get_user_config(user_id)
+        stored_config = self.user_manager.get_user_config(user_id)
         if stored_config:
             self.user_configs[user_id] = stored_config
             self._load_user_cube_access(user_id)
@@ -280,7 +286,7 @@ class MOSProduct(MOSCore):
         """Load user's cube access permissions."""
         try:
             # Get user's accessible cubes from persistent storage
-            accessible_cubes = self.global_user_manager.get_user_cube_access(user_id)
+            accessible_cubes = self.user_manager.get_user_cube_access(user_id)
             self.user_cube_access[user_id] = set(accessible_cubes)
         except Exception as e:
             logger.warning(f"Failed to load cube access for user {user_id}: {e}")
@@ -316,7 +322,7 @@ class MOSProduct(MOSCore):
         user_config.session_id = f"{user_id}_session"
 
         # Save configuration to persistent storage
-        self.global_user_manager.save_user_config(user_id, user_config)
+        self.user_manager.save_user_config(user_id, user_config)
 
         return user_config
 
@@ -328,7 +334,7 @@ class MOSProduct(MOSCore):
             return self.user_configs[user_id]
 
         # Try to get config from persistent storage first
-        stored_config = self.global_user_manager.get_user_config(user_id)
+        stored_config = self.user_manager.get_user_config(user_id)
         if stored_config:
             return self._create_user_config(user_id, stored_config)
 
@@ -615,9 +621,7 @@ class MOSProduct(MOSCore):
                 user_name = user_id
 
             # Create user with configuration using persistent user manager
-            self.global_user_manager.create_user_with_config(
-                user_id, user_config, UserRole.USER, user_id
-            )
+            self.user_manager.create_user_with_config(user_id, user_config, UserRole.USER, user_id)
 
             # Create user configuration
             user_config = self._create_user_config(user_id, user_config)
@@ -746,6 +750,10 @@ class MOSProduct(MOSCore):
             internet_search=internet_search,
         )["text_mem"]
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
+        search_time_end = time.time()
+        logger.info(
+            f"time chat: search text_mem time user_id: {user_id} time is: {search_time_end - time_start}"
+        )
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
         )
@@ -797,7 +805,10 @@ class MOSProduct(MOSCore):
                 response_stream = self.chat_llm.generate(current_messages)
 
         time_end = time.time()
-
+        chat_time_end = time.time()
+        logger.info(
+            f"time chat: chat time user_id: {user_id} time is: {chat_time_end - search_time_end}"
+        )
         # Simulate streaming output with proper reference handling using tiktoken
 
         # Initialize buffer for streaming
@@ -933,9 +944,14 @@ class MOSProduct(MOSCore):
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
+        time_start = time.time()
         memory_list = super().get_all(
             mem_cube_id=mem_cube_ids[0] if mem_cube_ids else None, user_id=user_id
         )[memory_type]
+        get_all_time_end = time.time()
+        logger.info(
+            f"time get_all: get_all time user_id: {user_id} time is: {get_all_time_end - time_start}"
+        )
         reformat_memory_list = []
         if memory_type == "text_mem":
             for memory in memory_list:
@@ -993,6 +1009,10 @@ class MOSProduct(MOSCore):
                     "memories": act_mem_params[0].model_dump(),
                 }
             )
+        make_format_time_end = time.time()
+        logger.info(
+            f"time get_all: make_format time user_id: {user_id} time is: {make_format_time_end - get_all_time_end}"
+        )
         return reformat_memory_list
 
     def _get_subgraph(
@@ -1068,8 +1088,17 @@ class MOSProduct(MOSCore):
         """Search memories for a specific user."""
 
         # Load user cubes if not already loaded
+        time_start = time.time()
         self._load_user_cubes(user_id, self.default_cube_config)
+        load_user_cubes_time_end = time.time()
+        logger.info(
+            f"time search: load_user_cubes time user_id: {user_id} time is: {load_user_cubes_time_end - time_start}"
+        )
         search_result = super().search(query, user_id, install_cube_ids, top_k, mode=mode)
+        search_time_end = time.time()
+        logger.info(
+            f"time search: search text_mem time user_id: {user_id} time is: {search_time_end - load_user_cubes_time_end}"
+        )
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
         for memory in text_memory_list:
@@ -1085,7 +1114,10 @@ class MOSProduct(MOSCore):
                 memories_list.append(memories)
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
         search_result["text_mem"] = reformat_memory_list
-
+        time_end = time.time()
+        logger.info(
+            f"time search: total time for user_id: {user_id} time is: {time_end - time_start}"
+        )
         return search_result
 
     def add(
@@ -1095,24 +1127,34 @@ class MOSProduct(MOSCore):
         memory_content: str | None = None,
         doc_path: str | None = None,
         mem_cube_id: str | None = None,
+        source: str | None = None,
+        user_profile: bool = False,
     ):
         """Add memory for a specific user."""
-        # Use MOSCore's built-in user/cube validation
-        if mem_cube_id:
-            self._validate_cube_access(user_id, mem_cube_id)
-        else:
-            self._validate_user_exists(user_id)
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
 
         result = super().add(messages, memory_content, doc_path, mem_cube_id, user_id)
+        if user_profile:
+            try:
+                user_interests = memory_content.split("'userInterests': '")[1].split("', '")[0]
+                user_interests = user_interests.replace(",", " ")
+                user_profile_memories = self.mem_cubes[
+                    mem_cube_id
+                ].text_mem.internet_retriever.retrieve_from_internet(query=user_interests, top_k=5)
+                for memory in user_profile_memories:
+                    self.mem_cubes[mem_cube_id].text_mem.add(memory)
+            except Exception as e:
+                logger.error(
+                    f"Failed to retrieve user profile: {e}, memory_content: {memory_content}"
+                )
 
         return result
 
     def list_users(self) -> list:
         """List all registered users."""
-        return self.global_user_manager.list_users()
+        return self.user_manager.list_users()
 
     def get_user_info(self, user_id: str) -> dict:
         """Get user information including accessible cubes."""
@@ -1152,7 +1194,7 @@ class MOSProduct(MOSCore):
         """
         try:
             # Save to persistent storage
-            success = self.global_user_manager.save_user_config(user_id, config)
+            success = self.user_manager.save_user_config(user_id, config)
             if success:
                 # Update in-memory config
                 self.user_configs[user_id] = config
@@ -1172,7 +1214,7 @@ class MOSProduct(MOSCore):
         Returns:
             MOSConfig | None: The user's configuration or None if not found.
         """
-        return self.global_user_manager.get_user_config(user_id)
+        return self.user_manager.get_user_config(user_id)
 
     def get_active_user_count(self) -> int:
         """Get the number of active user configurations in memory."""
