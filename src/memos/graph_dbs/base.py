@@ -146,7 +146,7 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_by_metadata(self, filters: dict[str, Any]) -> list[str]:
+    def get_by_metadata(self, filters: list[dict[str, Any]]) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
 
@@ -160,6 +160,14 @@ class BaseGraphDB(ABC):
         Notes:
             - Supports structured querying such as tag/category/importance/time filtering.
             - Can be used for faceted recall or prefiltering before embedding rerank.
+        """
+
+    @abstractmethod
+    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+        """
+        Find nodes that are likely candidates for structure optimization:
+        - Isolated nodes, nodes with empty background, or nodes with exactly one child.
+        - Plus: the child of any parent node that has exactly one child.
         """
 
     # Structure Maintenance

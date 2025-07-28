@@ -255,6 +255,34 @@ class APIConfig:
         return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "false").lower() == "true"
 
     @staticmethod
+    def is_dingding_bot_enabled() -> bool:
+        """Check if DingDing bot is enabled via environment variable."""
+        return os.getenv("ENABLE_DINGDING_BOT", "false").lower() == "true"
+
+    @staticmethod
+    def get_dingding_bot_config() -> dict[str, Any] | None:
+        """Get DingDing bot configuration if enabled."""
+        if not APIConfig.is_dingding_bot_enabled():
+            return None
+
+        return {
+            "enabled": True,
+            "access_token_user": os.getenv("DINGDING_ACCESS_TOKEN_USER", ""),
+            "secret_user": os.getenv("DINGDING_SECRET_USER", ""),
+            "access_token_error": os.getenv("DINGDING_ACCESS_TOKEN_ERROR", ""),
+            "secret_error": os.getenv("DINGDING_SECRET_ERROR", ""),
+            "robot_code": os.getenv("DINGDING_ROBOT_CODE", ""),
+            "app_key": os.getenv("DINGDING_APP_KEY", ""),
+            "app_secret": os.getenv("DINGDING_APP_SECRET", ""),
+            "oss_endpoint": os.getenv("OSS_ENDPOINT", ""),
+            "oss_region": os.getenv("OSS_REGION", ""),
+            "oss_bucket_name": os.getenv("OSS_BUCKET_NAME", ""),
+            "oss_access_key_id": os.getenv("OSS_ACCESS_KEY_ID", ""),
+            "oss_access_key_secret": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+            "oss_public_base_url": os.getenv("OSS_PUBLIC_BASE_URL", ""),
+        }
+
+    @staticmethod
     def get_product_default_config() -> dict[str, Any]:
         """Get default configuration for Product API."""
         openai_config = APIConfig.get_openai_config()
@@ -431,10 +459,6 @@ class APIConfig:
             )
         else:
             raise ValueError(f"Invalid Neo4j backend: {graph_db_backend}")
-        if os.getenv("ENABLE_INTERNET", "false").lower() == "true":
-            default_cube_config.text_mem.config["internet_retriever"] = (
-                APIConfig.get_internet_config()
-            )
         default_mem_cube = GeneralMemCube(default_cube_config)
         return default_config, default_mem_cube
 
