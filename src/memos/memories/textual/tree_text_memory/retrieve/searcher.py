@@ -149,7 +149,7 @@ class Searcher:
                 query=query,
                 query_embedding=query_embedding[0],
                 graph_results=internet_items,
-                top_k=max(top_k, 10),
+                top_k=min(top_k, 5),
                 parsed_goal=parsed_goal,
             )
             return ranked_memories

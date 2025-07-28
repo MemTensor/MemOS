@@ -54,6 +54,8 @@ class MOSProduct(MOSCore):
         default_config: MOSConfig | None = None,
         max_user_instances: int = 1,
         default_cube_config: GeneralMemCubeConfig | None = None,
+        online_bot=None,
+        error_bot=None,
     ):
         """
         Initialize MOSProduct with an optional default configuration.
@@ -62,6 +64,8 @@ class MOSProduct(MOSCore):
             default_config (MOSConfig | None): Default configuration for new users
             max_user_instances (int): Maximum number of user instances to keep in memory
             default_cube_config (GeneralMemCubeConfig | None): Default cube configuration for loading cubes
+            online_bot: DingDing online_bot function or None if disabled
+            error_bot: DingDing error_bot function or None if disabled
         """
         # Initialize with a root config for shared resources
         if default_config is None:
@@ -88,6 +92,8 @@ class MOSProduct(MOSCore):
         self.default_config = default_config
         self.default_cube_config = default_cube_config
         self.max_user_instances = max_user_instances
+        self.online_bot = online_bot
+        self.error_bot = error_bot
 
         # User-specific data structures
         self.user_configs: dict[str, MOSConfig] = {}
@@ -333,7 +339,9 @@ class MOSProduct(MOSCore):
 
         return self._create_user_config(user_id, user_config)
 
-    def _build_system_prompt(self, user_id: str, memories_all: list[TextualMemoryItem]) -> str:
+    def _build_system_prompt(
+        self, memories_all: list[TextualMemoryItem], base_prompt: str | None = None
+    ) -> str:
         """
         Build custom system prompt for the user with memory references.
 
@@ -363,7 +371,7 @@ class MOSProduct(MOSCore):
             for i, memory in enumerate(memories_all, 1):
                 # Format: [memory_id]: memory_content
                 memory_id = f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                memory_content = memory.memory if hasattr(memory, "memory") else str(memory)
+                memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
                 memory_context += f"{memory_id}: {memory_content}\n"
             return base_prompt + memory_context
 
@@ -694,7 +702,7 @@ class MOSProduct(MOSCore):
             "text_mem"
         ]
         if text_mem_result:
-            memories = "\n".join([m.memory for m in text_mem_result[0]["memories"]])
+            memories = "\n".join([m.memory[:200] for m in text_mem_result[0]["memories"]])
         else:
             memories = ""
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
@@ -710,6 +718,7 @@ class MOSProduct(MOSCore):
         cube_id: str | None = None,
         history: MessageList | None = None,
         top_k: int = 10,
+        internet_search: bool = False,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -729,7 +738,12 @@ class MOSProduct(MOSCore):
         memories_list = []
         yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
         memories_result = super().search(
-            query, user_id, install_cube_ids=[cube_id] if cube_id else None, top_k=top_k
+            query,
+            user_id,
+            install_cube_ids=[cube_id] if cube_id else None,
+            top_k=top_k,
+            mode="fine",
+            internet_search=internet_search,
         )["text_mem"]
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
         self._send_message_to_scheduler(
@@ -739,7 +753,7 @@ class MOSProduct(MOSCore):
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list)
         # Build custom system prompt with relevant memories
-        system_prompt = self._build_system_prompt(user_id, memories_list)
+        system_prompt = self._build_system_prompt(memories_list, base_prompt=None)
 
         # Get chat history
         if user_id not in self.chat_history_manager:
@@ -829,6 +843,7 @@ class MOSProduct(MOSCore):
             memories_json["metadata"]["embedding"] = []
             memories_json["metadata"]["sources"] = []
             memories_json["metadata"]["memory"] = memories.memory
+            memories_json["metadata"]["id"] = memories.id
             reference.append({"metadata": memories_json["metadata"]})
 
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
@@ -844,6 +859,41 @@ class MOSProduct(MOSCore):
 
         clean_response, extracted_references = self._extract_references_from_response(full_response)
         logger.info(f"Extracted {len(extracted_references)} references from response")
+
+        # Send chat report if online_bot is available
+        try:
+            from memos.memos_tools.notification_utils import send_online_bot_notification
+
+            # Prepare data for online_bot
+            chat_data = {
+                "query": query,
+                "user_id": user_id,
+                "cube_id": cube_id,
+                "system_prompt": system_prompt,
+                "full_response": full_response,
+            }
+
+            system_data = {
+                "references": extracted_references,
+                "time_start": time_start,
+                "time_end": time_end,
+                "speed_improvement": speed_improvement,
+            }
+
+            emoji_config = {"chat": "💬", "system_info": "📊"}
+
+            send_online_bot_notification(
+                online_bot=self.online_bot,
+                header_name="MemOS Chat Report",
+                sub_title_name="chat_with_references",
+                title_color="#00956D",
+                other_data1=chat_data,
+                other_data2=system_data,
+                emoji=emoji_config,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send chat notification: {e}")
+
         self._send_message_to_scheduler(
             user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
         )
@@ -1008,13 +1058,18 @@ class MOSProduct(MOSCore):
         return reformat_memory_list
 
     def search(
-        self, query: str, user_id: str, install_cube_ids: list[str] | None = None, top_k: int = 10
+        self,
+        query: str,
+        user_id: str,
+        install_cube_ids: list[str] | None = None,
+        top_k: int = 10,
+        mode: Literal["fast", "fine"] = "fast",
     ):
         """Search memories for a specific user."""
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-        search_result = super().search(query, user_id, install_cube_ids, top_k)
+        search_result = super().search(query, user_id, install_cube_ids, top_k, mode=mode)
         text_memory_list = search_result["text_mem"]
         reformat_memory_list = []
         for memory in text_memory_list:
