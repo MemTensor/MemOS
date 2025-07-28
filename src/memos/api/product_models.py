@@ -143,6 +143,8 @@ class MemoryCreateRequest(BaseRequest):
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="Cube ID")
+    source: str | None = Field(None, description="Source of the memory")
+    user_profile: bool = Field(False, description="User profile memory")
 
 
 class SearchRequest(BaseRequest):

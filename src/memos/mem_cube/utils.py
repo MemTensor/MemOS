@@ -98,6 +98,12 @@ def merge_config_with_default(
                     logger.info("neo4j is not supported, remove db_name")
                 else:
                     logger.info("db_name is not in merged_graph_config, no need to remove")
+            else:
+                if "space" in merged_graph_config:
+                    merged_graph_config.pop("space")
+                    logger.info("neo4j is not supported, remove db_name")
+                else:
+                    logger.info("space is not in merged_graph_config, no need to remove")
             preserved_graph_db = {
                 "backend": default_text_config["graph_db"]["backend"],
                 "config": merged_graph_config,

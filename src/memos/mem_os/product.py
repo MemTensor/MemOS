@@ -1125,18 +1125,28 @@ class MOSProduct(MOSCore):
         memory_content: str | None = None,
         doc_path: str | None = None,
         mem_cube_id: str | None = None,
+        source: str | None = None,
+        user_profile: bool = False,
     ):
         """Add memory for a specific user."""
-        # Use MOSCore's built-in user/cube validation
-        if mem_cube_id:
-            self._validate_cube_access(user_id, mem_cube_id)
-        else:
-            self._validate_user_exists(user_id)
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
 
         result = super().add(messages, memory_content, doc_path, mem_cube_id, user_id)
+        if user_profile:
+            try:
+                user_interests = memory_content.split("'userInterests': '")[1].split("', '")[0]
+                user_interests = user_interests.replace(",", " ")
+                user_profile_memories = self.mem_cubes[
+                    mem_cube_id
+                ].text_mem.internet_retriever.retrieve_from_internet(query=user_interests, top_k=5)
+                for memory in user_profile_memories:
+                    self.mem_cubes[mem_cube_id].text_mem.add(memory)
+            except Exception as e:
+                logger.error(
+                    f"Failed to retrieve user profile: {e}, memory_content: {memory_content}"
+                )
 
         return result
 
