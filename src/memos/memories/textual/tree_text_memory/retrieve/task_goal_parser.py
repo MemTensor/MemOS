@@ -81,7 +81,7 @@ class TaskGoalParser:
         Parse LLM JSON output safely.
         """
         try:
-            response = response.replace("```", "").replace("json", "")
+            response = response.replace("```", "").replace("json", "").strip()
             response_json = eval(response)
             return ParsedTaskGoal(
                 memories=response_json.get("memories", []),
