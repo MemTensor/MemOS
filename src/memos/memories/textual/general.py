@@ -214,7 +214,7 @@ EXTRACTION_PROMPT_PART_1 = f"""You are a memory extractor. Your task is to extra
     - "memory": The content of the memory (string). Rephrase the content if necessary.
     - "metadata": A dictionary containing additional information about the memory.
 * The metadata dictionary should include:
-    - "type": The type of memory (string), e.g., "procedure", "fact", "event", "opinion", etc.
+    - "type": The type of memory must be only in: "procedure", "fact", "event", "opinion", "topic", "reasoning".
     - "memory_time": The time the memory occurred or refers to (string). Must be in standard `YYYY-MM-DD` format. Relative expressions such as "yesterday" or "tomorrow" are not allowed.
     - "source": The origin of the memory (string), e.g., `"conversation"`, `"retrieved"`, `"web"`, `"file"`.
     - "confidence": A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.
