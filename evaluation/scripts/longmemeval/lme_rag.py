@@ -17,13 +17,8 @@ from dotenv import load_dotenv
 from locomo.locomo_rag import RAGManager
 from openai import OpenAI
 from tqdm import tqdm
-from utils.client import mem0_client, memos_client, zep_client
-from utils.memos_filters import filter_memory_data
 from utils.prompts import (
-    MEM0_CONTEXT_TEMPLATE,
-    MEM0_GRAPH_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
-    ZEP_CONTEXT_TEMPLATE,
 )
 
 
@@ -100,109 +95,6 @@ class RAGFullContext(RAGManager):
         return chunks, embeddings
 
 
-def zep_search(client, user_id, query, top_k=20):
-    start = time()
-    nodes_result = client.graph.search(
-        query=query,
-        user_id=user_id,
-        scope="nodes",
-        reranker="rrf",
-        limit=top_k,
-    )
-    edges_result = client.graph.search(
-        query=query,
-        user_id=user_id,
-        scope="edges",
-        reranker="cross_encoder",
-        limit=top_k,
-    )
-
-    nodes = nodes_result.nodes
-    edges = edges_result.edges
-
-    facts = [f"  - {edge.fact} (event_time: {edge.valid_at})" for edge in edges]
-    entities = [f"  - {node.name}: {node.summary}" for node in nodes]
-    context = ZEP_CONTEXT_TEMPLATE.format(facts="\n".join(facts), entities="\n".join(entities))
-
-    duration_ms = (time() - start) * 1000
-
-    return context, duration_ms
-
-
-def mem0_search(client, user_id, query, top_k=20, enable_graph=False, frame="mem0-api"):
-    start = time()
-
-    if frame == "mem0-local":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k,
-        )
-        search_memories = "\n".join(
-            [
-                f"  - {item['memory']} (date: {item['metadata']['timestamp']})"
-                for item in results["results"]
-            ]
-        )
-        search_graph = (
-            "\n".join(
-                [
-                    f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('destination', '?')} (relationship: {item.get('relationship', '?')})"
-                    for item in results.get("relations", [])
-                ]
-            )
-            if enable_graph
-            else ""
-        )
-
-    elif frame == "mem0-api":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k,
-            version="v2",
-            output_format="v1.1",
-            enable_graph=enable_graph,
-            filters={"AND": [{"user_id": user_id}, {"run_id": "*"}]},
-        )
-        search_memories = "\n".join(
-            [f"  - {item['memory']} (date: {item['created_at']})" for item in results["results"]]
-        )
-        search_graph = (
-            "\n".join(
-                [
-                    f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} (relationship: {item.get('relationship', '?')})"
-                    for item in results.get("relations", [])
-                ]
-            )
-            if enable_graph
-            else ""
-        )
-    if enable_graph:
-        context = MEM0_GRAPH_CONTEXT_TEMPLATE.format(
-            user_id=user_id, memories=search_memories, relations=search_graph
-        )
-    else:
-        context = MEM0_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
-    duration_ms = (time() - start) * 1000
-    return context, duration_ms
-
-
-def memos_search(client, user_id, query, frame="memos-local"):
-    start = time()
-
-    results = client.search(
-        query=query,
-        user_id=user_id,
-    )
-
-    search_memories = filter_memory_data(results)["text_mem"][0]["memories"]
-    context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
-
-    duration_ms = (time() - start) * 1000
-    return context, duration_ms
-
-
 def rag_search(client, user_id, query, top_k, frame):
     print(f"The number_chunks is:{client.k}")
     start = time()
@@ -216,7 +108,7 @@ def rag_search(client, user_id, query, top_k, frame):
         question_id = item.get("question_id")
         question = item.get("question")
         answer = item.get("answer")
-        print(f"The question_id: {question_id} --> question: {question} <----> answer is:{answer}")
+        print(f"Question_id: {question_id} --> question: {question} <----> answer is:{answer}")
         haystack_sessions = item.get("haystack_sessions", [])
 
         for session in haystack_sessions:
@@ -285,33 +177,7 @@ def process_user(lme_df, conv_idx, frame, version, chunk_size, num_chunks, top_k
         print(f"♻️  \033[93mUsing existing results for conversation {conv_idx}\033[0m")
         return existing_results
 
-    if frame == "zep":
-        client = zep_client()
-        print("🔌 \033[1mUsing \033[94mZep client\033[0m \033[1mfor search...\033[0m")
-        context, duration_ms = zep_search(client, user_id, question)
-
-    elif frame == "mem0-local":
-        client = mem0_client(mode="local")
-        print("🔌 \033[1mUsing \033[94mMem0 Local client\033[0m \033[1mfor search...\033[0m")
-        context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
-    elif frame == "mem0-api":
-        client = mem0_client(mode="api")
-        print("🔌 \033[1mUsing \033[94mMem0 API client\033[0m \033[1mfor search...\033[0m")
-        context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
-    elif frame == "memos-local":
-        client = memos_client(
-            mode="local",
-            db_name=f"lme_{frame}-{version}-{user_id.replace('_', '')}",
-            user_id=user_id,
-            top_k=20,
-            mem_cube_path=f"results/lme/{frame}-{version}/storages/{user_id}",
-            mem_cube_config_path="configs/mem_cube_config.json",
-            mem_os_config_path="configs/mos_memos_config.json",
-            addorsearch="search",
-        )
-        print("🔌 \033[1mUsing \033[94mMemos Local client\033[0m \033[1mfor search...\033[0m")
-        context, duration_ms = memos_search(client, user_id, question, frame=frame)
-    elif frame == "rag":
+    if frame == "rag":
         rag_fullcontext_obj = RAGFullContext(chunk_size=chunk_size, k=num_chunks)
         print("🔌 \033[1mUsing \033[94mRAG API client\033[0m \033[1mfor search...\033[0m")
         context, duration_ms = rag_search(rag_fullcontext_obj, user_id, question, top_k, frame)
@@ -414,7 +280,7 @@ def main(frame, version, chunk_size, num_chunks, top_k=20, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LongMemeval Search Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "rag"])
+    parser.add_argument("--lib", type=str, choices=["rag"])
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."
     )
