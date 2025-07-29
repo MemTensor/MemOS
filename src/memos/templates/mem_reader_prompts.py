@@ -16,6 +16,7 @@ For example, write "The user felt exhausted..." instead of "I felt exhausted..."
    - Include all key experiences, thoughts, emotional responses, and plans — even if they seem minor.
    - Prioritize completeness and fidelity over conciseness.
    - Do not generalize or skip details that could be personally meaningful to user.
+5. Please avoid any content that violates national laws and regulations or involves politically sensitive information in the memories you extract.
 
 Return a single valid JSON object with the following structure:
 

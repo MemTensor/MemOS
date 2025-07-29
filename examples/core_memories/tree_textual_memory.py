@@ -193,27 +193,45 @@ for m_list in memory:
 
 time.sleep(60)
 
+init_time = time.time()
 results = my_tree_textual_memory.search(
     "Talk about the user's childhood story?",
     top_k=10,
-    info={"query": "Talk about the user's childhood story?", "user_id": "111", "session": "2234"},
+    info={
+        "query": "Talk about the user's childhood story?",
+        "user_id": "111",
+        "session_id": "2234",
+        "chat_history": [{"role": "user", "content": "xxxxx"}],
+    },
 )
 for i, r in enumerate(results):
     r = r.to_dict()
     print(f"{i}'th similar result is: " + str(r["memory"]))
-print(f"Successfully search {len(results)} memories")
+print(f"Successfully search {len(results)} memories in {round(time.time() - init_time)}s")
 
 # try this when use 'fine' mode (Note that you should pass the internet Config, refer to examples/core_memories/textual_internet_memoy.py)
+init_time = time.time()
 results_fine_search = my_tree_textual_memory.search(
-    "Recent news in NewYork",
+    "Recent news in the first city you've mentioned.",
     top_k=10,
     mode="fine",
-    info={"query": "Recent news in NewYork", "user_id": "111", "session": "2234"},
+    info={
+        "query": "Recent news in NewYork",
+        "user_id": "111",
+        "session_id": "2234",
+        "chat_history": [
+            {"role": "user", "content": "I want to know three beautiful cities"},
+            {"role": "assistant", "content": "New York, London, and Shanghai"},
+        ],
+    },
 )
+
 for i, r in enumerate(results_fine_search):
     r = r.to_dict()
     print(f"{i}'th similar result is: " + str(r["memory"]))
-print(f"Successfully search {len(results_fine_search)} memories")
+print(
+    f"Successfully search {len(results_fine_search)} memories in {round(time.time() - init_time)}s"
+)
 
 # find related nodes
 related_nodes = my_tree_textual_memory.get_relevant_subgraph("Painting")
