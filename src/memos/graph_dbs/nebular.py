@@ -38,6 +38,7 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     - Convert embedding to list of float if present.
     """
     now = datetime.utcnow().isoformat()
+    metadata["node_type"] = metadata.pop("type")
 
     # Fill timestamps if missing
     metadata.setdefault("created_at", now)
@@ -49,6 +50,44 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         metadata["embedding"] = _normalize([float(x) for x in embedding])
 
     return metadata
+
+
+def _metadata_filter(metadata: dict[str, Any]) -> dict[str, Any]:
+    """
+    Filter and validate metadata dictionary against the Memory node schema.
+    - Removes keys not in schema.
+    - Warns if required fields are missing.
+    """
+
+    allowed_fields = {
+        "id",
+        "memory",
+        "user_name",
+        "user_id",
+        "session_id",
+        "status",
+        "key",
+        "confidence",
+        "tags",
+        "created_at",
+        "updated_at",
+        "memory_type",
+        "sources",
+        "source",
+        "node_type",
+        "visibility",
+        "usage",
+        "background",
+        "embedding",
+    }
+
+    missing_fields = allowed_fields - metadata.keys()
+    if missing_fields:
+        logger.warning(f"Metadata missing required fields: {sorted(missing_fields)}")
+
+    filtered_metadata = {k: v for k, v in metadata.items() if k in allowed_fields}
+
+    return filtered_metadata
 
 
 def _escape_str(value: str) -> str:
@@ -281,6 +320,7 @@ class NebulaGraphDB(BaseGraphDB):
         if "embedding" in metadata and isinstance(metadata["embedding"], list):
             metadata["embedding"] = _normalize(metadata["embedding"])
 
+        metadata = _metadata_filter(metadata)
         properties = ", ".join(f"{k}: {_format_value(v, k)}" for k, v in metadata.items())
         gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
 
@@ -830,8 +870,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         def _escape_value(value):
             if isinstance(value, str):
-                escaped = value.replace('"', '\\"')
-                return f'"{escaped}"'
+                return f'"{value}"'
             elif isinstance(value, list):
                 return "[" + ", ".join(_escape_value(v) for v in value) + "]"
             else:
@@ -850,7 +889,7 @@ class NebulaGraphDB(BaseGraphDB):
             elif op == "in":
                 where_clauses.append(f"n.{field} IN {escaped_value}")
             elif op == "contains":
-                where_clauses.append(f"ANY(x IN n.{field} WHERE x = {escaped_value})")
+                where_clauses.append(f"size(filter(n.{field}, t -> t IN {escaped_value})) > 0")
             elif op == "starts_with":
                 where_clauses.append(f"n.{field} STARTS WITH {escaped_value}")
             elif op == "ends_with":
