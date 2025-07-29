@@ -30,56 +30,8 @@ def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     return node_id, memory, metadata
 
 
-def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """
-    Ensure metadata has proper datetime fields and normalized types.
-
-    - Fill `created_at` and `updated_at` if missing (in ISO 8601 format).
-    - Convert embedding to list of float if present.
-    """
-    now = datetime.utcnow().isoformat()
-
-    # Fill timestamps if missing
-    metadata.setdefault("created_at", now)
-    metadata.setdefault("updated_at", now)
-
-    # Normalize embedding type
-    embedding = metadata.get("embedding")
-    if embedding and isinstance(embedding, list):
-        metadata["embedding"] = _normalize([float(x) for x in embedding])
-
-    return metadata
-
-
 def _escape_str(value: str) -> str:
     return value.replace('"', '\\"')
-
-
-def _format_value(val: Any, key: str = "") -> str:
-    from nebulagraph_python.py_data_types import NVector
-
-    if isinstance(val, str):
-        return f'"{_escape_str(val)}"'
-    elif isinstance(val, (int | float)):
-        return str(val)
-    elif isinstance(val, datetime):
-        return f'datetime("{val.isoformat()}")'
-    elif isinstance(val, list):
-        if key == "embedding":
-            dim = len(val)
-            joined = ",".join(str(float(x)) for x in val)
-            return f"VECTOR<{dim}, FLOAT>([{joined}])"
-        else:
-            return f"[{', '.join(_format_value(v) for v in val)}]"
-    elif isinstance(val, NVector):
-        if key == "embedding":
-            dim = len(val)
-            joined = ",".join(str(float(x)) for x in val)
-            return f"VECTOR<{dim}, FLOAT>([{joined}])"
-    elif val is None:
-        return "NULL"
-    else:
-        return f'"{_escape_str(str(val))}"'
 
 
 def _format_datetime(value: str | datetime) -> str:
@@ -201,6 +153,12 @@ class NebulaGraphDB(BaseGraphDB):
         self.config = config
         self.db_name = config.space
         self.user_name = config.user_name
+        self.embedding_dimension = config.embedding_dimension
+        self.dim_field = (
+            f"embedding_{self.embedding_dimension}"
+            if (self.embedding_dimension != "3072")
+            else "embedding"
+        )
         self.system_db_name = "system" if config.use_multi_db else config.space
         self.pool = SessionPool(
             hosts=config.get("uri"),
@@ -224,7 +182,11 @@ class NebulaGraphDB(BaseGraphDB):
         with self.pool.get() as client:
             if auto_set_db and self.db_name:
                 client.execute(f"SESSION SET GRAPH `{self.db_name}`")
-            return client.execute(gql, timeout=timeout)
+            try:
+                return client.execute(gql, timeout=timeout)
+            except Exception:
+                logger.error(f"Fail to run gql {gql} trace: {traceback.format_exc()}")
+                print("here")
 
     def close(self):
         self.pool.close()
@@ -279,9 +241,10 @@ class NebulaGraphDB(BaseGraphDB):
         metadata["memory"] = memory
 
         if "embedding" in metadata and isinstance(metadata["embedding"], list):
-            metadata["embedding"] = _normalize(metadata["embedding"])
+            metadata[self.dim_field] = _normalize(metadata["embedding"])
+            metadata.pop("embedding")
 
-        properties = ", ".join(f"{k}: {_format_value(v, k)}" for k, v in metadata.items())
+        properties = ", ".join(f"{k}: {self._format_value(v, k)}" for k, v in metadata.items())
         gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
 
         try:
@@ -319,7 +282,7 @@ class NebulaGraphDB(BaseGraphDB):
         fields = fields.copy()
         set_clauses = []
         for k, v in fields.items():
-            set_clauses.append(f"n.{k} = {_format_value(v, k)}")
+            set_clauses.append(f"n.{k} = {self._format_value(v, k)}")
 
         set_clause_str = ",\n    ".join(set_clauses)
 
@@ -344,7 +307,7 @@ class NebulaGraphDB(BaseGraphDB):
             """
         if not self.config.use_multi_db and self.config.user_name:
             user_name = self.config.user_name
-            query += f" WHERE n.user_name = {_format_value(user_name)}"
+            query += f" WHERE n.user_name = {self._format_value(user_name)}"
         query += "\n DETACH DELETE n"
         self.execute_query(query)
 
@@ -382,12 +345,12 @@ class NebulaGraphDB(BaseGraphDB):
         """
         query = f"""
                    MATCH (a@Memory) -[r@{type}]-> (b@Memory)
-                   WHERE a.id = {_format_value(source_id)} AND b.id = {_format_value(target_id)}
+                   WHERE a.id = {self._format_value(source_id)} AND b.id = {self._format_value(target_id)}
                """
 
         if not self.config.use_multi_db and self.config.user_name:
             user_name = self.config.user_name
-            query += f" AND a.user_name = {_format_value(user_name)} AND b.user_name = {_format_value(user_name)}"
+            query += f" AND a.user_name = {self._format_value(user_name)} AND b.user_name = {self._format_value(user_name)}"
 
         query += "\nDELETE r"
         self.execute_query(query)
@@ -651,13 +614,13 @@ class NebulaGraphDB(BaseGraphDB):
         query = f"""
             MATCH (p@Memory)-[@PARENT]->(c@Memory)
             WHERE p.id = "{id}" {where_user}
-            RETURN c.id AS id, c.embedding AS embedding, c.memory AS memory
+            RETURN c.id AS id, c.{self.dim_field} AS embedding, c.memory AS memory
         """
         result = self.execute_query(query)
         children = []
         for row in result:
             eid = row["id"].value  # STRING
-            emb_v = row["embedding"].value  # NVector
+            emb_v = row[self.dim_field].value  # NVector
             emb = list(emb_v.values) if emb_v else []
             mem = row["memory"].value  # STRING
 
@@ -775,11 +738,11 @@ class NebulaGraphDB(BaseGraphDB):
                USE `{self.db_name}`
                MATCH (n@Memory)
                {where_clause}
-               ORDER BY inner_product(n.embedding, {gql_vector}) DESC
+               ORDER BY inner_product(n.{self.dim_field}, {gql_vector}) DESC
                APPROXIMATE
                LIMIT {top_k}
                OPTIONS {{ METRIC: IP, TYPE: IVF, NPROBE: 8 }}
-               RETURN n.id AS id, inner_product(n.embedding, {gql_vector}) AS score
+               RETURN n.id AS id, inner_product(n.{self.dim_field}, {gql_vector}) AS score
            """
 
         try:
@@ -1017,9 +980,9 @@ class NebulaGraphDB(BaseGraphDB):
             if not self.config.use_multi_db and self.config.user_name:
                 metadata["user_name"] = self.config.user_name
 
-            metadata = _prepare_node_metadata(metadata)
+            metadata = self._prepare_node_metadata(metadata)
             metadata.update({"id": id, "memory": memory})
-            properties = ", ".join(f"{k}: {_format_value(v, k)}" for k, v in metadata.items())
+            properties = ", ".join(f"{k}: {self._format_value(v, k)}" for k, v in metadata.items())
             node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
             self.execute_query(node_gql)
 
@@ -1181,43 +1144,71 @@ class NebulaGraphDB(BaseGraphDB):
         raise NotImplementedError
 
     def _ensure_database_exists(self):
-        create_tag = """
-            CREATE GRAPH TYPE IF NOT EXISTS MemOSType AS {
-            NODE Memory (:MemoryTag {
-                id STRING,
-                memory STRING,
-                user_name STRING,
-                user_id STRING,
-                session_id STRING,
-                status STRING,
-                key STRING,
-                confidence FLOAT,
-                tags LIST<STRING>,
-                created_at STRING,
-                updated_at STRING,
-                memory_type STRING,
-                sources LIST<STRING>,
-                source STRING,
-                node_type STRING,
-                visibility STRING,
-                usage LIST<STRING>,
-                background STRING,
-                embedding VECTOR<3072, FLOAT>,
-                PRIMARY KEY(id)
-            }),
-            EDGE RELATE_TO (Memory) -[{user_name STRING}]-> (Memory),
-            EDGE PARENT (Memory) -[{user_name STRING}]-> (Memory),
-            EDGE AGGREGATE_TO (Memory) -[{user_name STRING}]-> (Memory),
-            EDGE MERGED_TO (Memory) -[{user_name STRING}]-> (Memory),
-            EDGE INFERS (Memory) -[{user_name STRING}]-> (Memory),
-            EDGE FOLLOWS (Memory) -[{user_name STRING}]-> (Memory)
-        }
-        """
-        create_graph = f"CREATE GRAPH IF NOT EXISTS `{self.db_name}` TYPED MemOSType"
+        graph_type_name = "MemOSBgeM3Type"
+
+        check_type_query = "SHOW GRAPH TYPES"
+        result = self.execute_query(check_type_query, auto_set_db=False)
+
+        type_exists = any(row["graph_type"].as_string() == graph_type_name for row in result)
+
+        if not type_exists:
+            create_tag = f"""
+            CREATE GRAPH TYPE IF NOT EXISTS {graph_type_name} AS {{
+                NODE Memory (:MemoryTag {{
+                    id STRING,
+                    memory STRING,
+                    user_name STRING,
+                    user_id STRING,
+                    session_id STRING,
+                    status STRING,
+                    key STRING,
+                    confidence FLOAT,
+                    tags LIST<STRING>,
+                    created_at STRING,
+                    updated_at STRING,
+                    memory_type STRING,
+                    sources LIST<STRING>,
+                    source STRING,
+                    node_type STRING,
+                    visibility STRING,
+                    usage LIST<STRING>,
+                    background STRING,
+                    {self.dim_field} VECTOR<{self.embedding_dimension}, FLOAT>,
+                    PRIMARY KEY(id)
+                }}),
+                EDGE RELATE_TO (Memory) -[{{user_name STRING}}]-> (Memory),
+                EDGE PARENT (Memory) -[{{user_name STRING}}]-> (Memory),
+                EDGE AGGREGATE_TO (Memory) -[{{user_name STRING}}]-> (Memory),
+                EDGE MERGED_TO (Memory) -[{{user_name STRING}}]-> (Memory),
+                EDGE INFERS (Memory) -[{{user_name STRING}}]-> (Memory),
+                EDGE FOLLOWS (Memory) -[{{user_name STRING}}]-> (Memory)
+            }}
+            """
+            self.execute_query(create_tag, auto_set_db=False)
+        else:
+            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name};"
+            desc_result = self.execute_query(describe_query, auto_set_db=False)
+
+            memory_fields = []
+            for row in desc_result:
+                field_name = row.values()[0].as_string()
+                memory_fields.append(field_name)
+
+            if self.dim_field not in memory_fields:
+                alter_query = f"""
+                ALTER GRAPH TYPE {graph_type_name} {{
+                    ALTER NODE TYPE Memory ADD PROPERTIES {{ {self.dim_field} VECTOR<{self.embedding_dimension}, FLOAT> }}
+                }}
+                """
+                self.execute_query(alter_query, auto_set_db=False)
+                logger.info(f"✅ Add new vector search {self.dim_field} to {graph_type_name}")
+            else:
+                logger.info(f"✅ Graph Type {graph_type_name} already include {self.dim_field}")
+
+        create_graph = f"CREATE GRAPH IF NOT EXISTS `{self.db_name}` TYPED {graph_type_name}"
         set_graph_working = f"SESSION SET GRAPH `{self.db_name}`"
 
         try:
-            self.execute_query(create_tag, auto_set_db=False)
             self.execute_query(create_graph, auto_set_db=False)
             self.execute_query(set_graph_working)
             logger.info(f"✅ Graph ``{self.db_name}`` is now the working graph.")
@@ -1230,19 +1221,24 @@ class NebulaGraphDB(BaseGraphDB):
         """
         Create a vector index for the specified property in the label.
         """
+        index_name = f"idx_{vector_property}_{dimensions}"
         create_vector_index = f"""
-                        CREATE VECTOR INDEX IF NOT EXISTS {index_name}
-                        ON NODE Memory::{vector_property}
-                        OPTIONS {{
-                            DIM: {dimensions},
-                            METRIC: IP,
-                            TYPE: IVF,
-                            NLIST: 100,
-                            TRAINSIZE: 1000
-                        }}
-                        FOR `{self.db_name}`
-                    """
+                CREATE VECTOR INDEX IF NOT EXISTS {index_name}
+                ON NODE {label}::{vector_property}_{dimensions}
+                OPTIONS {{
+                    DIM: {dimensions},
+                    METRIC: IP,
+                    TYPE: IVF,
+                    NLIST: 100,
+                    TRAINSIZE: 1000
+                }}
+                FOR `{self.db_name}`
+            """
         self.execute_query(create_vector_index)
+        logger.info(
+            f"✅ Ensure {label}::{vector_property} vector index {index_name} "
+            f"exists (DIM={dimensions})"
+        )
 
     def _create_basic_property_indexes(self) -> None:
         """
@@ -1321,5 +1317,52 @@ class NebulaGraphDB(BaseGraphDB):
         parsed.pop("user_name", None)
         metadata = parsed
         metadata["type"] = metadata.pop("node_type")
+        metadata["embedding"] = metadata.pop(self.dim_field)
 
         return {"id": node_id, "memory": memory, "metadata": metadata}
+
+    def _prepare_node_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Ensure metadata has proper datetime fields and normalized types.
+
+        - Fill `created_at` and `updated_at` if missing (in ISO 8601 format).
+        - Convert embedding to list of float if present.
+        """
+        now = datetime.utcnow().isoformat()
+
+        # Fill timestamps if missing
+        metadata.setdefault("created_at", now)
+        metadata.setdefault("updated_at", now)
+
+        # Normalize embedding type
+        embedding = metadata.get("embedding")
+        if embedding and isinstance(embedding, list):
+            metadata[self.dim_field] = _normalize([float(x) for x in embedding])
+
+        return metadata
+
+    def _format_value(self, val: Any, key: str = "") -> str:
+        from nebulagraph_python.py_data_types import NVector
+
+        if isinstance(val, str):
+            return f'"{_escape_str(val)}"'
+        elif isinstance(val, (int | float)):
+            return str(val)
+        elif isinstance(val, datetime):
+            return f'datetime("{val.isoformat()}")'
+        elif isinstance(val, list):
+            if key == self.dim_field:
+                dim = len(val)
+                joined = ",".join(str(float(x)) for x in val)
+                return f"VECTOR<{dim}, FLOAT>([{joined}])"
+            else:
+                return f"[{', '.join(self._format_value(v) for v in val)}]"
+        elif isinstance(val, NVector):
+            if key == self.dim_field:
+                dim = len(val)
+                joined = ",".join(str(float(x)) for x in val)
+                return f"VECTOR<{dim}, FLOAT>([{joined}])"
+        elif val is None:
+            return "NULL"
+        else:
+            return f'"{_escape_str(str(val))}"'
