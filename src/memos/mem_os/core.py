@@ -288,7 +288,7 @@ class MOSCore:
                     info={
                         "user_id": target_user_id,
                         "session_id": self.session_id,
-                        "chat_history": chat_history,
+                        "chat_history": chat_history.chat_history,
                     },
                 )
                 memories_all.extend(memories)
