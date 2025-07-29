@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import uuid
 
 from datetime import datetime
 from pathlib import Path
@@ -565,7 +564,8 @@ class MOSCore:
         logger.info(
             f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
         )
-
+        if target_user_id not in self.chat_history_manager:
+            self._register_chat_history(target_user_id)
         chat_history = self.chat_history_manager[target_user_id]
 
         result: MOSSearchResult = {
