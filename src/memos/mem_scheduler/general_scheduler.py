@@ -9,6 +9,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
     QUERY_LABEL,
+    WORKING_MEMORY_TYPE,
     MemCubeID,
     UserID,
 )
@@ -247,6 +248,9 @@ class GeneralScheduler(BaseScheduler):
                             mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
                             mem_type = mem_item.metadata.memory_type
                             mem_content = mem_item.memory
+
+                            if mem_type == WORKING_MEMORY_TYPE:
+                                continue
 
                             self.log_adding_memory(
                                 memory=mem_content,
