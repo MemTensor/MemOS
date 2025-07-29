@@ -88,7 +88,7 @@ class ChatRequest(BaseRequest):
 
 class UserCreate(BaseRequest):
     user_name: str | None = Field(None, description="Name of the user")
-    role: str = Field("user", description="Role of the user")
+    role: str = Field("USER", description="Role of the user")
     user_id: str = Field(..., description="User ID")
 
 
@@ -143,6 +143,8 @@ class MemoryCreateRequest(BaseRequest):
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="Cube ID")
+    source: str | None = Field(None, description="Source of the memory")
+    user_profile: bool = Field(False, description="User profile memory")
 
 
 class SearchRequest(BaseRequest):

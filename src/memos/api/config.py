@@ -1,3 +1,4 @@
+import json
 import os
 
 from typing import Any
@@ -219,6 +220,32 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_nebular_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get Nebular configuration."""
+        return {
+            "uri": json.loads(os.getenv("NEBULAR_HOSTS", '["localhost"]')),
+            "user": os.getenv("NEBULAR_USER", "root"),
+            "password": os.getenv("NEBULAR_PASSWORD", "xxxxxx"),
+            "space": os.getenv("NEBULAR_SPACE", "shared-tree-textual-memory"),
+            "user_name": f"memos{user_id.replace('-', '')}",
+            "use_multi_db": False,
+            "auto_create": True,
+            "embedding_dimension": 3072,
+        }
+
+    @staticmethod
+    def get_mysql_config() -> dict[str, Any]:
+        """Get MySQL configuration."""
+        return {
+            "host": os.getenv("MYSQL_HOST", "localhost"),
+            "port": int(os.getenv("MYSQL_PORT", "3306")),
+            "username": os.getenv("MYSQL_USERNAME", "root"),
+            "password": os.getenv("MYSQL_PASSWORD", "12345678"),
+            "database": os.getenv("MYSQL_DATABASE", "memos_users"),
+            "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
+        }
+
+    @staticmethod
     def get_scheduler_config() -> dict[str, Any]:
         """Get scheduler configuration."""
         return {
@@ -294,6 +321,7 @@ class APIConfig:
             "vllm": vllm_config,
         }
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
+        mysql_config = APIConfig.get_mysql_config()
         config = {
             "user_id": os.getenv("MOS_USER_ID", "root"),
             "chat_model": {"backend": backend, "config": backend_model[backend]},
@@ -329,6 +357,13 @@ class APIConfig:
             config["enable_mem_scheduler"] = True
         else:
             config["enable_mem_scheduler"] = False
+
+        # Add user manager configuration if enabled
+        if os.getenv("MOS_USER_MANAGER_BACKEND", "sqlite").lower() == "mysql":
+            config["user_manager"] = {
+                "backend": "mysql",
+                "config": mysql_config,
+            }
 
         return config
 
@@ -372,6 +407,7 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        mysql_config = APIConfig.get_mysql_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         backend_model = {
             "openai": openai_config,
@@ -417,10 +453,18 @@ class APIConfig:
         else:
             config_dict["enable_mem_scheduler"] = False
 
+        # Add user manager configuration if enabled
+        if os.getenv("MOS_USER_MANAGER_BACKEND", "sqlite").lower() == "mysql":
+            config_dict["user_manager"] = {
+                "backend": "mysql",
+                "config": mysql_config,
+            }
+
         default_config = MOSConfig(**config_dict)
 
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
+        nebular_config = APIConfig.get_nebular_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
@@ -429,6 +473,7 @@ class APIConfig:
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
+            "nebular": nebular_config,
         }
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
@@ -475,9 +520,11 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
+        nebular_config = APIConfig.get_nebular_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
+            "nebular": nebular_config,
         }
         internet_config = (
             APIConfig.get_internet_config()

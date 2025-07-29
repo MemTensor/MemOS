@@ -258,7 +258,7 @@ class TestMOSUserManagement:
         assert len(users) == 1
         assert users[0]["user_id"] == "test_user"
         assert users[0]["user_name"] == "Test User"
-        assert users[0]["role"] == "user"
+        assert users[0]["role"] == "USER"
 
 
 class TestMOSMemoryOperations:
