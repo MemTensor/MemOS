@@ -6,6 +6,7 @@ from datetime import datetime
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
+from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 
 from .internet_retriever_factory import InternetRetrieverFactory
@@ -13,6 +14,9 @@ from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
 from .reranker import MemoryReranker
 from .task_goal_parser import TaskGoalParser
+
+
+logger = get_logger(__name__)
 
 
 class Searcher:
@@ -53,7 +57,12 @@ class Searcher:
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-
+        if not info:
+            logger.warning(
+                "Please input 'info' when use tree.search so that "
+                "the database would store the consume history."
+            )
+            info = {"user_id": "", "session_id": ""}
         # Step 1: Parse task structure into topic, concept, and fact levels
         context = []
         if mode == "fine":
@@ -67,7 +76,18 @@ class Searcher:
             context = list(set(context))
 
         # Step 1a: Parse task structure into topic, concept, and fact levels
-        parsed_goal = self.task_goal_parser.parse(query, "\n".join(context))
+        parsed_goal = self.task_goal_parser.parse(
+            task_description=query,
+            context="\n".join(context),
+            conversation=info.get("chat_history", []),
+            mode=mode,
+        )
+
+        query = (
+            parsed_goal.rephrased_query
+            if parsed_goal.rephrased_query and len(parsed_goal.rephrased_query) > 0
+            else query
+        )
 
         if parsed_goal.memories:
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
@@ -136,12 +156,12 @@ class Searcher:
             """
             Retrieve information from the internet using Google Custom Search API.
             """
-            if not self.internet_retriever or mode == "fast":
+            if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
                 return []
             if memory_type not in ["All"]:
                 return []
             internet_items = self.internet_retriever.retrieve_from_internet(
-                query=query, top_k=top_k, parsed_goal=parsed_goal
+                query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
             )
 
             # Convert to the format expected by reranker
@@ -149,21 +169,30 @@ class Searcher:
                 query=query,
                 query_embedding=query_embedding[0],
                 graph_results=internet_items,
-                top_k=max(top_k, 10),
+                top_k=min(top_k, 5),
                 parsed_goal=parsed_goal,
             )
             return ranked_memories
 
-        # Step 3: Parallel execution of all paths
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            future_working = executor.submit(retrieve_from_working_memory)
-            future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
-            future_internet = executor.submit(retrieve_from_internet)
+        # Step 3: Parallel execution of all paths (enable internet search accoeding to parameter in the parsed goal)
+        if parsed_goal.internet_search:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                future_working = executor.submit(retrieve_from_working_memory)
+                future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
+                future_internet = executor.submit(retrieve_from_internet)
 
-            working_results = future_working.result()
-            hybrid_results = future_hybrid.result()
-            internet_results = future_internet.result()
-            searched_res = working_results + hybrid_results + internet_results
+                working_results = future_working.result()
+                hybrid_results = future_hybrid.result()
+                internet_results = future_internet.result()
+                searched_res = working_results + hybrid_results + internet_results
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_working = executor.submit(retrieve_from_working_memory)
+                future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
+
+                working_results = future_working.result()
+                hybrid_results = future_hybrid.result()
+                searched_res = working_results + hybrid_results
 
         # Deduplicate by item.memory, keep higher score
         deduped_result = {}

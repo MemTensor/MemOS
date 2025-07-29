@@ -1,14 +1,13 @@
 """User management system for MemOS.
 
 This module provides user authentication, authorization, and cube management
-functionality using SQLAlchemy and SQLite.
+functionality using SQLAlchemy and MySQL.
 """
 
 import uuid
 
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
 
 from sqlalchemy import (
     Boolean,
@@ -19,13 +18,9 @@ from sqlalchemy import (
     Table,
     create_engine,
 )
-from sqlalchemy import (
-    Enum as SQLEnum,
-)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from memos import settings
 from memos.log import get_logger
 
 
@@ -47,8 +42,8 @@ class UserRole(Enum):
 user_cube_association = Table(
     "user_cube_association",
     Base.metadata,
-    Column("user_id", String, ForeignKey("users.user_id"), primary_key=True),
-    Column("cube_id", String, ForeignKey("cubes.cube_id"), primary_key=True),
+    Column("user_id", String(255), ForeignKey("users.user_id"), primary_key=True),
+    Column("cube_id", String(255), ForeignKey("cubes.cube_id"), primary_key=True),
     Column("created_at", DateTime, default=datetime.now),
 )
 
@@ -58,9 +53,9 @@ class User(Base):
 
     __tablename__ = "users"
 
-    user_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_name = Column(String, unique=True, nullable=False)
-    role = Column(SQLEnum(UserRole), default=UserRole.USER, nullable=False)
+    user_id = Column(String(255), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_name = Column(String(255), unique=True, nullable=False)
+    role = Column(String(20), default=UserRole.USER.value, nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -78,10 +73,10 @@ class Cube(Base):
 
     __tablename__ = "cubes"
 
-    cube_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    cube_name = Column(String, nullable=False)
-    cube_path = Column(String, nullable=True)  # Local path or remote repo
-    owner_id = Column(String, ForeignKey("users.user_id"), nullable=False)
+    cube_id = Column(String(255), primary_key=True, default=lambda: str(uuid.uuid4()))
+    cube_name = Column(String(255), nullable=False)
+    cube_path = Column(String(500), nullable=True)  # Local path or remote repo
+    owner_id = Column(String(255), ForeignKey("users.user_id"), nullable=False)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -94,25 +89,42 @@ class Cube(Base):
         return f"<Cube(cube_id='{self.cube_id}', cube_name='{self.cube_name}', owner_id='{self.owner_id}')>"
 
 
-class UserManager:
-    """User management system for MemOS."""
+class MySQLUserManager:
+    """User management system for MemOS using MySQL."""
 
-    def __init__(self, db_path: str | None = None, user_id: str = "root"):
-        """Initialize the user manager with database connection.
+    def __init__(
+        self,
+        user_id: str = "root",
+        host: str = "localhost",
+        port: int = 3306,
+        username: str = "root",
+        password: str = "",
+        database: str = "memos_users",
+        charset: str = "utf8mb4",
+    ):
+        """Initialize the user manager with MySQL database connection.
 
         Args:
-            db_path (str, optional): Path to the SQLite database file.
-                If None, uses default path in MEMOS_DIR.
             user_id (str, optional): User ID. If None, uses default user ID.
+            host (str): MySQL server host. Defaults to "localhost".
+            port (int): MySQL server port. Defaults to 3306.
+            username (str): MySQL username. Defaults to "root".
+            password (str): MySQL password. Defaults to "".
+            database (str): MySQL database name. Defaults to "memos_users".
+            charset (str): MySQL charset. Defaults to "utf8mb4".
         """
-        if db_path is None:
-            db_path = str(settings.MEMOS_DIR / "memos_users.db")
+        # Build MySQL connection URL
+        if password:
+            connection_url = (
+                f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset={charset}"
+            )
+        else:
+            connection_url = (
+                f"mysql+pymysql://{username}@{host}:{port}/{database}?charset={charset}"
+            )
 
-        # Ensure the directory exists
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-
-        self.db_path = db_path
-        self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        self.connection_url = connection_url
+        self.engine = create_engine(connection_url, echo=False, pool_pre_ping=True)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
         # Create tables
@@ -121,7 +133,7 @@ class UserManager:
         # Initialize with root user if no users exist
         self._init_root_user(user_id)
 
-        logger.info(f"UserManager initialized with database at {db_path}")
+        logger.info(f"MySQLUserManager initialized with database at {host}:{port}/{database}")
 
     def _get_session(self) -> Session:
         """Get a database session."""
@@ -169,14 +181,14 @@ class UserManager:
             if existing_user:
                 logger.info(f"User with name '{user_name}' already exists")
                 return existing_user.user_id
-            user = User(user_name=user_name, role=role, user_id=user_id or str(uuid.uuid4()))
+            user = User(user_name=user_name, role=role.value, user_id=user_id or str(uuid.uuid4()))
             session.add(user)
             session.commit()
             logger.info(f"User '{user_name}' created with ID: {user.user_id}")
             return user.user_id
         except IntegrityError:
             session.rollback()
-            logger.info(f"failed to create user with name '{user_name}' already exists")
+            logger.info(f"Failed to create user with name '{user_name}' already exists")
         except Exception as e:
             session.rollback()
             logger.error(f"Error creating user: {e}")
@@ -480,9 +492,9 @@ class UserManager:
     def close(self) -> None:
         """Close the database engine and dispose of all connections.
 
-        This method should be called when the UserManager is no longer needed
+        This method should be called when the MySQLUserManager is no longer needed
         to ensure proper cleanup of database connections.
         """
         if hasattr(self, "engine"):
             self.engine.dispose()
-            logger.info("UserManager database connections closed")
+            logger.info("MySQLUserManager database connections closed")

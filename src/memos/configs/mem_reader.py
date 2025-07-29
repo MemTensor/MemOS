@@ -15,6 +15,15 @@ class BaseMemReaderConfig(BaseConfig):
     created_at: datetime = Field(
         default_factory=datetime.now, description="Creation timestamp for the MemReader"
     )
+
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def parse_datetime(cls, value):
+        """Parse datetime from string if needed."""
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return value
+
     llm: LLMConfigFactory = Field(..., description="LLM configuration for the MemReader")
     embedder: EmbedderConfigFactory = Field(
         ..., description="Embedder configuration for the MemReader"
