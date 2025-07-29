@@ -864,14 +864,14 @@ class NebulaGraphDB(BaseGraphDB):
             where_clauses.append(f'n.user_name = "{self.config.user_name}"')
 
         where_str = " AND ".join(where_clauses)
-        query = f"MATCH (n@Memory) WHERE {where_str} RETURN n.id AS id"
-
+        gql = f"MATCH (n@Memory) WHERE {where_str} RETURN n.id AS id"
+        ids = []
         try:
-            result = self.execute_query(query)
+            result = self.execute_query(gql)
             ids = [record["id"].value for record in result]
-            return ids
         except Exception as e:
-            logger.error(f"Failed to get metadata: {e}")
+            logger.error(f"Failed to get metadata: {e}, gql is {gql}")
+        return ids
 
     def get_grouped_counts(
         self,
