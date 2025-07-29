@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import uuid
 
 from datetime import datetime
 from pathlib import Path
@@ -590,7 +589,7 @@ class MOSCore:
                     info={
                         "user_id": target_user_id,
                         "session_id": self.session_id,
-                        "chat_history": chat_history,
+                        "chat_history": chat_history.chat_history,
                     },
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
