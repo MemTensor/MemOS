@@ -47,7 +47,7 @@ class SchedulerRetriever(BaseSchedulerModule):
         """
         text_mem_base = mem_cube.text_mem
         try:
-            if method == [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
+            if method in [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
                 assert isinstance(text_mem_base, TreeTextMemory)
                 mode = "fast" if method == TreeTextMemory_SEARCH_METHOD else "fine"
                 results_long_term = text_mem_base.search(
