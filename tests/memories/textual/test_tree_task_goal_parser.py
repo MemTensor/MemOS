@@ -18,8 +18,8 @@ class MockLLM:
 
 
 def test_parse_fast_returns_expected():
-    parser = TaskGoalParser(mode="fast")
-    result = parser.parse("Tell me about cats")
+    parser = TaskGoalParser()
+    result = parser.parse("Tell me about cats", mode="fast")
 
     assert isinstance(result, ParsedTaskGoal)
     assert result.memories == ["Tell me about cats"]
@@ -30,9 +30,9 @@ def test_parse_fast_returns_expected():
 
 def test_parse_fine_calls_llm_and_parses():
     mock_llm = MockLLM()
-    parser = TaskGoalParser(llm=mock_llm, mode="fine")
+    parser = TaskGoalParser(llm=mock_llm)
 
-    result = parser.parse("Tell me about cats")
+    result = parser.parse("Tell me about cats", mode="fine")
     assert isinstance(result, ParsedTaskGoal)
     assert result.memories == ["Cats are cute"]
     assert "cats" in result.keys
@@ -41,7 +41,7 @@ def test_parse_fine_calls_llm_and_parses():
 
 
 def test_parse_response_invalid_json():
-    parser = TaskGoalParser(llm=MockLLM(), mode="fine")
+    parser = TaskGoalParser(llm=MockLLM())
 
     bad_response = "not a valid json"
     with pytest.raises(ValueError) as e:
@@ -50,14 +50,14 @@ def test_parse_response_invalid_json():
 
 
 def test_parse_fine_raises_without_llm():
-    parser = TaskGoalParser(llm=None, mode="fine")
+    parser = TaskGoalParser(llm=None)
     with pytest.raises(ValueError) as e:
-        parser.parse("Hello")
+        parser.parse("Hello", mode="fine")
     assert "LLM not provided" in str(e.value)
 
 
 def test_parse_raises_on_unknown_mode():
-    parser = TaskGoalParser(mode="unknown")
+    parser = TaskGoalParser()
     with pytest.raises(ValueError) as e:
-        parser.parse("Hi")
+        parser.parse("Hi", mode="unknown")
     assert "Unknown mode" in str(e.value)

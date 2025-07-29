@@ -830,7 +830,8 @@ class NebulaGraphDB(BaseGraphDB):
 
         def _escape_value(value):
             if isinstance(value, str):
-                return f'"{value}"'
+                escaped = value.replace('"', '\\"')
+                return f'"{escaped}"'
             elif isinstance(value, list):
                 return "[" + ", ".join(_escape_value(v) for v in value) + "]"
             else:
