@@ -586,7 +586,15 @@ class TestMOSChat:
 
         # Verify memory search was called (called twice because we have two cubes)
         assert mock_mem_cube.text_mem.search.call_count == 2
-        mock_mem_cube.text_mem.search.assert_any_call("What do I like?", top_k=5)
+        mock_mem_cube.text_mem.search.assert_any_call(
+            "What do I like?",
+            top_k=5,
+            info={
+                "user_id": mos.user_id,
+                "session_id": mos.session_id,
+                "chat_history": mos.chat_history_manager[mos.user_id],
+            },
+        )
 
         # Verify LLM was called
         mock_llm.generate.assert_called_once()
