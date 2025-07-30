@@ -5,6 +5,7 @@ from typing import Any, ClassVar
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.embedders.base import BaseEmbedder
 from memos.mem_reader.factory import MemReaderFactory
+from memos.memories.textual.tree_text_memory.retrieve.bochasearch import BochaAISearchRetriever
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever import (
     InternetGoogleRetriever,
 )
@@ -18,6 +19,7 @@ class InternetRetrieverFactory:
         "google": InternetGoogleRetriever,
         "bing": InternetGoogleRetriever,  # TODO: Implement BingRetriever
         "xinyu": XinyuSearchRetriever,
+        "bocha": BochaAISearchRetriever,
     }
 
     @classmethod
@@ -62,7 +64,7 @@ class InternetRetrieverFactory:
                 max_results=config.max_results,
                 num_per_request=config.num_per_request,
             )
-        elif backend == "xinyu":
+        elif backend == "xinyu" or backend == "bocha":
             return retriever_class(
                 access_key=config.api_key,  # Use api_key as access_key for xinyu
                 search_engine_id=config.search_engine_id,

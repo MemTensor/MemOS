@@ -55,6 +55,10 @@ class XinyuSearchConfig(BaseInternetRetrieverConfig):
     )
 
 
+class BochaSearchConfig(XinyuSearchConfig):
+    """Configuration class for Bocha Search API."""
+
+
 class InternetRetrieverConfigFactory(BaseConfig):
     """Factory class for creating internet retriever configurations."""
 
@@ -69,6 +73,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
         "google": GoogleCustomSearchConfig,
         "bing": BingSearchConfig,
         "xinyu": XinyuSearchConfig,
+        "bocha": BochaSearchConfig,
     }
 
     @field_validator("backend")
