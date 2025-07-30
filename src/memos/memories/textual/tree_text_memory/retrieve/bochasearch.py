@@ -98,32 +98,57 @@ class BochaAISearchRetriever:
     """BochaAI retriever that converts search results into TextualMemoryItem objects"""
 
     def __init__(
-        self, api_key: str, embedder: OllamaEmbedder, reader: BaseMemReader, max_results: int = 20
+        self,
+        access_key: str,
+        search_engine_id: str,
+        embedder: OllamaEmbedder,
+        reader: BaseMemReader,
+        max_results: int = 20,
     ):
         """
         Initialize BochaAI Search retriever.
 
         Args:
-            api_key: BochaAI API key
+            access_key: BochaAI API key
+            search_engine_id: (Not used for Bocha, but kept for API consistency)
             embedder: Embedder instance for generating embeddings
             reader: MemReader instance for processing internet content
             max_results: Maximum number of search results to retrieve
         """
-        self.bocha_api = BochaAISearchAPI(api_key, max_results=max_results)
+        self.bocha_api = BochaAISearchAPI(access_key, max_results=max_results)
         self.embedder = embedder
         self.reader = reader
+
+    def retrieve_from_internet(
+        self, query: str, top_k: int = 10, parsed_goal=None, info=None
+    ) -> list[TextualMemoryItem]:
+        """
+        Default internet retrieval (Web Search).
+        This keeps consistent API with Xinyu and Google retrievers.
+
+        Args:
+            query: Search query
+            top_k: Number of results to retrieve
+            parsed_goal: Parsed task goal (optional)
+            info (dict): Metadata for memory consumption tracking
+
+        Returns:
+            List of TextualMemoryItem
+        """
+        search_results = self.bocha_api.search_web(query)  # ✅ default to web-search
+        return self._convert_to_mem_items(search_results, query, parsed_goal, info)
 
     def retrieve_from_web(
         self, query: str, top_k: int = 10, parsed_goal=None, info=None
     ) -> list[TextualMemoryItem]:
-        """Retrieve information using BochaAI Web Search."""
+        """Explicitly retrieve using Bocha Web Search."""
         search_results = self.bocha_api.search_web(query)
         return self._convert_to_mem_items(search_results, query, parsed_goal, info)
 
     def retrieve_from_ai(
         self, query: str, top_k: int = 10, parsed_goal=None, info=None
     ) -> list[TextualMemoryItem]:
-        """Retrieve information using BochaAI AI Search."""
+        """Explicitly retrieve using Bocha AI Search."""
         search_results = self.bocha_api.search_ai(query)
         return self._convert_to_mem_items(search_results, query, parsed_goal, info)
 
@@ -158,9 +183,7 @@ class BochaAISearchRetriever:
         content = result.get("content", "")
         summary = result.get("summary", "")
         url = result.get("url", "")
-        publish_time = datetime.now().strftime(
-            "%Y-%m-%d"
-        )  # Optional: can map to API field if exists
+        publish_time = datetime.now().strftime("%Y-%m-%d")
 
         # Use reader to split and process the content into chunks
         read_items = self.reader.get_memory([content], type="doc", info=info)
