@@ -1,11 +1,14 @@
-import logging
 import traceback
 
 from string import Template
 
 from memos.llms.base import BaseLLM
+from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
 from memos.memories.textual.tree_text_memory.retrieve.utils import TASK_PARSE_PROMPT
+
+
+logger = get_logger(__name__)
 
 
 class TaskGoalParser:
@@ -70,10 +73,12 @@ class TaskGoalParser:
             prompt = Template(TASK_PARSE_PROMPT).substitute(
                 task=query.strip(), context=context, conversation=conversation_prompt
             )
+            logger.info(f"Parsing Goal... LLM input is {prompt}")
             response = self.llm.generate(messages=[{"role": "user", "content": prompt}])
+            logger.info(f"Parsing Goal... LLM Response is {response}")
             return self._parse_response(response)
         except Exception:
-            logging.warning(f"Fail to fine-parse query {query}: {traceback.format_exc()}")
+            logger.warning(f"Fail to fine-parse query {query}: {traceback.format_exc()}")
             return self._parse_fast(query)
 
     def _parse_response(self, response: str) -> ParsedTaskGoal:
