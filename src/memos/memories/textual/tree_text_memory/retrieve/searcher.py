@@ -157,6 +157,9 @@ class Searcher:
             logger.info(
                 f"[TIMER] PATH-A rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
             )
+            for i, (item, score) in enumerate(ranked_memories[:2], start=1):
+                logger.info(f"[PATH-A][TOP{i}] score={score:.4f} memory={item.memory[:80]}...")
+
             return ranked_memories
 
         @timed
@@ -199,6 +202,9 @@ class Searcher:
             logger.info(
                 f"[TIMER] PATH-B rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
             )
+            for i, (item, score) in enumerate(ranked_memories[:2], start=1):
+                logger.info(f"[PATH-B][TOP{i}] score={score:.4f} memory={item.memory[:80]}...")
+
             return ranked_memories
 
         @timed
@@ -231,6 +237,9 @@ class Searcher:
             logger.info(
                 f"[TIMER] PATH-C rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
             )
+            for i, (item, score) in enumerate(ranked_memories[:2], start=1):
+                logger.info(f"[PATH-C][TOP{i}] score={score:.4f} memory={item.memory[:80]}...")
+
             return ranked_memories
 
         # ===== Step 3: Run retrieval in parallel =====
