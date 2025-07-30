@@ -64,10 +64,17 @@ class InternetRetrieverFactory:
                 max_results=config.max_results,
                 num_per_request=config.num_per_request,
             )
-        elif backend == "xinyu" or backend == "bocha":
+        elif backend == "xinyu":
             return retriever_class(
                 access_key=config.api_key,  # Use api_key as access_key for xinyu
                 search_engine_id=config.search_engine_id,
+                embedder=embedder,
+                reader=MemReaderFactory.from_config(config.reader),
+                max_results=config.max_results,
+            )
+        elif backend == "bocha":
+            return retriever_class(
+                access_key=config.api_key,  # Use api_key as access_key for xinyu
                 embedder=embedder,
                 reader=MemReaderFactory.from_config(config.reader),
                 max_results=config.max_results,

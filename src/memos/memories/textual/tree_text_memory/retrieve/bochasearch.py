@@ -81,12 +81,15 @@ class BochaAISearchAPI:
         return self._post(self.ai_url, body)
 
     def _post(self, url: str, body: dict) -> list[dict]:
-        """Helper method to send POST request and return JSON results."""
+        """Send POST request and parse BochaAI search results."""
         try:
             resp = requests.post(url, headers=self.headers, json=body)
             resp.raise_for_status()
-            data = resp.json()
-            return data.get("results", [])
+            raw_data = resp.json()
+
+            # ✅ parse the nested structure correctly
+            return raw_data.get("data", {}).get("webPages", {}).get("value", [])
+
         except Exception:
             import traceback
 
@@ -100,7 +103,6 @@ class BochaAISearchRetriever:
     def __init__(
         self,
         access_key: str,
-        search_engine_id: str,
         embedder: OllamaEmbedder,
         reader: BaseMemReader,
         max_results: int = 20,
@@ -110,7 +112,6 @@ class BochaAISearchRetriever:
 
         Args:
             access_key: BochaAI API key
-            search_engine_id: (Not used for Bocha, but kept for API consistency)
             embedder: Embedder instance for generating embeddings
             reader: MemReader instance for processing internet content
             max_results: Maximum number of search results to retrieve
@@ -178,12 +179,22 @@ class BochaAISearchRetriever:
     def _process_result(
         self, result: dict, query: str, parsed_goal: str, info: None
     ) -> list[TextualMemoryItem]:
-        """Process a single result into one or more TextualMemoryItems."""
-        title = result.get("title", "")
-        content = result.get("content", "")
-        summary = result.get("summary", "")
+        """Process one Bocha search result into TextualMemoryItem."""
+        title = result.get("name", "")
+        content = result.get("summary", "") or result.get("snippet", "")
+        summary = result.get("snippet", "")
         url = result.get("url", "")
-        publish_time = datetime.now().strftime("%Y-%m-%d")
+        publish_time = result.get("datePublished", "")
+
+        if publish_time:
+            try:
+                publish_time = datetime.fromisoformat(publish_time.replace("Z", "+00:00")).strftime(
+                    "%Y-%m-%d"
+                )
+            except Exception:
+                publish_time = datetime.now().strftime("%Y-%m-%d")
+        else:
+            publish_time = datetime.now().strftime("%Y-%m-%d")
 
         # Use reader to split and process the content into chunks
         read_items = self.reader.get_memory([content], type="doc", info=info)
