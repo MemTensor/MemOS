@@ -187,7 +187,6 @@ class NebulaGraphDB(BaseGraphDB):
                 return client.execute(gql, timeout=timeout)
             except Exception:
                 logger.error(f"Fail to run gql {gql} trace: {traceback.format_exc()}")
-                print("here")
 
     def close(self):
         self.pool.close()
