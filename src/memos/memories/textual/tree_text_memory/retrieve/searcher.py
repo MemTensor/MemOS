@@ -215,6 +215,8 @@ class Searcher:
 
         # Step 5: Update usage history with current timestamp
         now_time = datetime.now().isoformat()
+        if "chat_history" in info:
+            info.pop("chat_history")
         usage_record = json.dumps(
             {"time": now_time, "info": info}
         )  # `info` should be a serializable dict or string

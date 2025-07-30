@@ -22,6 +22,7 @@ from memos.mem_os.utils.format_utils import (
     filter_nodes_by_tree_ids,
     remove_embedding_recursive,
     sort_children_by_memory_type,
+    split_continuous_references,
 )
 from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
@@ -33,6 +34,7 @@ from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
+from memos.templates.mos_prompts import MEMOS_PRODUCT_BASE_PROMPT, MEMOS_PRODUCT_ENHANCE_PROMPT
 from memos.types import MessageList
 
 
@@ -360,17 +362,6 @@ class MOSProduct(MOSCore):
         """
 
         # Build base prompt
-        base_prompt = (
-            "You are a knowledgeable and helpful AI assistant with access to user memories. "
-            "When responding to user queries, you should reference relevant memories using the provided memory IDs. "
-            "Use the reference format: [1-n:memoriesID] "
-            "where refid is a sequential number starting from 1 and increments for each reference in your response, "
-            "and memoriesID is the specific memory ID provided in the available memories list. "
-            "For example: [1:abc123], [2:def456], [3:ghi789], [4:jkl101], [5:mno112] "
-            "Only reference memories that are directly relevant to the user's question. "
-            "Make your responses natural and conversational while incorporating memory references when appropriate."
-        )
-
         # Add memory context if available
         if memories_all:
             memory_context = "\n\n## Available ID Memories:\n"
@@ -378,10 +369,42 @@ class MOSProduct(MOSCore):
                 # Format: [memory_id]: memory_content
                 memory_id = f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
                 memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
+                memory_content = memory_content.replace("\n", " ")
                 memory_context += f"{memory_id}: {memory_content}\n"
-            return base_prompt + memory_context
+            return MEMOS_PRODUCT_BASE_PROMPT + memory_context
 
-        return base_prompt
+        return MEMOS_PRODUCT_BASE_PROMPT
+
+    def _build_enhance_system_prompt(
+        self, user_id: str, memories_all: list[TextualMemoryItem]
+    ) -> str:
+        """
+        Build enhance prompt for the user with memory references.
+        """
+        if memories_all:
+            personal_memory_context = "\n\n## Available ID and PersonalMemory Memories:\n"
+            outer_memory_context = "\n\n## Available ID and OuterMemory Memories:\n"
+            for i, memory in enumerate(memories_all, 1):
+                # Format: [memory_id]: memory_content
+                if memory.metadata.memory_type != "OuterMemory":
+                    memory_id = (
+                        f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
+                    )
+                    memory_content = (
+                        memory.memory[:500] if hasattr(memory, "memory") else str(memory)
+                    )
+                    personal_memory_context += f"{memory_id}: {memory_content}\n"
+                else:
+                    memory_id = (
+                        f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
+                    )
+                    memory_content = (
+                        memory.memory[:500] if hasattr(memory, "memory") else str(memory)
+                    )
+                    memory_content = memory_content.replace("\n", " ")
+                    outer_memory_context += f"{memory_id}: {memory_content}\n"
+            return MEMOS_PRODUCT_ENHANCE_PROMPT + personal_memory_context + outer_memory_context
+        return MEMOS_PRODUCT_ENHANCE_PROMPT
 
     def _process_streaming_references_complete(self, text_buffer: str) -> tuple[str, str]:
         """
@@ -406,9 +429,13 @@ class MOSProduct(MOSCore):
             last_match = complete_matches[-1]
             end_pos = last_match.end()
 
-            # Return text up to the end of the last complete tag
+            # Get text up to the end of the last complete tag
             processed_text = text_buffer[:end_pos]
             remaining_buffer = text_buffer[end_pos:]
+
+            # Apply reference splitting to the processed text
+            processed_text = split_continuous_references(processed_text)
+
             return processed_text, remaining_buffer
 
         # Check for incomplete reference tags
@@ -427,15 +454,22 @@ class MOSProduct(MOSCore):
                 return "", text_buffer
             else:
                 # Incomplete opening pattern, return text before it
-                return text_buffer[:opening_start], text_buffer[opening_start:]
+                processed_text = text_buffer[:opening_start]
+                # Apply reference splitting to the processed text
+                processed_text = split_continuous_references(processed_text)
+                return processed_text, text_buffer[opening_start:]
 
         # Check for partial opening pattern (starts with [ but not complete)
         if "[" in text_buffer:
             ref_start = text_buffer.find("[")
-            return text_buffer[:ref_start], text_buffer[ref_start:]
+            processed_text = text_buffer[:ref_start]
+            # Apply reference splitting to the processed text
+            processed_text = split_continuous_references(processed_text)
+            return processed_text, text_buffer[ref_start:]
 
-        # No reference tags found, return all text
-        return text_buffer, ""
+        # No reference tags found, apply reference splitting and return all text
+        processed_text = split_continuous_references(text_buffer)
+        return processed_text, ""
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
@@ -760,9 +794,8 @@ class MOSProduct(MOSCore):
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list)
-        # Build custom system prompt with relevant memories
-        system_prompt = self._build_system_prompt(memories_list, base_prompt=None)
-
+        # Build custom system prompt with relevant memories)
+        system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
         # Get chat history
         if user_id not in self.chat_history_manager:
             self._register_chat_history(user_id)
@@ -775,6 +808,9 @@ class MOSProduct(MOSCore):
             *chat_history.chat_history,
             {"role": "user", "content": query},
         ]
+        logger.info(
+            f"user_id: {user_id}, cube_id: {cube_id}, current_system_prompt: {system_prompt}"
+        )
         yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
         # Generate response with custom prompt
         past_key_values = None

@@ -592,7 +592,7 @@ class TestMOSChat:
             info={
                 "user_id": mos.user_id,
                 "session_id": mos.session_id,
-                "chat_history": mos.chat_history_manager[mos.user_id],
+                "chat_history": mos.chat_history_manager[mos.user_id].chat_history,
             },
         )
 

@@ -1,7 +1,6 @@
 import json
 import os
 import time
-import uuid
 
 from datetime import datetime
 from pathlib import Path
@@ -290,7 +289,7 @@ class MOSCore:
                     info={
                         "user_id": target_user_id,
                         "session_id": self.session_id,
-                        "chat_history": chat_history,
+                        "chat_history": chat_history.chat_history,
                     },
                 )
                 memories_all.extend(memories)
@@ -565,7 +564,8 @@ class MOSCore:
         logger.info(
             f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
         )
-
+        if target_user_id not in self.chat_history_manager:
+            self._register_chat_history(target_user_id)
         chat_history = self.chat_history_manager[target_user_id]
 
         result: MOSSearchResult = {
@@ -590,7 +590,7 @@ class MOSCore:
                     info={
                         "user_id": target_user_id,
                         "session_id": self.session_id,
-                        "chat_history": chat_history,
+                        "chat_history": chat_history.chat_history,
                     },
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})

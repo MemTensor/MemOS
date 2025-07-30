@@ -169,14 +169,14 @@ class APIConfig:
             "user_name": f"memos{user_id.replace('-', '')}",
             "auto_create": True,
             "use_multi_db": False,
-            "embedding_dimension": 3072,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
             "vec_config": {
                 # Pass nested config to initialize external vector DB
                 # If you use qdrant, please use Server instead of local mode.
                 "backend": "qdrant",
                 "config": {
                     "collection_name": "neo4j_vec_db",
-                    "vector_dimension": 3072,
+                    "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
                     "distance_metric": "cosine",
                     "host": "localhost",
                     "port": 6333,
@@ -202,7 +202,7 @@ class APIConfig:
             "password": os.getenv("NEO4J_PASSWORD", "12345678"),
             "auto_create": True,
             "use_multi_db": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
 
     @staticmethod
@@ -216,7 +216,7 @@ class APIConfig:
             "user_name": f"memos{user_id.replace('-', '')}",
             "auto_create": True,
             "use_multi_db": False,
-            "embedding_dimension": 3072,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
 
     @staticmethod
@@ -230,7 +230,7 @@ class APIConfig:
             "user_name": f"memos{user_id.replace('-', '')}",
             "use_multi_db": False,
             "auto_create": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
 
     @staticmethod
