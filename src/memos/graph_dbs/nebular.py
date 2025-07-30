@@ -154,9 +154,10 @@ class NebulaGraphDB(BaseGraphDB):
         self.db_name = config.space
         self.user_name = config.user_name
         self.embedding_dimension = config.embedding_dimension
+        self.default_memory_dimension = 3072
         self.dim_field = (
             f"embedding_{self.embedding_dimension}"
-            if (self.embedding_dimension != "3072")
+            if (str(self.embedding_dimension) != str(self.default_memory_dimension))
             else "embedding"
         )
         self.system_db_name = "system" if config.use_multi_db else config.space
@@ -1221,10 +1222,16 @@ class NebulaGraphDB(BaseGraphDB):
         """
         Create a vector index for the specified property in the label.
         """
-        index_name = f"idx_{vector_property}_{dimensions}"
+        if str(dimensions) == self.default_memory_dimension:
+            index_name = f"idx_{vector_property}"
+            vector_name = vector_property
+        else:
+            index_name = f"idx_{vector_property}_{dimensions}"
+            vector_name = f"{vector_property}_{dimensions}"
+
         create_vector_index = f"""
                 CREATE VECTOR INDEX IF NOT EXISTS {index_name}
-                ON NODE {label}::{vector_property}_{dimensions}
+                ON NODE {label}::{vector_name}
                 OPTIONS {{
                     DIM: {dimensions},
                     METRIC: IP,
@@ -1334,6 +1341,7 @@ class NebulaGraphDB(BaseGraphDB):
         # Fill timestamps if missing
         metadata.setdefault("created_at", now)
         metadata.setdefault("updated_at", now)
+        metadata["node_type"] = metadata.pop("type")
 
         # Normalize embedding type
         embedding = metadata.get("embedding")

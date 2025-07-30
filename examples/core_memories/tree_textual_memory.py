@@ -1,30 +1,13 @@
 import time
 
 from memos import log
-from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.configs.memory import TreeTextMemoryConfig
-from memos.embedders.factory import EmbedderFactory
 from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = log.get_logger(__name__)
-
-
-embedder_config = EmbedderConfigFactory.model_validate(
-    {
-        "backend": "ollama",
-        "config": {
-            "model_name_or_path": "nomic-embed-text:latest",
-        },
-    }
-)
-embedder = EmbedderFactory.from_config(embedder_config)
-
-
-def embed_memory_item(memory: str) -> list[float]:
-    return embedder.embed([memory])[0]
 
 
 tree_config = TreeTextMemoryConfig.from_json_file(
