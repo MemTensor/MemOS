@@ -23,7 +23,7 @@ def show(nebular_data):
 
     tree_config = Neo4jGraphDBConfig.from_json_file("../../examples/data/config/neo4j_config.json")
     tree_config.use_multi_db = True
-    tree_config.db_name = "nebular-show"
+    tree_config.db_name = "nebular-show2"
 
     neo4j_db = Neo4jGraphDB(tree_config)
     neo4j_db.clear()
@@ -42,6 +42,7 @@ embedder_config = EmbedderConfigFactory.model_validate(
     }
 )
 embedder = EmbedderFactory.from_config(embedder_config)
+embedder_dimension = 3072
 
 
 def embed_memory_item(memory: str) -> list[float]:
@@ -62,7 +63,7 @@ def example_multi_db(db_name: str = "paper"):
             "space": db_name,
             "use_multi_db": True,
             "auto_create": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": embedder_dimension,
         },
     )
 
@@ -121,7 +122,7 @@ def example_shared_db(db_name: str = "shared-traval-group"):
                 "user_name": user_name,
                 "use_multi_db": False,
                 "auto_create": True,
-                "embedding_dimension": 3072,
+                "embedding_dimension": embedder_dimension,
             },
         )
 
@@ -208,7 +209,7 @@ def example_shared_db(db_name: str = "shared-traval-group"):
             "space": db_name,
             "user_name": user_list[0],
             "auto_create": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": embedder_dimension,
             "use_multi_db": False,
         },
     )
@@ -238,7 +239,7 @@ def run_user_session(
             "user_name": user_name,
             "use_multi_db": False,
             "auto_create": True,
-            "embedding_dimension": 3072,
+            "embedding_dimension": embedder_dimension,
         },
     )
     graph = GraphStoreFactory.from_config(config)
@@ -404,10 +405,10 @@ def example_complex_shared_db(db_name: str = "shared-traval-group-complex"):
 
 if __name__ == "__main__":
     print("\n=== Example: Multi-DB ===")
-    example_multi_db(db_name="paper")
+    example_multi_db(db_name="paper-new")
 
     print("\n=== Example: Single-DB ===")
-    example_shared_db(db_name="shared_traval_group")
+    example_shared_db(db_name="shared_traval_group-new")
 
     print("\n=== Example: Single-DB-Complex ===")
-    example_complex_shared_db(db_name="shared-traval-group-complex-new11")
+    example_complex_shared_db(db_name="shared-traval-group-complex-new2")
