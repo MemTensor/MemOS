@@ -60,7 +60,7 @@ class Searcher:
         """
         overall_start = time.perf_counter()
         logger.info(
-            f"[SEARCH] 🚀 Starting search for query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
+            f"[SEARCH]'{query}' 🚀 Starting search for query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
 
         if not info:
@@ -104,19 +104,21 @@ class Searcher:
             mode=mode,
         )
         logger.info(
-            f"[TIMER] TaskGoalParser took {(time.perf_counter() - parse_start) * 1000:.2f} ms"
+            f"[TIMER] '{query}'TaskGoalParser took {(time.perf_counter() - parse_start) * 1000:.2f} ms"
         )
-        logger.info(f"TaskGoalParser result is {parsed_goal}")
+        logger.info(f"'{query}'TaskGoalParser result is {parsed_goal}")
 
         query = parsed_goal.rephrased_query or query
         if parsed_goal.memories:
             embed_extra_start = time.perf_counter()
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
             logger.info(
-                f"[TIMER] Embedding parsed_goal memories took {(time.perf_counter() - embed_extra_start) * 1000:.2f} ms"
+                f"[TIMER] '{query}'Embedding parsed_goal memories took {(time.perf_counter() - embed_extra_start) * 1000:.2f} ms"
             )
         step_end = time.perf_counter()
-        logger.info(f"[TIMER] Step 1 (Parsing & Embedding) took {(step_end - step_start):.2f} s")
+        logger.info(
+            f"[TIMER] '{query}'Step 1 (Parsing & Embedding) took {(step_end - step_start):.2f} s"
+        )
 
         # ===== Step 2: Define retrieval paths =====
         def timed(func):
@@ -136,15 +138,15 @@ class Searcher:
             """
             Direct structure-based retrieval from working memory.
             """
-            logger.info("[PATH-A] Retrieving from WorkingMemory...")
+            logger.info(f"[PATH-A] '{query}'Retrieving from WorkingMemory...")
             if memory_type not in ["All", "WorkingMemory"]:
-                logger.info("[PATH-A] Skipped (memory_type does not match)")
+                logger.info(f"[PATH-A] '{query}'Skipped (memory_type does not match)")
                 return []
             working_memory = self.graph_retriever.retrieve(
                 query=query, parsed_goal=parsed_goal, top_k=top_k, memory_scope="WorkingMemory"
             )
 
-            logger.debug(f"[PATH-A] Retrieved {len(working_memory)} items.")
+            logger.debug(f"[PATH-A] '{query}'Retrieved {len(working_memory)} items.")
             # Rerank working_memory results
             rerank_start = time.perf_counter()
             ranked_memories = self.reranker.rerank(
@@ -155,16 +157,18 @@ class Searcher:
                 parsed_goal=parsed_goal,
             )
             logger.info(
-                f"[TIMER] PATH-A rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
+                f"[TIMER] '{query}'PATH-A rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
             )
             for i, (item, score) in enumerate(ranked_memories[:2], start=1):
-                logger.info(f"[PATH-A][TOP{i}] score={score:.4f} memory={item.memory[:80]}...")
+                logger.info(
+                    f"[PATH-A][TOP{i}] '{query}' score={score:.4f} memory={item.memory[:80]}..."
+                )
 
             return ranked_memories
 
         @timed
         def retrieve_ranked_long_term_and_user():
-            logger.info("[PATH-B] Retrieving from LongTermMemory & UserMemory...")
+            logger.info(f"[PATH-B] '{query}' Retrieving from LongTermMemory & UserMemory...")
             long_term_items = (
                 self.graph_retriever.retrieve(
                     query=query,
@@ -188,7 +192,7 @@ class Searcher:
                 else []
             )
             logger.debug(
-                f"[PATH-B] Retrieved {len(long_term_items)} LongTerm + {len(user_items)} UserMemory items."
+                f"[PATH-B] '{query}'Retrieved {len(long_term_items)} LongTerm + {len(user_items)} UserMemory items."
             )
             rerank_start = time.perf_counter()
             # Rerank combined results
@@ -200,10 +204,13 @@ class Searcher:
                 parsed_goal=parsed_goal,
             )
             logger.info(
-                f"[TIMER] PATH-B rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
+                f"[TIMER] '{query}' PATH-B rerank took"
+                f" {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
             )
             for i, (item, score) in enumerate(ranked_memories[:2], start=1):
-                logger.info(f"[PATH-B][TOP{i}] score={score:.4f} memory={item.memory[:80]}...")
+                logger.info(
+                    f"[PATH-B][TOP{i}] '{query}' score={score:.4f} memory={item.memory[:80]}..."
+                )
 
             return ranked_memories
 
@@ -212,10 +219,11 @@ class Searcher:
             """
             Retrieve information from the internet using Google Custom Search API.
             """
-            logger.info("[PATH-C] Retrieving from Internet...")
+            logger.info(f"[PATH-C] '{query}'Retrieving from Internet...")
             if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
                 logger.info(
-                    "[PATH-C] Skipped (no retriever, fast mode, or no internet_search flag)"
+                    f"[PATH-C] '{query}' Skipped (no retriever, fast mode, "
+                    "or no internet_search flag)"
                 )
                 return []
             if memory_type not in ["All"]:
@@ -224,7 +232,7 @@ class Searcher:
                 query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
             )
 
-            logger.debug(f"[PATH-C] Retrieved {len(internet_items)} internet items.")
+            logger.debug(f"[PATH-C] '{query}'Retrieved {len(internet_items)} internet items.")
             rerank_start = time.perf_counter()
             # Convert to the format expected by reranker
             ranked_memories = self.reranker.rerank(
@@ -235,10 +243,12 @@ class Searcher:
                 parsed_goal=parsed_goal,
             )
             logger.info(
-                f"[TIMER] PATH-C rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
+                f"[TIMER] '{query}'PATH-C rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
             )
             for i, (item, score) in enumerate(ranked_memories[:2], start=1):
-                logger.info(f"[PATH-C][TOP{i}] score={score:.4f} memory={item.memory[:80]}...")
+                logger.info(
+                    f"[PATH-C][TOP{i}] '{query}'score={score:.4f} memory={item.memory[:80]}..."
+                )
 
             return ranked_memories
 
@@ -263,9 +273,9 @@ class Searcher:
                 hybrid_results = future_hybrid.result()
                 searched_res = working_results + hybrid_results
         logger.info(
-            f"[TIMER] Step 3 (Retrieval paths) took {(time.perf_counter() - path_start):.2f} s"
+            f"[TIMER] '{query}'Step 3 (Retrieval paths) took {(time.perf_counter() - path_start):.2f} s"
         )
-        logger.info(f"[SEARCH] Total results before deduplication: {len(searched_res)}")
+        logger.info(f"[SEARCH] '{query}'Total results before deduplication: {len(searched_res)}")
 
         # ===== Step 4: Deduplication =====
         dedup_start = time.perf_counter()
@@ -275,7 +285,7 @@ class Searcher:
             if mem_key not in deduped_result or score > deduped_result[mem_key][1]:
                 deduped_result[mem_key] = (item, score)
         logger.info(
-            f"[TIMER] Deduplication took {(time.perf_counter() - dedup_start) * 1000:.2f} ms"
+            f"[TIMER] '{query}'Deduplication took {(time.perf_counter() - dedup_start) * 1000:.2f} ms"
         )
 
         # ===== Step 5: Sorting & trimming =====
@@ -292,7 +302,7 @@ class Searcher:
                 TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)
             )
         logger.info(
-            f"[TIMER] Sorting & trimming took {(time.perf_counter() - sort_start) * 1000:.2f} ms"
+            f"[TIMER] '{query}'Sorting & trimming took {(time.perf_counter() - sort_start) * 1000:.2f} ms"
         )
 
         # ===== Step 6: Update usage history =====
@@ -312,10 +322,12 @@ class Searcher:
                 item.metadata.usage.append(usage_record)
                 self.graph_store.update_node(item.id, {"usage": item.metadata.usage})
         logger.info(
-            f"[TIMER] Usage history update took {(time.perf_counter() - usage_start) * 1000:.2f} ms"
+            f"[TIMER] '{query}'Usage history update took {(time.perf_counter() - usage_start) * 1000:.2f} ms"
         )
 
         # ===== Finish =====
-        logger.info(f"[SEARCH] ✅ Final top_k results: {len(searched_res)}")
-        logger.info(f"[SEARCH] 🔚 Total search took {(time.perf_counter() - overall_start):.2f} s")
+        logger.info(f"[SEARCH] '{query}'✅ Final top_k results: {len(searched_res)}")
+        logger.info(
+            f"[SEARCH] '{query}'🔚 Total search took {(time.perf_counter() - overall_start):.2f} s"
+        )
         return searched_res
