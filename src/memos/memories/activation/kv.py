@@ -210,14 +210,15 @@ class KVCacheMemory(BaseActMemory):
 
         merged = DynamicCache()
         num_layers = len(caches[0].key_cache)
+        merged.append_new_layers(num_layers - 1)
 
         for layer in range(num_layers):
             # gather all K and V for this layer
-            keys = [c.key_cache[layer] for c in caches]
-            vals = [c.value_cache[layer] for c in caches]
+            keys = [c.layers[layer].keys for c in caches]
+            vals = [c.layers[layer].values for c in caches]
             # single concat per layer
-            merged.key_cache.append(torch.cat(keys, dim=-2))
-            merged.value_cache.append(torch.cat(vals, dim=-2))
+            merged.layers[layer].keys = torch.cat(keys, dim=-2)
+            merged.layers[layer].values = torch.cat(vals, dim=-2)
 
         return merged
 
@@ -231,7 +232,9 @@ def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> Dynamic
     # Currently, we put this function outside [class KVCacheMemory]
     for i in range(len(dynamic_cache.key_cache)):
         if dynamic_cache.key_cache[i] is not None:
-            dynamic_cache.key_cache[i] = dynamic_cache.key_cache[i].to(device, non_blocking=True)
+            dynamic_cache.key_cache[i] = dynamic_cache.key_cache[i].to(
+                device, non_blocking=True
+            )
         if dynamic_cache.value_cache[i] is not None:
             dynamic_cache.value_cache[i] = dynamic_cache.value_cache[i].to(
                 device, non_blocking=True

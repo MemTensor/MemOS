@@ -100,9 +100,9 @@ class APIConfig:
                 "backend": "universal_api",
                 "config": {
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
-                    "api_key": os.getenv("OPENAI_API_KEY", "sk-xxxx"),
+                    "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
-                    "base_url": os.getenv("OPENAI_API_BASE", "http://openai.com"),
+                    "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                 },
             }
         else:  # ollama
@@ -120,10 +120,9 @@ class APIConfig:
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
         return {
-            "backend": "xinyu",
+            "backend": "bocha",
             "config": {
-                "api_key": os.getenv("XINYU_API_KEY"),
-                "search_engine_id": os.getenv("XINYU_SEARCH_ENGINE_ID"),
+                "api_key": os.getenv("BOCHA_API_KEY"),
                 "max_results": 15,
                 "num_per_request": 10,
                 "reader": {
