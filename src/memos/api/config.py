@@ -122,7 +122,7 @@ class APIConfig:
         return {
             "backend": "bocha",
             "config": {
-                "api_key": os.getenv("XINYU_API_KEY"),
+                "api_key": os.getenv("BOCHA_API_KEY"),
                 "max_results": 15,
                 "num_per_request": 10,
                 "reader": {
