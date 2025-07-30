@@ -242,8 +242,11 @@ class NebulaGraphDB(BaseGraphDB):
         metadata["memory"] = memory
 
         if "embedding" in metadata and isinstance(metadata["embedding"], list):
-            metadata[self.dim_field] = _normalize(metadata["embedding"])
-            metadata.pop("embedding")
+            assert len(metadata["embedding"]) == self.embedding_dimension, (
+                f"input embedding dimension must equal to {self.embedding_dimension}"
+            )
+            embedding = metadata.pop("embedding")
+            metadata[self.dim_field] = _normalize(embedding)
 
         metadata = self._metadata_filter(metadata)
         properties = ", ".join(f"{k}: {self._format_value(v, k)}" for k, v in metadata.items())
@@ -616,7 +619,7 @@ class NebulaGraphDB(BaseGraphDB):
         query = f"""
             MATCH (p@Memory)-[@PARENT]->(c@Memory)
             WHERE p.id = "{id}" {where_user}
-            RETURN c.id AS id, c.{self.dim_field} AS embedding, c.memory AS memory
+            RETURN c.id AS id, c.{self.dim_field} AS {self.dim_field}, c.memory AS memory
         """
         result = self.execute_query(query)
         children = []
@@ -1222,7 +1225,7 @@ class NebulaGraphDB(BaseGraphDB):
         """
         Create a vector index for the specified property in the label.
         """
-        if str(dimensions) == self.default_memory_dimension:
+        if str(dimensions) == str(self.default_memory_dimension):
             index_name = f"idx_{vector_property}"
             vector_name = vector_property
         else:
@@ -1341,7 +1344,6 @@ class NebulaGraphDB(BaseGraphDB):
         # Fill timestamps if missing
         metadata.setdefault("created_at", now)
         metadata.setdefault("updated_at", now)
-        metadata["node_type"] = metadata.pop("type")
 
         # Normalize embedding type
         embedding = metadata.get("embedding")
