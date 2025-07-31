@@ -132,7 +132,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.current_mem_cube_id = msg.mem_cube_id
             self.current_mem_cube = msg.mem_cube
 
-    def transform_memories_to_monitors(
+    def transform_working_memories_to_monitors(
         self, query_keywords, memories: list[TextualMemoryItem]
     ) -> list[MemoryMonitorItem]:
         """
@@ -193,9 +193,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             text_mem_base: TreeTextMemory = text_mem_base
 
             # process rerank memories with llm
-            query_history = self.monitor.query_monitors[user_id][
-                mem_cube_id
-            ].get_queries_with_timesort()
+            query_monitor = self.monitor.query_monitors[user_id][mem_cube_id]
+            query_history = query_monitor.get_queries_with_timesort()
             memories_with_new_order, rerank_success_flag = (
                 self.retriever.process_and_rerank_memories(
                     queries=query_history,
@@ -206,13 +205,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
 
             # update working memory monitors
-            query_keywords = self.monitor.query_monitors[user_id][
-                mem_cube_id
-            ].get_keywords_collections()
+            query_keywords = query_monitor.get_keywords_collections()
             logger.debug(
                 f"Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
             )
-            new_working_memory_monitors = self.transform_memories_to_monitors(
+            new_working_memory_monitors = self.transform_working_memories_to_monitors(
                 query_keywords=query_keywords,
                 memories=memories_with_new_order,
             )
@@ -251,25 +248,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             memories_with_new_order = new_memory
 
         return memories_with_new_order
-
-    def initialize_working_memory_monitors(
-        self,
-        user_id: UserID | str,
-        mem_cube_id: MemCubeID | str,
-        mem_cube: GeneralMemCube,
-    ):
-        text_mem_base: TreeTextMemory = mem_cube.text_mem
-        working_memories = text_mem_base.get_working_memory()
-
-        working_memory_monitors = self.transform_memories_to_monitors(
-            memories=working_memories,
-        )
-        self.monitor.update_working_memory_monitors(
-            new_working_memory_monitors=working_memory_monitors,
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-        )
 
     def update_activation_memory(
         self,
@@ -374,13 +352,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     or len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories) == 0
                 ):
                     logger.warning(
-                        "No memories found in working_memory_monitors, initializing from current working_memories"
+                        "No memories found in working_memory_monitors, activation memory update is skipped"
                     )
-                    self.initialize_working_memory_monitors(
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                    )
+                    return
 
                 self.monitor.update_activation_memory_monitors(
                     user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube

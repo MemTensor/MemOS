@@ -326,8 +326,17 @@ class GeneralScheduler(BaseScheduler):
         new_candidates = []
         for item in missing_evidences:
             logger.info(f"missing_evidences: {item}")
+            info = {
+                "user_id": user_id,
+                "session_id": "",
+            }
+
             results: list[TextualMemoryItem] = self.retriever.search(
-                query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
+                query=item,
+                mem_cube=mem_cube,
+                top_k=k_per_evidence,
+                method=self.search_method,
+                info=info,
             )
             logger.info(
                 f"search results for {missing_evidences}: {[one.memory for one in results]}"

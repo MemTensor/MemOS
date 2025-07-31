@@ -124,8 +124,7 @@ def run_with_scheduler_init():
         query = item["question"]
         print(f"Query:\n {query}\n")
         response = mos.chat(query=query, user_id=user_id)
-        print(f"Answer:\n {response}")
-        print("===== Chat End =====")
+        print(f"Answer:\n {response}\n")
 
     show_web_logs(mem_scheduler=mos.mem_scheduler)
 
