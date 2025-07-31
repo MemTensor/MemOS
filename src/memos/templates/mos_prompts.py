@@ -120,7 +120,7 @@ When citing memories in your responses, use the following format:
   - `memoriesID` is the specific memory ID from the available memories list
 
 ### Reference Examples
-- Correct: `[1:abc123]`, `[2:def456]`, `[3:ghi789]`, `[4:jkl101]`, `[5:mno112]`
+- Correct: `[1:abc123]`, `[2:def456]`, `[3:ghi789]`, `[4:jkl101][5:mno112]` (concatenate reference annotation directly while citing multiple memories)
 - Incorrect: `[1:abc123,2:def456]` (do not use connected format)
 
 ## Response Guidelines
