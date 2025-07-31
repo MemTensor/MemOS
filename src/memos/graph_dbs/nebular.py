@@ -1065,7 +1065,7 @@ class NebulaGraphDB(BaseGraphDB):
                 node_props = rec["n"].as_node().get_properties()
                 candidates.append(self._parse_node(node_props))
         except Exception as e:
-            logger.error(f"Failed : {e}")
+            logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
         return candidates
 
     def drop_database(self) -> None:
