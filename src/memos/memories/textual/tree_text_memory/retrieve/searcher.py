@@ -75,6 +75,18 @@ class Searcher:
             context = [related_node["memory"] for related_node in related_nodes]
             context = list(set(context))
 
+            # add some knowledge retrieved from internet to the context to avoid misunderstanding while parsing the task goal.
+            if self.internet_retriever:
+                supplyment_memory_items = self.internet_retriever.retrieve_from_internet(
+                    query=query, top_k=3
+                )
+                context.extend(
+                    [
+                        each_supplyment_item.memory.partition("\nContent: ")[-1]
+                        for each_supplyment_item in supplyment_memory_items
+                    ]
+                )
+
         # Step 1a: Parse task structure into topic, concept, and fact levels
         parsed_goal = self.task_goal_parser.parse(
             task_description=query,
