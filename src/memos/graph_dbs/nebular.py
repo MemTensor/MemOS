@@ -945,7 +945,9 @@ class NebulaGraphDB(BaseGraphDB):
             full_node_query = f"{node_query} RETURN n"
             node_result = self.execute_query(full_node_query)
             nodes = []
+            logger.debug(f"Debugging: {node_result}")
             for row in node_result:
+                logger.debug(f"Debugging: {row}")
                 node_wrapper = row.values()[0].as_node()
                 props = node_wrapper.get_properties()
 
