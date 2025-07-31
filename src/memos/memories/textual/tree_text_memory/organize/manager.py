@@ -158,106 +158,18 @@ class MemoryManager:
         - topic_summary_prefix: summary node id prefix if applicable
         - enable_summary_link: whether to auto-link to a summary node
         """
-        embedding = memory.metadata.embedding
-
-        # Step 1: Find similar nodes for possible merging
-        similar_nodes = self.graph_store.search_by_embedding(
-            vector=embedding,
-            top_k=3,
-            scope=memory_type,
-            threshold=self._threshold,
-            status="activated",
-        )
-
-        if similar_nodes and similar_nodes[0]["score"] > self._merged_threshold:
-            return self._merge(memory, similar_nodes)
-        else:
-            node_id = str(uuid.uuid4())
-            # Step 2: Add new node to graph
-            self.graph_store.add_node(
-                node_id, memory.memory, memory.metadata.model_dump(exclude_none=True)
-            )
-            self.reorganizer.add_message(
-                QueueMessage(
-                    op="add",
-                    after_node=[node_id],
-                )
-            )
-            return node_id
-
-    def _merge(self, source_node: TextualMemoryItem, similar_nodes: list[dict]) -> str:
-        """
-        TODO: Add node traceability support by optionally preserving source nodes and linking them with MERGED_FROM edges.
-
-        Merge the source memory into the most similar existing node (only one),
-        and establish a MERGED_FROM edge in the graph.
-
-        Parameters:
-            source_node: The new memory item (not yet in the graph)
-            similar_nodes: A list of dicts returned by search_by_embedding(), ordered by similarity
-        """
-        original_node = similar_nodes[0]
-        original_id = original_node["id"]
-        original_data = self.graph_store.get_node(original_id)
-
-        target_text = original_data.get("memory", "")
-        merged_text = f"{target_text}\n⟵MERGED⟶\n{source_node.memory}"
-
-        original_meta = TreeNodeTextualMemoryMetadata(**original_data["metadata"])
-        source_meta = source_node.metadata
-
-        merged_key = source_meta.key or original_meta.key
-        merged_tags = list(set((original_meta.tags or []) + (source_meta.tags or [])))
-        merged_sources = list(set((original_meta.sources or []) + (source_meta.sources or [])))
-        merged_background = f"{original_meta.background}\n⟵MERGED⟶\n{source_meta.background}"
-        merged_embedding = self.embedder.embed([merged_text])[0]
-
-        original_conf = original_meta.confidence or 0.0
-        source_conf = source_meta.confidence or 0.0
-        merged_confidence = float((original_conf + source_conf) / 2)
-        merged_usage = list(set((original_meta.usage or []) + (source_meta.usage or [])))
-
-        # Create new merged node
-        merged_id = str(uuid.uuid4())
-        merged_metadata = source_meta.model_copy(
-            update={
-                "embedding": merged_embedding,
-                "updated_at": datetime.now().isoformat(),
-                "key": merged_key,
-                "tags": merged_tags,
-                "sources": merged_sources,
-                "background": merged_background,
-                "confidence": merged_confidence,
-                "usage": merged_usage,
-            }
-        )
-
+        node_id = str(uuid.uuid4())
+        # Step 2: Add new node to graph
         self.graph_store.add_node(
-            merged_id, merged_text, merged_metadata.model_dump(exclude_none=True)
+            node_id, memory.memory, memory.metadata.model_dump(exclude_none=True)
         )
-
-        # Add traceability edges: both original and new point to merged node
-        self.graph_store.add_edge(original_id, merged_id, type="MERGED_TO")
-        self.graph_store.update_node(original_id, {"status": "archived"})
-        source_id = str(uuid.uuid4())
-        source_metadata = source_node.metadata.model_copy(update={"status": "archived"})
-        self.graph_store.add_node(source_id, source_node.memory, source_metadata.model_dump())
-        self.graph_store.add_edge(source_id, merged_id, type="MERGED_TO")
-        # After creating merged node and tracing lineage
-        self._inherit_edges(original_id, merged_id)
-
-        # log to reorganizer before updating the graph
         self.reorganizer.add_message(
             QueueMessage(
-                op="merge",
-                before_node=[
-                    original_id,
-                    source_node.id,
-                ],
-                after_node=[merged_id],
+                op="add",
+                after_node=[node_id],
             )
         )
-        return merged_id
+        return node_id
 
     def _inherit_edges(self, from_id: str, to_id: str) -> None:
         """

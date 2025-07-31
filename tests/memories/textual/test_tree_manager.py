@@ -103,19 +103,6 @@ def test_add_to_graph_memory_creates_new_node(memory_manager, mock_graph_store):
     assert mock_graph_store.add_node.called
 
 
-def test_merge(memory_manager, mock_graph_store):
-    source = TextualMemoryItem(
-        memory="source text",
-        metadata=TreeNodeTextualMemoryMetadata(
-            embedding=[0.1] * 5, confidence=50, background="src bg"
-        ),
-    )
-    similar_nodes = [{"id": str(uuid.uuid4()), "score": 0.95}]
-    memory_manager._merge(source, similar_nodes)
-    assert mock_graph_store.add_node.called
-    assert mock_graph_store.add_edge.called
-
-
 def test_inherit_edges(memory_manager, mock_graph_store):
     from_id = "from_id"
     to_id = "to_id"
