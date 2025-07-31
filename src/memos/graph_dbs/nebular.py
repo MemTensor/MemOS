@@ -955,9 +955,11 @@ class NebulaGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(f"[ERROR] Failed to clear database: {e}")
 
-    def export_graph(self) -> dict[str, Any]:
+    def export_graph(self, include_embedding: bool = False) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
+        Args:
+        include_embedding (bool): Whether to include the large embedding field.
 
         Returns:
             {
@@ -974,14 +976,41 @@ class NebulaGraphDB(BaseGraphDB):
             edge_query += f' WHERE r.user_name = "{username}"'
 
         try:
-            full_node_query = f"{node_query} RETURN n"
+            if include_embedding:
+                return_fields = "n"
+            else:
+                return_fields = ",".join(
+                    [
+                        "n.id AS id",
+                        "n.memory AS memory",
+                        "n.user_name AS user_name",
+                        "n.user_id AS user_id",
+                        "n.session_id AS session_id",
+                        "n.status AS status",
+                        "n.key AS key",
+                        "n.confidence AS confidence",
+                        "n.tags AS tags",
+                        "n.created_at AS created_at",
+                        "n.updated_at AS updated_at",
+                        "n.memory_type AS memory_type",
+                        "n.sources AS sources",
+                        "n.source AS source",
+                        "n.node_type AS node_type",
+                        "n.visibility AS visibility",
+                        "n.usage AS usage",
+                        "n.background AS background",
+                    ]
+                )
+
+            full_node_query = f"{node_query} RETURN {return_fields}"
             node_result = self.execute_query(full_node_query, timeout=20)
             nodes = []
             logger.debug(f"Debugging: {node_result}")
             for row in node_result:
-                logger.debug(f"Debugging: {row}")
-                node_wrapper = row.values()[0].as_node()
-                props = node_wrapper.get_properties()
+                if include_embedding:
+                    props = row.values()[0].as_node().get_properties()
+                else:
+                    props = {k: v.value for k, v in row.items()}
 
                 node = self._parse_node(props)
                 nodes.append(node)
@@ -1361,7 +1390,9 @@ class NebulaGraphDB(BaseGraphDB):
         parsed.pop("user_name", None)
         metadata = parsed
         metadata["type"] = metadata.pop("node_type")
-        metadata["embedding"] = metadata.pop(self.dim_field)
+
+        if self.dim_field in metadata:
+            metadata["embedding"] = metadata.pop(self.dim_field)
 
         return {"id": node_id, "memory": memory, "metadata": metadata}
 
