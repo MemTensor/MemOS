@@ -62,6 +62,7 @@ class SessionPool:
         self.hosts = hosts
         self.user = user
         self.password = password
+        self.minsize = minsize
         self.maxsize = maxsize
         self.pool = Queue(maxsize)
         self.lock = Lock()
@@ -79,13 +80,13 @@ class SessionPool:
         self.clients.append(client)
 
     def get_client(self, timeout: float = 5.0):
-        from nebulagraph_python import NebulaClient
-
         try:
             return self.pool.get(timeout=timeout)
         except Empty:
             with self.lock:
                 if len(self.clients) < self.maxsize:
+                    from nebulagraph_python import NebulaClient
+
                     client = NebulaClient(self.hosts, self.user, self.password)
                     self.clients.append(client)
                     return client
@@ -119,6 +120,25 @@ class SessionPool:
                     self.outer.return_client(self.client)
 
         return _ClientContext(self)
+
+    def reset_pool(self):
+        """⚠️ Emergency reset: Close all clients and clear the pool."""
+        logger.warning("[Pool] Resetting all clients. Existing sessions will be lost.")
+        with self.lock:
+            for client in self.clients:
+                try:
+                    client.close()
+                except Exception:
+                    logger.error("Fail to close!!!")
+            self.clients.clear()
+            while not self.pool.empty():
+                try:
+                    self.pool.get_nowait()
+                except Empty:
+                    break
+            for _ in range(self.minsize):
+                self._create_and_add_client()
+        logger.info("[Pool] Pool has been reset successfully.")
 
 
 class NebulaGraphDB(BaseGraphDB):
@@ -185,8 +205,20 @@ class NebulaGraphDB(BaseGraphDB):
                 client.execute(f"SESSION SET GRAPH `{self.db_name}`")
             try:
                 return client.execute(gql, timeout=timeout)
-            except Exception:
+            except Exception as e:
                 logger.error(f"Fail to run gql {gql} trace: {traceback.format_exc()}")
+                if "Session not found" in str(e):
+                    logger.warning("[execute_query] Session expired, replacing client.")
+                    try:
+                        client.close()
+                    except Exception:
+                        logger.error("Fail to close!!!!!")
+                    from nebulagraph_python import NebulaClient
+
+                    new_client = NebulaClient(self.pool.hosts, self.pool.user, self.pool.password)
+                    self.pool.clients.append(new_client)
+                    return new_client.execute(gql, timeout=timeout)
+                raise
 
     def close(self):
         self.pool.close()
