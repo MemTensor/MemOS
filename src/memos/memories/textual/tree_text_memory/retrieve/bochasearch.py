@@ -1,5 +1,7 @@
 """BochaAI Search API retriever for tree text memory."""
 
+import json
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -87,7 +89,20 @@ class BochaAISearchAPI:
             resp.raise_for_status()
             raw_data = resp.json()
 
-            # ✅ parse the nested structure correctly
+            # parse the nested structure correctly
+            # ✅ AI Search
+            if "messages" in raw_data:
+                results = []
+                for msg in raw_data["messages"]:
+                    if msg.get("type") == "source" and msg.get("content_type") == "webpage":
+                        try:
+                            content_json = json.loads(msg["content"])
+                            results.extend(content_json.get("value", []))
+                        except Exception as e:
+                            logger.error(f"Failed to parse message content: {e}")
+                return results
+
+            # ✅ Web Search
             return raw_data.get("data", {}).get("webPages", {}).get("value", [])
 
         except Exception:
@@ -136,7 +151,8 @@ class BochaAISearchRetriever:
         Returns:
             List of TextualMemoryItem
         """
-        search_results = self.bocha_api.search_web(query)  # ✅ default to web-search
+        search_results = self.bocha_api.search_ai(query)  # ✅ default to
+        # web-search
         return self._convert_to_mem_items(search_results, query, parsed_goal, info)
 
     def retrieve_from_web(
