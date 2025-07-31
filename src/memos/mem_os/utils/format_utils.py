@@ -570,15 +570,23 @@ def convert_graph_to_tree_forworkmem(
         else:
             other_roots.append(root_id)
 
-    def build_tree(node_id: str) -> dict[str, Any]:
-        """Recursively build tree structure"""
+    def build_tree(node_id: str, visited=None) -> dict[str, Any] | None:
+        """Recursively build tree structure with cycle detection"""
+        if visited is None:
+            visited = set()
+
+        if node_id in visited:
+            logger.warning(f"[build_tree] Detected cycle at node {node_id}, skipping.")
+            return None
+        visited.add(node_id)
+
         if node_id not in node_map:
             return None
 
         children_ids = children_map.get(node_id, [])
         children = []
         for child_id in children_ids:
-            child_tree = build_tree(child_id)
+            child_tree = build_tree(child_id, visited)
             if child_tree:
                 children.append(child_tree)
 
