@@ -39,8 +39,8 @@ class MemoryManager:
         if not memory_size:
             self.memory_size = {
                 "WorkingMemory": 20,
-                "LongTermMemory": 10000,
-                "UserMemory": 10000,
+                "LongTermMemory": 1500,
+                "UserMemory": 480,
             }
         self._threshold = threshold
         self.is_reorganize = is_reorganize
