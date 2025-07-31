@@ -67,6 +67,7 @@ class GraphStructureReorganizer:
         self.redundancy = RedundancyHandler(graph_store=graph_store, llm=llm, embedder=embedder)
 
         self.is_reorganize = is_reorganize
+        self._reorganize_needed = False
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
             self.thread = threading.Thread(target=self._run_message_consumer_loop)
@@ -130,8 +131,12 @@ class GraphStructureReorganizer:
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
-            schedule.run_pending()
-            time.sleep(1)
+            if self._reorganize_needed:
+                logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
+                self.optimize_structure(scope="LongTermMemory")
+                self.optimize_structure(scope="UserMemory")
+                self._reorganize_needed = False
+            time.sleep(30)
 
     def stop(self):
         """
@@ -172,6 +177,8 @@ class GraphStructureReorganizer:
             for added_node, existing_node in redundancies:
                 self.redundancy.resolve_two_nodes(added_node, existing_node)
                 logger.info(f"Resolved redundancy between {added_node.id} and {existing_node.id}.")
+
+        self._reorganize_needed = False
 
     def handle_remove(self, message: QueueMessage):
         logger.debug(f"Handling remove operation: {str(message)[:50]}")
