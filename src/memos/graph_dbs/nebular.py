@@ -1057,6 +1057,7 @@ class NebulaGraphDB(BaseGraphDB):
                    MATCH (n@Memory)
                    {where_clause}
                    RETURN n
+                   LIMIT 100
                    """
         nodes = []
         try:
