@@ -41,6 +41,20 @@ def _format_datetime(value: str | datetime) -> str:
     return str(value)
 
 
+def _normalize_datetime(val):
+    """
+    Normalize datetime to ISO 8601 UTC string with +00:00.
+    - If val is datetime object -> keep isoformat() (Neo4j)
+    - If val is string without timezone -> append +00:00 (Nebula)
+    - Otherwise just str()
+    """
+    if hasattr(val, "isoformat"):
+        return val.isoformat()
+    if isinstance(val, str) and not val.endswith(("+00:00", "Z")):
+        return val + "+00:00"
+    return str(val)
+
+
 class SessionPoolError(Exception):
     pass
 
@@ -1382,8 +1396,8 @@ class NebulaGraphDB(BaseGraphDB):
         parsed = {k: self._parse_value(v) for k, v in props.items()}
 
         for tf in ("created_at", "updated_at"):
-            if tf in parsed and hasattr(parsed[tf], "isoformat"):
-                parsed[tf] = parsed[tf].isoformat()
+            if tf in parsed and parsed[tf] is not None:
+                parsed[tf] = _normalize_datetime(parsed[tf])
 
         node_id = parsed.pop("id")
         memory = parsed.pop("memory", "")
