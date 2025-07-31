@@ -975,7 +975,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         try:
             full_node_query = f"{node_query} RETURN n"
-            node_result = self.execute_query(full_node_query)
+            node_result = self.execute_query(full_node_query, timeout=20)
             nodes = []
             logger.debug(f"Debugging: {node_result}")
             for row in node_result:
@@ -990,7 +990,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         try:
             full_edge_query = f"{edge_query} RETURN a.id AS source, b.id AS target, type(r) as edge"
-            edge_result = self.execute_query(full_edge_query)
+            edge_result = self.execute_query(full_edge_query, timeout=20)
             edges = [
                 {
                     "source": row.values()[0].value,
