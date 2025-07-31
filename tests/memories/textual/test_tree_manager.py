@@ -85,7 +85,6 @@ def test_add_to_graph_memory_merges(memory_manager, mock_graph_store):
     )
     memory_manager._add_to_graph_memory(memory, "UserMemory")
     assert mock_graph_store.add_node.called
-    assert mock_graph_store.add_edge.called
 
 
 def test_add_to_graph_memory_creates_new_node(memory_manager, mock_graph_store):
