@@ -2,6 +2,7 @@ import json
 import os
 import random
 import time
+import traceback
 
 from collections.abc import Generator
 from datetime import datetime
@@ -990,30 +991,35 @@ class MOSProduct(MOSCore):
         )
         reformat_memory_list = []
         if memory_type == "text_mem":
-            for memory in memory_list:
-                memories = remove_embedding_recursive(memory["memories"])
-                custom_type_ratios = {
-                    "WorkingMemory": 0.20,
-                    "LongTermMemory": 0.40,
-                    "UserMemory": 0.40,
-                }
-                tree_result, node_type_count = convert_graph_to_tree_forworkmem(
-                    memories, target_node_count=200, type_ratios=custom_type_ratios
-                )
-                # Ensure all node IDs are unique in the tree structure
-                tree_result = ensure_unique_tree_ids(tree_result)
-                memories_filtered = filter_nodes_by_tree_ids(tree_result, memories)
-                children = tree_result["children"]
-                children_sort = sort_children_by_memory_type(children)
-                tree_result["children"] = children_sort
-                memories_filtered["tree_structure"] = tree_result
-                reformat_memory_list.append(
-                    {
-                        "cube_id": memory["cube_id"],
-                        "memories": [memories_filtered],
-                        "memory_statistics": node_type_count,
+            try:
+                for memory in memory_list:
+                    memories = remove_embedding_recursive(memory["memories"])
+                    custom_type_ratios = {
+                        "WorkingMemory": 0.20,
+                        "LongTermMemory": 0.40,
+                        "UserMemory": 0.40,
                     }
-                )
+                    tree_result, node_type_count = convert_graph_to_tree_forworkmem(
+                        memories, target_node_count=200, type_ratios=custom_type_ratios
+                    )
+                    # Ensure all node IDs are unique in the tree structure
+                    tree_result = ensure_unique_tree_ids(tree_result)
+                    memories_filtered = filter_nodes_by_tree_ids(tree_result, memories)
+                    children = tree_result["children"]
+                    children_sort = sort_children_by_memory_type(children)
+                    tree_result["children"] = children_sort
+                    memories_filtered["tree_structure"] = tree_result
+                    reformat_memory_list.append(
+                        {
+                            "cube_id": memory["cube_id"],
+                            "memories": [memories_filtered],
+                            "memory_statistics": node_type_count,
+                        }
+                    )
+            except Exception:
+                logger.debug(f"memory_list: {memory_list}")
+                logger.error(traceback.format_exc())
+
         elif memory_type == "act_mem":
             memories_list = []
             act_mem_params = self.mem_cubes[mem_cube_ids[0]].act_mem.get_all()
