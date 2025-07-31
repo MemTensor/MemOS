@@ -50,7 +50,7 @@ def _normalize_datetime(val):
     """
     if hasattr(val, "isoformat"):
         return val.isoformat()
-    if isinstance(val, str) and not val.endswith(("+00:00", "Z")):
+    if isinstance(val, str) and not val.endswith(("+00:00", "Z", "+08:00")):
         return val + "+08:00"
     return str(val)
 
