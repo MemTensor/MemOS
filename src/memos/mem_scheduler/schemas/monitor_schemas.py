@@ -1,3 +1,5 @@
+import threading
+
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -76,7 +78,7 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
     Each item is expected to be a dictionary containing:
     """
 
-    def put(self, item: QueryMonitorItem, block: bool = True, timeout: float | None = None) -> None:
+    def put(self, item: QueryMonitorItem, block: bool = True, timeout: float | None = 5.0) -> None:
         """
         Add a query item to the queue. Ensures the item is of correct type.
 
@@ -85,6 +87,9 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
         """
         if not isinstance(item, QueryMonitorItem):
             raise ValueError("Item must be an instance of QueryMonitorItem")
+        logger.debug(
+            f"Thread {threading.get_ident()} acquired mutex. Timeout is set to {timeout} seconds"
+        )
         super().put(item, block, timeout)
 
     def get_queries_by_timestamp(
@@ -94,6 +99,7 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
         Retrieve queries added between the specified time range.
         """
         with self.mutex:
+            logger.debug(f"Thread {threading.get_ident()} acquired mutex.")
             return [item for item in self.queue if start_time <= item.timestamp <= end_time]
 
     def get_keywords_collections(self) -> Counter:
@@ -104,6 +110,7 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
             Counter object with keyword counts
         """
         with self.mutex:
+            logger.debug(f"Thread {threading.get_ident()} acquired mutex.")
             all_keywords = [kw for item in self.queue for kw in item.keywords]
             return Counter(all_keywords)
 
@@ -119,6 +126,7 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
             List of query items sorted by timestamp
         """
         with self.mutex:
+            logger.debug(f"Thread {threading.get_ident()} acquired mutex.")
             return [
                 monitor.query_text
                 for monitor in sorted(self.queue, key=lambda x: x.timestamp, reverse=reverse)

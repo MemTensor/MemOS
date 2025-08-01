@@ -81,7 +81,13 @@ class MOSForTestScheduler(MOS):
 
                 # from mem_cube
                 memories = mem_cube.text_mem.search(
-                    query, top_k=self.config.top_k - topk_for_scheduler
+                    query,
+                    top_k=self.config.top_k - topk_for_scheduler,
+                    info={
+                        "user_id": target_user_id,
+                        "session_id": self.session_id,
+                        "chat_history": chat_history.chat_history,
+                    },
                 )
                 text_memories = [m.memory for m in memories]
                 print(f"Search results with new working memories: {text_memories}")

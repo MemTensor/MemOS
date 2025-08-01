@@ -17,24 +17,29 @@ Consider these satisfaction factors:
 4. Personalization (tailored to user's context)
 
 ## Decision Framework
-1. Mark as satisfied ONLY if:
+1. We have enough information (satisfied) ONLY when:
    - All question aspects are addressed
    - Supporting evidence exists in working memory
-   - No apparent gaps in information
+   - There's no obvious information missing
 
-2. Mark as unsatisfied if:
+2. We need more information (unsatisfied) if:
    - Any question aspect remains unanswered
    - Evidence is generic/non-specific
    - Personal context is missing
 
 ## Output Specification
 Return JSON with:
-- "trigger_retrieval": Boolean (true if more evidence needed)
-- "missing_evidences": List of specific evidence types required
+- "trigger_retrieval": true/false (true if we need more information)
+- "evidences": List of information from our working memory that helps answer the questions
+- "missing_evidences":  List of specific types of information we need to answer the questions
 
 ## Response Format
 {{
   "trigger_retrieval": <boolean>,
+  "evidences": [
+    "<useful_evidence_1>",
+    "<useful_evidence_2>"
+    ],
   "missing_evidences": [
     "<evidence_type_1>",
     "<evidence_type_2>"
@@ -107,7 +112,7 @@ Input order: ["[0] syntax", "[1] matplotlib", "[2] threading"]
 Output:
 {{
   "new_order": [2, 1, 0],
-  "reasoning": "Threading (2) prioritized for matching newest query, followed by matplotlib (1) for older visualization query",
+  "reasoning": "Threading (2) prioritized for matching newest query, followed by matplotlib (1) for older visualization query"
 }}
 
 ## Current Task

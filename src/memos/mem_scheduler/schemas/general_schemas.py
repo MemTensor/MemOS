@@ -10,6 +10,7 @@ ANSWER_LABEL = "answer"
 ADD_LABEL = "add"
 
 TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
+TreeTextMemory_FINE_SEARCH_METHOD = "tree_text_memory_fine_search"
 TextMemory_SEARCH_METHOD = "text_memory_search"
 DIRECT_EXCHANGE_TYPE = "direct"
 FANOUT_EXCHANGE_TYPE = "fanout"

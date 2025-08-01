@@ -1,4 +1,5 @@
 from datetime import datetime
+from threading import Lock
 from typing import Any
 
 from memos.configs.mem_scheduler import BaseSchedulerConfig
@@ -46,9 +47,7 @@ class SchedulerMonitor(BaseSchedulerModule):
 
         # attributes
         # recording query_messages
-        self.query_monitors: QueryMonitorQueue[QueryMonitorItem] = QueryMonitorQueue(
-            maxsize=self.config.context_window_size
-        )
+        self.query_monitors: dict[UserID, dict[MemCubeID, QueryMonitorQueue[QueryMonitorItem]]] = {}
 
         self.working_memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]] = {}
         self.activation_memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]] = {}
@@ -57,6 +56,7 @@ class SchedulerMonitor(BaseSchedulerModule):
         self.last_activation_mem_update_time = datetime.min
         self.last_query_consume_time = datetime.min
 
+        self._register_lock = Lock()
         self._process_llm = process_llm
 
     def extract_query_keywords(self, query: str) -> list:
@@ -78,15 +78,34 @@ class SchedulerMonitor(BaseSchedulerModule):
             keywords = [query]
         return keywords
 
+    def register_query_monitor_if_not_exists(
+        self,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
+    ) -> None:
+        # First check (lock-free, fast path)
+        if user_id in self.query_monitors and mem_cube_id in self.query_monitors[user_id]:
+            return
+
+        # Second check (with lock, ensures uniqueness)
+        with self._register_lock:
+            if user_id not in self.query_monitors:
+                self.query_monitors[user_id] = {}
+            if mem_cube_id not in self.query_monitors[user_id]:
+                self.query_monitors[user_id][mem_cube_id] = QueryMonitorQueue(
+                    maxsize=self.config.context_window_size
+                )
+
     def register_memory_manager_if_not_exists(
         self,
-        user_id: str,
-        mem_cube_id: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
         memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]],
         max_capacity: int,
     ) -> None:
         """
         Register a new MemoryMonitorManager for the given user and memory cube if it doesn't exist.
+        Thread-safe implementation using double-checked locking pattern.
 
         Checks if a MemoryMonitorManager already exists for the specified user_id and mem_cube_id.
         If not, creates a new MemoryMonitorManager with appropriate capacity settings and registers it.
@@ -94,14 +113,34 @@ class SchedulerMonitor(BaseSchedulerModule):
         Args:
             user_id: The ID of the user to associate with the memory manager
             mem_cube_id: The ID of the memory cube to monitor
+            memory_monitors: Dictionary storing existing memory monitor managers
+            max_capacity: Maximum capacity for the new memory monitor manager
+            lock: Threading lock to ensure safe concurrent access
 
         Note:
             This function will update the loose_max_working_memory_capacity based on the current
             WorkingMemory size plus partial retention number before creating a new manager.
         """
-        # Check if a MemoryMonitorManager already exists for the current user_id and mem_cube_id
-        # If doesn't exist, create and register a new one
-        if (user_id not in memory_monitors) or (mem_cube_id not in memory_monitors[user_id]):
+        # First check (lock-free, fast path)
+        # Quickly verify existence without lock overhead
+        if user_id in memory_monitors and mem_cube_id in memory_monitors[user_id]:
+            logger.info(
+                f"MemoryMonitorManager already exists for user_id={user_id}, "
+                f"mem_cube_id={mem_cube_id} in the provided memory_monitors dictionary"
+            )
+            return
+
+        # Second check (with lock, ensures uniqueness)
+        # Acquire lock before modification and verify again to prevent race conditions
+        with self._register_lock:
+            # Re-check after acquiring lock, as another thread might have created it
+            if user_id in memory_monitors and mem_cube_id in memory_monitors[user_id]:
+                logger.info(
+                    f"MemoryMonitorManager already exists for user_id={user_id}, "
+                    f"mem_cube_id={mem_cube_id} in the provided memory_monitors dictionary"
+                )
+                return
+
             # Initialize MemoryMonitorManager with user ID, memory cube ID, and max capacity
             monitor_manager = MemoryMonitorManager(
                 user_id=user_id, mem_cube_id=mem_cube_id, max_capacity=max_capacity
@@ -112,11 +151,6 @@ class SchedulerMonitor(BaseSchedulerModule):
             logger.info(
                 f"Registered new MemoryMonitorManager for user_id={user_id},"
                 f" mem_cube_id={mem_cube_id} with max_capacity={max_capacity}"
-            )
-        else:
-            logger.info(
-                f"MemoryMonitorManager already exists for user_id={user_id}, "
-                f"mem_cube_id={mem_cube_id} in the provided memory_monitors dictionary"
             )
 
     def update_working_memory_monitors(

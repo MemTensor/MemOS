@@ -9,6 +9,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
     QUERY_LABEL,
+    WORKING_MEMORY_TYPE,
     MemCubeID,
     UserID,
 )
@@ -35,11 +36,12 @@ class GeneralScheduler(BaseScheduler):
 
     # for evaluation
     def search_for_eval(
-        self,
-        query: str,
-        user_id: UserID | str,
-        top_k: int,
-    ) -> list[str]:
+        self, query: str, user_id: UserID | str, top_k: int, scheduler_flag: bool = True
+    ) -> (list[str], bool):
+        self.monitor.register_query_monitor_if_not_exists(
+            user_id=user_id, mem_cube_id=self.current_mem_cube_id
+        )
+
         query_keywords = self.monitor.extract_query_keywords(query=query)
         logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
 
@@ -48,35 +50,61 @@ class GeneralScheduler(BaseScheduler):
             keywords=query_keywords,
             max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
         )
-        self.monitor.query_monitors.put(item=item)
-        logger.debug(
-            f"Queries in monitor are {self.monitor.query_monitors.get_queries_with_timesort()}."
-        )
+        query_monitor = self.monitor.query_monitors[user_id][self.current_mem_cube_id]
+        query_monitor.put(item=item)
+        logger.debug(f"Queries in monitor are {query_monitor.get_queries_with_timesort()}.")
 
         queries = [query]
 
         # recall
-        cur_working_memory, new_candidates = self.process_session_turn(
-            queries=queries,
-            user_id=user_id,
-            mem_cube_id=self.current_mem_cube_id,
-            mem_cube=self.current_mem_cube,
-            top_k=self.top_k,
-        )
-        logger.info(f"Processed {queries} and get {len(new_candidates)} new candidate memories.")
+        mem_cube = self.current_mem_cube
+        text_mem_base = mem_cube.text_mem
 
-        # rerank
-        new_order_working_memory = self.replace_working_memory(
-            user_id=user_id,
-            mem_cube_id=self.current_mem_cube_id,
-            mem_cube=self.current_mem_cube,
-            original_memory=cur_working_memory,
-            new_memory=new_candidates,
+        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
+        text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
+        intent_result = self.monitor.detect_intent(
+            q_list=queries, text_working_memory=text_working_memory
         )
-        new_order_working_memory = new_order_working_memory[:top_k]
-        logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
 
-        return [m.memory for m in new_order_working_memory]
+        if not scheduler_flag:
+            return text_working_memory, intent_result["trigger_retrieval"]
+        else:
+            if intent_result["trigger_retrieval"]:
+                missing_evidences = intent_result["missing_evidences"]
+                num_evidence = len(missing_evidences)
+                k_per_evidence = max(1, top_k // max(1, num_evidence))
+                new_candidates = []
+                for item in missing_evidences:
+                    logger.info(f"missing_evidences: {item}")
+                    results: list[TextualMemoryItem] = self.retriever.search(
+                        query=item,
+                        mem_cube=mem_cube,
+                        top_k=k_per_evidence,
+                        method=self.search_method,
+                    )
+                    logger.info(
+                        f"search results for {missing_evidences}: {[one.memory for one in results]}"
+                    )
+                    new_candidates.extend(results)
+                print(
+                    f"missing_evidences: {missing_evidences} and get {len(new_candidates)} new candidate memories."
+                )
+            else:
+                new_candidates = []
+                print(f"intent_result: {intent_result}. not triggered")
+
+            # rerank
+            new_order_working_memory = self.replace_working_memory(
+                user_id=user_id,
+                mem_cube_id=self.current_mem_cube_id,
+                mem_cube=self.current_mem_cube,
+                original_memory=cur_working_memory,
+                new_memory=new_candidates,
+            )
+            new_order_working_memory = new_order_working_memory[:top_k]
+            logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
+
+            return [m.memory for m in new_order_working_memory], intent_result["trigger_retrieval"]
 
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
@@ -105,6 +133,10 @@ class GeneralScheduler(BaseScheduler):
 
                 # update query monitors
                 for msg in messages:
+                    self.monitor.register_query_monitor_if_not_exists(
+                        user_id=user_id, mem_cube_id=mem_cube_id
+                    )
+
                     query = msg.content
                     query_keywords = self.monitor.extract_query_keywords(query=query)
                     logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
@@ -114,9 +146,11 @@ class GeneralScheduler(BaseScheduler):
                         keywords=query_keywords,
                         max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
                     )
-                    self.monitor.query_monitors.put(item=item)
+
+                    self.monitor.query_monitors[user_id][mem_cube_id].put(item=item)
                 logger.debug(
-                    f"Queries in monitor are {self.monitor.query_monitors.get_queries_with_timesort()}."
+                    f"Queries in monitor are "
+                    f"{self.monitor.query_monitors[user_id][mem_cube_id].get_queries_with_timesort()}."
                 )
 
                 queries = [msg.content for msg in messages]
@@ -215,6 +249,9 @@ class GeneralScheduler(BaseScheduler):
                             mem_type = mem_item.metadata.memory_type
                             mem_content = mem_item.memory
 
+                            if mem_type == WORKING_MEMORY_TYPE:
+                                continue
+
                             self.log_adding_memory(
                                 memory=mem_content,
                                 memory_type=mem_type,
@@ -289,18 +326,20 @@ class GeneralScheduler(BaseScheduler):
         new_candidates = []
         for item in missing_evidences:
             logger.info(f"missing_evidences: {item}")
+            info = {
+                "user_id": user_id,
+                "session_id": "",
+            }
+
             results: list[TextualMemoryItem] = self.retriever.search(
-                query=item, mem_cube=mem_cube, top_k=k_per_evidence, method=self.search_method
+                query=item,
+                mem_cube=mem_cube,
+                top_k=k_per_evidence,
+                method=self.search_method,
+                info=info,
             )
             logger.info(
                 f"search results for {missing_evidences}: {[one.memory for one in results]}"
             )
             new_candidates.extend(results)
-
-        if len(new_candidates) == 0:
-            logger.warning(
-                f"As new_candidates is empty, new_candidates is set same to working_memory.\n"
-                f"time_trigger_flag: {time_trigger_flag}; intent_result: {intent_result}"
-            )
-            new_candidates = cur_working_memory
         return cur_working_memory, new_candidates

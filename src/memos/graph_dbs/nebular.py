@@ -41,6 +41,20 @@ def _format_datetime(value: str | datetime) -> str:
     return str(value)
 
 
+def _normalize_datetime(val):
+    """
+    Normalize datetime to ISO 8601 UTC string with +00:00.
+    - If val is datetime object -> keep isoformat() (Neo4j)
+    - If val is string without timezone -> append +00:00 (Nebula)
+    - Otherwise just str()
+    """
+    if hasattr(val, "isoformat"):
+        return val.isoformat()
+    if isinstance(val, str) and not val.endswith(("+00:00", "Z", "+08:00")):
+        return val + "+08:00"
+    return str(val)
+
+
 class SessionPoolError(Exception):
     pass
 
@@ -62,6 +76,7 @@ class SessionPool:
         self.hosts = hosts
         self.user = user
         self.password = password
+        self.minsize = minsize
         self.maxsize = maxsize
         self.pool = Queue(maxsize)
         self.lock = Lock()
@@ -79,13 +94,13 @@ class SessionPool:
         self.clients.append(client)
 
     def get_client(self, timeout: float = 5.0):
-        from nebulagraph_python import NebulaClient
-
         try:
             return self.pool.get(timeout=timeout)
         except Empty:
             with self.lock:
                 if len(self.clients) < self.maxsize:
+                    from nebulagraph_python import NebulaClient
+
                     client = NebulaClient(self.hosts, self.user, self.password)
                     self.clients.append(client)
                     return client
@@ -119,6 +134,25 @@ class SessionPool:
                     self.outer.return_client(self.client)
 
         return _ClientContext(self)
+
+    def reset_pool(self):
+        """⚠️ Emergency reset: Close all clients and clear the pool."""
+        logger.warning("[Pool] Resetting all clients. Existing sessions will be lost.")
+        with self.lock:
+            for client in self.clients:
+                try:
+                    client.close()
+                except Exception:
+                    logger.error("Fail to close!!!")
+            self.clients.clear()
+            while not self.pool.empty():
+                try:
+                    self.pool.get_nowait()
+                except Empty:
+                    break
+            for _ in range(self.minsize):
+                self._create_and_add_client()
+        logger.info("[Pool] Pool has been reset successfully.")
 
 
 class NebulaGraphDB(BaseGraphDB):
@@ -181,12 +215,27 @@ class NebulaGraphDB(BaseGraphDB):
 
     def execute_query(self, gql: str, timeout: float = 5.0, auto_set_db: bool = True):
         with self.pool.get() as client:
-            if auto_set_db and self.db_name:
-                client.execute(f"SESSION SET GRAPH `{self.db_name}`")
             try:
+                if auto_set_db and self.db_name:
+                    client.execute(f"SESSION SET GRAPH `{self.db_name}`")
                 return client.execute(gql, timeout=timeout)
-            except Exception:
+            except Exception as e:
                 logger.error(f"Fail to run gql {gql} trace: {traceback.format_exc()}")
+                if "Session not found" in str(e):
+                    logger.warning("[execute_query] Session expired, replacing client.")
+                    try:
+                        client.close()
+                    except Exception:
+                        logger.error("Fail to close!!!!!")
+                    finally:
+                        if client in self.pool.clients:
+                            self.pool.clients.remove(client)
+                    from nebulagraph_python import NebulaClient
+
+                    new_client = NebulaClient(self.pool.hosts, self.pool.user, self.pool.password)
+                    self.pool.clients.append(new_client)
+                    return new_client.execute(gql, timeout=timeout)
+                raise
 
     def close(self):
         self.pool.close()
@@ -923,9 +972,11 @@ class NebulaGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(f"[ERROR] Failed to clear database: {e}")
 
-    def export_graph(self) -> dict[str, Any]:
+    def export_graph(self, include_embedding: bool = False) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
+        Args:
+        include_embedding (bool): Whether to include the large embedding field.
 
         Returns:
             {
@@ -942,12 +993,41 @@ class NebulaGraphDB(BaseGraphDB):
             edge_query += f' WHERE r.user_name = "{username}"'
 
         try:
-            full_node_query = f"{node_query} RETURN n"
-            node_result = self.execute_query(full_node_query)
+            if include_embedding:
+                return_fields = "n"
+            else:
+                return_fields = ",".join(
+                    [
+                        "n.id AS id",
+                        "n.memory AS memory",
+                        "n.user_name AS user_name",
+                        "n.user_id AS user_id",
+                        "n.session_id AS session_id",
+                        "n.status AS status",
+                        "n.key AS key",
+                        "n.confidence AS confidence",
+                        "n.tags AS tags",
+                        "n.created_at AS created_at",
+                        "n.updated_at AS updated_at",
+                        "n.memory_type AS memory_type",
+                        "n.sources AS sources",
+                        "n.source AS source",
+                        "n.node_type AS node_type",
+                        "n.visibility AS visibility",
+                        "n.usage AS usage",
+                        "n.background AS background",
+                    ]
+                )
+
+            full_node_query = f"{node_query} RETURN {return_fields}"
+            node_result = self.execute_query(full_node_query, timeout=20)
             nodes = []
+            logger.debug(f"Debugging: {node_result}")
             for row in node_result:
-                node_wrapper = row.values()[0].as_node()
-                props = node_wrapper.get_properties()
+                if include_embedding:
+                    props = row.values()[0].as_node().get_properties()
+                else:
+                    props = {k: v.value for k, v in row.items()}
 
                 node = self._parse_node(props)
                 nodes.append(node)
@@ -956,7 +1036,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         try:
             full_edge_query = f"{edge_query} RETURN a.id AS source, b.id AS target, type(r) as edge"
-            edge_result = self.execute_query(full_edge_query)
+            edge_result = self.execute_query(full_edge_query, timeout=20)
             edges = [
                 {
                     "source": row.values()[0].value,
@@ -1023,6 +1103,7 @@ class NebulaGraphDB(BaseGraphDB):
                    MATCH (n@Memory)
                    {where_clause}
                    RETURN n
+                   LIMIT 100
                    """
         nodes = []
         try:
@@ -1065,7 +1146,7 @@ class NebulaGraphDB(BaseGraphDB):
                 node_props = rec["n"].as_node().get_properties()
                 candidates.append(self._parse_node(node_props))
         except Exception as e:
-            logger.error(f"Failed : {e}")
+            logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
         return candidates
 
     def drop_database(self) -> None:
@@ -1318,15 +1399,17 @@ class NebulaGraphDB(BaseGraphDB):
         parsed = {k: self._parse_value(v) for k, v in props.items()}
 
         for tf in ("created_at", "updated_at"):
-            if tf in parsed and hasattr(parsed[tf], "isoformat"):
-                parsed[tf] = parsed[tf].isoformat()
+            if tf in parsed and parsed[tf] is not None:
+                parsed[tf] = _normalize_datetime(parsed[tf])
 
         node_id = parsed.pop("id")
         memory = parsed.pop("memory", "")
         parsed.pop("user_name", None)
         metadata = parsed
         metadata["type"] = metadata.pop("node_type")
-        metadata["embedding"] = metadata.pop(self.dim_field)
+
+        if self.dim_field in metadata:
+            metadata["embedding"] = metadata.pop(self.dim_field)
 
         return {"id": node_id, "memory": memory, "metadata": metadata}
 
