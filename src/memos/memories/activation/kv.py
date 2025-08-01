@@ -1,7 +1,8 @@
 import os
 import pickle
-
 from datetime import datetime
+from importlib.metadata import version
+from packaging.version import Version
 
 from transformers import DynamicCache
 
@@ -211,13 +212,24 @@ class KVCacheMemory(BaseActMemory):
         merged = DynamicCache()
         num_layers = len(caches[0].key_cache)
 
-        for layer in range(num_layers):
-            # gather all K and V for this layer
-            keys = [c.key_cache[layer] for c in caches]
-            vals = [c.value_cache[layer] for c in caches]
-            # single concat per layer
-            merged.key_cache.append(torch.cat(keys, dim=-2))
-            merged.value_cache.append(torch.cat(vals, dim=-2))
+        if Version(version("transformers")) >= Version("4.54.0"):
+            merged.append_new_layers(num_layers - 1)
+            for layer in range(num_layers):
+                # gather all K and V for this layer
+                keys = [c.layers[layer].keys for c in caches]
+                vals = [c.layers[layer].values for c in caches]
+                # single concat per layer
+                merged.layers[layer].keys = torch.cat(keys, dim=-2)
+                merged.layers[layer].values = torch.cat(vals, dim=-2)
+
+        else:
+            for layer in range(num_layers):
+                # gather all K and V for this layer
+                keys = [c.key_cache[layer] for c in caches]
+                vals = [c.value_cache[layer] for c in caches]
+                # single concat per layer
+                merged.key_cache.append(torch.cat(keys, dim=-2))
+                merged.value_cache.append(torch.cat(vals, dim=-2))
 
         return merged
 
