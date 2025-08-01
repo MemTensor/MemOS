@@ -215,9 +215,9 @@ class NebulaGraphDB(BaseGraphDB):
 
     def execute_query(self, gql: str, timeout: float = 5.0, auto_set_db: bool = True):
         with self.pool.get() as client:
-            if auto_set_db and self.db_name:
-                client.execute(f"SESSION SET GRAPH `{self.db_name}`")
             try:
+                if auto_set_db and self.db_name:
+                    client.execute(f"SESSION SET GRAPH `{self.db_name}`")
                 return client.execute(gql, timeout=timeout)
             except Exception as e:
                 logger.error(f"Fail to run gql {gql} trace: {traceback.format_exc()}")
@@ -227,6 +227,9 @@ class NebulaGraphDB(BaseGraphDB):
                         client.close()
                     except Exception:
                         logger.error("Fail to close!!!!!")
+                    finally:
+                        if client in self.pool.clients:
+                            self.pool.clients.remove(client)
                     from nebulagraph_python import NebulaClient
 
                     new_client = NebulaClient(self.pool.hosts, self.pool.user, self.pool.password)
