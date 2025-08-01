@@ -68,7 +68,7 @@ LOGGING_CONFIG = {
             "class": "logging.handlers.RotatingFileHandler",
             "filename": _setup_logfile(),
             "maxBytes": 1024**2 * 10,
-            "backupCount": 3,
+            "backupCount": 10,
             "formatter": "standard",
         },
         "customRequest": {
