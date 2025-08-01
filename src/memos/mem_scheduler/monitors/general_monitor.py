@@ -6,7 +6,7 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.base import BaseSchedulerModule
+from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
     DEFAULT_WEIGHT_VECTOR_FOR_RANKING,
@@ -29,7 +29,7 @@ from memos.memories.textual.tree import TreeTextMemory
 logger = get_logger(__name__)
 
 
-class SchedulerMonitor(BaseSchedulerModule):
+class SchedulerGeneralMonitor(BaseSchedulerModule):
     """Monitors and manages scheduling operations with LLM integration."""
 
     def __init__(self, process_llm: BaseLLM, config: BaseSchedulerConfig):
@@ -208,11 +208,11 @@ class SchedulerMonitor(BaseSchedulerModule):
         )
 
     def timed_trigger(self, last_time: datetime, interval_seconds: float) -> bool:
-        now = datetime.now()
+        now = datetime.utcnow()
         elapsed = (now - last_time).total_seconds()
         if elapsed >= interval_seconds:
             return True
-        logger.debug(f"Time trigger not ready, {elapsed:.1f}s elapsed (needs {interval_seconds}s)")
+        logger.info(f"Time trigger not ready, {elapsed:.1f}s elapsed (needs {interval_seconds}s)")
         return False
 
     def get_monitor_memories(

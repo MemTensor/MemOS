@@ -8,8 +8,8 @@ from pathlib import Path
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
-from memos.mem_scheduler.modules.base import BaseSchedulerModule
-from memos.mem_scheduler.modules.misc import AutoDroppingQueue
+from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
+from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue
 from memos.mem_scheduler.schemas.general_schemas import DIRECT_EXCHANGE_TYPE, FANOUT_EXCHANGE_TYPE
 
 
