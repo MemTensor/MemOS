@@ -258,7 +258,7 @@ class TestMOSUserManagement:
         assert len(users) == 1
         assert users[0]["user_id"] == "test_user"
         assert users[0]["user_name"] == "Test User"
-        assert users[0]["role"] == "user"
+        assert users[0]["role"] == "USER"
 
 
 class TestMOSMemoryOperations:
@@ -326,7 +326,16 @@ class TestMOSMemoryOperations:
         assert "para_mem" in result
         assert len(result["text_mem"]) == 1
         assert result["text_mem"][0]["cube_id"] == "test_cube_1"
-        mock_mem_cube.text_mem.search.assert_called_once_with("football", top_k=5)
+        # Verify the search was called with the correct parameters
+        mock_mem_cube.text_mem.search.assert_called_once()
+        call_args = mock_mem_cube.text_mem.search.call_args
+        assert call_args[0] == ("football",)  # positional args
+        assert call_args[1]["top_k"] == 5
+        assert call_args[1]["mode"] == "fast"
+        assert call_args[1]["manual_close_internet"]
+        assert "info" in call_args[1]
+        assert call_args[1]["info"]["user_id"] == "test_user"
+        assert "session_id" in call_args[1]["info"]
 
     @patch("memos.mem_os.core.UserManager")
     @patch("memos.mem_os.core.MemReaderFactory")
@@ -577,7 +586,15 @@ class TestMOSChat:
 
         # Verify memory search was called (called twice because we have two cubes)
         assert mock_mem_cube.text_mem.search.call_count == 2
-        mock_mem_cube.text_mem.search.assert_any_call("What do I like?", top_k=5)
+        mock_mem_cube.text_mem.search.assert_any_call(
+            "What do I like?",
+            top_k=5,
+            info={
+                "user_id": mos.user_id,
+                "session_id": mos.session_id,
+                "chat_history": mos.chat_history_manager[mos.user_id].chat_history,
+            },
+        )
 
         # Verify LLM was called
         mock_llm.generate.assert_called_once()

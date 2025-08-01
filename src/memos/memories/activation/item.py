@@ -18,6 +18,10 @@ class KVCacheRecords(BaseModel):
         default=[],
         description="The list of text memories transformed to the activation memory.",
     )
+    composed_text_memory: str = Field(
+        default="",
+        description="Single string combining all text_memories using assembly template",
+    )
     timestamp: datetime = Field(
         default_factory=datetime.now, description="submit time for schedule_messages"
     )

@@ -58,9 +58,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 metadata=TreeNodeTextualMemoryMetadata(
                     user_id=info.get("user_id"),
                     session_id=info.get("session_id"),
-                    memory_type=memory_i_raw.get("memory_type", ""),
+                    memory_type=memory_i_raw.get("memory_type", "")
+                    .replace("长期记忆", "LongTermMemory")
+                    .replace("用户记忆", "UserMemory"),
                     status="activated",
-                    tags=memory_i_raw.get("tags", ""),
+                    tags=memory_i_raw.get("tags", [])
+                    if type(memory_i_raw.get("tags", [])) is list
+                    else [],
                     key=memory_i_raw.get("key", ""),
                     embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
                     usage=[],
@@ -176,8 +180,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         elif type == "doc":
             for item in scene_data:
                 try:
-                    parsed_text = parser.parse(item)
-                    results.append({"file": item, "text": parsed_text})
+                    if not isinstance(item, str):
+                        parsed_text = parser.parse(item)
+                        results.append({"file": "pure_text", "text": parsed_text})
+                    else:
+                        parsed_text = item
+                        results.append({"file": item, "text": parsed_text})
                 except Exception as e:
                     print(f"Error parsing file {item}: {e!s}")
 
@@ -208,15 +216,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         for i, chunk_res in enumerate(processed_chunks):
             if chunk_res:
                 node_i = TextualMemoryItem(
-                    memory=chunk_res["summary"],
+                    memory=chunk_res["value"],
                     metadata=TreeNodeTextualMemoryMetadata(
                         user_id=info.get("user_id"),
                         session_id=info.get("session_id"),
                         memory_type="LongTermMemory",
                         status="activated",
-                        tags=chunk_res["tags"],
-                        key="",
-                        embedding=self.embedder.embed([chunk_res["summary"]])[0],
+                        tags=chunk_res["tags"] if type(chunk_res["tags"]) is list else [],
+                        key=chunk_res["key"],
+                        embedding=self.embedder.embed([chunk_res["value"]])[0],
                         usage=[],
                         sources=[f"{scene_data_info['file']}_{i}"],
                         background="",

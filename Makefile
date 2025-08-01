@@ -1,7 +1,7 @@
 .PHONY: test
 
 install:
-	poetry install --with dev --with test
+	poetry install --extras all --with dev --with test
 	poetry run pre-commit install --install-hooks
 
 clean:

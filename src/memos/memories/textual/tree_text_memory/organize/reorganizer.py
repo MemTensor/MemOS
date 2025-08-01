@@ -3,15 +3,14 @@ import threading
 import time
 import traceback
 
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import PriorityQueue
 from typing import Literal
-from collections import Counter, defaultdict
+
 import numpy as np
-import schedule
 
-from sklearn.cluster import MiniBatchKMeans
-
+from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
 from memos.graph_dbs.neo4j import Neo4jGraphDB
@@ -32,7 +31,7 @@ logger = get_logger(__name__)
 class QueueMessage:
     def __init__(
         self,
-        op: Literal["add", "remove", "merge", "update"],
+        op: Literal["add", "remove", "merge", "update", "end"],
         # `str` for node and edge IDs, `GraphDBNode` and `GraphDBEdge` for actual objects
         before_node: list[str] | list[GraphDBNode] | None = None,
         before_edge: list[str] | list[GraphDBEdge] | None = None,
@@ -49,7 +48,7 @@ class QueueMessage:
         return f"QueueMessage(op={self.op}, before_node={self.before_node if self.before_node is None else len(self.before_node)}, after_node={self.after_node if self.after_node is None else len(self.after_node)})"
 
     def __lt__(self, other: "QueueMessage") -> bool:
-        op_priority = {"add": 2, "remove": 2, "merge": 1}
+        op_priority = {"add": 2, "remove": 2, "merge": 1, "end": 0}
         return op_priority[self.op] < op_priority[other.op]
 
 
@@ -104,7 +103,7 @@ class GraphStructureReorganizer:
     def _run_message_consumer_loop(self):
         while True:
             message = self.queue.get()
-            if message is None:
+            if message.op == "end":
                 break
 
             try:
@@ -114,13 +113,20 @@ class GraphStructureReorganizer:
                 logger.error(traceback.format_exc())
             self.queue.task_done()
 
+    @require_python_package(
+        import_name="schedule",
+        install_command="pip install schedule",
+        install_link="https://schedule.readthedocs.io/en/stable/installation.html",
+    )
     def _run_structure_organizer_loop(self):
         """
         Use schedule library to periodically trigger structure optimization.
         This runs until the stop flag is set.
         """
-        schedule.every(20).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(20).seconds.do(self.optimize_structure, scope="UserMemory")
+        import schedule
+
+        schedule.every(600).seconds.do(self.optimize_structure, scope="LongTermMemory")
+        schedule.every(600).seconds.do(self.optimize_structure, scope="UserMemory")
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
@@ -134,7 +140,7 @@ class GraphStructureReorganizer:
         if not self.is_reorganize:
             return
 
-        self.add_message(None)
+        self.add_message(QueueMessage(op="end"))
         self.thread.join()
         logger.info("Reorganize thread stopped.")
         self._stop_scheduler = True
@@ -152,9 +158,6 @@ class GraphStructureReorganizer:
 
     def handle_add(self, message: QueueMessage):
         logger.debug(f"Handling add operation: {str(message)[:500]}")
-        assert message.before_node is None and message.before_edge is None, (
-            "Before node and edge should be None for `add` operation."
-        )
         # ———————— 1. check for conflicts ————————
         added_node = message.after_node[0]
         conflicts = self.conflict.detect(added_node, scope=added_node.metadata.memory_type)
@@ -195,7 +198,7 @@ class GraphStructureReorganizer:
             logger.info(f"Already optimizing for {scope}. Skipping.")
             return
 
-        if self.graph_store.count_nodes(scope) == 0:
+        if self.graph_store.node_not_exist(scope):
             logger.debug(f"[GraphStructureReorganize] No nodes for scope={scope}. Skip.")
             return
 
@@ -248,7 +251,10 @@ class GraphStructureReorganizer:
                     try:
                         f.result()
                     except Exception as e:
-                        logger.warning(f"[Reorganize] Cluster processing failed: {e}")
+                        logger.warning(
+                            f"[Reorganize] Cluster processing "
+                            f"failed: {e}, trace: {traceback.format_exc()}"
+                        )
                 logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
         finally:
@@ -340,7 +346,7 @@ class GraphStructureReorganizer:
                         agg_node.metadata.model_dump(exclude_none=True),
                     )
                     for child_id in agg_node.metadata.sources:
-                        self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATES")
+                        self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATE_TO")
 
             logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
@@ -378,6 +384,11 @@ class GraphStructureReorganizer:
 
         return result_subclusters
 
+    @require_python_package(
+        import_name="sklearn",
+        install_command="pip install scikit-learn",
+        install_link="https://scikit-learn.org/stable/install.html",
+    )
     def _partition(self, nodes, min_cluster_size: int = 3, max_cluster_size: int = 20):
         """
         Partition nodes by:
@@ -392,6 +403,8 @@ class GraphStructureReorganizer:
         Returns:
             List of clusters, each as a list of GraphDBNode
         """
+        from sklearn.cluster import MiniBatchKMeans
+
         # 1) Count all tags
         tag_counter = Counter()
         for node in nodes:
@@ -573,7 +586,7 @@ class GraphStructureReorganizer:
 
     def _preprocess_message(self, message: QueueMessage) -> bool:
         message = self._convert_id_to_node(message)
-        if None in message.after_node:
+        if message.after_node is None or None in message.after_node:
             logger.debug(
                 f"Found non-existent node in after_node in message: {message}, skip this message."
             )

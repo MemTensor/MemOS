@@ -1,17 +1,7 @@
 from typing import Any
 
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
-from qdrant_client.http.models import (
-    Distance,
-    FieldCondition,
-    Filter,
-    MatchValue,
-    PointStruct,
-    VectorParams,
-)
-
 from memos.configs.vec_db import QdrantVecDBConfig
+from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.vec_dbs.base import BaseVecDB
 from memos.vec_dbs.item import VecDBItem
@@ -23,8 +13,15 @@ logger = get_logger(__name__)
 class QdrantVecDB(BaseVecDB):
     """Qdrant vector database implementation."""
 
+    @require_python_package(
+        import_name="qdrant_client",
+        install_command="pip install qdrant-client",
+        install_link="https://python-client.qdrant.tech/",
+    )
     def __init__(self, config: QdrantVecDBConfig):
         """Initialize the Qdrant vector database and the collection."""
+        from qdrant_client import QdrantClient
+
         self.config = config
 
         # If both host and port are None, we are running in local mode
@@ -43,6 +40,7 @@ class QdrantVecDB(BaseVecDB):
 
     def create_collection(self) -> None:
         """Create a new collection with specified parameters."""
+        from qdrant_client.http import models
 
         if self.collection_exists(self.config.collection_name):
             collection_info = self.client.get_collection(self.config.collection_name)
@@ -54,14 +52,14 @@ class QdrantVecDB(BaseVecDB):
 
         # Map string distance metric to Qdrant Distance enum
         distance_map = {
-            "cosine": Distance.COSINE,
-            "euclidean": Distance.EUCLID,
-            "dot": Distance.DOT,
+            "cosine": models.Distance.COSINE,
+            "euclidean": models.Distance.EUCLID,
+            "dot": models.Distance.DOT,
         }
 
         self.client.create_collection(
             collection_name=self.config.collection_name,
-            vectors_config=VectorParams(
+            vectors_config=models.VectorParams(
                 size=self.config.vector_dimension,
                 distance=distance_map[self.config.distance_metric],
             ),
@@ -122,16 +120,20 @@ class QdrantVecDB(BaseVecDB):
             for point in response
         ]
 
-    def _dict_to_filter(self, filter_dict: dict[str, Any]) -> Filter:
+    def _dict_to_filter(self, filter_dict: dict[str, Any]) -> Any:
+        from qdrant_client.http import models
+
         """Convert a dictionary filter to a Qdrant Filter object."""
         conditions = []
 
         for field, value in filter_dict.items():
             # Simple exact match for now
             # TODO: Extend this to support more complex conditions
-            conditions.append(FieldCondition(key=field, match=MatchValue(value=value)))
+            conditions.append(
+                models.FieldCondition(key=field, match=models.MatchValue(value=value))
+            )
 
-        return Filter(must=conditions)
+        return models.Filter(must=conditions)
 
     def get_by_id(self, id: str) -> VecDBItem | None:
         """Get a single item by ID."""
@@ -235,6 +237,8 @@ class QdrantVecDB(BaseVecDB):
         return response.count
 
     def add(self, data: list[VecDBItem | dict[str, Any]]) -> None:
+        from qdrant_client.http import models
+
         """
         Add data to the vector database.
 
@@ -249,13 +253,14 @@ class QdrantVecDB(BaseVecDB):
             if isinstance(item, dict):
                 item = item.copy()
                 item = VecDBItem.from_dict(item)
-            point = PointStruct(id=item.id, vector=item.vector, payload=item.payload)
+            point = models.PointStruct(id=item.id, vector=item.vector, payload=item.payload)
             points.append(point)
 
         self.client.upsert(collection_name=self.config.collection_name, points=points)
 
     def update(self, id: str, data: VecDBItem | dict[str, Any]) -> None:
         """Update an item in the vector database."""
+        from qdrant_client.http import models
 
         if isinstance(data, dict):
             data = data.copy()
@@ -265,13 +270,32 @@ class QdrantVecDB(BaseVecDB):
             # For vector updates (with or without payload), use upsert with the same ID
             self.client.upsert(
                 collection_name=self.config.collection_name,
-                points=[PointStruct(id=id, vector=data.vector, payload=data.payload)],
+                points=[models.PointStruct(id=id, vector=data.vector, payload=data.payload)],
             )
         else:
             # For payload-only updates
             self.client.set_payload(
                 collection_name=self.config.collection_name, payload=data.payload, points=[id]
             )
+
+    def ensure_payload_indexes(self, fields: list[str]) -> None:
+        """
+        Create payload indexes for specified fields in the collection.
+        This is idempotent: it will skip if index already exists.
+
+        Args:
+            fields (list[str]): List of field names to index (as keyword).
+        """
+        for field in fields:
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.config.collection_name,
+                    field_name=field,
+                    field_schema="keyword",  # Could be extended in future
+                )
+                logger.debug(f"Qdrant payload index on '{field}' ensured.")
+            except Exception as e:
+                logger.warning(f"Failed to create payload index on '{field}': {e}")
 
     def upsert(self, data: list[VecDBItem | dict[str, Any]]) -> None:
         """
@@ -284,6 +308,8 @@ class QdrantVecDB(BaseVecDB):
         self.add(data)
 
     def delete(self, ids: list[str]) -> None:
+        from qdrant_client.http import models
+
         """Delete items from the vector database."""
         point_ids: list[str | int] = ids
         self.client.delete(

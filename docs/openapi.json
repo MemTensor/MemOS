@@ -884,7 +884,7 @@
             "type": "string",
             "title": "Session Id",
             "description": "Session ID for the MOS. This is used to distinguish between different dialogue",
-            "default": "a47d75a0-5ee8-473f-86c4-3f09073fd59f"
+            "default": "842877f4-c3f7-4c22-ad38-5950026870fe"
           },
           "chat_model": {
             "$ref": "#/components/schemas/LLMConfigFactory",
@@ -904,6 +904,10 @@
               }
             ],
             "description": "Memory scheduler configuration for managing memory operations"
+          },
+          "user_manager": {
+            "$ref": "#/components/schemas/UserManagerConfigFactory",
+            "description": "User manager configuration for database operations"
           },
           "max_turns_window": {
             "type": "integer",
@@ -1369,6 +1373,25 @@
         ],
         "title": "UserListResponse",
         "description": "Response model for user list operations."
+      },
+      "UserManagerConfigFactory": {
+        "properties": {
+          "backend": {
+            "type": "string",
+            "title": "Backend",
+            "description": "Backend for user manager",
+            "default": "sqlite"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config",
+            "description": "Configuration for the user manager backend"
+          }
+        },
+        "type": "object",
+        "title": "UserManagerConfigFactory",
+        "description": "Factory for user manager configurations."
       },
       "UserResponse": {
         "properties": {

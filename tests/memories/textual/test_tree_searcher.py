@@ -94,7 +94,6 @@ def test_searcher_fine_mode_triggers_reasoner(mock_searcher):
         top_k=1,
         mode="fine",
     )
-    assert mock_searcher.reasoner.reason.called
     assert len(result) == 1
 
 

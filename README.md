@@ -17,6 +17,9 @@
     <a href="https://pypi.org/project/MemoryOS">
       <img src="https://img.shields.io/pypi/pyversions/MemoryOS.svg" alt="Supported Python versions">
     </a>
+    <a href="https://pypi.org/project/MemoryOS">
+      <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Supported Platforms">
+    </a>
     <a href="https://memos-docs.openmem.net/home/overview/">
       <img src="https://img.shields.io/badge/Documentation-view-blue.svg" alt="Documentation">
     </a>
@@ -138,34 +141,37 @@ For more detailed examples, please check out the [`examples`](./examples) direct
 
 ## 📦 Installation
 
-> [!WARNING]
-> MemOS is compatible with Linux, Windows, and macOS.
->
-> However, if you're using macOS, please note that there may be dependency issues that are difficult to resolve.
->
-> For example, compatibility with macOS 13 Ventura is currently challenging.
-
 ### Install via pip
 
 ```bash
 pip install MemoryOS
 ```
 
-### Development Install
+### Optional Dependencies
 
-To contribute to MemOS, clone the repository and install it in editable mode:
+MemOS provides several optional dependency groups for different features. You can install them based on your needs.
+
+| Feature               | Package Name              |
+| --------------------- | ------------------------- |
+| Tree Memory           | `MemoryOS[tree-mem]`      |
+| Memory Reader         | `MemoryOS[mem-reader]`    |
+| Memory Scheduler      | `MemoryOS[mem-scheduler]` |
+
+Example installation commands:
 
 ```bash
-git clone https://github.com/MemTensor/MemOS.git
-cd MemOS
-make install
+pip install MemoryOS[tree-mem]
+pip install MemoryOS[tree-mem,mem-reader]
+pip install MemoryOS[mem-scheduler]
+pip install MemoryOS[tree-mem,mem-reader,mem-scheduler]
 ```
 
-### Optional Dependencies
+### External Dependencies
 
 #### Ollama Support
 
 To use MemOS with [Ollama](https://ollama.com/), first install the Ollama CLI:
+
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ```
@@ -245,6 +251,9 @@ MemOS is licensed under the [Apache 2.0 License](./LICENSE).
 
 Stay up to date with the latest MemOS announcements, releases, and community highlights.
 
+- **2025-07-29** – 🎉 MemOS v0.2.2 (Nebula Update): Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
+- **2025-07-21** – 🎉 MemOS v0.2.1 (Neo Release): Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
+- **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
 - **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
 - **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
 - **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.

@@ -75,7 +75,9 @@ class TestSimpleStructMemReader(unittest.TestCase):
         info = {"user_id": "user1", "session_id": "session1"}
 
         # Mock LLM response
-        mock_response = '{"summary": "A sample document about testing.", "tags": ["document"]}'
+        mock_response = (
+            '{"value": "A sample document about testing.", "tags": ["document"], "key": "title"}'
+        )
         self.reader.llm.generate.return_value = mock_response
         self.reader.chunker.chunk.return_value = [
             Chunk(text="Parsed document text", token_count=3, sentences=["Parsed document text"])
@@ -115,18 +117,18 @@ class TestSimpleStructMemReader(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0][0], "user: [3 May 2025]: I'm feeling a bit down today.")
 
-    @patch("memos.parsers.factory.ParserFactory")
+    @patch("memos.mem_reader.simple_struct.ParserFactory")
     def test_get_scene_data_info_with_doc(self, mock_parser_factory):
         """Test parsing document files."""
         parser_instance = MagicMock()
         parser_instance.parse.return_value = "Parsed document text.\n"
         mock_parser_factory.from_config.return_value = parser_instance
 
-        scene_data = ["tests/mem_reader/test.txt"]
+        scene_data = [{"fake_file_like": "should trigger parse"}]
         result = self.reader.get_scene_data_info(scene_data, type="doc")
 
         self.assertIsInstance(result, list)
-        self.assertEqual(result[0]["text"], "Parsed document text\n")
+        self.assertEqual(result[0]["text"], "Parsed document text.\n")
 
     def test_parse_json_result_success(self):
         """Test successful JSON parsing."""

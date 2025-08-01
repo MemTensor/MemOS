@@ -2,10 +2,12 @@ from typing import Any, ClassVar
 
 from memos.configs.llm import LLMConfigFactory
 from memos.llms.base import BaseLLM
+from memos.llms.deepseek import DeepSeekLLM
 from memos.llms.hf import HFLLM
 from memos.llms.hf_singleton import HFSingletonLLM
 from memos.llms.ollama import OllamaLLM
 from memos.llms.openai import AzureLLM, OpenAILLM
+from memos.llms.qwen import QwenLLM
 from memos.llms.vllm import VLLMLLM
 
 
@@ -19,6 +21,8 @@ class LLMFactory(BaseLLM):
         "huggingface": HFLLM,
         "huggingface_singleton": HFSingletonLLM,  # Add singleton version
         "vllm": VLLMLLM,
+        "qwen": QwenLLM,
+        "deepseek": DeepSeekLLM,
     }
 
     @classmethod

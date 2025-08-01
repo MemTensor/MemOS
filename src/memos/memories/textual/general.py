@@ -12,6 +12,7 @@ from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem
+from memos.templates.mem_reader_prompts import SIMPLE_STRUCT_MEM_READER_PROMPT
 from memos.types import MessageList
 from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory
 from memos.vec_dbs.item import VecDBItem
@@ -36,11 +37,7 @@ class GeneralTextMemory(BaseTextMemory):
         stop=stop_after_attempt(3),
         retry=retry_if_exception_type(json.JSONDecodeError),
         before_sleep=lambda retry_state: logger.warning(
-            EXTRACTION_RETRY_LOG.format(
-                error=retry_state.outcome.exception(),
-                attempt_number=retry_state.attempt_number,
-                max_attempt_number=3,
-            )
+            f"Extracting memory failed due to JSON decode error: {retry_state.outcome.exception()}, Attempt retry: {retry_state.attempt_number} / {3}"
         ),
     )
     def extract(self, messages: MessageList) -> list[TextualMemoryItem]:
@@ -52,14 +49,27 @@ class GeneralTextMemory(BaseTextMemory):
         Returns:
             List of TextualMemoryItem objects representing the extracted memories.
         """
-        str_messages = json.dumps(messages)
-        user_query = EXTRACTION_PROMPT_PART_1 + EXTRACTION_PROMPT_PART_2.format(
-            messages=str_messages
+
+        str_messages = "\n".join(
+            [message["role"] + ":" + message["content"] for message in messages]
         )
-        response = self.extractor_llm.generate([{"role": "user", "content": user_query}])
-        raw_extracted_memories = json.loads(response)
+
+        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", str_messages)
+        messages = [{"role": "user", "content": prompt}]
+        response_text = self.extractor_llm.generate(messages)
+        response_json = self.parse_json_result(response_text)
+
         extracted_memories = [
-            TextualMemoryItem(**memory_dict) for memory_dict in raw_extracted_memories
+            TextualMemoryItem(
+                memory=memory_dict["value"],
+                metadata={
+                    "key": memory_dict["key"],
+                    "source": "conversation",
+                    "tags": memory_dict["tags"],
+                    "updated_at": datetime.now().isoformat(),
+                },
+            )
+            for memory_dict in response_json["memory list"]
         ]
 
         return extracted_memories
@@ -206,83 +216,17 @@ class GeneralTextMemory(BaseTextMemory):
         """Embed a single sentence."""
         return self.embedder.embed([sentence])[0]
 
-
-EXTRACTION_PROMPT_PART_1 = f"""You are a memory extractor. Your task is to extract memories from the given messages.
-* You will receive a list of messages, each with a role (user or assistant) and content.
-* Your job is to extract memories related to the user's long-term goals, interests, and emotional states.
-* Each memory should be a dictionary with the following keys:
-    - "memory": The content of the memory (string). Rephrase the content if necessary.
-    - "metadata": A dictionary containing additional information about the memory.
-* The metadata dictionary should include:
-    - "type": The type of memory (string), e.g., "procedure", "fact", "event", "opinion", etc.
-    - "memory_time": The time the memory occurred or refers to (string). Must be in standard `YYYY-MM-DD` format. Relative expressions such as "yesterday" or "tomorrow" are not allowed.
-    - "source": The origin of the memory (string), e.g., `"conversation"`, `"retrieved"`, `"web"`, `"file"`.
-    - "confidence": A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.
-    - "entities": A list of key entities (array of strings) mentioned in the memory, e.g., people, places, organizations, e.g., `["Alice", "Paris", "OpenAI"]`.
-    - "tags": A list of keywords or thematic labels (array of strings) associated with the memory for categorization or retrieval, e.g., `["travel", "health", "project-x"]`.
-    - "visibility": The accessibility scope of the memory (string), e.g., `"private"`, `"public"`, `"session"`, determining who or what contexts can access it.
-    - "updated_at": The timestamp of the last modification to the memory (string). Useful for tracking memory freshness or change history. Format: ISO 8601 or natural language.
-* Current date and time is {datetime.now().isoformat()}.
-* Only return the list of memories in JSON format.
-* Do not include any explanations
-* Do not include any extra text
-* Do not include code blocks (```json```)
-
-## Example
-
-### Input
-
-[
-    {{"role": "user", "content": "I plan to visit Paris next week."}},
-    {{"role": "assistant", "content": "Paris is a beautiful city with many attractions."}},
-    {{"role": "user", "content": "I love the Eiffel Tower."}},
-    {{"role": "assistant", "content": "The Eiffel Tower is a must-see landmark in Paris."}}
-]
-
-### Output
-
-[
-  {{
-    "memory": "The user plans to visit Paris on 05-26-2025.",
-    "metadata": {{
-      "type": "event",
-      "memory_time": "2025-05-26",
-      "source": "conversation",
-      "confidence": 90.0,
-      "entities": ["Paris"],
-      "tags": ["travel", "plans"],
-      "visibility": "private",
-      "updated_at": "2025-05-19T00:00:00"
-    }}
-  }},
-  {{
-    "memory": "The user loves the Eiffel Tower.",
-    "metadata": {{
-      "type": "opinion",
-      "memory_time": "2025-05-19",
-      "source": "conversation",
-      "confidence": 100.0,
-      "entities": ["Eiffel Tower"],
-      "tags": ["opinions", "landmarks"],
-      "visibility": "session",
-      "updated_at": "2025-05-19T00:00:00"
-    }}
-  }}
-]
-
-"""
-
-EXTRACTION_PROMPT_PART_2 = """
-## Query
-
-### Input
-
-{messages}
-
-### Output
-
-"""
-
-EXTRACTION_RETRY_LOG = """Extracting memory failed due to JSON decode error: {error},
-Attempt retry: {attempt_number} / {max_attempt_number}
-"""
+    def parse_json_result(self, response_text):
+        try:
+            json_start = response_text.find("{")
+            response_text = response_text[json_start:]
+            response_text = response_text.replace("```", "").strip()
+            if response_text[-1] != "}":
+                response_text += "}"
+            response_json = json.loads(response_text)
+            return response_json
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f"Failed to parse LLM response as JSON: {e}\nRaw response:\n{response_text}"
+            )
+            return {}

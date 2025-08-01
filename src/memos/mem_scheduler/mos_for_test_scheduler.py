@@ -3,12 +3,12 @@ from datetime import datetime
 from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.modules.schemas import (
+from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     MONITOR_WORKING_MEMORY_TYPE,
     QUERY_LABEL,
-    ScheduleMessageItem,
 )
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 logger = get_logger(__name__)
@@ -54,24 +54,20 @@ class MOSForTestScheduler(MOS):
                 if not mem_cube.text_mem:
                     continue
 
-                # submit message to scheduler
-                if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                    message_item = ScheduleMessageItem(
-                        user_id=target_user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                        label=QUERY_LABEL,
-                        content=query,
-                        timestamp=datetime.now(),
-                    )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
-
-                self.mem_scheduler.monitor.register_memory_manager_if_not_exists(
-                    user_id=user_id,
+                message_item = ScheduleMessageItem(
+                    user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    memory_monitors=self.mem_scheduler.monitor.working_memory_monitors,
-                    max_capacity=self.mem_scheduler.monitor.working_mem_monitor_capacity,
+                    mem_cube=mem_cube,
+                    label=QUERY_LABEL,
+                    content=query,
+                    timestamp=datetime.now(),
                 )
+                cur_working_memories = [m.memory for m in mem_cube.text_mem.get_working_memory()]
+                print(f"Working memories before schedule: {cur_working_memories}")
+
+                # --- force to run mem_scheduler ---
+                self.mem_scheduler.monitor.query_trigger_interval = 0
+                self.mem_scheduler._query_message_consumer(messages=[message_item])
 
                 # from scheduler
                 scheduler_memories = self.mem_scheduler.monitor.get_monitor_memories(
@@ -80,6 +76,7 @@ class MOSForTestScheduler(MOS):
                     memory_type=MONITOR_WORKING_MEMORY_TYPE,
                     top_k=topk_for_scheduler,
                 )
+                print(f"Working memories after schedule: {scheduler_memories}")
                 memories_all.extend(scheduler_memories)
 
                 # from mem_cube
@@ -87,6 +84,7 @@ class MOSForTestScheduler(MOS):
                     query, top_k=self.config.top_k - topk_for_scheduler
                 )
                 text_memories = [m.memory for m in memories]
+                print(f"Search results with new working memories: {text_memories}")
                 memories_all.extend(text_memories)
 
                 memories_all = list(set(memories_all))
@@ -139,5 +137,4 @@ class MOSForTestScheduler(MOS):
                     timestamp=datetime.now(),
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item])
-
         return response

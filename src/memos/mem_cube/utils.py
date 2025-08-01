@@ -71,10 +71,6 @@ def merge_config_with_default(
 
             # Define graph_db fields to preserve (user-specific)
             preserve_graph_fields = {
-                "uri",
-                "user",
-                "password",
-                "db_name",
                 "auto_create",
                 "user_name",
                 "use_multi_db",
@@ -96,9 +92,20 @@ def merge_config_with_default(
                     merged_graph_config["db_name"] = default_graph_config.get("db_name")
                 else:
                     logger.info("use_multi_db is already False, no need to change")
-
+            if "neo4j" not in default_text_config["graph_db"]["backend"]:
+                if "db_name" in merged_graph_config:
+                    merged_graph_config.pop("db_name")
+                    logger.info("neo4j is not supported, remove db_name")
+                else:
+                    logger.info("db_name is not in merged_graph_config, no need to remove")
+            else:
+                if "space" in merged_graph_config:
+                    merged_graph_config.pop("space")
+                    logger.info("neo4j is not supported, remove db_name")
+                else:
+                    logger.info("space is not in merged_graph_config, no need to remove")
             preserved_graph_db = {
-                "backend": existing_text_config["graph_db"]["backend"],
+                "backend": default_text_config["graph_db"]["backend"],
                 "config": merged_graph_config,
             }
 

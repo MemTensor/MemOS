@@ -1,17 +1,17 @@
 #!/bin/bash
 
 # Common parameters for all scripts
-LIB="memos"
-VERSION="063001"
+LIB="memos-api"
+VERSION="072001"
 WORKERS=10
 TOPK=20
 
-echo "Running locomo_ingestion.py..."
-CUDA_VISIBLE_DEVICES=0 python scripts/locomo/locomo_ingestion.py --lib $LIB --version $VERSION --workers $WORKERS
-if [ $? -ne 0 ]; then
-    echo "Error running locomo_ingestion.py"
-    exit 1
-fi
+# echo "Running locomo_ingestion.py..."
+# CUDA_VISIBLE_DEVICES=0 python scripts/locomo/locomo_ingestion.py --lib $LIB --version $VERSION --workers $WORKERS
+# if [ $? -ne 0 ]; then
+#     echo "Error running locomo_ingestion.py"
+#     exit 1
+# fi
 
 echo "Running locomo_search.py..."
 CUDA_VISIBLE_DEVICES=0 python scripts/locomo/locomo_search.py --lib $LIB --version $VERSION --top_k $TOPK --workers $WORKERS

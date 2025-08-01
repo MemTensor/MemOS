@@ -37,10 +37,10 @@ Base = declarative_base()
 class UserRole(Enum):
     """User roles enumeration."""
 
-    ROOT = "root"
-    ADMIN = "admin"
-    USER = "user"
-    GUEST = "guest"
+    ROOT = "ROOT"
+    ADMIN = "ADMIN"
+    USER = "USER"
+    GUEST = "GUEST"
 
 
 # Association table for many-to-many relationship between users and cubes

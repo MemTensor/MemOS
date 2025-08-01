@@ -6,6 +6,7 @@ from pydantic import Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
 from memos.exceptions import ConfigurationError
+from memos.mem_reader.factory import MemReaderConfigFactory
 
 
 class BaseInternetRetrieverConfig(BaseConfig):
@@ -47,6 +48,23 @@ class XinyuSearchConfig(BaseInternetRetrieverConfig):
     num_per_request: int = Field(
         default=10, description="Number of results per API request (not used for Xinyu)"
     )
+    reader: MemReaderConfigFactory = Field(
+        ...,
+        default_factory=MemReaderConfigFactory,
+        description="Reader configuration",
+    )
+
+
+class BochaSearchConfig(BaseInternetRetrieverConfig):
+    """Configuration class for Bocha Search API."""
+
+    max_results: int = Field(default=20, description="Maximum number of results to retrieve")
+    num_per_request: int = Field(default=10, description="Number of results per API request")
+    reader: MemReaderConfigFactory = Field(
+        ...,
+        default_factory=MemReaderConfigFactory,
+        description="Reader configuration",
+    )
 
 
 class InternetRetrieverConfigFactory(BaseConfig):
@@ -63,6 +81,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
         "google": GoogleCustomSearchConfig,
         "bing": BingSearchConfig,
         "xinyu": XinyuSearchConfig,
+        "bocha": BochaSearchConfig,
     }
 
     @field_validator("backend")

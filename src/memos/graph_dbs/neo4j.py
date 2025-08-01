@@ -3,27 +3,13 @@ import time
 from datetime import datetime
 from typing import Any, Literal
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ClientError
-
 from memos.configs.graph_db import Neo4jGraphDBConfig
+from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 
 
 logger = get_logger(__name__)
-
-
-def _parse_node(node_data: dict[str, Any]) -> dict[str, Any]:
-    node = node_data.copy()
-
-    # Convert Neo4j datetime to string
-    for time_field in ("created_at", "updated_at"):
-        if time_field in node and hasattr(node[time_field], "isoformat"):
-            node[time_field] = node[time_field].isoformat()
-    node.pop("user_name", None)
-
-    return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
 
 
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
@@ -57,6 +43,11 @@ def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 class Neo4jGraphDB(BaseGraphDB):
     """Neo4j-based implementation of a graph memory store."""
 
+    @require_python_package(
+        import_name="neo4j",
+        install_command="pip install neo4j",
+        install_link="https://neo4j.com/docs/python-manual/current/install/",
+    )
     def __init__(self, config: Neo4jGraphDBConfig):
         """Neo4j-based implementation of a graph memory store.
 
@@ -75,6 +66,7 @@ class Neo4jGraphDB(BaseGraphDB):
             All node queries will enforce `user_name` in WHERE conditions and store it in metadata,
             but it will be removed automatically before returning to external consumers.
         """
+        from neo4j import GraphDatabase
 
         self.config = config
         self.driver = GraphDatabase.driver(config.uri, auth=(config.user, config.password))
@@ -122,14 +114,14 @@ class Neo4jGraphDB(BaseGraphDB):
             )
             return result.single()["count"]
 
-    def count_nodes(self, scope: str) -> int:
+    def node_not_exist(self, scope: str) -> int:
         query = """
         MATCH (n:Memory)
         WHERE n.memory_type = $scope
         """
         if not self.config.use_multi_db and self.config.user_name:
             query += "\nAND n.user_name = $user_name"
-        query += "\nRETURN count(n) AS count"
+        query += "\nRETURN n LIMIT 1"
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(
@@ -139,7 +131,7 @@ class Neo4jGraphDB(BaseGraphDB):
                     "user_name": self.config.user_name if self.config.user_name else None,
                 },
             )
-            return result.single()["count"]
+            return result.single() is None
 
     def remove_oldest_memory(self, memory_type: str, keep_latest: int) -> None:
         """
@@ -349,7 +341,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             record = session.run(query, params).single()
-            return _parse_node(dict(record["n"])) if record else None
+            return self._parse_node(dict(record["n"])) if record else None
 
     def get_nodes(self, ids: list[str]) -> list[dict[str, Any]]:
         """
@@ -377,7 +369,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in results]
+            return [self._parse_node(dict(record["n"])) for record in results]
 
     def get_edges(self, id: str, type: str = "ANY", direction: str = "ANY") -> list[dict[str, str]]:
         """
@@ -493,7 +485,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in result]
+            return [self._parse_node(dict(record["n"])) for record in result]
 
     def get_children_with_embeddings(self, id: str) -> list[dict[str, Any]]:
         where_user = ""
@@ -575,8 +567,8 @@ class Neo4jGraphDB(BaseGraphDB):
             if not centers or centers[0] is None:
                 return {"core_node": None, "neighbors": [], "edges": []}
 
-            core_node = _parse_node(dict(centers[0]))
-            neighbors = [_parse_node(dict(n)) for n in record["neighbors"] if n]
+            core_node = self._parse_node(dict(centers[0]))
+            neighbors = [self._parse_node(dict(n)) for n in record["neighbors"] if n]
             edges = []
             for rel_chain in record["rels"]:
                 for rel in rel_chain:
@@ -859,7 +851,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 params["user_name"] = self.config.user_name
 
             node_result = session.run(f"{node_query} RETURN n", params)
-            nodes = [_parse_node(dict(record["n"])) for record in node_result]
+            nodes = [self._parse_node(dict(record["n"])) for record in node_result]
 
             # Export edges
             edge_result = session.run(
@@ -928,7 +920,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
-        if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory"}:
+        if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
         where_clause = "WHERE n.memory_type = $scope"
@@ -946,7 +938,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node(dict(record["n"])) for record in results]
+            return [self._parse_node(dict(record["n"])) for record in results]
 
     def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
         """
@@ -973,7 +965,9 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [_parse_node({"id": record["id"], **dict(record["node"])}) for record in results]
+            return [
+                self._parse_node({"id": record["id"], **dict(record["node"])}) for record in results
+            ]
 
     def drop_database(self) -> None:
         """
@@ -994,6 +988,8 @@ class Neo4jGraphDB(BaseGraphDB):
             )
 
     def _ensure_database_exists(self):
+        from neo4j.exceptions import ClientError
+
         try:
             with self.driver.session(database="system") as session:
                 session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
@@ -1094,3 +1090,14 @@ class Neo4jGraphDB(BaseGraphDB):
                 if record["name"] == index_name:
                     return True
         return False
+
+    def _parse_node(self, node_data: dict[str, Any]) -> dict[str, Any]:
+        node = node_data.copy()
+
+        # Convert Neo4j datetime to string
+        for time_field in ("created_at", "updated_at"):
+            if time_field in node and hasattr(node[time_field], "isoformat"):
+                node[time_field] = node[time_field].isoformat()
+        node.pop("user_name", None)
+
+        return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
