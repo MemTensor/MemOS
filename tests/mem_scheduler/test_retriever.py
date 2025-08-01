@@ -37,7 +37,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
 
-        # Initialize modules with mock LLM
+        # Initialize general_modules with mock LLM
         self.scheduler.initialize_modules(chat_llm=self.llm, process_llm=self.llm)
         self.scheduler.mem_cube = self.mem_cube
 
@@ -47,7 +47,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.logging_warning_patch = patch("logging.warning")
         self.mock_logging_warning = self.logging_warning_patch.start()
 
-        self.logger_info_patch = patch("memos.mem_scheduler.modules.retriever.logger.info")
+        self.logger_info_patch = patch("memos.mem_scheduler.general_modules.retriever.logger.info")
         self.mock_logger_info = self.logger_info_patch.start()
 
     def tearDown(self):

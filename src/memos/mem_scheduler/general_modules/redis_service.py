@@ -6,7 +6,7 @@ from typing import Any
 
 from memos.dependency import require_python_package
 from memos.log import get_logger
-from memos.mem_scheduler.modules.base import BaseSchedulerModule
+from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 
 
 logger = get_logger(__name__)

@@ -11,7 +11,7 @@ PYTHON_PACKAGE_DIR = Path("src/memos")
 
 def extract_top_level_modules(tree: ast.Module) -> set[str]:
     """
-    Extract all top-level imported modules (excluding relative imports).
+    Extract all top-level imported general_modules (excluding relative imports).
     """
     modules = set()
     for node in tree.body:
@@ -27,12 +27,12 @@ def extract_top_level_modules(tree: ast.Module) -> set[str]:
 def check_importable(modules: set[str], filename: str) -> list[str]:
     """
     Attempt to import each module in the current environment.
-    Return a list of modules that fail to import.
+    Return a list of general_modules that fail to import.
     """
     failed = []
     for mod in sorted(modules):
         if mod in EXCLUDE_MODULES:
-            # Skip excluded modules such as your own package
+            # Skip excluded general_modules such as your own package
             continue
         try:
             importlib.import_module(mod)
@@ -70,7 +70,7 @@ def main():
 
     if has_error:
         print(
-            "\n💥 Top-level imports failed. These modules may not be main dependencies."
+            "\n💥 Top-level imports failed. These general_modules may not be main dependencies."
             " Try moving the imports to a function or class scope, and decorate it with @require_python_package."
         )
         sys.exit(1)

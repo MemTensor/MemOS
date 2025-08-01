@@ -124,7 +124,7 @@ class MOSCore:
                     chat_llm=self.chat_llm, process_llm=self.chat_llm
                 )
             else:
-                # Configure scheduler modules
+                # Configure scheduler general_modules
                 self._mem_scheduler.initialize_modules(
                     chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
                 )
@@ -185,7 +185,7 @@ class MOSCore:
         self.chat_history_manager[user_id] = ChatHistory(
             user_id=user_id,
             session_id=self.session_id,
-            created_at=datetime.now(),
+            created_at=datetime.utcnow(),
             total_messages=0,
             chat_history=[],
         )
@@ -279,7 +279,7 @@ class MOSCore:
                         mem_cube=mem_cube,
                         label=QUERY_LABEL,
                         content=query,
-                        timestamp=datetime.now(),
+                        timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -338,7 +338,7 @@ class MOSCore:
                     mem_cube=mem_cube,
                     label=ANSWER_LABEL,
                     content=response,
-                    timestamp=datetime.now(),
+                    timestamp=datetime.utcnow(),
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -681,7 +681,7 @@ class MOSCore:
                         mem_cube=mem_cube,
                         label=ADD_LABEL,
                         content=json.dumps(mem_ids),
-                        timestamp=datetime.now(),
+                        timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -725,7 +725,7 @@ class MOSCore:
                         mem_cube=mem_cube,
                         label=ADD_LABEL,
                         content=json.dumps(mem_ids),
-                        timestamp=datetime.now(),
+                        timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -756,7 +756,7 @@ class MOSCore:
                     mem_cube=mem_cube,
                     label=ADD_LABEL,
                     content=json.dumps(mem_ids),
-                    timestamp=datetime.now(),
+                    timestamp=datetime.utcnow(),
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item])
 

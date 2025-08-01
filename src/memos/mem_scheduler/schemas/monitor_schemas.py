@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 from memos.log import get_logger
-from memos.mem_scheduler.modules.misc import AutoDroppingQueue, DictConversionMixin
+from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue, DictConversionMixin
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_MAX_QUERY_KEY_WORDS,
     DEFAULT_WEIGHT_VECTOR_FOR_RANKING,
