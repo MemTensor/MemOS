@@ -2,7 +2,6 @@ import json
 import threading
 import time
 import traceback
-
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import PriorityQueue
@@ -17,13 +16,11 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
-from memos.memories.textual.tree_text_memory.organize.conflict import ConflictHandler
-from memos.memories.textual.tree_text_memory.organize.redundancy import RedundancyHandler
+from memos.memories.textual.tree_text_memory.organize.handler import NodeHandler
 from memos.memories.textual.tree_text_memory.organize.relation_reason_detector import (
     RelationAndReasoningDetector,
 )
 from memos.templates.tree_reorganize_prompts import LOCAL_SUBCLUSTER_PROMPT, REORGANIZE_PROMPT
-
 
 logger = get_logger(__name__)
 
@@ -63,8 +60,7 @@ class GraphStructureReorganizer:
         self.relation_detector = RelationAndReasoningDetector(
             self.graph_store, self.llm, self.embedder
         )
-        self.conflict = ConflictHandler(graph_store=graph_store, llm=llm, embedder=embedder)
-        self.redundancy = RedundancyHandler(graph_store=graph_store, llm=llm, embedder=embedder)
+        self.resolver = NodeHandler(graph_store=graph_store, llm=llm, embedder=embedder)
 
         self.is_reorganize = is_reorganize
         self._reorganize_needed = False
@@ -153,40 +149,24 @@ class GraphStructureReorganizer:
         logger.info("Structure optimizer stopped.")
 
     def handle_message(self, message: QueueMessage):
-        handle_map = {
-            "add": self.handle_add,
-            "remove": self.handle_remove,
-            "merge": self.handle_merge,
-        }
+        handle_map = {"add": self.handle_add, "remove": self.handle_remove}
         handle_map[message.op](message)
         logger.debug(f"message queue size: {self.queue.qsize()}")
 
     def handle_add(self, message: QueueMessage):
         logger.debug(f"Handling add operation: {str(message)[:500]}")
-        # ———————— 1. check for conflicts ————————
         added_node = message.after_node[0]
-        conflicts = self.conflict.detect(added_node, scope=added_node.metadata.memory_type)
-        if conflicts:
-            for added_node, existing_node in conflicts:
-                self.conflict.resolve(added_node, existing_node)
-                logger.info(f"Resolved conflict between {added_node.id} and {existing_node.id}.")
-
-        # ———————— 2. check for redundancy ————————
-        redundancies = self.redundancy.detect(added_node, scope=added_node.metadata.memory_type)
-        if redundancies:
-            for added_node, existing_node in redundancies:
-                self.redundancy.resolve_two_nodes(added_node, existing_node)
-                logger.info(f"Resolved redundancy between {added_node.id} and {existing_node.id}.")
+        detected_relationships = self.resolver.detect(
+            added_node, scope=added_node.metadata.memory_type
+        )
+        if detected_relationships:
+            for added_node, existing_node, relation in detected_relationships:
+                self.resolver.resolve(added_node, existing_node, relation)
 
         self._reorganize_needed = False
 
     def handle_remove(self, message: QueueMessage):
         logger.debug(f"Handling remove operation: {str(message)[:50]}")
-
-    def handle_merge(self, message: QueueMessage):
-        after_node = message.after_node[0]
-        logger.debug(f"Handling merge operation: <{after_node.memory}>")
-        self.redundancy.resolve_one_node(after_node)
 
     def optimize_structure(
         self,
