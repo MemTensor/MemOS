@@ -116,7 +116,12 @@ class SessionPool:
 
     @timed
     def return_client(self, client):
-        self.pool.put(client)
+        try:
+            client.execute("YIELD 1")
+            self.pool.put(client)
+        except Exception:
+            logger.warning("[Pool] Client dead, replacing...")
+            self.replace_client(client)
 
     @timed
     def close(self):
@@ -165,6 +170,26 @@ class SessionPool:
             for _ in range(self.minsize):
                 self._create_and_add_client()
         logger.info("[Pool] Pool has been reset successfully.")
+
+    @timed
+    def replace_client(self, client):
+        try:
+            client.close()
+        except Exception:
+            logger.error("Fail to close client")
+
+        if client in self.clients:
+            self.clients.remove(client)
+
+        from nebulagraph_python import NebulaClient
+
+        new_client = NebulaClient(self.hosts, self.user, self.password)
+        self.clients.append(new_client)
+
+        self.pool.put(new_client)
+
+        logger.info("[Pool] Replaced dead client with a new one.")
+        return new_client
 
 
 class NebulaGraphDB(BaseGraphDB):
@@ -232,22 +257,12 @@ class NebulaGraphDB(BaseGraphDB):
                 if auto_set_db and self.db_name:
                     client.execute(f"SESSION SET GRAPH `{self.db_name}`")
                 return client.execute(gql, timeout=timeout)
-            except Exception as e:
-                logger.error(f"Fail to run gql {gql} trace: {traceback.format_exc()}")
-                if "Session not found" in str(e):
-                    logger.warning("[execute_query] Session expired, replacing client.")
-                    try:
-                        client.close()
-                    except Exception:
-                        logger.error("Fail to close!!!!!")
-                    finally:
-                        if client in self.pool.clients:
-                            self.pool.clients.remove(client)
-                    from nebulagraph_python import NebulaClient
 
-                    new_client = NebulaClient(self.pool.hosts, self.pool.user, self.pool.password)
-                    self.pool.clients.append(new_client)
-                    return new_client.execute(gql, timeout=timeout)
+            except Exception as e:
+                if "Session not found" in str(e) or "Connection not established" in str(e):
+                    logger.warning(f"[execute_query] {e!s}, replacing client...")
+                    self.pool.replace_client(client)
+                    return self.execute_query(gql, timeout, auto_set_db)
                 raise
 
     @timed
