@@ -201,16 +201,6 @@ class GeneralScheduler(BaseScheduler):
 
                 # update activation memories
                 if self.enable_act_memory_update:
-                    if (
-                        len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories)
-                        == 0
-                    ):
-                        self.initialize_working_memory_monitors(
-                            user_id=user_id,
-                            mem_cube_id=mem_cube_id,
-                            mem_cube=messages[0].mem_cube,
-                        )
-
                     self.update_activation_memory_periodically(
                         interval_seconds=self.monitor.act_mem_update_interval,
                         label=ANSWER_LABEL,

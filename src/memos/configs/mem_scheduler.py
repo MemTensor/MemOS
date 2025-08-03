@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
-from memos.mem_scheduler.modules.misc import DictConversionMixin
+from memos.mem_scheduler.general_modules.misc import DictConversionMixin
 from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
