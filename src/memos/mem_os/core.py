@@ -1,6 +1,6 @@
 import json
 import os
-import uuid
+import time
 
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +24,7 @@ from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
+from memos.templates.mos_prompts import QUERY_REWRITING_PROMPT
 from memos.types import ChatHistory, MessageList, MOSSearchResult
 
 
@@ -123,7 +124,7 @@ class MOSCore:
                     chat_llm=self.chat_llm, process_llm=self.chat_llm
                 )
             else:
-                # Configure scheduler modules
+                # Configure scheduler general_modules
                 self._mem_scheduler.initialize_modules(
                     chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
                 )
@@ -184,7 +185,7 @@ class MOSCore:
         self.chat_history_manager[user_id] = ChatHistory(
             user_id=user_id,
             session_id=self.session_id,
-            created_at=datetime.now(),
+            created_at=datetime.utcnow(),
             total_messages=0,
             chat_history=[],
         )
@@ -278,11 +279,19 @@ class MOSCore:
                         mem_cube=mem_cube,
                         label=QUERY_LABEL,
                         content=query,
-                        timestamp=datetime.now(),
+                        timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
-                memories = mem_cube.text_mem.search(query, top_k=self.config.top_k)
+                memories = mem_cube.text_mem.search(
+                    query,
+                    top_k=self.config.top_k,
+                    info={
+                        "user_id": target_user_id,
+                        "session_id": self.session_id,
+                        "chat_history": chat_history.chat_history,
+                    },
+                )
                 memories_all.extend(memories)
             logger.info(f"🧠 [Memory] Searched memories:\n{self._str_memories(memories_all)}\n")
             system_prompt = self._build_system_prompt(memories_all, base_prompt=base_prompt)
@@ -329,7 +338,7 @@ class MOSCore:
                     mem_cube=mem_cube,
                     label=ANSWER_LABEL,
                     content=response,
-                    timestamp=datetime.now(),
+                    timestamp=datetime.utcnow(),
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -530,6 +539,8 @@ class MOSCore:
         user_id: str | None = None,
         install_cube_ids: list[str] | None = None,
         top_k: int | None = None,
+        mode: Literal["fast", "fine"] = "fast",
+        internet_search: bool = False,
     ) -> MOSSearchResult:
         """
         Search for textual memories across all registered MemCubes.
@@ -553,6 +564,10 @@ class MOSCore:
         logger.info(
             f"User {target_user_id} has access to {len(user_cube_ids)} cubes: {user_cube_ids}"
         )
+        if target_user_id not in self.chat_history_manager:
+            self._register_chat_history(target_user_id)
+        chat_history = self.chat_history_manager[target_user_id]
+
         result: MOSSearchResult = {
             "text_mem": [],
             "act_mem": [],
@@ -566,12 +581,25 @@ class MOSCore:
                 and (mem_cube.text_mem is not None)
                 and self.config.enable_textual_memory
             ):
+                time_start = time.time()
                 memories = mem_cube.text_mem.search(
-                    query, top_k=top_k if top_k else self.config.top_k
+                    query,
+                    top_k=top_k if top_k else self.config.top_k,
+                    mode=mode,
+                    manual_close_internet=not internet_search,
+                    info={
+                        "user_id": target_user_id,
+                        "session_id": self.session_id,
+                        "chat_history": chat_history.chat_history,
+                    },
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
                     f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                )
+                search_time_end = time.time()
+                logger.info(
+                    f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
                 )
         return result
 
@@ -633,7 +661,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
+                    info={"user_id": target_user_id, "session_id": self.session_id},
                 )
 
                 mem_ids = []
@@ -653,7 +681,7 @@ class MOSCore:
                         mem_cube=mem_cube,
                         label=ADD_LABEL,
                         content=json.dumps(mem_ids),
-                        timestamp=datetime.now(),
+                        timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -677,7 +705,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
+                    info={"user_id": target_user_id, "session_id": self.session_id},
                 )
 
                 mem_ids = []
@@ -697,7 +725,7 @@ class MOSCore:
                         mem_cube=mem_cube,
                         label=ADD_LABEL,
                         content=json.dumps(mem_ids),
-                        timestamp=datetime.now(),
+                        timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -711,7 +739,7 @@ class MOSCore:
             doc_memories = self.mem_reader.get_memory(
                 documents,
                 type="doc",
-                info={"user_id": target_user_id, "session_id": str(uuid.uuid4())},
+                info={"user_id": target_user_id, "session_id": self.session_id},
             )
 
             mem_ids = []
@@ -728,7 +756,7 @@ class MOSCore:
                     mem_cube=mem_cube,
                     label=ADD_LABEL,
                     content=json.dumps(mem_ids),
-                    timestamp=datetime.now(),
+                    timestamp=datetime.utcnow(),
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item])
 
@@ -965,3 +993,27 @@ class MOSCore:
             raise ValueError(f"Target user '{target_user_id}' does not exist or is inactive.")
 
         return self.user_manager.add_user_to_cube(target_user_id, cube_id)
+
+    def get_query_rewrite(self, query: str, user_id: str | None = None):
+        """
+        Rewrite user's query according the context.
+        Args:
+            query (str): The search query that needs rewriting.
+            user_id(str, optional): The identifier of the user that the query belongs to.
+                If None, the default user is used.
+
+        Returns:
+            str: query after rewriting process.
+        """
+        target_user_id = user_id if user_id is not None else self.user_id
+        chat_history = self.chat_history_manager[target_user_id]
+
+        dialogue = "————{}".format("\n————".join(chat_history.chat_history))
+        user_prompt = QUERY_REWRITING_PROMPT.format(dialogue=dialogue, query=query)
+        messages = {"role": "user", "content": user_prompt}
+        rewritten_result = self.chat_llm.generate(messages=messages)
+        rewritten_result = json.loads(rewritten_result)
+        if rewritten_result.get("former_dialogue_related", False):
+            rewritten_query = rewritten_result.get("rewritten_question")
+            return rewritten_query if len(rewritten_query) > 0 else query
+        return query

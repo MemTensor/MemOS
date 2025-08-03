@@ -122,7 +122,7 @@ def set_trace_id_getter(getter: TraceIdGetter) -> None:
     Set a custom trace_id getter function.
 
     This allows the logging system to retrieve trace_id without importing
-    API-specific modules.
+    API-specific general_modules.
     """
     global _trace_id_getter
     _trace_id_getter = getter

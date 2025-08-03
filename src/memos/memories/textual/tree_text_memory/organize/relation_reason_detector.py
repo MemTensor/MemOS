@@ -1,4 +1,5 @@
 import json
+import traceback
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBNode
@@ -30,53 +31,59 @@ class RelationAndReasoningDetector:
         3) Sequence links
         4) Aggregate concepts
         """
-        if node.metadata.type == "reasoning":
-            logger.info(f"Skip reasoning for inferred node {node.id}")
-            return {
-                "relations": [],
-                "inferred_nodes": [],
-                "sequence_links": [],
-                "aggregate_nodes": [],
-            }
-
         results = {
             "relations": [],
             "inferred_nodes": [],
             "sequence_links": [],
             "aggregate_nodes": [],
         }
+        try:
+            if node.metadata.type == "reasoning":
+                logger.info(f"Skip reasoning for inferred node {node.id}")
+                return {
+                    "relations": [],
+                    "inferred_nodes": [],
+                    "sequence_links": [],
+                    "aggregate_nodes": [],
+                }
 
-        nearest = self.graph_store.get_neighbors_by_tag(
-            tags=node.metadata.tags,
-            exclude_ids=exclude_ids,
-            top_k=top_k,
-            min_overlap=2,
-        )
-        nearest = [GraphDBNode(**cand_data) for cand_data in nearest]
+            nearest = self.graph_store.get_neighbors_by_tag(
+                tags=node.metadata.tags,
+                exclude_ids=exclude_ids,
+                top_k=top_k,
+                min_overlap=2,
+            )
+            nearest = [GraphDBNode(**cand_data) for cand_data in nearest]
 
-        """
-        # 1) Pairwise relations (including CAUSE/CONDITION/CONFLICT)
-        pairwise = self._detect_pairwise_causal_condition_relations(node, nearest)
-        results["relations"].extend(pairwise["relations"])
-        """
+            """
+            # 1) Pairwise relations (including CAUSE/CONDITION/CONFLICT)
+            pairwise = self._detect_pairwise_causal_condition_relations(node, nearest)
+            results["relations"].extend(pairwise["relations"])
+            """
 
-        """
-        # 2) Inferred nodes (from causal/condition)
-        inferred = self._infer_fact_nodes_from_relations(pairwise)
-        results["inferred_nodes"].extend(inferred)
-        """
+            """
+            # 2) Inferred nodes (from causal/condition)
+            inferred = self._infer_fact_nodes_from_relations(pairwise)
+            results["inferred_nodes"].extend(inferred)
+            """
 
-        """
-        3) Sequence (optional, if you have timestamps)
-        seq = self._detect_sequence_links(node, nearest)
-        results["sequence_links"].extend(seq)
-        """
+            """
+            3) Sequence (optional, if you have timestamps)
+            seq = self._detect_sequence_links(node, nearest)
+            results["sequence_links"].extend(seq)
+            """
 
-        # 4) Aggregate
-        agg = self._detect_aggregate_node_for_group(node, nearest, min_group_size=5)
-        if agg:
-            results["aggregate_nodes"].append(agg)
+            """
+            # 4) Aggregate
+            agg = self._detect_aggregate_node_for_group(node, nearest, min_group_size=5)
+            if agg:
+                results["aggregate_nodes"].append(agg)
+            """
 
+        except Exception as e:
+            logger.error(
+                f"Error {e} while process struct reorganize: trace: {traceback.format_exc()}"
+            )
         return results
 
     def _detect_pairwise_causal_condition_relations(
@@ -176,10 +183,9 @@ class RelationAndReasoningDetector:
         joined = "\n".join(f"- {n.memory}" for n in combined_nodes)
         prompt = AGGREGATE_PROMPT.replace("{joined}", joined)
         response_text = self._call_llm(prompt)
-        response_json = self._parse_json_result(response_text)
-        if not response_json:
+        summary = self._parse_json_result(response_text)
+        if not summary:
             return None
-        summary = json.loads(response_text)
         embedding = self.embedder.embed([summary["value"]])[0]
 
         parent_node = GraphDBNode(

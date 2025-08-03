@@ -17,8 +17,7 @@ class BaseSchedulerModule:
 
         self._chat_llm = None
         self._process_llm = None
-        self.current_mem_cube_id: str | None = None
-        self.current_mem_cube: GeneralMemCube | None = None
+
         self.mem_cubes: dict[str, GeneralMemCube] = {}
 
     def load_template(self, template_name: str) -> str:

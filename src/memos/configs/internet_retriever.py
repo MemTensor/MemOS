@@ -55,6 +55,18 @@ class XinyuSearchConfig(BaseInternetRetrieverConfig):
     )
 
 
+class BochaSearchConfig(BaseInternetRetrieverConfig):
+    """Configuration class for Bocha Search API."""
+
+    max_results: int = Field(default=20, description="Maximum number of results to retrieve")
+    num_per_request: int = Field(default=10, description="Number of results per API request")
+    reader: MemReaderConfigFactory = Field(
+        ...,
+        default_factory=MemReaderConfigFactory,
+        description="Reader configuration",
+    )
+
+
 class InternetRetrieverConfigFactory(BaseConfig):
     """Factory class for creating internet retriever configurations."""
 
@@ -69,6 +81,7 @@ class InternetRetrieverConfigFactory(BaseConfig):
         "google": GoogleCustomSearchConfig,
         "bing": BingSearchConfig,
         "xinyu": XinyuSearchConfig,
+        "bocha": BochaSearchConfig,
     }
 
     @field_validator("backend")

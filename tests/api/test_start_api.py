@@ -34,7 +34,7 @@ MOCK_MEMCUBE_REGISTER = {
     "user_id": "test_user",
 }
 MOCK_CHAT_REQUEST = {"query": "test chat query", "user_id": "test_user"}
-MOCK_USER_CREATE = {"user_id": "test_user", "user_name": "Test User", "role": "user"}
+MOCK_USER_CREATE = {"user_id": "test_user", "user_name": "Test User", "role": "USER"}
 MOCK_CUBE_SHARE = {"target_user_id": "target_user"}
 MOCK_CONFIG = {
     "user_id": "test_user",

@@ -570,15 +570,23 @@ def convert_graph_to_tree_forworkmem(
         else:
             other_roots.append(root_id)
 
-    def build_tree(node_id: str) -> dict[str, Any]:
-        """Recursively build tree structure"""
+    def build_tree(node_id: str, visited=None) -> dict[str, Any] | None:
+        """Recursively build tree structure with cycle detection"""
+        if visited is None:
+            visited = set()
+
+        if node_id in visited:
+            logger.warning(f"[build_tree] Detected cycle at node {node_id}, skipping.")
+            return None
+        visited.add(node_id)
+
         if node_id not in node_map:
             return None
 
         children_ids = children_map.get(node_id, [])
         children = []
         for child_id in children_ids:
-            child_tree = build_tree(child_id)
+            child_tree = build_tree(child_id, visited)
             if child_tree:
                 children.append(child_tree)
 
@@ -1355,3 +1363,47 @@ def clean_json_response(response: str) -> str:
         str: Clean JSON string without markdown formatting
     """
     return response.replace("```json", "").replace("```", "").strip()
+
+
+def split_continuous_references(text: str) -> str:
+    """
+    Split continuous reference tags into individual reference tags.
+
+    Converts patterns like [1:92ff35fb, 4:bfe6f044] to [1:92ff35fb] [4:bfe6f044]
+
+    Only processes text if:
+    1. '[' appears exactly once
+    2. ']' appears exactly once
+    3. Contains commas between '[' and ']'
+
+    Args:
+        text (str): Text containing reference tags
+
+    Returns:
+        str: Text with split reference tags, or original text if conditions not met
+    """
+    # Early return if text is empty
+    if not text:
+        return text
+    # Check if '[' appears exactly once
+    if text.count("[") != 1:
+        return text
+    # Check if ']' appears exactly once
+    if text.count("]") != 1:
+        return text
+    # Find positions of brackets
+    open_bracket_pos = text.find("[")
+    close_bracket_pos = text.find("]")
+
+    # Check if brackets are in correct order
+    if open_bracket_pos >= close_bracket_pos:
+        return text
+    # Extract content between brackets
+    content_between_brackets = text[open_bracket_pos + 1 : close_bracket_pos]
+    # Check if there's a comma between brackets
+    if "," not in content_between_brackets:
+        return text
+    text = text.replace(content_between_brackets, content_between_brackets.replace(", ", "]["))
+    text = text.replace(content_between_brackets, content_between_brackets.replace(",", "]["))
+
+    return text

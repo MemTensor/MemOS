@@ -114,7 +114,7 @@ class GeneralTextMemory(BaseTextMemory):
 
         self.vector_db.update(memory_id, vec_db_item)
 
-    def search(self, query: str, top_k: int) -> list[TextualMemoryItem]:
+    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
             query (str): The query to search for.
