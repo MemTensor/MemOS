@@ -120,7 +120,7 @@ class SessionPool:
             client.execute("YIELD 1")
             self.pool.put(client)
         except Exception:
-            logger.warning("[Pool] Client dead, replacing...")
+            logger.info("[Pool] Client dead, replacing...")
             self.replace_client(client)
 
     @timed
@@ -226,6 +226,26 @@ class NebulaGraphDB(BaseGraphDB):
         self.user_name = config.user_name
         self.embedding_dimension = config.embedding_dimension
         self.default_memory_dimension = 3072
+        self.common_fields = {
+            "id",
+            "memory",
+            "user_name",
+            "user_id",
+            "session_id",
+            "status",
+            "key",
+            "confidence",
+            "tags",
+            "created_at",
+            "updated_at",
+            "memory_type",
+            "sources",
+            "source",
+            "node_type",
+            "visibility",
+            "usage",
+            "background",
+        }
         self.dim_field = (
             f"embedding_{self.embedding_dimension}"
             if (str(self.embedding_dimension) != str(self.default_memory_dimension))
@@ -346,11 +366,12 @@ class NebulaGraphDB(BaseGraphDB):
             filter_clause = f'n.memory_type = "{scope}" AND n.user_name = "{self.config.user_name}"'
         else:
             filter_clause = f'n.memory_type = "{scope}"'
+        return_fields = ", ".join(f"n.{field} AS {field}" for field in self.common_fields)
 
         query = f"""
         MATCH (n@Memory)
         WHERE {filter_clause}
-        RETURN n
+        RETURN {return_fields}
         LIMIT 1
         """
 
@@ -521,43 +542,52 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     # Graph Query & Reasoning
-    def get_node(self, id: str) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
         """
         Retrieve a Memory node by its unique ID.
 
         Args:
             id (str): Node ID (Memory.id)
+            include_embedding: with/without embedding
 
         Returns:
             dict: Node properties as key-value pairs, or None if not found.
         """
+        if not self.config.use_multi_db and self.config.user_name:
+            filter_clause = f'n.user_name = "{self.config.user_name}" AND n.id = "{id}"'
+        else:
+            filter_clause = f'n.id = "{id}"'
+
+        return_fields = self._build_return_fields(include_embedding)
         gql = f"""
-               USE `{self.db_name}`
-               MATCH (v {{id: '{id}'}})
-               RETURN v
-           """
+            MATCH (n@Memory)
+            WHERE {filter_clause}
+            RETURN {return_fields}
+        """
 
         try:
             result = self.execute_query(gql)
-            record = result.one_or_none()
-            if record is None:
-                return None
-
-            node_wrapper = record["v"].as_node()
-            props = node_wrapper.get_properties()
-            node = self._parse_node(props)
-            return node
+            for row in result:
+                if include_embedding:
+                    props = row.values()[0].as_node().get_properties()
+                else:
+                    props = {k: v.value for k, v in row.items()}
+                node = self._parse_node(props)
+                return node
 
         except Exception as e:
-            logger.error(f"[get_node] Failed to retrieve node '{id}': {e}")
+            logger.error(
+                f"[get_node] Failed to retrieve node '{id}': {e}, trace: {traceback.format_exc()}"
+            )
             return None
 
     @timed
-    def get_nodes(self, ids: list[str]) -> list[dict[str, Any]]:
+    def get_nodes(self, ids: list[str], include_embedding: bool = False) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
             ids: List of Node identifier.
+            include_embedding: with/without embedding
         Returns:
         list[dict]: Parsed node records containing 'id', 'memory', and 'metadata'.
 
@@ -572,14 +602,28 @@ class NebulaGraphDB(BaseGraphDB):
         if not self.config.use_multi_db and self.config.user_name:
             where_user = f" AND n.user_name = '{self.config.user_name}'"
 
-        query = f"MATCH (n@Memory) WHERE n.id IN {ids} {where_user} RETURN n"
+        # Safe formatting of the ID list
+        id_list = ",".join(f'"{_id}"' for _id in ids)
 
-        results = self.execute_query(query)
+        return_fields = self._build_return_fields(include_embedding)
+        query = f"""
+            MATCH (n@Memory)
+            WHERE n.id IN [{id_list}] {where_user}
+            RETURN {return_fields}
+        """
         nodes = []
-        for rec in results:
-            node_props = rec["n"].as_node().get_properties()
-            nodes.append(self._parse_node(node_props))
-
+        try:
+            results = self.execute_query(query)
+            for row in results:
+                if include_embedding:
+                    props = row.values()[0].as_node().get_properties()
+                else:
+                    props = {k: v.value for k, v in row.items()}
+                nodes.append(self._parse_node(props))
+        except Exception as e:
+            logger.error(
+                f"[get_nodes] Failed to retrieve nodes {ids}: {e}, trace: {traceback.format_exc()}"
+            )
         return nodes
 
     @timed
@@ -1079,7 +1123,6 @@ class NebulaGraphDB(BaseGraphDB):
                     props = row.values()[0].as_node().get_properties()
                 else:
                     props = {k: v.value for k, v in row.items()}
-
                 node = self._parse_node(props)
                 nodes.append(node)
         except Exception as e:
@@ -1134,12 +1177,13 @@ class NebulaGraphDB(BaseGraphDB):
             self.execute_query(edge_gql)
 
     @timed
-    def get_all_memory_items(self, scope: str) -> list[dict]:
+    def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> (list)[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
+            include_embedding: with/without embedding
 
         Returns:
             list[dict]: Full list of memory items under this scope.
@@ -1152,24 +1196,31 @@ class NebulaGraphDB(BaseGraphDB):
         if not self.config.use_multi_db and self.config.user_name:
             where_clause += f" AND n.user_name = '{self.config.user_name}'"
 
+        return_fields = self._build_return_fields(include_embedding)
+
         query = f"""
                    MATCH (n@Memory)
                    {where_clause}
-                   RETURN n
+                   RETURN {return_fields}
                    LIMIT 100
                    """
         nodes = []
         try:
             results = self.execute_query(query)
-            for rec in results:
-                node_props = rec["n"].as_node().get_properties()
-                nodes.append(self._parse_node(node_props))
+            for row in results:
+                if include_embedding:
+                    props = row.values()[0].as_node().get_properties()
+                else:
+                    props = {k: v.value for k, v in row.items()}
+                nodes.append(self._parse_node(props))
         except Exception as e:
             logger.error(f"Failed to get memories: {e}")
         return nodes
 
     @timed
-    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+    def get_structure_optimization_candidates(
+        self, scope: str, include_embedding: bool = False
+    ) -> list[dict]:
         """
         Find nodes that are likely candidates for structure optimization:
         - Isolated nodes, nodes with empty background, or nodes with exactly one child.
@@ -1183,6 +1234,8 @@ class NebulaGraphDB(BaseGraphDB):
         if not self.config.use_multi_db and self.config.user_name:
             where_clause += f' AND n.user_name = "{self.config.user_name}"'
 
+        return_fields = self._build_return_fields(include_embedding)
+
         query = f"""
             USE `{self.db_name}`
             MATCH (n@Memory)
@@ -1190,15 +1243,18 @@ class NebulaGraphDB(BaseGraphDB):
             OPTIONAL MATCH (n)-[@PARENT]->(c@Memory)
             OPTIONAL MATCH (p@Memory)-[@PARENT]->(n)
             WHERE c IS NULL AND p IS NULL
-            RETURN n
+            RETURN {return_fields}
         """
 
         candidates = []
         try:
             results = self.execute_query(query)
-            for rec in results:
-                node_props = rec["n"].as_node().get_properties()
-                candidates.append(self._parse_node(node_props))
+            for row in results:
+                if include_embedding:
+                    props = row.values()[0].as_node().get_properties()
+                else:
+                    props = {k: v.value for k, v in row.items()}
+                candidates.append(self._parse_node(props))
         except Exception as e:
             logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
         return candidates
@@ -1415,7 +1471,9 @@ class NebulaGraphDB(BaseGraphDB):
                 self.execute_query(gql)
                 logger.info(f"✅ Created index: {index_name} on field {field}")
             except Exception as e:
-                logger.error(f"❌ Failed to create index {index_name}: {e}")
+                logger.error(
+                    f"❌ Failed to create index {index_name}: {e}, trace: {traceback.format_exc()}"
+                )
 
     @timed
     def _index_exists(self, index_name: str) -> bool:
@@ -1537,32 +1595,19 @@ class NebulaGraphDB(BaseGraphDB):
         - Warns if required fields are missing.
         """
 
-        allowed_fields = {
-            "id",
-            "memory",
-            "user_name",
-            "user_id",
-            "session_id",
-            "status",
-            "key",
-            "confidence",
-            "tags",
-            "created_at",
-            "updated_at",
-            "memory_type",
-            "sources",
-            "source",
-            "node_type",
-            "visibility",
-            "usage",
-            "background",
-            self.dim_field,
-        }
+        dim_fields = {self.dim_field}
+
+        allowed_fields = self.common_fields | dim_fields
 
         missing_fields = allowed_fields - metadata.keys()
         if missing_fields:
-            logger.warning(f"Metadata missing required fields: {sorted(missing_fields)}")
+            logger.info(f"Metadata missing required fields: {sorted(missing_fields)}")
 
         filtered_metadata = {k: v for k, v in metadata.items() if k in allowed_fields}
 
         return filtered_metadata
+
+    def _build_return_fields(self, include_embedding: bool = False) -> str:
+        if include_embedding:
+            return "n"
+        return ", ".join(f"n.{field} AS {field}" for field in self.common_fields)
