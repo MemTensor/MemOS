@@ -65,17 +65,29 @@ def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
         last_match = complete_matches[-1]
         end_pos = last_match.end()
 
-        # Get text up to the end of the last complete tag
-        processed_text = text_buffer[:end_pos]
-        remaining_buffer = text_buffer[end_pos:]
+        # Check if there's any incomplete reference after the last complete one
+        remaining_text = text_buffer[end_pos:]
 
-        # Apply reference splitting to the processed text
-        processed_text = split_continuous_references(processed_text)
+        # Look for potential incomplete reference patterns after the last complete tag
+        incomplete_pattern = r"\[\d*:?[^\]]*$"
+        if re.search(incomplete_pattern, remaining_text):
+            # There's a potential incomplete reference, find where it starts
+            incomplete_match = re.search(incomplete_pattern, remaining_text)
+            if incomplete_match:
+                incomplete_start = end_pos + incomplete_match.start()
+                processed_text = text_buffer[:incomplete_start]
+                remaining_buffer = text_buffer[incomplete_start:]
 
-        return processed_text, remaining_buffer
+                # Apply reference splitting to the processed text
+                processed_text = split_continuous_references(processed_text)
+                return processed_text, remaining_buffer
 
-    # Check for incomplete reference tags
-    # Look for opening bracket with number and colon
+        # No incomplete reference after the last complete tag, process all
+        processed_text = split_continuous_references(text_buffer)
+        return processed_text, ""
+
+    # Check for incomplete reference tags - be more specific about what constitutes a potential reference
+    # Look for opening bracket with number and colon that could be a reference tag
     opening_pattern = r"\[\d+:"
     opening_matches = list(re.finditer(opening_pattern, text_buffer))
 
@@ -84,25 +96,38 @@ def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
         last_opening = opening_matches[-1]
         opening_start = last_opening.start()
 
-        # Check if we have a complete opening pattern
-        if last_opening.end() <= len(text_buffer):
-            # We have a complete opening pattern, keep everything in buffer
-            return "", text_buffer
+        # Check if this might be a complete reference tag (has closing bracket after the pattern)
+        remaining_text = text_buffer[last_opening.end() :]
+        if "]" in remaining_text:
+            # This looks like a complete reference tag, process it
+            processed_text = split_continuous_references(text_buffer)
+            return processed_text, ""
         else:
-            # Incomplete opening pattern, return text before it
+            # Incomplete reference tag, keep it in buffer
             processed_text = text_buffer[:opening_start]
-            # Apply reference splitting to the processed text
             processed_text = split_continuous_references(processed_text)
             return processed_text, text_buffer[opening_start:]
 
-    # Check for partial opening pattern (starts with [ but not complete)
-    if "[" in text_buffer:
-        ref_start = text_buffer.find("[")
-        processed_text = text_buffer[:ref_start]
-        # Apply reference splitting to the processed text
-        processed_text = split_continuous_references(processed_text)
-        return processed_text, text_buffer[ref_start:]
+    # More sophisticated check for potential reference patterns
+    # Only hold back text if we see a pattern that could be the start of a reference tag
+    potential_ref_pattern = r"\[\d*:?$"  # Matches [, [1, [12:, etc. at end of buffer
+    if re.search(potential_ref_pattern, text_buffer):
+        # Find the position of the potential reference start
+        match = re.search(potential_ref_pattern, text_buffer)
+        if match:
+            ref_start = match.start()
+            processed_text = text_buffer[:ref_start]
+            processed_text = split_continuous_references(processed_text)
+            return processed_text, text_buffer[ref_start:]
 
-    # No reference tags found, apply reference splitting and return all text
+    # Check for standalone [ only at the very end of the buffer
+    # This prevents cutting off mathematical expressions like [ \Delta U = Q - W ]
+    if text_buffer.endswith("["):
+        # Only hold back the single [ character
+        processed_text = text_buffer[:-1]
+        processed_text = split_continuous_references(processed_text)
+        return processed_text, "["
+
+    # No reference-like patterns found, process all text
     processed_text = split_continuous_references(text_buffer)
     return processed_text, ""
