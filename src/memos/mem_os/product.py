@@ -22,7 +22,9 @@ from memos.mem_os.utils.format_utils import (
     filter_nodes_by_tree_ids,
     remove_embedding_recursive,
     sort_children_by_memory_type,
-    split_continuous_references,
+)
+from memos.mem_os.utils.reference_utils import (
+    process_streaming_references_complete,
 )
 from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
@@ -405,71 +407,6 @@ class MOSProduct(MOSCore):
                     outer_memory_context += f"{memory_id}: {memory_content}\n"
             return MEMOS_PRODUCT_ENHANCE_PROMPT + personal_memory_context + outer_memory_context
         return MEMOS_PRODUCT_ENHANCE_PROMPT
-
-    def _process_streaming_references_complete(self, text_buffer: str) -> tuple[str, str]:
-        """
-        Complete streaming reference processing to ensure reference tags are never split.
-
-        Args:
-            text_buffer (str): The accumulated text buffer.
-
-        Returns:
-            tuple[str, str]: (processed_text, remaining_buffer)
-        """
-        import re
-
-        # Pattern to match complete reference tags: [refid:memoriesID]
-        complete_pattern = r"\[\d+:[^\]]+\]"
-
-        # Find all complete reference tags
-        complete_matches = list(re.finditer(complete_pattern, text_buffer))
-
-        if complete_matches:
-            # Find the last complete tag
-            last_match = complete_matches[-1]
-            end_pos = last_match.end()
-
-            # Get text up to the end of the last complete tag
-            processed_text = text_buffer[:end_pos]
-            remaining_buffer = text_buffer[end_pos:]
-
-            # Apply reference splitting to the processed text
-            processed_text = split_continuous_references(processed_text)
-
-            return processed_text, remaining_buffer
-
-        # Check for incomplete reference tags
-        # Look for opening bracket with number and colon
-        opening_pattern = r"\[\d+:"
-        opening_matches = list(re.finditer(opening_pattern, text_buffer))
-
-        if opening_matches:
-            # Find the last opening tag
-            last_opening = opening_matches[-1]
-            opening_start = last_opening.start()
-
-            # Check if we have a complete opening pattern
-            if last_opening.end() <= len(text_buffer):
-                # We have a complete opening pattern, keep everything in buffer
-                return "", text_buffer
-            else:
-                # Incomplete opening pattern, return text before it
-                processed_text = text_buffer[:opening_start]
-                # Apply reference splitting to the processed text
-                processed_text = split_continuous_references(processed_text)
-                return processed_text, text_buffer[opening_start:]
-
-        # Check for partial opening pattern (starts with [ but not complete)
-        if "[" in text_buffer:
-            ref_start = text_buffer.find("[")
-            processed_text = text_buffer[:ref_start]
-            # Apply reference splitting to the processed text
-            processed_text = split_continuous_references(processed_text)
-            return processed_text, text_buffer[ref_start:]
-
-        # No reference tags found, apply reference splitting and return all text
-        processed_text = split_continuous_references(text_buffer)
-        return processed_text, ""
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
@@ -868,7 +805,7 @@ class MOSProduct(MOSCore):
             full_response += chunk
 
             # Process buffer to ensure complete reference tags
-            processed_chunk, remaining_buffer = self._process_streaming_references_complete(buffer)
+            processed_chunk, remaining_buffer = process_streaming_references_complete(buffer)
 
             if processed_chunk:
                 chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
@@ -877,7 +814,7 @@ class MOSProduct(MOSCore):
 
         # Process any remaining buffer
         if buffer:
-            processed_chunk, remaining_buffer = self._process_streaming_references_complete(buffer)
+            processed_chunk, remaining_buffer = process_streaming_references_complete(buffer)
             if processed_chunk:
                 chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
                 yield chunk_data
