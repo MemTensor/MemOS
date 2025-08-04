@@ -42,9 +42,9 @@ jobs:
     - name: Install virtualenv with specific version
       # This is only a temporary fix to ensure compatibility with Poetry & virtualenv
       # Relevant issues:
-      # - https://github.com/actions/setup-python/issues/1167
       # - https://github.com/pypa/virtualenv/issues/2931
       # - https://github.com/python-poetry/poetry/issues/10490
+      # - https://github.com/actions/setup-python/issues/1167
       run: pip install virtualenv==20.32
     - uses: actions/checkout@v4
     - name: Install poetry
