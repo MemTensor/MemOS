@@ -41,12 +41,19 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install poetry
-      run: pipx install --python python3.10 poetry
+      run: pipx install poetry
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'poetry'
+    - name: Install virtualenv with specific version
+      # This is only a temporary fix to ensure compatibility with Poetry & virtualenv
+      # Relevant issues:
+      # - https://github.com/actions/setup-python/issues/1167
+      # - https://github.com/pypa/virtualenv/issues/2931
+      # - https://github.com/python-poetry/poetry/issues/10490
+      run: pip install virtualenv==20.32
 
     # Dependency and building tests
     - name: Install main dependencies
