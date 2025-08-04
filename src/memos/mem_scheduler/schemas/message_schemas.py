@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.misc import DictConversionMixin
+from memos.mem_scheduler.general_modules.misc import DictConversionMixin
 
 from .general_schemas import NOT_INITIALIZED
 

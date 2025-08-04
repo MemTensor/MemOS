@@ -9,13 +9,14 @@ from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.dispatcher import SchedulerDispatcher
-from memos.mem_scheduler.modules.misc import AutoDroppingQueue as Queue
-from memos.mem_scheduler.modules.monitor import SchedulerMonitor
-from memos.mem_scheduler.modules.rabbitmq_service import RabbitMQSchedulerModule
-from memos.mem_scheduler.modules.redis_service import RedisSchedulerModule
-from memos.mem_scheduler.modules.retriever import SchedulerRetriever
-from memos.mem_scheduler.modules.scheduler_logger import SchedulerLoggerModule
+from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
+from memos.mem_scheduler.general_modules.rabbitmq_service import RabbitMQSchedulerModule
+from memos.mem_scheduler.general_modules.redis_service import RedisSchedulerModule
+from memos.mem_scheduler.general_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
+from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
+from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
@@ -56,15 +57,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.act_mem_dump_path = self.config.get("act_mem_dump_path", DEFAULT_ACT_MEM_DUMP_PATH)
         self.search_method = TreeTextMemory_SEARCH_METHOD
         self.enable_parallel_dispatch = self.config.get("enable_parallel_dispatch", False)
-        self.max_workers = self.config.get(
+        self.thread_pool_max_workers = self.config.get(
             "thread_pool_max_workers", DEFAULT_THREAD__POOL_MAX_WORKERS
         )
 
         self.retriever: SchedulerRetriever | None = None
-        self.monitor: SchedulerMonitor | None = None
-
+        self.monitor: SchedulerGeneralMonitor | None = None
+        self.thread_pool_monitor: SchedulerDispatcherMonitor | None = None
         self.dispatcher = SchedulerDispatcher(
-            max_workers=self.max_workers, enable_parallel_dispatch=self.enable_parallel_dispatch
+            max_workers=self.thread_pool_max_workers,
+            enable_parallel_dispatch=self.enable_parallel_dispatch,
         )
 
         # internal message queue
@@ -84,6 +86,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # other attributes
         self._context_lock = threading.Lock()
         self.current_user_id: UserID | str | None = None
+        self.current_mem_cube_id: MemCubeID | str | None = None
+        self.current_mem_cube: GeneralMemCube | None = None
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
@@ -95,8 +99,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # initialize submodules
         self.chat_llm = chat_llm
         self.process_llm = process_llm
-        self.monitor = SchedulerMonitor(process_llm=self.process_llm, config=self.config)
+        self.monitor = SchedulerGeneralMonitor(process_llm=self.process_llm, config=self.config)
+        self.thread_pool_monitor = SchedulerDispatcherMonitor(config=self.config)
         self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
+
+        if self.enable_parallel_dispatch:
+            self.thread_pool_monitor.initialize(dispatcher=self.dispatcher)
+            self.thread_pool_monitor.start()
 
         # initialize with auth_cofig
         if self.auth_config_path is not None and Path(self.auth_config_path).exists():
@@ -130,8 +139,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.current_mem_cube_id = msg.mem_cube_id
             self.current_mem_cube = msg.mem_cube
 
-    def transform_memories_to_monitors(
-        self, memories: list[TextualMemoryItem]
+    def transform_working_memories_to_monitors(
+        self, query_keywords, memories: list[TextualMemoryItem]
     ) -> list[MemoryMonitorItem]:
         """
         Convert a list of TextualMemoryItem objects into MemoryMonitorItem objects
@@ -143,10 +152,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Returns:
             List of MemoryMonitorItem objects with computed importance scores.
         """
-        query_keywords = self.monitor.query_monitors.get_keywords_collections()
-        logger.debug(
-            f"Processing {len(memories)} memories with {len(query_keywords)} query keywords"
-        )
 
         result = []
         mem_length = len(memories)
@@ -195,7 +200,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             text_mem_base: TreeTextMemory = text_mem_base
 
             # process rerank memories with llm
-            query_history = self.monitor.query_monitors.get_queries_with_timesort()
+            query_monitor = self.monitor.query_monitors[user_id][mem_cube_id]
+            query_history = query_monitor.get_queries_with_timesort()
             memories_with_new_order, rerank_success_flag = (
                 self.retriever.process_and_rerank_memories(
                     queries=query_history,
@@ -206,8 +212,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
 
             # update working memory monitors
-            new_working_memory_monitors = self.transform_memories_to_monitors(
-                memories=memories_with_new_order
+            query_keywords = query_monitor.get_keywords_collections()
+            logger.debug(
+                f"Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
+            )
+            new_working_memory_monitors = self.transform_working_memories_to_monitors(
+                query_keywords=query_keywords,
+                memories=memories_with_new_order,
             )
 
             if not rerank_success_flag:
@@ -244,25 +255,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             memories_with_new_order = new_memory
 
         return memories_with_new_order
-
-    def initialize_working_memory_monitors(
-        self,
-        user_id: UserID | str,
-        mem_cube_id: MemCubeID | str,
-        mem_cube: GeneralMemCube,
-    ):
-        text_mem_base: TreeTextMemory = mem_cube.text_mem
-        working_memories = text_mem_base.get_working_memory()
-
-        working_memory_monitors = self.transform_memories_to_monitors(
-            memories=working_memories,
-        )
-        self.monitor.update_working_memory_monitors(
-            new_working_memory_monitors=working_memory_monitors,
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-        )
 
     def update_activation_memory(
         self,
@@ -367,13 +359,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     or len(self.monitor.working_memory_monitors[user_id][mem_cube_id].memories) == 0
                 ):
                     logger.warning(
-                        "No memories found in working_memory_monitors, initializing from current working_memories"
+                        "No memories found in working_memory_monitors, activation memory update is skipped"
                     )
-                    self.initialize_working_memory_monitors(
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                    )
+                    return
 
                 self.monitor.update_activation_memory_monitors(
                     user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
@@ -396,7 +384,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     mem_cube=mem_cube,
                 )
 
-                self.monitor.last_activation_mem_update_time = datetime.now()
+                self.monitor.last_activation_mem_update_time = datetime.utcnow()
 
                 logger.debug(
                     f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
@@ -405,7 +393,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.info(
                     f"Skipping update - {interval_seconds} second interval not yet reached. "
                     f"Last update time is {self.monitor.last_activation_mem_update_time} and now is"
-                    f"{datetime.now()}"
+                    f"{datetime.utcnow()}"
                 )
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
@@ -506,7 +494,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         # Initialize dispatcher resources
         if self.enable_parallel_dispatch:
-            logger.info(f"Initializing dispatcher thread pool with {self.max_workers} workers")
+            logger.info(
+                f"Initializing dispatcher thread pool with {self.thread_pool_max_workers} workers"
+            )
 
         # Start consumer thread
         self._running = True

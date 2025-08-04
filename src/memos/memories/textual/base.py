@@ -36,7 +36,7 @@ class BaseTextMemory(BaseMemory):
         """Update a memory by memory_id."""
 
     @abstractmethod
-    def search(self, query: str, top_k: int, info=None) -> list[TextualMemoryItem]:
+    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
             query (str): The query to search for.

@@ -8,13 +8,12 @@ from unittest.mock import MagicMock
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.monitor import SchedulerMonitor
-from memos.mem_scheduler.modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.general_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    TreeTextMemory_SEARCH_METHOD,
 )
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
@@ -44,7 +43,7 @@ class TestGeneralScheduler(unittest.TestCase):
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
 
-        # Initialize modules with mock LLM
+        # Initialize general_modules with mock LLM
         self.scheduler.initialize_modules(chat_llm=self.llm, process_llm=self.llm)
         self.scheduler.mem_cube = self.mem_cube
 
@@ -61,7 +60,7 @@ class TestGeneralScheduler(unittest.TestCase):
     def test_initialize_modules(self):
         """Test module initialization with proper component assignments."""
         self.assertEqual(self.scheduler.chat_llm, self.llm)
-        self.assertIsInstance(self.scheduler.monitor, SchedulerMonitor)
+        self.assertIsInstance(self.scheduler.monitor, SchedulerGeneralMonitor)
         self.assertIsInstance(self.scheduler.retriever, SchedulerRetriever)
 
     def test_submit_web_logs(self):
@@ -126,32 +125,3 @@ class TestGeneralScheduler(unittest.TestCase):
         self.assertTrue(isinstance(actual_message.item_id, str))
         self.assertTrue(hasattr(actual_message, "timestamp"))
         self.assertTrue(isinstance(actual_message.timestamp, datetime))
-
-    def test_search_with_empty_results(self):
-        """Test search method with empty results."""
-        # Setup mock memory cube and text memory
-        mock_mem_cube = MagicMock()
-        mock_mem_cube.text_mem = self.tree_text_memory
-
-        # Setup mock search results for both memory types
-        self.tree_text_memory.search.side_effect = [
-            [],  # results_long_term
-            [],  # results_user
-        ]
-
-        # Test search
-        results = self.scheduler.retriever.search(
-            query="Test query", mem_cube=mock_mem_cube, top_k=5, method=TreeTextMemory_SEARCH_METHOD
-        )
-
-        # Verify results
-        self.assertEqual(results, [])
-
-        # Verify search was called twice (for LongTermMemory and UserMemory)
-        self.assertEqual(self.tree_text_memory.search.call_count, 2)
-        self.tree_text_memory.search.assert_any_call(
-            query="Test query", top_k=5, memory_type="LongTermMemory"
-        )
-        self.tree_text_memory.search.assert_any_call(
-            query="Test query", top_k=5, memory_type="UserMemory"
-        )

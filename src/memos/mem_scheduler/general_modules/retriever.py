@@ -2,8 +2,9 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.base import BaseSchedulerModule
+from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
+    TreeTextMemory_FINE_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
 )
 from memos.mem_scheduler.utils.filter_utils import (
@@ -32,7 +33,12 @@ class SchedulerRetriever(BaseSchedulerModule):
         self.process_llm = process_llm
 
     def search(
-        self, query: str, mem_cube: GeneralMemCube, top_k: int, method=TreeTextMemory_SEARCH_METHOD
+        self,
+        query: str,
+        mem_cube: GeneralMemCube,
+        top_k: int,
+        method: str = TreeTextMemory_SEARCH_METHOD,
+        info: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """Search in text memory with the given query.
 
@@ -46,13 +52,21 @@ class SchedulerRetriever(BaseSchedulerModule):
         """
         text_mem_base = mem_cube.text_mem
         try:
-            if method == TreeTextMemory_SEARCH_METHOD:
+            if method in [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
                 assert isinstance(text_mem_base, TreeTextMemory)
+                if info is None:
+                    logger.warning(
+                        "Please input 'info' when use tree.search so that "
+                        "the database would store the consume history."
+                    )
+                    info = {"user_id": "", "session_id": ""}
+
+                mode = "fast" if method == TreeTextMemory_SEARCH_METHOD else "fine"
                 results_long_term = text_mem_base.search(
-                    query=query, top_k=top_k, memory_type="LongTermMemory"
+                    query=query, top_k=top_k, memory_type="LongTermMemory", mode=mode, info=info
                 )
                 results_user = text_mem_base.search(
-                    query=query, top_k=top_k, memory_type="UserMemory"
+                    query=query, top_k=top_k, memory_type="UserMemory", mode=mode, info=info
                 )
                 results = results_long_term + results_user
             else:
