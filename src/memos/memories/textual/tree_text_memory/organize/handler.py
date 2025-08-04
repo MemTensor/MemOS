@@ -1,6 +1,5 @@
 import json
 import re
-
 from datetime import datetime
 
 from dateutil import parser
@@ -11,15 +10,14 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.tree_reorganize_prompts import (
-    CONFLICT_DETECTOR_PROMPT,
-    CONFLICT_RESOLVER_PROMPT,
+    MEMORY_RELATION_DETECTOR_PROMPT,
+    MEMORY_RELATION_RESOLVER_PROMPT,
 )
-
 
 logger = get_logger(__name__)
 
 
-class ConflictHandler:
+class NodeHandler:
     EMBEDDING_THRESHOLD: float = 0.8  # Threshold for embedding similarity to consider conflict
 
     def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
@@ -27,66 +25,53 @@ class ConflictHandler:
         self.llm = llm
         self.embedder = embedder
 
-    def detect(
-        self, memory: TextualMemoryItem, top_k: int = 5, scope: str | None = None
-    ) -> list[tuple[TextualMemoryItem, TextualMemoryItem]]:
-        """
-        Detect conflicts by finding the most similar items in the graph database based on embedding, then use LLM to judge conflict.
-        Args:
-            memory: The memory item (should have an embedding attribute or field).
-            top_k: Number of top similar nodes to retrieve.
-            scope: Optional memory type filter.
-        Returns:
-            List of conflict pairs (each pair is a tuple: (memory, candidate)).
-        """
+    def detect(self, memory, top_k: int = 5, scope=None):
         # 1. Search for similar memories based on embedding
         embedding = memory.metadata.embedding
         embedding_candidates_info = self.graph_store.search_by_embedding(
-            embedding, top_k=top_k, scope=scope
+            embedding, top_k=top_k, scope=scope, threshold=self.EMBEDDING_THRESHOLD
         )
         # 2. Filter based on similarity threshold
         embedding_candidates_ids = [
-            info["id"]
-            for info in embedding_candidates_info
-            if info["score"] >= self.EMBEDDING_THRESHOLD and info["id"] != memory.id
+            info["id"] for info in embedding_candidates_info if info["id"] != memory.id
         ]
         # 3. Judge conflicts using LLM
         embedding_candidates = self.graph_store.get_nodes(embedding_candidates_ids)
-        conflict_pairs = []
+        detected_relationships = []
         for embedding_candidate in embedding_candidates:
             embedding_candidate = TextualMemoryItem.from_dict(embedding_candidate)
             prompt = [
                 {
-                    "role": "system",
-                    "content": "You are a conflict detector for memory items.",
-                },
-                {
                     "role": "user",
-                    "content": CONFLICT_DETECTOR_PROMPT.format(
-                        statement_1=memory.memory,
-                        statement_2=embedding_candidate.memory,
+                    "content": MEMORY_RELATION_DETECTOR_PROMPT.format(
+                        statement_1=memory.memory, statement_2=embedding_candidate.memory
                     ),
-                },
+                }
             ]
             result = self.llm.generate(prompt).strip()
-            if "yes" in result.lower():
-                conflict_pairs.append([memory, embedding_candidate])
-        if len(conflict_pairs):
-            conflict_text = "\n".join(
-                f'"{pair[0].memory!s}" <==CONFLICT==> "{pair[1].memory!s}"'
-                for pair in conflict_pairs
-            )
-            logger.warning(
-                f"Detected {len(conflict_pairs)} conflicts for memory {memory.id}\n {conflict_text}"
-            )
-        return conflict_pairs
+            if result == "contradictory":
+                logger.warning(
+                    f'detected "{memory.memory}" <==CONFLICT==> "{embedding_candidate.memory}"'
+                )
+                detected_relationships.append([memory, embedding_candidate, "contradictory"])
+            elif result == "redundant":
+                logger.warning(
+                    f'detected "{memory.memory}" <==REDUNDANT==> "{embedding_candidate.memory}"'
+                )
+                detected_relationships.append([memory, embedding_candidate, "redundant"])
+            elif result == "independent":
+                pass
+            else:
+                pass
+        return detected_relationships
 
-    def resolve(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem) -> None:
+    def resolve(self, memory_a: TextualMemoryItem, memory_b: TextualMemoryItem, relation) -> None:
         """
         Resolve detected conflicts between two memory items using LLM fusion.
         Args:
             memory_a: The first conflicting memory item.
             memory_b: The second conflicting memory item.
+            relation: relation
         Returns:
             A fused TextualMemoryItem representing the resolved memory.
         """
@@ -97,12 +82,9 @@ class ConflictHandler:
         metadata_2 = memory_b.metadata.model_dump_json(include=metadata_for_resolve)
         prompt = [
             {
-                "role": "system",
-                "content": "",
-            },
-            {
                 "role": "user",
-                "content": CONFLICT_RESOLVER_PROMPT.format(
+                "content": MEMORY_RELATION_RESOLVER_PROMPT.format(
+                    relation=relation,
                     statement_1=memory_a.memory,
                     metadata_1=metadata_1,
                     statement_2=memory_b.memory,
@@ -119,7 +101,7 @@ class ConflictHandler:
             # —————— 2.1 Can't resolve conflict, hard update by comparing timestamp ————
             if len(answer) <= 10 and "no" in answer.lower():
                 logger.warning(
-                    f"Conflict between {memory_a.id} and {memory_b.id} could not be resolved. "
+                    f"{relation} between {memory_a.id} and {memory_b.id} could not be resolved. "
                 )
                 self._hard_update(memory_a, memory_b)
             # —————— 2.2 Conflict resolved, update metadata and memory ————

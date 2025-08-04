@@ -73,10 +73,12 @@ class RelationAndReasoningDetector:
             results["sequence_links"].extend(seq)
             """
 
+            """
             # 4) Aggregate
             agg = self._detect_aggregate_node_for_group(node, nearest, min_group_size=5)
             if agg:
                 results["aggregate_nodes"].append(agg)
+            """
 
         except Exception as e:
             logger.error(

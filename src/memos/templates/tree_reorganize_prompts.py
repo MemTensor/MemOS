@@ -191,33 +191,40 @@ Good Aggregate:
 If you find NO useful higher-level concept, reply exactly: "None".
 """
 
-CONFLICT_DETECTOR_PROMPT = """You are given two plaintext statements. Determine if these two statements are factually contradictory. Respond with only "yes" if they contradict each other, or "no" if they do not contradict each other. Do not provide any explanation or additional text.
+REDUNDANCY_MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""
+
+
+MEMORY_RELATION_DETECTOR_PROMPT = """You are a memory relationship analyzer.
+You are given two plaintext statements. Determine the relationship between them. Classify the relationship into one of the following categories:
+
+contradictory: The two statements describe the same event or related aspects of it but contain factually conflicting details.
+redundant: The two statements describe essentially the same event or information with significant overlap in content and details, conveying the same core information (even if worded differently).
+independent: The two statements are either about different events/topics (unrelated) OR describe different, non-overlapping aspects or perspectives of the same event without conflict (complementary). In both sub-cases, they provide distinct information without contradiction.
+Respond only with one of the three labels: contradictory, redundant, or independent.
+Do not provide any explanation or additional text.
+
 Statement 1: {statement_1}
 Statement 2: {statement_2}
 """
 
-CONFLICT_RESOLVER_PROMPT = """You are given two facts that conflict with each other. You are also given some contextual metadata of them. Your task is to analyze the two facts in light of the contextual metadata and try to reconcile them into a single, consistent, non-conflicting fact.
-- Don't output any explanation or additional text, just the final reconciled fact, try to be objective and remain independent of the context, don't use pronouns.
-- Try to judge facts by using its time, confidence etc.
-- Try to retain as much information as possible from the perspective of time.
-If the conflict cannot be resolved, output <answer>No</answer>. Otherwise, output the fused, consistent fact in enclosed with <answer></answer> tags.
 
-Output Example 1:
+MEMORY_RELATION_RESOLVER_PROMPT = """You are a memory fusion expert. You are given two statements and their associated metadata. The statements have been identified as {relation}. Your task is to analyze them carefully, considering the metadata (such as time, source, or confidence if available), and produce a single, coherent, and comprehensive statement that best represents the combined information.
+
+If the statements are redundant, merge them by preserving all unique details and removing duplication, forming a richer, consolidated version.
+If the statements are contradictory, attempt to resolve the conflict by prioritizing more recent information, higher-confidence data, or logically reconciling the differences based on context. If the contradiction is fundamental and cannot be logically resolved, output <answer>No</answer>.
+Do not include any explanations, reasoning, or extra text. Only output the final result enclosed in <answer></answer> tags.
+Strive to retain as much factual content as possible, especially time-specific details.
+Use objective language and avoid pronouns.
+Output Example 1 (unresolvable conflict):
 <answer>No</answer>
 
-Output Example 2:
-<answer> ... </answer>
+Output Example 2 (successful fusion):
+<answer>The meeting took place on 2023-10-05 at 14:00 in the main conference room, as confirmed by the updated schedule, and included a presentation on project milestones followed by a Q&A session.</answer>
 
-Now reconcile the following two facts:
+Now, reconcile the following two statements:
+Relation Type: {relation}
 Statement 1: {statement_1}
 Metadata 1: {metadata_1}
 Statement 2: {statement_2}
 Metadata 2: {metadata_2}
 """
-
-REDUNDANCY_MERGE_PROMPT = """You are given two pieces of text joined by the marker `⟵MERGED⟶`. Please carefully read both sides of the merged text. Your task is to summarize and consolidate all the factual details from both sides into a single, coherent text, without omitting any information. You must include every distinct detail mentioned in either text. Do not provide any explanation or analysis — only return the merged summary. Don't use pronouns or subjective language, just the facts as they are presented.\n{merged_text}"""
-
-
-REDUNDANCY_DETECTOR_PROMPT = """"""
-
-REDUNDANCY_RESOLVER_PROMPT = """"""

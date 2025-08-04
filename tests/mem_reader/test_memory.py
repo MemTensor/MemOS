@@ -7,7 +7,7 @@ def test_memory_initialization():
     """Test initialization of Memory class."""
     user_id = "user123"
     session_id = "session456"
-    created_at = datetime.now()
+    created_at = datetime.utcnow()
 
     memory = Memory(user_id=user_id, session_id=session_id, created_at=created_at)
 
