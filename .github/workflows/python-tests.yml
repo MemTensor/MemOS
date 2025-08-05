@@ -39,17 +39,12 @@ jobs:
     timeout-minutes: 30
 
     steps:
-
-    - name: Install virtualenv with specific version
-      # This is only a temporary fix to ensure compatibility with Poetry & virtualenv
-      # Relevant issues:
-      # - https://github.com/pypa/virtualenv/issues/2931
-      # - https://github.com/python-poetry/poetry/issues/10490
-      # - https://github.com/actions/setup-python/issues/1167
-      run: pip install virtualenv==20.32
     - uses: actions/checkout@v4
     - name: Install poetry
-      run: pipx install poetry
+      run: |
+        echo "virtualenv==20.32.0" > constraints.txt
+        pipx install poetry==2.1.3 --pip-args="--constraint=constraints.txt"
+        rm constraints.txt
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
