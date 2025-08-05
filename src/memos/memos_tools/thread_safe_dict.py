@@ -13,7 +13,7 @@ V = TypeVar("V")
 
 
 class ReadWriteLock:
-    """A simple read-write lock implementation."""
+    """A simple read-write lock implementation. use for product-server scenario"""
 
     def __init__(self):
         self._read_ready = threading.Condition(threading.RLock())
