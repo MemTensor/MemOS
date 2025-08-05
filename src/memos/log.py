@@ -6,7 +6,7 @@ from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
 
-import requests
+import httpx
 
 from dotenv import load_dotenv
 
@@ -32,13 +32,66 @@ def _setup_logfile() -> Path:
 
 
 class CustomLoggerRequestHandler(logging.Handler):
+    def __init__(self):
+        """Initialize handler with a persistent HTTP client"""
+        super().__init__()
+        self.client = httpx.Client()
+
     def emit(self, record):
+        """Process log records of INFO or ERROR level"""
         if os.getenv("CUSTOM_LOGGER_URL") is None:
             return
 
         if record.levelno == logging.INFO or record.levelno == logging.ERROR:
             with suppress(Exception):
-                log_custom_request(record.getMessage())
+                self._send_log(record.getMessage())
+
+    def _send_log(self, message):
+        """Send log message using fire-and-forget pattern"""
+        logger_url = os.getenv("CUSTOM_LOGGER_URL")
+        token = os.getenv("CUSTOM_LOGGER_TOKEN")
+
+        headers = {
+            "Content-Type": "application/json",
+        }
+        post_content = {
+            "message": message,
+        }
+
+        # Add auth token if exists
+        if token is not None:
+            headers["Authorization"] = token
+
+        # Add trace ID for tracking
+        trace_id = get_current_trace_id()
+        print(f"trace_id: {trace_id}")
+        if trace_id is not None:
+            headers["traceId"] = trace_id
+            post_content["trace_id"] = trace_id
+
+        # Add custom attributes from env
+        for key, value in os.environ.items():
+            if key.startswith("CUSTOM_LOGGER_ATTRIBUTE_"):
+                attribute_key = key[len("CUSTOM_LOGGER_ATTRIBUTE_") :].lower()
+                post_content[attribute_key] = value
+
+        print(f"post_content: {post_content}")
+        print(f"headers: {headers}")
+
+        # Fire request without waiting
+        self.client.post(
+            url=logger_url, headers=headers, json=post_content, timeout=5, stream=False
+        )
+
+    def close(self):
+        """Clean up HTTP client resources"""
+        try:
+            if hasattr(self, "client") and self.client:
+                self.client.close()
+        except Exception:
+            pass
+        finally:
+            super().close()
 
 
 LOGGING_CONFIG = {
@@ -100,33 +153,3 @@ def get_logger(name: str | None = None) -> logging.Logger:
     if name:
         return parent_logger.getChild(name)
     return parent_logger
-
-
-def log_custom_request(message: str):
-    logger_url = os.getenv("CUSTOM_LOGGER_URL")
-    token = os.getenv("CUSTOM_LOGGER_TOKEN")
-
-    trace_id = get_current_trace_id()
-
-    print(f"trace_id: {trace_id}")
-
-    headers = {
-        "Content-Type": "application/json",
-    }
-    post_content = {
-        "message": message,
-    }
-
-    for key, value in os.environ.items():
-        if key.startswith("CUSTOM_LOGGER_ATTRIBUTE_"):
-            attribute_key = key[len("CUSTOM_LOGGER_ATTRIBUTE_") :].lower()
-            post_content[attribute_key] = value
-
-    if token is not None:
-        headers["Authorization"] = token
-
-    if trace_id is not None:
-        headers["traceId"] = trace_id
-        post_content["trace_id"] = trace_id
-
-    requests.post(url=logger_url, headers=headers, json=post_content, timeout=5)
