@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.modules.monitor import SchedulerMonitor
-from memos.mem_scheduler.modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.general_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
@@ -43,7 +43,7 @@ class TestGeneralScheduler(unittest.TestCase):
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
 
-        # Initialize modules with mock LLM
+        # Initialize general_modules with mock LLM
         self.scheduler.initialize_modules(chat_llm=self.llm, process_llm=self.llm)
         self.scheduler.mem_cube = self.mem_cube
 
@@ -60,7 +60,7 @@ class TestGeneralScheduler(unittest.TestCase):
     def test_initialize_modules(self):
         """Test module initialization with proper component assignments."""
         self.assertEqual(self.scheduler.chat_llm, self.llm)
-        self.assertIsInstance(self.scheduler.monitor, SchedulerMonitor)
+        self.assertIsInstance(self.scheduler.monitor, SchedulerGeneralMonitor)
         self.assertIsInstance(self.scheduler.retriever, SchedulerRetriever)
 
     def test_submit_web_logs(self):
