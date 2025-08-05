@@ -1,9 +1,11 @@
+import concurrent
+
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from memos.log import get_logger
-from memos.mem_scheduler.modules.base import BaseSchedulerModule
+from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
@@ -26,19 +28,26 @@ class SchedulerDispatcher(BaseSchedulerModule):
         super().__init__()
         # Main dispatcher thread pool
         self.max_workers = max_workers
+
         # Only initialize thread pool if in parallel mode
         self.enable_parallel_dispatch = enable_parallel_dispatch
+        self.thread_name_prefix = "dispatcher"
         if self.enable_parallel_dispatch:
             self.dispatcher_executor = ThreadPoolExecutor(
-                max_workers=self.max_workers, thread_name_prefix="dispatcher"
+                max_workers=self.max_workers, thread_name_prefix=self.thread_name_prefix
             )
         else:
             self.dispatcher_executor = None
         logger.info(f"enable_parallel_dispatch is set to {self.enable_parallel_dispatch}")
+
         # Registered message handlers
         self.handlers: dict[str, Callable] = {}
+
         # Dispatcher running state
         self._running = False
+
+        # Set to track active futures for monitoring purposes
+        self._futures = set()
 
     def register_handler(self, label: str, handler: Callable[[list[ScheduleMessageItem]], None]):
         """
@@ -105,6 +114,13 @@ class SchedulerDispatcher(BaseSchedulerModule):
         # Convert defaultdict to regular dict for cleaner output
         return {user_id: dict(cube_groups) for user_id, cube_groups in grouped_dict.items()}
 
+    def _handle_future_result(self, future):
+        self._futures.remove(future)
+        try:
+            future.result()  # this will throw exception
+        except Exception as e:
+            logger.error(f"Handler execution failed: {e!s}", exc_info=True)
+
     def dispatch(self, msg_list: list[ScheduleMessageItem]):
         """
         Dispatch a list of messages to their respective handlers.
@@ -112,26 +128,26 @@ class SchedulerDispatcher(BaseSchedulerModule):
         Args:
             msg_list: List of ScheduleMessageItem objects to process
         """
+        if not msg_list:
+            logger.debug("Received empty message list, skipping dispatch")
+            return
 
-        # Group messages by their labels
+        # Group messages by their labels, and organize messages by label
         label_groups = defaultdict(list)
-
-        # Organize messages by label
         for message in msg_list:
             label_groups[message.label].append(message)
 
         # Process each label group
         for label, msgs in label_groups.items():
-            if label not in self.handlers:
-                logger.error(f"No handler registered for label: {label}")
-                handler = self._default_message_handler
-            else:
-                handler = self.handlers[label]
+            handler = self.handlers.get(label, self._default_message_handler)
+
             # dispatch to different handler
             logger.debug(f"Dispatch {len(msgs)} message(s) to {label} handler.")
             if self.enable_parallel_dispatch and self.dispatcher_executor is not None:
                 # Capture variables in lambda to avoid loop variable issues
-                self.dispatcher_executor.submit(handler, msgs)
+                future = self.dispatcher_executor.submit(handler, msgs)
+                self._futures.add(future)
+                future.add_done_callback(self._handle_future_result)
                 logger.info(f"Dispatched {len(msgs)} message(s) as future task")
             else:
                 handler(msgs)
@@ -148,15 +164,38 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if not self.enable_parallel_dispatch or self.dispatcher_executor is None:
             return True  # 串行模式无需等待
 
-        self.dispatcher_executor.shutdown(wait=True, timeout=timeout)
-        return True
+        done, not_done = concurrent.futures.wait(
+            self._futures, timeout=timeout, return_when=concurrent.futures.ALL_COMPLETED
+        )
+
+        # Check for exceptions in completed tasks
+        for future in done:
+            try:
+                future.result()
+            except Exception:
+                logger.error("Handler failed during shutdown", exc_info=True)
+
+        return len(not_done) == 0
 
     def shutdown(self) -> None:
         """Gracefully shutdown the dispatcher."""
-        if self.dispatcher_executor is not None:
-            self.dispatcher_executor.shutdown(wait=True)
         self._running = False
-        logger.info("Dispatcher has been shutdown.")
+
+        if self.dispatcher_executor is not None:
+            # Cancel pending tasks
+            cancelled = 0
+            for future in self._futures:
+                if future.cancel():
+                    cancelled += 1
+            logger.info(f"Cancelled {cancelled}/{len(self._futures)} pending tasks")
+
+        # Shutdown executor
+        try:
+            self.dispatcher_executor.shutdown(wait=True)
+        except Exception as e:
+            logger.error(f"Executor shutdown error: {e}", exc_info=True)
+        finally:
+            self._futures.clear()
 
     def __enter__(self):
         self._running = True

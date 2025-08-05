@@ -142,7 +142,6 @@ if __name__ == "__main__":
         query = item["question"]
         print(f"Query:\n {query}\n")
         response = mos.chat(query=query, user_id=user_id)
-        print(f"Answer:\n {response}")
-        print("===== Chat End =====")
+        print(f"Answer:\n {response}\n")
 
     mos.mem_scheduler.stop()
