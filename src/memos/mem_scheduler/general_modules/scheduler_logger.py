@@ -180,6 +180,11 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
+            logger.info(
+                f"{len(added_memories)} {TEXT_MEMORY_TYPE} memorie(s) "
+                f"transformed to {ACTIVATION_MEMORY_TYPE} memories."
+            )
+
             log_message_b = self.create_autofilled_log_item(
                 log_content=mem,
                 label=label,
@@ -189,11 +194,12 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
-            log_func_callback([log_message_a, log_message_b])
             logger.info(
-                f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
-                f"transformed to {WORKING_MEMORY_TYPE} memories."
+                f"{len(added_memories)} {ACTIVATION_MEMORY_TYPE} memorie(s) "
+                f"transformed to {PARAMETER_MEMORY_TYPE} memories."
             )
+
+            log_func_callback([log_message_a, log_message_b])
 
     @log_exceptions(logger=logger)
     def log_adding_memory(

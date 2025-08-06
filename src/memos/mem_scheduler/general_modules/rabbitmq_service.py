@@ -71,9 +71,9 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
         if config is None:
             if config_path is None and AuthConfig.default_config_exists():
-                auth_config = AuthConfig.from_local_yaml()
+                auth_config = AuthConfig.from_local_config()
             elif Path(config_path).exists():
-                auth_config = AuthConfig.from_local_yaml(config_path=config_path)
+                auth_config = AuthConfig.from_local_config(config_path=config_path)
             else:
                 logger.error("Fail to initialize auth_config")
                 return

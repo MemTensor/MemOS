@@ -219,7 +219,7 @@ class MOS(MOSCore):
                         mem_cube=mem_cube,
                         label=ANSWER_LABEL,
                         content=enhanced_response,
-                        timestamp=datetime.now(),
+                        timestamp=datetime.now().isoformat(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
