@@ -4,8 +4,13 @@ from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
 
+from dotenv import load_dotenv
+
 from memos import settings
 
+
+# Load environment variables
+load_dotenv()
 
 selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
 

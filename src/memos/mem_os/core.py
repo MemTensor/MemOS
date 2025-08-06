@@ -24,6 +24,7 @@ from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
+from memos.memos_tools.thread_safe_dict import ThreadSafeDict
 from memos.templates.mos_prompts import QUERY_REWRITING_PROMPT
 from memos.types import ChatHistory, MessageList, MOSSearchResult
 
@@ -42,10 +43,13 @@ class MOSCore:
         self.config = config
         self.user_id = config.user_id
         self.session_id = config.session_id
-        self.mem_cubes: dict[str, GeneralMemCube] = {}
         self.chat_llm = LLMFactory.from_config(config.chat_model)
         self.mem_reader = MemReaderFactory.from_config(config.mem_reader)
         self.chat_history_manager: dict[str, ChatHistory] = {}
+        # use thread safe dict for multi-user product-server scenario
+        self.mem_cubes: ThreadSafeDict[str, GeneralMemCube] = (
+            ThreadSafeDict() if user_manager is not None else {}
+        )
         self._register_chat_history()
 
         # Use provided user_manager or create a new one
@@ -575,7 +579,13 @@ class MOSCore:
         }
         if install_cube_ids is None:
             install_cube_ids = user_cube_ids
-        for mem_cube_id, mem_cube in self.mem_cubes.items():
+        # create exist dict in mem_cubes and avoid  one search slow
+        tmp_mem_cubes = {}
+        for mem_cube_id in install_cube_ids:
+            if mem_cube_id in self.mem_cubes:
+                tmp_mem_cubes[mem_cube_id] = self.mem_cubes.get(mem_cube_id)
+
+        for mem_cube_id, mem_cube in tmp_mem_cubes.items():
             if (
                 (mem_cube_id in install_cube_ids)
                 and (mem_cube.text_mem is not None)

@@ -1,6 +1,5 @@
 import concurrent.futures
 import json
-import time
 
 from datetime import datetime
 
@@ -9,6 +8,7 @@ from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
+from memos.utils import timed
 
 from .internet_retriever_factory import InternetRetrieverFactory
 from .reasoner import MemoryReasoner
@@ -39,8 +39,9 @@ class Searcher:
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
 
+    @timed
     def search(
-        self, query: str, top_k: int, info=None, mode: str = "fast", memory_type: str = "All"
+        self, query: str, top_k: int, info=None, mode="fast", memory_type="All"
     ) -> list[TextualMemoryItem]:
         """
         Search for memories based on a query.
@@ -58,11 +59,9 @@ class Searcher:
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        overall_start = time.perf_counter()
         logger.info(
-            f"[SEARCH]'{query}' 🚀 Starting search for query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
+            f"[SEARCH] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
-
         if not info:
             logger.warning(
                 "Please input 'info' when use tree.search so that "
@@ -72,261 +71,211 @@ class Searcher:
         else:
             logger.debug(f"[SEARCH] Received info dict: {info}")
 
-        # ===== Step 1: Parse task structure =====
-        step_start = time.perf_counter()
+        parsed_goal, query_embedding, context, query = self._parse_task(query, info, mode)
+        results = self._retrieve_paths(
+            query, parsed_goal, query_embedding, info, top_k, mode, memory_type
+        )
+        deduped = self._deduplicate_results(results)
+        final_results = self._sort_and_trim(deduped, top_k)
+        self._update_usage_history(final_results, info)
+
+        logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
+        return final_results
+
+    @timed
+    def _parse_task(self, query, info, mode, top_k=5):
+        """Parse user query, do embedding search and create context"""
         context = []
+        query_embedding = None
+
+        # fine mode will trigger initial embedding search
         if mode == "fine":
-            logger.info("[SEARCH] Fine mode enabled, performing initial embedding search...")
-            embed_start = time.perf_counter()
+            logger.info("[SEARCH] Fine mode: embedding search")
             query_embedding = self.embedder.embed([query])[0]
-            logger.debug(f"[SEARCH] Query embedding vector length: {len(query_embedding)}")
-            logger.info(
-                f"[TIMER] Embedding query took {(time.perf_counter() - embed_start) * 1000:.2f} ms"
-            )
 
-            search_start = time.perf_counter()
-            related_node_ids = self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
+            # retrieve related nodes by embedding
             related_nodes = [
-                self.graph_store.get_node(related_node["id"]) for related_node in related_node_ids
+                self.graph_store.get_node(n["id"])
+                for n in self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
             ]
-            context = [related_node["memory"] for related_node in related_nodes]
-            context = list(set(context))
-            logger.info(f"[SEARCH] Found {len(related_nodes)} related nodes from graph_store.")
-            logger.info(
-                f"[TIMER] Graph embedding search took {(time.perf_counter() - search_start) * 1000:.2f} ms"
-            )
+            context = list({node["memory"] for node in related_nodes})
 
-            # add some knowledge retrieved from internet to the context to avoid misunderstanding while parsing the task goal.
+            # optional: supplement context with internet knowledge
             if self.internet_retriever:
-                supplyment_memory_items = self.internet_retriever.retrieve_from_internet(
-                    query=query, top_k=3
-                )
-                context.extend(
-                    [
-                        each_supplyment_item.memory.partition("\nContent: ")[-1]
-                        for each_supplyment_item in supplyment_memory_items
-                    ]
-                )
+                extra = self.internet_retriever.retrieve_from_internet(query=query, top_k=3)
+                context.extend(item.memory.partition("\nContent: ")[-1] for item in extra)
 
-        # Step 1a: Parse task structure into topic, concept, and fact levels
-        parse_start = time.perf_counter()
+        # parse goal using LLM
         parsed_goal = self.task_goal_parser.parse(
             task_description=query,
             context="\n".join(context),
             conversation=info.get("chat_history", []),
             mode=mode,
         )
-        logger.info(
-            f"[TIMER] '{query}'TaskGoalParser took {(time.perf_counter() - parse_start) * 1000:.2f} ms"
-        )
-        logger.info(f"'{query}'TaskGoalParser result is {parsed_goal}")
 
         query = parsed_goal.rephrased_query or query
+        # if goal has extra memories, embed them too
         if parsed_goal.memories:
-            embed_extra_start = time.perf_counter()
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
-            logger.info(
-                f"[TIMER] '{query}'Embedding parsed_goal memories took {(time.perf_counter() - embed_extra_start) * 1000:.2f} ms"
+
+        return parsed_goal, query_embedding, context, query
+
+    @timed
+    def _retrieve_paths(self, query, parsed_goal, query_embedding, info, top_k, mode, memory_type):
+        """Run A/B/C retrieval paths in parallel"""
+        tasks = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_working_memory,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    top_k,
+                    memory_type,
+                )
             )
-        step_end = time.perf_counter()
-        logger.info(
-            f"[TIMER] '{query}'Step 1 (Parsing & Embedding) took {(step_end - step_start):.2f} s"
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_long_term_and_user,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    top_k,
+                    memory_type,
+                )
+            )
+            if parsed_goal.internet_search:
+                tasks.append(
+                    executor.submit(
+                        self._retrieve_from_internet,
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        info,
+                        mode,
+                        memory_type,
+                    )
+                )
+
+            results = []
+            for t in tasks:
+                results.extend(t.result())
+
+        logger.info(f"[SEARCH] Total raw results: {len(results)}")
+        return results
+
+    # --- Path A
+    @timed
+    def _retrieve_from_working_memory(
+        self, query, parsed_goal, query_embedding, top_k, memory_type
+    ):
+        """Retrieve and rerank from WorkingMemory"""
+        if memory_type not in ["All", "WorkingMemory"]:
+            logger.info(f"[PATH-A] '{query}'Skipped (memory_type does not match)")
+            return []
+        items = self.graph_retriever.retrieve(
+            query=query, parsed_goal=parsed_goal, top_k=top_k, memory_scope="WorkingMemory"
+        )
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=items,
+            top_k=top_k,
+            parsed_goal=parsed_goal,
         )
 
-        # ===== Step 2: Define retrieval paths =====
-        def timed(func):
-            """Decorator to measure and log time of retrieval steps."""
-
-            def wrapper(*args, **kwargs):
-                start = time.perf_counter()
-                result = func(*args, **kwargs)
-                elapsed = time.perf_counter() - start
-                logger.info(f"[TIMER] {func.__name__} took {elapsed:.2f} s")
-                return result
-
-            return wrapper
-
-        @timed
-        def retrieve_from_working_memory():
-            """
-            Direct structure-based retrieval from working memory.
-            """
-            logger.info(f"[PATH-A] '{query}'Retrieving from WorkingMemory...")
-            if memory_type not in ["All", "WorkingMemory"]:
-                logger.info(f"[PATH-A] '{query}'Skipped (memory_type does not match)")
-                return []
-            working_memory = self.graph_retriever.retrieve(
-                query=query, parsed_goal=parsed_goal, top_k=top_k, memory_scope="WorkingMemory"
-            )
-
-            logger.debug(f"[PATH-A] '{query}'Retrieved {len(working_memory)} items.")
-            # Rerank working_memory results
-            rerank_start = time.perf_counter()
-            ranked_memories = self.reranker.rerank(
+    # --- Path B
+    @timed
+    def _retrieve_from_long_term_and_user(
+        self, query, parsed_goal, query_embedding, top_k, memory_type
+    ):
+        """Retrieve and rerank from LongTermMemory and UserMemory"""
+        results = []
+        if memory_type in ["All", "LongTermMemory"]:
+            results += self.graph_retriever.retrieve(
                 query=query,
-                query_embedding=query_embedding[0],
-                graph_results=working_memory,
-                top_k=top_k,
                 parsed_goal=parsed_goal,
-            )
-            logger.info(
-                f"[TIMER] '{query}'PATH-A rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
-            )
-            for i, (item, score) in enumerate(ranked_memories[:2], start=1):
-                logger.info(
-                    f"[PATH-A][TOP{i}] '{query}' score={score:.4f} memory={item.memory[:80]}..."
-                )
-
-            return ranked_memories
-
-        @timed
-        def retrieve_ranked_long_term_and_user():
-            logger.info(f"[PATH-B] '{query}' Retrieving from LongTermMemory & UserMemory...")
-            long_term_items = (
-                self.graph_retriever.retrieve(
-                    query=query,
-                    query_embedding=query_embedding,
-                    parsed_goal=parsed_goal,
-                    top_k=top_k * 2,
-                    memory_scope="LongTermMemory",
-                )
-                if memory_type in ["All", "LongTermMemory"]
-                else []
-            )
-            user_items = (
-                self.graph_retriever.retrieve(
-                    query=query,
-                    query_embedding=query_embedding,
-                    parsed_goal=parsed_goal,
-                    top_k=top_k * 2,
-                    memory_scope="UserMemory",
-                )
-                if memory_type in ["All", "UserMemory"]
-                else []
-            )
-            logger.debug(
-                f"[PATH-B] '{query}'Retrieved {len(long_term_items)} LongTerm + {len(user_items)} UserMemory items."
-            )
-            rerank_start = time.perf_counter()
-            # Rerank combined results
-            ranked_memories = self.reranker.rerank(
-                query=query,
-                query_embedding=query_embedding[0],
-                graph_results=long_term_items + user_items,
+                query_embedding=query_embedding,
                 top_k=top_k * 2,
-                parsed_goal=parsed_goal,
+                memory_scope="LongTermMemory",
             )
-            logger.info(
-                f"[TIMER] '{query}' PATH-B rerank took"
-                f" {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
-            )
-            for i, (item, score) in enumerate(ranked_memories[:2], start=1):
-                logger.info(
-                    f"[PATH-B][TOP{i}] '{query}' score={score:.4f} memory={item.memory[:80]}..."
-                )
-
-            return ranked_memories
-
-        @timed
-        def retrieve_from_internet():
-            """
-            Retrieve information from the internet using Google Custom Search API.
-            """
-            logger.info(f"[PATH-C] '{query}'Retrieving from Internet...")
-            if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
-                logger.info(
-                    f"[PATH-C] '{query}' Skipped (no retriever, fast mode, "
-                    "or no internet_search flag)"
-                )
-                return []
-            if memory_type not in ["All"]:
-                return []
-            internet_items = self.internet_retriever.retrieve_from_internet(
-                query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
-            )
-
-            logger.debug(f"[PATH-C] '{query}'Retrieved {len(internet_items)} internet items.")
-            rerank_start = time.perf_counter()
-            # Convert to the format expected by reranker
-            ranked_memories = self.reranker.rerank(
+        if memory_type in ["All", "UserMemory"]:
+            results += self.graph_retriever.retrieve(
                 query=query,
-                query_embedding=query_embedding[0],
-                graph_results=internet_items,
-                top_k=min(top_k, 5),
                 parsed_goal=parsed_goal,
+                query_embedding=query_embedding,
+                top_k=top_k * 2,
+                memory_scope="UserMemory",
             )
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=results,
+            top_k=top_k * 2,
+            parsed_goal=parsed_goal,
+        )
+
+    # --- Path C
+    @timed
+    def _retrieve_from_internet(
+        self, query, parsed_goal, query_embedding, top_k, info, mode, memory_type
+    ):
+        """Retrieve and rerank from Internet source"""
+        if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
             logger.info(
-                f"[TIMER] '{query}'PATH-C rerank took {(time.perf_counter() - rerank_start) * 1000:.2f} ms"
+                f"[PATH-C] '{query}' Skipped (no retriever, fast mode, or no internet_search flag)"
             )
-            for i, (item, score) in enumerate(ranked_memories[:2], start=1):
-                logger.info(
-                    f"[PATH-C][TOP{i}] '{query}'score={score:.4f} memory={item.memory[:80]}..."
-                )
-
-            return ranked_memories
-
-        # ===== Step 3: Run retrieval in parallel =====
-        path_start = time.perf_counter()
-        if parsed_goal.internet_search:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                future_working = executor.submit(retrieve_from_working_memory)
-                future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
-                future_internet = executor.submit(retrieve_from_internet)
-
-                working_results = future_working.result()
-                hybrid_results = future_hybrid.result()
-                internet_results = future_internet.result()
-                searched_res = working_results + hybrid_results + internet_results
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                future_working = executor.submit(retrieve_from_working_memory)
-                future_hybrid = executor.submit(retrieve_ranked_long_term_and_user)
-
-                working_results = future_working.result()
-                hybrid_results = future_hybrid.result()
-                searched_res = working_results + hybrid_results
-        logger.info(
-            f"[TIMER] '{query}'Step 3 (Retrieval paths) took {(time.perf_counter() - path_start):.2f} s"
+            return []
+        if memory_type not in ["All"]:
+            return []
+        items = self.internet_retriever.retrieve_from_internet(
+            query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
         )
-        logger.info(f"[SEARCH] '{query}'Total results before deduplication: {len(searched_res)}")
-
-        # ===== Step 4: Deduplication =====
-        dedup_start = time.perf_counter()
-        deduped_result = {}
-        for item, score in searched_res:
-            mem_key = item.memory
-            if mem_key not in deduped_result or score > deduped_result[mem_key][1]:
-                deduped_result[mem_key] = (item, score)
-        logger.info(
-            f"[TIMER] '{query}'Deduplication took {(time.perf_counter() - dedup_start) * 1000:.2f} ms"
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=items,
+            top_k=min(top_k, 5),
+            parsed_goal=parsed_goal,
         )
 
-        # ===== Step 5: Sorting & trimming =====
-        sort_start = time.perf_counter()
-        searched_res = []
-        for item, score in sorted(deduped_result.values(), key=lambda pair: pair[1], reverse=True)[
-            :top_k
-        ]:
+    @timed
+    def _deduplicate_results(self, results):
+        """Deduplicate results by memory text"""
+        deduped = {}
+        for item, score in results:
+            if item.memory not in deduped or score > deduped[item.memory][1]:
+                deduped[item.memory] = (item, score)
+        return list(deduped.values())
+
+    @timed
+    def _sort_and_trim(self, results, top_k):
+        """Sort results by score and trim to top_k"""
+        sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
+        final_items = []
+        for item, score in sorted_results:
             meta_data = item.metadata.model_dump()
             if "relativity" not in meta_data:
                 meta_data["relativity"] = score
-            new_meta = SearchedTreeNodeTextualMemoryMetadata(**meta_data)
-            searched_res.append(
-                TextualMemoryItem(id=item.id, memory=item.memory, metadata=new_meta)
+            final_items.append(
+                TextualMemoryItem(
+                    id=item.id,
+                    memory=item.memory,
+                    metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                )
             )
-        logger.info(
-            f"[TIMER] '{query}'Sorting & trimming took {(time.perf_counter() - sort_start) * 1000:.2f} ms"
-        )
+        return final_items
 
-        # ===== Step 6: Update usage history =====
-        usage_start = time.perf_counter()
+    @timed
+    def _update_usage_history(self, items, info):
+        """Update usage history in graph DB"""
         now_time = datetime.now().isoformat()
-        if "chat_history" in info:
-            info.pop("chat_history")
-        usage_record = json.dumps(
-            {"time": now_time, "info": info}
-        )  # `info` should be a serializable dict or string
-        for item in searched_res:
+        info.pop("chat_history", None)
+        # `info` should be a serializable dict or string
+        usage_record = json.dumps({"time": now_time, "info": info})
+        for item in items:
             if (
                 hasattr(item, "id")
                 and hasattr(item, "metadata")
@@ -334,13 +283,3 @@ class Searcher:
             ):
                 item.metadata.usage.append(usage_record)
                 self.graph_store.update_node(item.id, {"usage": item.metadata.usage})
-        logger.info(
-            f"[TIMER] '{query}'Usage history update took {(time.perf_counter() - usage_start) * 1000:.2f} ms"
-        )
-
-        # ===== Finish =====
-        logger.info(f"[SEARCH] '{query}'✅ Final top_k results: {len(searched_res)}")
-        logger.info(
-            f"[SEARCH] '{query}'🔚 Total search took {(time.perf_counter() - overall_start):.2f} s"
-        )
-        return searched_res

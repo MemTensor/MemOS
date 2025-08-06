@@ -2,6 +2,7 @@ import json
 import threading
 import time
 import traceback
+
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import PriorityQueue
@@ -21,6 +22,7 @@ from memos.memories.textual.tree_text_memory.organize.relation_reason_detector i
     RelationAndReasoningDetector,
 )
 from memos.templates.tree_reorganize_prompts import LOCAL_SUBCLUSTER_PROMPT, REORGANIZE_PROMPT
+
 
 logger = get_logger(__name__)
 
@@ -524,7 +526,7 @@ class GraphStructureReorganizer:
         for i, node in enumerate(message.after_node or []):
             if not isinstance(node, str):
                 continue
-            raw_node = self.graph_store.get_node(node)
+            raw_node = self.graph_store.get_node(node, include_embedding=True)
             if raw_node is None:
                 logger.debug(f"Node with ID {node} not found in the graph store.")
                 message.after_node[i] = None
