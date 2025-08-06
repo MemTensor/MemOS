@@ -108,8 +108,6 @@ def log_custom_request(message: str):
 
     trace_id = get_current_trace_id()
 
-    print(f"trace_id: {trace_id}")
-
     headers = {
         "Content-Type": "application/json",
     }
