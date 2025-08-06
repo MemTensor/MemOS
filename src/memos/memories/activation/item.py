@@ -23,7 +23,7 @@ class KVCacheRecords(BaseModel):
         description="Single string combining all text_memories using assembly template",
     )
     timestamp: datetime = Field(
-        default_factory=datetime.now, description="submit time for schedule_messages"
+        default_factory=datetime.utcnow, description="submit time for schedule_messages"
     )
 
 

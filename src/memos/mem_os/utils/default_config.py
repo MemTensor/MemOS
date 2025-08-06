@@ -112,7 +112,7 @@ def get_default_config(
                 "thread_pool_max_workers": kwargs.get("scheduler_thread_pool_max_workers", 10),
                 "consume_interval_seconds": kwargs.get("scheduler_consume_interval_seconds", 3),
                 "enable_parallel_dispatch": kwargs.get("scheduler_enable_parallel_dispatch", True),
-                "enable_act_memory_update": True,
+                "enable_activation_memory": True,
             },
         }
 
