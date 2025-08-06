@@ -49,7 +49,10 @@ class CustomLoggerRequestHandler(logging.Handler):
         """Initialize handler with minimal setup"""
         if not self._initialized:
             super().__init__()
-            self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="log_sender")
+            workers = int(os.getenv("CUSTOM_LOGGER_WORKERS", "2"))
+            self._executor = ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="log_sender"
+            )
             self._is_shutting_down = threading.Event()
             self._session = requests.Session()
             self._initialized = True
@@ -60,32 +63,31 @@ class CustomLoggerRequestHandler(logging.Handler):
         if os.getenv("CUSTOM_LOGGER_URL") is None or self._is_shutting_down.is_set():
             return
 
-        if record.levelno == logging.INFO or record.levelno == logging.ERROR:
+        if record.levelno in (logging.INFO, logging.ERROR):
             try:
                 trace_id = get_current_trace_id()
-                self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
+                if trace_id:
+                    self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
             except Exception as e:
                 if not self._is_shutting_down.is_set():
                     print(f"Error sending log: {e}")
 
-    def _send_log_sync(self, message, trace_id=None):
+    def _send_log_sync(self, message, trace_id):
         """Send log message synchronously in a separate thread"""
-
+        print(f"send_log_sync: {message} {trace_id}")
         try:
             logger_url = os.getenv("CUSTOM_LOGGER_URL")
             token = os.getenv("CUSTOM_LOGGER_TOKEN")
 
             headers = {"Content-Type": "application/json"}
-            post_content = {"message": message}
+            post_content = {"message": message, "trace_id": trace_id}
 
             # Add auth token if exists
             if token:
                 headers["Authorization"] = f"Bearer {token}"
 
-            # Use the trace_id passed from emit method
-            if trace_id:
-                headers["traceId"] = trace_id
-                post_content["trace_id"] = trace_id
+            # Add traceId to headers for consistency
+            headers["traceId"] = trace_id
 
             # Add custom attributes from env
             for key, value in os.environ.items():
@@ -105,7 +107,7 @@ class CustomLoggerRequestHandler(logging.Handler):
 
         self._is_shutting_down.set()
         try:
-            self._executor.shutdown(wait=True)
+            self._executor.shutdown(wait=False)
             self._session.close()
         except Exception as e:
             print(f"Error during cleanup: {e}")

@@ -69,6 +69,14 @@ def get_mos_product_instance():
 get_mos_product_instance()
 
 
+@router.get("/test_log", summary="Test log", response_model=SimpleResponse)
+def test_log():
+    """Test logging functionality."""
+    logger.info("test_log")
+
+    return SimpleResponse(message="Log test successful")
+
+
 @router.post("/configure", summary="Configure MOSProduct", response_model=SimpleResponse)
 def set_config(config):
     """Set MOSProduct configuration."""
