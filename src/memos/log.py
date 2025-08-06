@@ -48,7 +48,6 @@ class CustomLoggerRequestHandler(logging.Handler):
     def __init__(self):
         """Initialize handler with minimal setup"""
         if not self._initialized:
-            print("CustomLoggerRequestHandler __init__")
             super().__init__()
             self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="log_sender")
             self._is_shutting_down = threading.Event()
@@ -64,7 +63,6 @@ class CustomLoggerRequestHandler(logging.Handler):
         if record.levelno == logging.INFO or record.levelno == logging.ERROR:
             try:
                 trace_id = get_current_trace_id()
-                print(f"trace_id from emit: {trace_id}")
                 self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
             except Exception as e:
                 if not self._is_shutting_down.is_set():
