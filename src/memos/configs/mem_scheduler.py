@@ -21,8 +21,6 @@ class BaseSchedulerConfig(BaseConfig):
     top_k: int = Field(
         default=10, description="Number of top candidates to consider in initial retrieval"
     )
-    # TODO: The 'top_n' field is deprecated and will be removed in future versions.
-    top_n: int = Field(default=5, description="Number of final results to return after processing")
     enable_parallel_dispatch: bool = Field(
         default=True, description="Whether to enable parallel message processing using thread pool"
     )
@@ -55,8 +53,14 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=DEFAULT_ACT_MEM_DUMP_PATH,  # Replace with DEFAULT_ACT_MEM_DUMP_PATH
         description="File path for dumping activation memory",
     )
-    enable_act_memory_update: bool = Field(
+    enable_activation_memory: bool = Field(
         default=False, description="Whether to enable automatic activation memory updates"
+    )
+    working_mem_monitor_capacity: int = Field(
+        default=30, description="Capacity of the working memory monitor"
+    )
+    activation_mem_monitor_capacity: int = Field(
+        default=20, description="Capacity of the activation memory monitor"
     )
 
 
@@ -137,29 +141,46 @@ class AuthConfig(BaseConfig, DictConversionMixin):
     )
 
     @classmethod
-    def from_local_yaml(cls, config_path: str | None = None) -> "AuthConfig":
+    def from_local_config(cls, config_path: str | Path | None = None) -> "AuthConfig":
         """
-        Load configuration from YAML file
+        Load configuration from either a YAML or JSON file based on file extension.
+
+        Automatically detects file type (YAML or JSON) from the file extension
+        and uses the appropriate parser. If no path is provided, uses the default
+        configuration path (YAML) or its JSON counterpart.
 
         Args:
-            config_path: Path to YAML configuration file
+            config_path: Optional path to configuration file.
+                         If not provided, uses default configuration path.
 
         Returns:
-            AuthConfig instance
+            AuthConfig instance populated with data from the configuration file.
 
         Raises:
-            FileNotFoundError: If config file doesn't exist
-            ValueError: If YAML parsing or validation fails
+            FileNotFoundError: If the specified or default configuration file does not exist.
+            ValueError: If file extension is not .yaml/.yml or .json, or if parsing fails.
         """
-
+        # Determine config path
         if config_path is None:
             config_path = cls.default_config_path
 
-        # Check file exists
-        if not Path(config_path).exists():
-            raise FileNotFoundError(f"Config file not found: {config_path}")
+        # Validate file existence
+        config_path_obj = Path(config_path)
+        if not config_path_obj.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
 
-        return cls.from_yaml_file(yaml_path=config_path)
+        # Get file extension and determine parser
+        file_ext = config_path_obj.suffix.lower()
+
+        if file_ext in (".yaml", ".yml"):
+            return cls.from_yaml_file(yaml_path=str(config_path_obj))
+        elif file_ext == ".json":
+            return cls.from_json_file(json_path=str(config_path_obj))
+        else:
+            raise ValueError(
+                f"Unsupported file format: {file_ext}. "
+                "Please use YAML (.yaml, .yml) or JSON (.json) files."
+            )
 
     def set_openai_config_to_environment(self):
         # Set environment variables

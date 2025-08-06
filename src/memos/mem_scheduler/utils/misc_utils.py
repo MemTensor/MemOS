@@ -1,4 +1,5 @@
 import json
+import re
 
 from functools import wraps
 from pathlib import Path
@@ -12,12 +13,52 @@ logger = get_logger(__name__)
 
 
 def extract_json_dict(text: str):
+    """
+    Safely extracts JSON from LLM response text with robust error handling.
+
+    Args:
+        text: Raw text response from LLM that may contain JSON
+
+    Returns:
+        Parsed JSON data (dict or list)
+
+    Raises:
+        ValueError: If no valid JSON can be extracted
+    """
+    if not text:
+        raise ValueError("Empty input text")
+
+    # Normalize the text
     text = text.strip()
+
+    # Remove common code block markers
     patterns_to_remove = ["json```", "```python", "```json", "latex```", "```latex", "```"]
     for pattern in patterns_to_remove:
         text = text.replace(pattern, "")
-    res = json.loads(text.strip())
-    return res
+
+    # Try: direct JSON parse first
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON from text: {text}. Error: {e!s}", exc_info=True)
+
+    # Fallback 1: Extract JSON using regex
+    json_pattern = r"\{[\s\S]*\}|\[[\s\S]*\]"
+    matches = re.findall(json_pattern, text)
+    if matches:
+        try:
+            return json.loads(matches[0])
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from text: {text}. Error: {e!s}", exc_info=True)
+
+    # Fallback 2: Handle malformed JSON (common LLM issues)
+    try:
+        # Try adding missing quotes around keys
+        text = re.sub(r"([\{\s,])(\w+)(:)", r'\1"\2"\3', text)
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON from text: {text}. Error: {e!s}", exc_info=True)
+        raise ValueError(text) from e
 
 
 def parse_yaml(yaml_file: str | Path):

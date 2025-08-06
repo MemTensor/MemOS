@@ -491,7 +491,7 @@ class MOSProduct(MOSCore):
                 mem_cube=self.mem_cubes[mem_cube_id],
                 label=label,
                 content=query,
-                timestamp=datetime.now(),
+                timestamp=datetime.now().isoformat(),
             )
             self.mem_scheduler.submit_messages(messages=[message_item])
 
