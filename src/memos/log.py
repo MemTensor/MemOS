@@ -65,7 +65,9 @@ class CustomLoggerRequestHandler(logging.Handler):
 
         if record.levelno in (logging.INFO, logging.ERROR):
             try:
-                trace_id = get_current_trace_id()
+                trace_id = (
+                    get_current_trace_id()
+                )  # TODO: get trace_id from request context instead of get_current_trace_id
                 if trace_id:
                     self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
             except Exception as e:
@@ -146,14 +148,10 @@ LOGGING_CONFIG = {
             "backupCount": 10,
             "formatter": "standard",
         },
-        "customRequest": {
-            "level": "INFO",
-            "class": "memos.log.CustomLoggerRequestHandler",
-        },
     },
     "root": {  # Root logger handles all logs
         "level": logging.DEBUG if settings.DEBUG else logging.INFO,
-        "handlers": ["console", "file", "customRequest"],
+        "handlers": ["console", "file"],
     },
     "loggers": {
         "memos": {
