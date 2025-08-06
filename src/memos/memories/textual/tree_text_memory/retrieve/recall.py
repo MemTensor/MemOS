@@ -44,16 +44,23 @@ class GraphMemoryRetriever:
 
         if memory_scope == "WorkingMemory":
             # For working memory, retrieve all entries (no filtering)
-            working_memories = self.graph_store.get_all_memory_items(scope="WorkingMemory")
+            working_memories = self.graph_store.get_all_memory_items(
+                scope="WorkingMemory", include_embedding=True
+            )
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
-        # Step 1: Structured graph-based retrieval
-        graph_results = self._graph_recall(parsed_goal, memory_scope)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # Structured graph-based retrieval
+            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope)
+            # Vector similarity search
+            future_vector = executor.submit(
+                self._vector_recall, query_embedding, memory_scope, top_k
+            )
 
-        # Step 2: Vector similarity search
-        vector_results = self._vector_recall(query_embedding, memory_scope, top_k)
+            graph_results = future_graph.result()
+            vector_results = future_vector.result()
 
-        # Step 3: Merge and deduplicate results
+        # Merge and deduplicate by ID
         combined = {item.id: item for item in graph_results + vector_results}
 
         graph_ids = {item.id for item in graph_results}
@@ -101,7 +108,7 @@ class GraphMemoryRetriever:
             return []
 
         # Load nodes and post-filter
-        node_dicts = self.graph_store.get_nodes(list(candidate_ids))
+        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=True)
 
         final_nodes = []
         for node in node_dicts:
@@ -152,6 +159,6 @@ class GraphMemoryRetriever:
 
         # Step 3: Extract matched IDs and retrieve full nodes
         unique_ids = set({r["id"] for r in all_matches})
-        node_dicts = self.graph_store.get_nodes(list(unique_ids))
+        node_dicts = self.graph_store.get_nodes(list(unique_ids), include_embedding=True)
 
         return [TextualMemoryItem.from_dict(record) for record in node_dicts]

@@ -70,13 +70,25 @@ class BaseGraphDB(ABC):
 
     # Graph Query & Reasoning
     @abstractmethod
-    def get_node(self, id: str) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
         """
         Retrieve the metadata and content of a node.
         Args:
             id: Node identifier.
+            include_embedding: with/without embedding
         Returns:
             Dictionary of node fields, or None if not found.
+        """
+
+    @abstractmethod
+    def get_nodes(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
+        """
+        Retrieve the metadata and memory of a list of nodes.
+        Args:
+            ids: List of Node identifier.
+            include_embedding: with/without embedding
+        Returns:
+        list[dict]: Parsed node records containing 'id', 'memory', and 'metadata'.
         """
 
     @abstractmethod
@@ -163,7 +175,9 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+    def get_structure_optimization_candidates(
+        self, scope: str, include_embedding: bool = False
+    ) -> list[dict]:
         """
         Find nodes that are likely candidates for structure optimization:
         - Isolated nodes, nodes with empty background, or nodes with exactly one child.
@@ -205,7 +219,7 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def export_graph(self) -> dict[str, Any]:
+    def export_graph(self, include_embedding: bool = False) -> dict[str, Any]:
         """
         Export the entire graph as a serializable dictionary.
 
@@ -220,4 +234,17 @@ class BaseGraphDB(ABC):
 
         Args:
             data: A dictionary containing all nodes and edges to be loaded.
+        """
+
+    @abstractmethod
+    def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> list[dict]:
+        """
+        Retrieve all memory items of a specific memory_type.
+
+        Args:
+            scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
+            include_embedding: with/without embedding
+
+        Returns:
+            list[dict]: Full list of memory items under this scope.
         """

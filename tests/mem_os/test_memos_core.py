@@ -183,7 +183,9 @@ class TestMOSInitialization:
         # Assertions
         assert mos.config == config
         assert mos.user_id == "test_user"
-        assert mos.mem_cubes == {}
+        # Test mem_cubes is empty (compatible with both dict and ThreadSafeDict)
+        assert len(mos.mem_cubes) == 0
+        assert not mos.mem_cubes  # Empty check that works for both types
         assert mos.chat_llm == mock_llm
         assert mos.mem_reader == mock_mem_reader
         mock_user_manager.validate_user.assert_called_once_with("test_user")
