@@ -323,14 +323,19 @@ class Neo4jGraphDB(BaseGraphDB):
             return result.single() is not None
 
     # Graph Query & Reasoning
-    def get_node(self, id: str) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = True) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a node.
         Args:
             id: Node identifier.
+            include_embedding (bool): Whether to include the large embedding field.
         Returns:
             Dictionary of node fields, or None if not found.
         """
+        logger.warning(
+            "[Neo4jGraphDB.get_node] `include_embedding=False` is not supported in Neo4j. Ignoring this flag."
+        )
+
         where_user = ""
         params = {"id": id}
         if not self.config.use_multi_db and self.config.user_name:
@@ -343,11 +348,12 @@ class Neo4jGraphDB(BaseGraphDB):
             record = session.run(query, params).single()
             return self._parse_node(dict(record["n"])) if record else None
 
-    def get_nodes(self, ids: list[str]) -> list[dict[str, Any]]:
+    def get_nodes(self, ids: list[str], include_embedding: bool = True) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
             ids: List of Node identifier.
+            include_embedding (bool): Whether to include the large embedding field.
         Returns:
         list[dict]: Parsed node records containing 'id', 'memory', and 'metadata'.
 
@@ -355,6 +361,10 @@ class Neo4jGraphDB(BaseGraphDB):
             - Assumes all provided IDs are valid and exist.
             - Returns empty list if input is empty.
         """
+        logger.warning(
+            "[Neo4jGraphDB.get_node] `include_embedding=False` is not supported in Neo4j. Ignoring this flag."
+        )
+
         if not ids:
             return []
 
@@ -829,7 +839,7 @@ class Neo4jGraphDB(BaseGraphDB):
             logger.error(f"[ERROR] Failed to clear database '{self.db_name}': {e}")
             raise
 
-    def export_graph(self) -> dict[str, Any]:
+    def export_graph(self, include_embedding: bool = True) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
 
@@ -839,6 +849,9 @@ class Neo4jGraphDB(BaseGraphDB):
                 "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
             }
         """
+        logger.warning(
+            "[Neo4jGraphDB.get_node] `include_embedding=False` is not supported in Neo4j. Ignoring this flag."
+        )
         with self.driver.session(database=self.db_name) as session:
             # Export nodes
             node_query = "MATCH (n:Memory)"
@@ -910,16 +923,22 @@ class Neo4jGraphDB(BaseGraphDB):
                     target_id=edge["target"],
                 )
 
-    def get_all_memory_items(self, scope: str) -> list[dict]:
+    def get_all_memory_items(self, scope: str, include_embedding: bool = True) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
+            include_embedding (bool): Whether to include the large embedding field.
+        Returns:
 
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
+        if include_embedding:
+            logger.warning(
+                "[Neo4jGraphDB.get_node] `include_embedding=True` is not supported in Neo4j. Ignoring this flag."
+            )
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
@@ -940,12 +959,18 @@ class Neo4jGraphDB(BaseGraphDB):
             results = session.run(query, params)
             return [self._parse_node(dict(record["n"])) for record in results]
 
-    def get_structure_optimization_candidates(self, scope: str) -> list[dict]:
+    def get_structure_optimization_candidates(
+        self, scope: str, include_embedding: bool = True
+    ) -> list[dict]:
         """
         Find nodes that are likely candidates for structure optimization:
         - Isolated nodes, nodes with empty background, or nodes with exactly one child.
         - Plus: the child of any parent node that has exactly one child.
         """
+        logger.warning(
+            "[Neo4jGraphDB.get_node] `include_embedding=True` is not supported in Neo4j. Ignoring this flag."
+        )
+
         where_clause = """
                 WHERE n.memory_type = $scope
                   AND n.status = 'activated'

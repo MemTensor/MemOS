@@ -1,7 +1,8 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from memos.api.context.dependencies import get_g_object
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.routers.product_router import router as product_router
 
@@ -14,6 +15,7 @@ app = FastAPI(
     title="MemOS Product REST APIs",
     description="A REST API for managing multiple users with MemOS Product.",
     version="1.0.0",
+    dependencies=[Depends(get_g_object)],
 )
 
 # Include routers

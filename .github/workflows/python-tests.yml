@@ -41,7 +41,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install poetry
-      run: pipx install poetry
+      # This is a temporary fix to ensure compatibility with Poetry & virtualenv
+      # Revert to the original installation method once the poetry==2.1.4 is released
+      run: |
+        echo "virtualenv==20.32.0" > constraints.txt
+        pipx install poetry==2.1.3 --pip-args="--constraint=constraints.txt"
+        rm constraints.txt
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
