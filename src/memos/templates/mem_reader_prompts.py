@@ -2,6 +2,8 @@ SIMPLE_STRUCT_MEM_READER_PROMPT = """You are a memory extraction expert.
 Your task is to extract memories from the perspective of user, based on a conversation between user and assistant. This means identifying what user would plausibly remember — including their own experiences, thoughts, plans, or relevant statements and actions made by others (such as assistant) that impacted or were acknowledged by user.
 Please perform:
 1. Identify information that reflects user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful input from assistant that user acknowledged or responded to.
+If the message is from the user, extract user-relevant memories; if it is from the assistant, only extract factual memories that the user acknowledged or responded to.
+
 2. Resolve all time, person, and event references clearly:
    - Convert relative time expressions (e.g., “yesterday,” “next Friday”) into absolute dates using the message timestamp if possible.
    - Clearly distinguish between event time and message time.
