@@ -266,7 +266,7 @@ class APIConfig:
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"
                 ).lower()
                 == "true",
-                "enable_act_memory_update": True,
+                "enable_activation_memory": True,
             },
         }
 

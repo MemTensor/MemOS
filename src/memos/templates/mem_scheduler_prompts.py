@@ -86,10 +86,18 @@ Reorganize the provided memory evidence list by:
 - Queries: Recent user questions/requests (list)
 - Current Order: Existing memory sequence (list of strings with indices)
 
-## Output Requirements
-Return a JSON object with:
-- "new_order": The reordered indices (array of integers)
-- "reasoning": Brief explanation of your ranking logic (1-2 sentences)
+## Output Format Requirements
+You MUST output a valid JSON object with EXACTLY the following structure:
+{{
+  "new_order": [array_of_integers],
+  "reasoning": "string_explanation"
+}}
+
+## Important Notes:
+- Only output the JSON object, nothing else
+- Do not include any markdown formatting or code block notation
+- Ensure all brackets and quotes are properly closed
+- The output must be parseable by a JSON parser
 
 ## Processing Guidelines
 1. Prioritize evidence that:

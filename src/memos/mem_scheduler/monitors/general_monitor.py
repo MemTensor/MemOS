@@ -42,8 +42,12 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
 
         # Partial Retention Strategy
         self.partial_retention_number = 2
-        self.working_mem_monitor_capacity = DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT
-        self.activation_mem_monitor_capacity = DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT
+        self.working_mem_monitor_capacity = self.config.get(
+            "working_mem_monitor_capacity", DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT
+        )
+        self.activation_mem_monitor_capacity = self.config.get(
+            "activation_mem_monitor_capacity", DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT
+        )
 
         # attributes
         # recording query_messages
