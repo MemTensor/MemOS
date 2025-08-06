@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 
-from memos.api.context.dependencies import get_g_object
 from memos.api.exceptions import APIExceptionHandler
+from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.product_router import router as product_router
 
 
@@ -15,8 +15,10 @@ app = FastAPI(
     title="MemOS Product REST APIs",
     description="A REST API for managing multiple users with MemOS Product.",
     version="1.0.0",
-    dependencies=[Depends(get_g_object)],
 )
+
+# Add request context middleware (must be added first)
+app.add_middleware(RequestContextMiddleware)
 
 # Include routers
 app.include_router(product_router)

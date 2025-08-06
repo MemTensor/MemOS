@@ -1,12 +1,14 @@
+import atexit
 import logging
 import os
+import threading
 
-from contextlib import suppress
+from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
 
-import httpx
+import requests
 
 from dotenv import load_dotenv
 
@@ -32,66 +34,86 @@ def _setup_logfile() -> Path:
 
 
 class CustomLoggerRequestHandler(logging.Handler):
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
-        """Initialize handler with a persistent HTTP client"""
-        super().__init__()
-        self.client = httpx.Client()
+        """Initialize handler with minimal setup"""
+        if not self._initialized:
+            print("CustomLoggerRequestHandler __init__")
+            super().__init__()
+            self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="log_sender")
+            self._is_shutting_down = threading.Event()
+            self._session = requests.Session()
+            self._initialized = True
+            atexit.register(self._cleanup)
 
     def emit(self, record):
-        """Process log records of INFO or ERROR level"""
-        if os.getenv("CUSTOM_LOGGER_URL") is None:
+        """Process log records of INFO or ERROR level (non-blocking)"""
+        if os.getenv("CUSTOM_LOGGER_URL") is None or self._is_shutting_down.is_set():
             return
 
         if record.levelno == logging.INFO or record.levelno == logging.ERROR:
-            with suppress(Exception):
-                self._send_log(record.getMessage())
+            try:
+                trace_id = get_current_trace_id()
+                print(f"trace_id from emit: {trace_id}")
+                self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
+            except Exception as e:
+                if not self._is_shutting_down.is_set():
+                    print(f"Error sending log: {e}")
 
-    def _send_log(self, message):
-        """Send log message using fire-and-forget pattern"""
-        logger_url = os.getenv("CUSTOM_LOGGER_URL")
-        token = os.getenv("CUSTOM_LOGGER_TOKEN")
+    def _send_log_sync(self, message, trace_id=None):
+        """Send log message synchronously in a separate thread"""
 
-        headers = {
-            "Content-Type": "application/json",
-        }
-        post_content = {
-            "message": message,
-        }
+        try:
+            logger_url = os.getenv("CUSTOM_LOGGER_URL")
+            token = os.getenv("CUSTOM_LOGGER_TOKEN")
 
-        # Add auth token if exists
-        if token is not None:
-            headers["Authorization"] = token
+            headers = {"Content-Type": "application/json"}
+            post_content = {"message": message}
 
-        # Add trace ID for tracking
-        trace_id = get_current_trace_id()
-        print(f"trace_id: {trace_id}")
-        if trace_id is not None:
-            headers["traceId"] = trace_id
-            post_content["trace_id"] = trace_id
+            # Add auth token if exists
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
 
-        # Add custom attributes from env
-        for key, value in os.environ.items():
-            if key.startswith("CUSTOM_LOGGER_ATTRIBUTE_"):
-                attribute_key = key[len("CUSTOM_LOGGER_ATTRIBUTE_") :].lower()
-                post_content[attribute_key] = value
+            # Use the trace_id passed from emit method
+            if trace_id:
+                headers["traceId"] = trace_id
+                post_content["trace_id"] = trace_id
 
-        print(f"post_content: {post_content}")
-        print(f"headers: {headers}")
+            # Add custom attributes from env
+            for key, value in os.environ.items():
+                if key.startswith("CUSTOM_LOGGER_ATTRIBUTE_"):
+                    attribute_key = key[len("CUSTOM_LOGGER_ATTRIBUTE_") :].lower()
+                    post_content[attribute_key] = value
 
-        # Fire request without waiting
-        self.client.post(
-            url=logger_url, headers=headers, json=post_content, timeout=5, stream=False
-        )
+            self._session.post(logger_url, headers=headers, json=post_content, timeout=5)
+        except Exception:
+            # Silently ignore errors to avoid affecting main application
+            pass
+
+    def _cleanup(self):
+        """Clean up resources during program exit"""
+        if not self._initialized:
+            return
+
+        self._is_shutting_down.set()
+        try:
+            self._executor.shutdown(wait=True)
+            self._session.close()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
     def close(self):
-        """Clean up HTTP client resources"""
-        try:
-            if hasattr(self, "client") and self.client:
-                self.client.close()
-        except Exception:
-            pass
-        finally:
-            super().close()
+        """Override close to prevent premature shutdown"""
 
 
 LOGGING_CONFIG = {
