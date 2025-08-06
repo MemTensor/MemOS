@@ -11,65 +11,15 @@
         "summary": "Configure MemOS",
         "description": "Set MemOS configuration.",
         "operationId": "set_config_configure_post",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/MOSConfig"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -96,69 +46,36 @@
       }
     },
     "/users": {
+      "get": {
+        "summary": "List all users",
+        "description": "List all active users.",
+        "operationId": "list_users_users_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Create a new user",
         "description": "Create a new user.",
         "operationId": "create_user_users_post",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/UserCreate"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -182,83 +99,6 @@
             }
           }
         }
-      },
-      "get": {
-        "summary": "List all users",
-        "description": "List all active users.",
-        "operationId": "list_users_users_get",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserListResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/users/me": {
@@ -266,56 +106,6 @@
         "summary": "Get current user info",
         "description": "Get current user information including accessible cubes.",
         "operationId": "get_user_info_users_me_get",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -323,16 +113,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -345,65 +125,15 @@
         "summary": "Register a MemCube",
         "description": "Register a new MemCube.",
         "operationId": "register_mem_cube_mem_cubes_post",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/MemCubeRegister"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -459,54 +189,6 @@
               ],
               "title": "User Id"
             }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
           }
         ],
         "responses": {
@@ -546,54 +228,6 @@
             "schema": {
               "type": "string",
               "title": "Cube Id"
-            }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
             }
           }
         ],
@@ -636,56 +270,6 @@
         "summary": "Create memories",
         "description": "Store new memories in a MemCube.",
         "operationId": "add_memory_memories_post",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -755,54 +339,6 @@
               ],
               "title": "User Id"
             }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
           }
         ],
         "responses": {
@@ -868,54 +404,6 @@
               ],
               "title": "User Id"
             }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
           }
         ],
         "responses": {
@@ -978,54 +466,6 @@
                 }
               ],
               "title": "User Id"
-            }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
             }
           }
         ],
@@ -1102,54 +542,6 @@
               ],
               "title": "User Id"
             }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
           }
         ],
         "responses": {
@@ -1181,65 +573,15 @@
         "summary": "Search memories",
         "description": "Search for memories across MemCubes.",
         "operationId": "search_memories_search_post",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SearchRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -1295,54 +637,6 @@
               ],
               "title": "User Id"
             }
-          },
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
           }
         ],
         "responses": {
@@ -1374,65 +668,15 @@
         "summary": "Chat with MemOS",
         "description": "Chat with the MemOS system.",
         "operationId": "chat_chat_post",
-        "parameters": [
-          {
-            "name": "trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Trace-Id"
-            }
-          },
-          {
-            "name": "x-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Trace-Id"
-            }
-          },
-          {
-            "name": "g-trace-id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "G-Trace-Id"
-            }
-          }
-        ],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ChatRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -1640,7 +884,7 @@
             "type": "string",
             "title": "Session Id",
             "description": "Session ID for the MOS. This is used to distinguish between different dialogue",
-            "default": "f1b53935-054c-4a3b-8189-3655e350a6ad"
+            "default": "0ce84b9c-0615-4b9d-83dd-fba50537d5d3"
           },
           "chat_model": {
             "$ref": "#/components/schemas/LLMConfigFactory",
