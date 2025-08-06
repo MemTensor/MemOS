@@ -15,6 +15,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
+from memos.mem_scheduler.utils.filter_utils import is_all_chinese, is_all_english
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 
@@ -141,6 +142,24 @@ class GeneralScheduler(BaseScheduler):
                     query_keywords = self.monitor.extract_query_keywords(query=query)
                     logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
 
+                    if len(query_keywords) == 0:
+                        stripped_query = query.strip()
+                        # Determine measurement method based on language
+                        if is_all_english(stripped_query):
+                            words = stripped_query.split()  # Word count for English
+                        elif is_all_chinese(stripped_query):
+                            words = stripped_query  # Character count for Chinese
+                        else:
+                            logger.debug(
+                                f"Mixed-language memory, using character count: {stripped_query[:50]}..."
+                            )
+                            words = stripped_query  # Default to character count
+
+                        query_keywords = list(set(words[:20]))
+                        logger.error(
+                            f"Keyword extraction failed for query. Using fallback keywords: {query_keywords[:10]}... (truncated)"
+                        )
+
                     item = QueryMonitorItem(
                         query_text=query,
                         keywords=query_keywords,
@@ -177,6 +196,20 @@ class GeneralScheduler(BaseScheduler):
                 )
                 logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
 
+                # update activation memories
+                logger.info(
+                    f"Activation memory update {'enabled' if self.enable_activation_memory else 'disabled'} "
+                    f"(interval: {self.monitor.act_mem_update_interval}s)"
+                )
+                if self.enable_activation_memory:
+                    self.update_activation_memory_periodically(
+                        interval_seconds=self.monitor.act_mem_update_interval,
+                        label=QUERY_LABEL,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=messages[0].mem_cube,
+                    )
+
     def _answer_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
         Process and handle answer trigger messages from the queue.
@@ -198,16 +231,6 @@ class GeneralScheduler(BaseScheduler):
 
                 # for status update
                 self._set_current_context_from_message(msg=messages[0])
-
-                # update activation memories
-                if self.enable_act_memory_update:
-                    self.update_activation_memory_periodically(
-                        interval_seconds=self.monitor.act_mem_update_interval,
-                        label=ANSWER_LABEL,
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=messages[0].mem_cube,
-                    )
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
@@ -251,15 +274,6 @@ class GeneralScheduler(BaseScheduler):
                                 log_func_callback=self._submit_web_logs,
                             )
 
-                    # update activation memories
-                    if self.enable_act_memory_update:
-                        self.update_activation_memory_periodically(
-                            interval_seconds=self.monitor.act_mem_update_interval,
-                            label=ADD_LABEL,
-                            user_id=user_id,
-                            mem_cube_id=mem_cube_id,
-                            mem_cube=messages[0].mem_cube,
-                        )
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
 
