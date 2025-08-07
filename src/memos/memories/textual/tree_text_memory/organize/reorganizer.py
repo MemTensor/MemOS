@@ -242,7 +242,7 @@ class GraphStructureReorganizer:
                     except Exception as e:
                         logger.warning(
                             f"[Reorganize] Cluster processing "
-                            f"failed: {e}, trace: {traceback.format_exc()}"
+                            f"failed: {e}, cluster_nodes: {cluster_nodes}, trace: {traceback.format_exc()}"
                         )
                 logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
@@ -333,7 +333,9 @@ class GraphStructureReorganizer:
 
             logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
-    def _local_subcluster(self, cluster_nodes: list[GraphDBNode]) -> list[list[GraphDBNode]]:
+    def _local_subcluster(
+        self, cluster_nodes: list[GraphDBNode], max_length: int = 8000
+    ) -> (list)[list[GraphDBNode]]:
         """
         Use LLM to split a large cluster into semantically coherent sub-clusters.
         """
@@ -347,7 +349,9 @@ class GraphStructureReorganizer:
             scene_lines.append(line)
 
         joined_scene = "\n".join(scene_lines)
-        prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene)
+        if len(joined_scene) > max_length:
+            logger.warning(f"Sub-cluster too long: {joined_scene}")
+        prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene[:max_length])
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
