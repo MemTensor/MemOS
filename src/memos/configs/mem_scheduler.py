@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
-from memos.mem_scheduler.general_modules.misc import DictConversionMixin
+from memos.mem_scheduler.general_modules.misc import DictConversionMixin, EnvConfigMixin
 from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
@@ -94,6 +94,8 @@ class SchedulerConfigFactory(BaseConfig):
 # ************************* Auth *************************
 class RabbitMQConfig(
     BaseConfig,
+    DictConversionMixin,
+    EnvConfigMixin,
 ):
     host_name: str = Field(default="", description="Endpoint for RabbitMQ instance access")
     user_name: str = Field(default="", description="Static username for RabbitMQ instance")
@@ -109,8 +111,12 @@ class RabbitMQConfig(
         le=65535,  # Port must be <= 65535
     )
 
+    @classmethod
+    def get_env_prefix(cls) -> str:
+        return "RABBITMQ_"
 
-class GraphDBAuthConfig(BaseConfig):
+
+class GraphDBAuthConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     uri: str = Field(
         default="bolt://localhost:7687",
         description="URI for graph database access (e.g., bolt://host:port)",
@@ -126,8 +132,12 @@ class GraphDBAuthConfig(BaseConfig):
         default=True, description="Whether to automatically create the database if it doesn't exist"
     )
 
+    @classmethod
+    def get_env_prefix(cls) -> str:
+        return "GRAPH_DB_"
 
-class OpenAIConfig(BaseConfig):
+
+class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     api_key: str = Field(default="", description="API key for OpenAI service")
     base_url: str = Field(default="", description="Base URL for API endpoint")
     default_model: str = Field(default="", description="Default model to use")
@@ -182,6 +192,25 @@ class AuthConfig(BaseConfig, DictConversionMixin):
                 f"Unsupported file format: {file_ext}. "
                 "Please use YAML (.yaml, .yml) or JSON (.json) files."
             )
+
+    @classmethod
+    def from_local_env(cls) -> "AuthConfig":
+        """Creates an AuthConfig instance by loading configuration from environment variables.
+
+        This method loads configuration for all nested components (RabbitMQ, OpenAI, GraphDB)
+        from their respective environment variables using each component's specific prefix.
+
+        Returns:
+            AuthConfig: Configured instance with values from environment variables
+
+        Raises:
+            ValueError: If any required environment variables are missing
+        """
+        return cls(
+            rabbitmq=RabbitMQConfig.from_env(),
+            openai=OpenAIConfig.from_env(),
+            graph_db=GraphDBAuthConfig.from_env(),
+        )
 
     def set_openai_config_to_environment(self):
         # Set environment variables
