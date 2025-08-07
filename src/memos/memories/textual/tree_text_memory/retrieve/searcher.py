@@ -223,9 +223,7 @@ class Searcher:
     ):
         """Retrieve and rerank from Internet source"""
         if not self.internet_retriever or mode == "fast":
-            logger.info(
-                f"[PATH-C] '{query}' Skipped (no retriever, fast mode, or no internet_search flag)"
-            )
+            logger.info(f"[PATH-C] '{query}' Skipped (no retriever, fast mode)")
             return []
         if memory_type not in ["All"]:
             return []
