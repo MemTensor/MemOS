@@ -242,7 +242,7 @@ class GraphStructureReorganizer:
                     except Exception as e:
                         logger.warning(
                             f"[Reorganize] Cluster processing "
-                            f"failed: {e}, trace: {traceback.format_exc()}"
+                            f"failed: {e}, cluster_nodes: {cluster_nodes}, trace: {traceback.format_exc()}"
                         )
                 logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
@@ -333,7 +333,9 @@ class GraphStructureReorganizer:
 
             logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
-    def _local_subcluster(self, cluster_nodes: list[GraphDBNode]) -> list[list[GraphDBNode]]:
+    def _local_subcluster(
+        self, cluster_nodes: list[GraphDBNode], max_length: int = 8000
+    ) -> (list)[list[GraphDBNode]]:
         """
         Use LLM to split a large cluster into semantically coherent sub-clusters.
         """
@@ -347,7 +349,9 @@ class GraphStructureReorganizer:
             scene_lines.append(line)
 
         joined_scene = "\n".join(scene_lines)
-        prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene)
+        if len(joined_scene) > max_length:
+            logger.warning(f"Sub-cluster too long: {joined_scene}")
+        prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene[:max_length])
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
@@ -394,41 +398,73 @@ class GraphStructureReorganizer:
             )
             return [nodes]
 
-        def recursive_clustering(nodes_list):
+        def recursive_clustering(nodes_list, depth=0):
             """Recursively split clusters until each is <= max_cluster_size."""
-            if len(nodes_list) <= max_cluster_size:
-                return [nodes_list]
+            indent = "  " * depth
+            logger.info(
+                f"{indent}[Recursive] Start clustering {len(nodes_list)} nodes at depth {depth}"
+            )
 
+            if len(nodes_list) <= max_cluster_size:
+                logger.info(
+                    f"{indent}[Recursive] Node count <= {max_cluster_size}, stop splitting."
+                )
+                return [nodes_list]
             # Try kmeans with k = ceil(len(nodes) / max_cluster_size)
-            x = np.array([n.metadata.embedding for n in nodes_list if n.metadata.embedding])
+            x_nodes = [n for n in nodes_list if n.metadata.embedding]
+            x = np.array([n.metadata.embedding for n in x_nodes])
+
             if len(x) < min_cluster_size:
+                logger.info(
+                    f"{indent}[Recursive] Too few embeddings ({len(x)}), skipping clustering."
+                )
                 return [nodes_list]
 
             k = min(len(x), (len(nodes_list) + max_cluster_size - 1) // max_cluster_size)
-            k = max(1, min(k, len(x)))
+            k = max(1, k)
 
             try:
+                logger.info(f"{indent}[Recursive] Clustering with k={k} on {len(x)} points.")
                 kmeans = MiniBatchKMeans(n_clusters=k, batch_size=256, random_state=42)
                 labels = kmeans.fit_predict(x)
 
                 label_groups = defaultdict(list)
-                for node, label in zip(nodes_list, labels, strict=False):
+                for node, label in zip(x_nodes, labels, strict=False):
                     label_groups[label].append(node)
 
+                # Map: label -> nodes with no embedding (fallback group)
+                no_embedding_nodes = [n for n in nodes_list if not n.metadata.embedding]
+                if no_embedding_nodes:
+                    logger.warning(
+                        f"{indent}[Recursive] {len(no_embedding_nodes)} nodes have no embedding. Added to largest cluster."
+                    )
+                    # Assign to largest cluster
+                    largest_label = max(label_groups.items(), key=lambda kv: len(kv[1]))[0]
+                    label_groups[largest_label].extend(no_embedding_nodes)
+
                 result = []
-                for sub_group in label_groups.values():
-                    result.extend(recursive_clustering(sub_group))
+                for label, sub_group in label_groups.items():
+                    logger.info(f"{indent}  Cluster-{label}: {len(sub_group)} nodes")
+                    result.extend(recursive_clustering(sub_group, depth=depth + 1))
                 return result
+
             except Exception as e:
-                logger.warning(f"Clustering failed: {e}, falling back to single cluster.")
+                logger.warning(
+                    f"{indent}[Recursive] Clustering failed: {e}, fallback to one cluster."
+                )
                 return [nodes_list]
 
         raw_clusters = recursive_clustering(nodes)
         filtered_clusters = [c for c in raw_clusters if len(c) > min_cluster_size]
+
+        logger.info(f"[KMeansPartition] Total clusters before filtering: {len(raw_clusters)}")
+        for i, cluster in enumerate(raw_clusters):
+            logger.info(f"[KMeansPartition]   Cluster-{i}: {len(cluster)} nodes")
+
         logger.info(
-            f"[KMeansPartition] Total clusters created: {len(raw_clusters)}, "
-            f"kept {len(filtered_clusters)} (>{min_cluster_size})."
+            f"[KMeansPartition] Clusters after filtering (>{min_cluster_size}): {len(filtered_clusters)}"
         )
+
         return filtered_clusters
 
     def _summarize_cluster(self, cluster_nodes: list[GraphDBNode], scope: str) -> GraphDBNode:

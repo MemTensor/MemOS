@@ -136,7 +136,7 @@ class APIConfig:
                                 "max_tokens": 5000,
                                 "top_p": 0.95,
                                 "top_k": 20,
-                                "api_key": "EMPTY",
+                                "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
                                 "api_base": os.getenv("MEMRADER_API_BASE"),
                                 "remove_think_prefix": True,
                                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
