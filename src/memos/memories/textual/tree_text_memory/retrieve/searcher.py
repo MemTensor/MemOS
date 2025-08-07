@@ -145,19 +145,18 @@ class Searcher:
                     memory_type,
                 )
             )
-            if parsed_goal.internet_search:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_internet,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                        info,
-                        mode,
-                        memory_type,
-                    )
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_internet,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    top_k,
+                    info,
+                    mode,
+                    memory_type,
                 )
+            )
 
             results = []
             for t in tasks:
