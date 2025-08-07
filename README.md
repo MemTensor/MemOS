@@ -251,7 +251,7 @@ MemOS is licensed under the [Apache 2.0 License](./LICENSE).
 
 Stay up to date with the latest MemOS announcements, releases, and community highlights.
 
-- **2025-08-07** - 🎉 *MemOS v0.2.3 (Our Very First MemCube)*: A word game to inspire user engagement (MemCube), enhanced LongMemEval, BochaAISearchRetriever integration, NebulaGraph database support, improved search contextual understanding and semantic control, bug fixes, and our official Playground.
+- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
 - **2025-07-29** – 🎉 *MemOS v0.2.2 (Nebula Update)*: Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
 - **2025-07-21** – 🎉 *MemOS v0.2.1 (Neo Release)*: Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
 - **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
