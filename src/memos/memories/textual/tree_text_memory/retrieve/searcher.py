@@ -222,7 +222,7 @@ class Searcher:
         self, query, parsed_goal, query_embedding, top_k, info, mode, memory_type
     ):
         """Retrieve and rerank from Internet source"""
-        if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
+        if not self.internet_retriever or mode == "fast":
             logger.info(
                 f"[PATH-C] '{query}' Skipped (no retriever, fast mode, or no internet_search flag)"
             )
