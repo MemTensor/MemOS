@@ -21,8 +21,8 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         super().__init__()
         self.config: BaseSchedulerConfig = config
 
-        self.check_interval = self.config.get("thread_pool_monitor_check_interval", 60)
-        self.max_failures = self.config.get("thread_pool_monitor_max_failures", 2)
+        self.check_interval = self.config.get("dispatcher_monitor_check_interval", 60)
+        self.max_failures = self.config.get("dispatcher_monitor_max_failures", 2)
 
         # Registry of monitored thread pools
         self._pools: dict[str, dict] = {}
@@ -133,14 +133,33 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         return True
 
     def stop(self) -> None:
-        """Stop the monitoring thread gracefully."""
+        """
+        Stop the monitoring thread and clean up all managed thread pools.
+        Ensures proper shutdown of all monitored executors.
+        """
         if not self._running:
             return
 
+        # Stop the monitoring loop
         self._running = False
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=5)
-        logger.info("Thread pool monitor stopped")
+
+        # Shutdown all registered pools
+        with self._pool_lock:
+            for name, pool_info in self._pools.items():
+                executor = pool_info["executor"]
+                if not executor._shutdown:  # pylint: disable=protected-access
+                    try:
+                        logger.info(f"Shutting down thread pool '{name}'")
+                        executor.shutdown(wait=True, cancel_futures=True)
+                        logger.info(f"Successfully shut down thread pool '{name}'")
+                    except Exception as e:
+                        logger.error(f"Error shutting down pool '{name}': {e!s}", exc_info=True)
+
+        # Clear the pool registry
+        self._pools.clear()
+        logger.info("Thread pool monitor and all pools stopped")
 
     def _check_pools_health(self) -> None:
         """Check health of all registered thread pools."""

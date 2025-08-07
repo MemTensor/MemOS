@@ -65,7 +65,7 @@ class GraphStructureReorganizer:
         self.resolver = NodeHandler(graph_store=graph_store, llm=llm, embedder=embedder)
 
         self.is_reorganize = is_reorganize
-        self._reorganize_needed = False
+        self._reorganize_needed = True
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
             self.thread = threading.Thread(target=self._run_message_consumer_loop)
@@ -124,8 +124,8 @@ class GraphStructureReorganizer:
         """
         import schedule
 
-        schedule.every(600).seconds.do(self.optimize_structure, scope="LongTermMemory")
-        schedule.every(600).seconds.do(self.optimize_structure, scope="UserMemory")
+        schedule.every(100).seconds.do(self.optimize_structure, scope="LongTermMemory")
+        schedule.every(100).seconds.do(self.optimize_structure, scope="UserMemory")
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
@@ -165,7 +165,7 @@ class GraphStructureReorganizer:
             for added_node, existing_node, relation in detected_relationships:
                 self.resolver.resolve(added_node, existing_node, relation)
 
-        self._reorganize_needed = False
+        self._reorganize_needed = True
 
     def handle_remove(self, message: QueueMessage):
         logger.debug(f"Handling remove operation: {str(message)[:50]}")

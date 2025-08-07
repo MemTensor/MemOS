@@ -53,7 +53,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # hyper-parameters
         self.top_k = self.config.get("top_k", 10)
         self.context_window_size = self.config.get("context_window_size", 5)
-        self.enable_act_memory_update = self.config.get("enable_act_memory_update", False)
+        self.enable_activation_memory = self.config.get("enable_activation_memory", False)
         self.act_mem_dump_path = self.config.get("act_mem_dump_path", DEFAULT_ACT_MEM_DUMP_PATH)
         self.search_method = TreeTextMemory_SEARCH_METHOD
         self.enable_parallel_dispatch = self.config.get("enable_parallel_dispatch", False)
@@ -63,7 +63,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         self.retriever: SchedulerRetriever | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
-        self.thread_pool_monitor: SchedulerDispatcherMonitor | None = None
+        self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.dispatcher = SchedulerDispatcher(
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
@@ -100,18 +100,18 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.chat_llm = chat_llm
         self.process_llm = process_llm
         self.monitor = SchedulerGeneralMonitor(process_llm=self.process_llm, config=self.config)
-        self.thread_pool_monitor = SchedulerDispatcherMonitor(config=self.config)
+        self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
         self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
 
         if self.enable_parallel_dispatch:
-            self.thread_pool_monitor.initialize(dispatcher=self.dispatcher)
-            self.thread_pool_monitor.start()
+            self.dispatcher_monitor.initialize(dispatcher=self.dispatcher)
+            self.dispatcher_monitor.start()
 
         # initialize with auth_cofig
         if self.auth_config_path is not None and Path(self.auth_config_path).exists():
-            self.auth_config = AuthConfig.from_local_yaml(config_path=self.auth_config_path)
+            self.auth_config = AuthConfig.from_local_config(config_path=self.auth_config_path)
         elif AuthConfig.default_config_exists():
-            self.auth_config = AuthConfig.from_local_yaml()
+            self.auth_config = AuthConfig.from_local_config()
         else:
             self.auth_config = None
 
@@ -183,7 +183,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
             result.append(mem_monitor)
 
-        logger.debug(f"Transformed {len(result)} memories to monitors")
+        logger.info(f"Transformed {len(result)} memories to monitors")
         return result
 
     def replace_working_memory(
@@ -213,7 +213,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             # update working memory monitors
             query_keywords = query_monitor.get_keywords_collections()
-            logger.debug(
+            logger.info(
                 f"Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
             )
             new_working_memory_monitors = self.transform_working_memories_to_monitors(
@@ -225,6 +225,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 for one in new_working_memory_monitors:
                     one.sorting_score = 0
 
+            logger.info(f"update {len(new_working_memory_monitors)} working_memory_monitors")
             self.monitor.update_working_memory_monitors(
                 new_working_memory_monitors=new_working_memory_monitors,
                 user_id=user_id,
@@ -316,6 +317,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             cache_item = act_mem.extract(new_text_memory)
             cache_item.records.text_memories = new_text_memories
+            cache_item.records.timestamp = datetime.utcnow()
 
             act_mem.add([cache_item])
             act_mem.dump(self.act_mem_dump_path)
@@ -375,6 +377,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.info(
                     f"Collected {len(new_activation_memories)} new memory entries for processing"
                 )
+                # Print the content of each new activation memory
+                for i, memory in enumerate(new_activation_memories[:5], 1):
+                    logger.info(
+                        f"Part of New Activation Memorires | {i}/{len(new_activation_memories)}: {memory[:20]}"
+                    )
 
                 self.update_activation_memory(
                     new_memories=new_activation_memories,
@@ -389,6 +396,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.debug(
                     f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
                 )
+
             else:
                 logger.info(
                     f"Skipping update - {interval_seconds} second interval not yet reached. "
@@ -396,7 +404,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     f"{datetime.utcnow()}"
                 )
         except Exception as e:
-            logger.error(f"Error: {e}", exc_info=True)
+            logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit multiple messages to the message queue."""
@@ -531,9 +539,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.info("Consumer thread stopped")
 
         # Shutdown dispatcher
-        if hasattr(self, "dispatcher") and self.dispatcher:
+        if self.dispatcher:
             logger.info("Shutting down dispatcher...")
             self.dispatcher.shutdown()
+
+        # Shutdown dispatcher_monitor
+        if self.dispatcher_monitor:
+            logger.info("Shutting down monitor...")
+            self.dispatcher_monitor.stop()
 
         # Clean up queues
         self._cleanup_queues()
