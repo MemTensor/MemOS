@@ -43,6 +43,7 @@ class BaseSchedulerConfig(BaseConfig):
 
 
 class GeneralSchedulerConfig(BaseSchedulerConfig):
+    model_config = ConfigDict(extra="ignore", strict=True)
     act_mem_update_interval: int | None = Field(
         default=300, description="Interval in seconds for updating activation memory"
     )

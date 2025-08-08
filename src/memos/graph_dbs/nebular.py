@@ -1519,7 +1519,6 @@ class NebulaGraphDB(BaseGraphDB):
 
         return prim  # already a Python primitive
 
-    @timed
     def _parse_node(self, props: dict[str, Any]) -> dict[str, Any]:
         parsed = {k: self._parse_value(v) for k, v in props.items()}
 
