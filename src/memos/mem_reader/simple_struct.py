@@ -17,6 +17,7 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
+    SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
     SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_PROMPT,
@@ -24,10 +25,14 @@ from memos.templates.mem_reader_prompts import (
 )
 
 logger = log.get_logger(__name__)
-PROMPT_DICT = {"en": SIMPLE_STRUCT_MEM_READER_PROMPT, "zh": SIMPLE_STRUCT_MEM_READER_PROMPT_ZH}
-PROMPT_EXAMPLE_DICT = {
-    "en": SIMPLE_STRUCT_MEM_READER_EXAMPLE,
-    "zh": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
+PROMPT_DICT = {
+    "chat": {
+        "en": SIMPLE_STRUCT_MEM_READER_PROMPT,
+        "zh": SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
+        "en_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+        "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
+    },
+    "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
 }
 
 
@@ -61,8 +66,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def _process_chat_data(self, scene_data_info, info):
         lang = detect_lang("\n".join(scene_data_info))
-        template = PROMPT_DICT[lang]
-        examples = PROMPT_DICT[lang]
+        template = PROMPT_DICT["chat"][lang]
+        examples = PROMPT_DICT["chat"][f"{lang}_example"]
 
         prompt = template.replace("${conversation}", "\n".join(scene_data_info))
         if self.config.remove_prompt_example:
@@ -215,15 +220,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def _process_doc_data(self, scene_data_info, info):
         chunks = self.chunker.chunk(scene_data_info["text"])
-        messages = [
-            [
-                {
-                    "role": "user",
-                    "content": SIMPLE_STRUCT_DOC_READER_PROMPT.replace("{chunk_text}", chunk.text),
-                }
-            ]
-            for chunk in chunks
-        ]
+        messages = []
+        for chunk in chunks:
+            lang = detect_lang(chunk.text)
+            template = PROMPT_DICT["doc"][lang]
+            prompt = template.replace("{chunk_text}", chunk.text)
+            message = [{"role": "user", "content": prompt}]
+            messages.append(message)
 
         processed_chunks = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
