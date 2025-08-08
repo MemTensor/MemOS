@@ -1,19 +1,15 @@
 import concurrent.futures
 import copy
 import json
-import os
 import re
 
 from abc import ABC
 from typing import Any
 
-from tqdm import tqdm
-
 from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.configs.parser import ParserConfigFactory
-from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
@@ -23,12 +19,10 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
-    SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
-    SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
+    SIMPLE_STRUCT_MEM_READER_PROMPT,
+    SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
 )
-from memos.utils import timed
-
 
 logger = log.get_logger(__name__)
 PROMPT_DICT = {
@@ -55,63 +49,6 @@ def detect_lang(text):
         return "en"
 
 
-def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder):
-    # generate
-    try:
-        raw = llm.generate(message)
-        if not raw:
-            logger.warning(f"[LLM] Empty generation for input: {message}")
-            return None
-    except Exception as e:
-        logger.error(f"[LLM] Exception during generation: {e}")
-        return None
-
-    # parse_json_result
-    try:
-        chunk_res = parse_json_result(raw)
-        if not chunk_res:
-            logger.warning(f"[Parse] Failed to parse result: {raw}")
-            return None
-    except Exception as e:
-        logger.error(f"[Parse] Exception during JSON parsing: {e}")
-        return None
-
-    try:
-        value = chunk_res.get("value", "").strip()
-        if not value:
-            logger.warning("[BuildNode] value is empty")
-            return None
-
-        tags = chunk_res.get("tags", [])
-        if not isinstance(tags, list):
-            tags = []
-
-        key = chunk_res.get("key", None)
-
-        embedding = embedder.embed([value])[0]
-
-        return TextualMemoryItem(
-            memory=value,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
-                memory_type="LongTermMemory",
-                status="activated",
-                tags=tags,
-                key=key,
-                embedding=embedding,
-                usage=[],
-                sources=[{"type": "doc", "doc_path": f"{scene_file}_{idx}"}],
-                background="",
-                confidence=0.99,
-                type="fact",
-            ),
-        )
-    except Exception as e:
-        logger.error(f"[BuildNode] Error building node: {e}")
-        return None
-
-
 class SimpleStructMemReader(BaseMemReader, ABC):
     """Naive implementation of MemReader."""
 
@@ -127,77 +64,44 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
-    @timed
     def _process_chat_data(self, scene_data_info, info):
-        mem_list = []
-        for item in scene_data_info:
-            if "chat_time" in item:
-                mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
-                mem_list.append(mem)
-            else:
-                mem = item["role"] + ":" + item["content"]
-                mem_list.append(mem)
-        lang = detect_lang("\n".join(mem_list))
+        lang = detect_lang("\n".join(scene_data_info))
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
 
-        prompt = template.replace("${conversation}", "\n".join(mem_list))
+        prompt = template.replace("${conversation}", "\n".join(scene_data_info))
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
 
         messages = [{"role": "user", "content": prompt}]
 
-        try:
-            response_text = self.llm.generate(messages)
-            response_json = self.parse_json_result(response_text)
-        except Exception as e:
-            logger.error(f"[LLM] Exception during chat generation: {e}")
-            response_json = {
-                "memory list": [
-                    {
-                        "key": "\n".join(mem_list)[:10],
-                        "memory_type": "UserMemory",
-                        "value": "\n".join(mem_list),
-                        "tags": [],
-                    }
-                ],
-                "summary": "\n".join(mem_list),
-            }
+        response_text = self.llm.generate(messages)
+        response_json = self.parse_json_result(response_text)
 
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
-            try:
-                memory_type = (
-                    memory_i_raw.get("memory_type", "LongTermMemory")
+            node_i = TextualMemoryItem(
+                memory=memory_i_raw.get("value", ""),
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=info.get("user_id"),
+                    session_id=info.get("session_id"),
+                    memory_type=memory_i_raw.get("memory_type", "")
                     .replace("长期记忆", "LongTermMemory")
-                    .replace("用户记忆", "UserMemory")
-                )
-
-                if memory_type not in ["LongTermMemory", "UserMemory"]:
-                    memory_type = "LongTermMemory"
-
-                node_i = TextualMemoryItem(
-                    memory=memory_i_raw.get("value", ""),
-                    metadata=TreeNodeTextualMemoryMetadata(
-                        user_id=info.get("user_id"),
-                        session_id=info.get("session_id"),
-                        memory_type=memory_type,
-                        status="activated",
-                        tags=memory_i_raw.get("tags", [])
-                        if type(memory_i_raw.get("tags", [])) is list
-                        else [],
-                        key=memory_i_raw.get("key", ""),
-                        embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
-                        usage=[],
-                        sources=scene_data_info,
-                        background=response_json.get("summary", ""),
-                        confidence=0.99,
-                        type="fact",
-                    ),
-                )
-                chat_read_nodes.append(node_i)
-            except Exception as e:
-                logger.error(f"[ChatReader] Error parsing memory item: {e}")
+                    .replace("用户记忆", "UserMemory"),
+                    status="activated",
+                    tags=memory_i_raw.get("tags", [])
+                    if type(memory_i_raw.get("tags", [])) is list
+                    else [],
+                    key=memory_i_raw.get("key", ""),
+                    embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
+                    usage=[],
+                    sources=scene_data_info,
+                    background=response_json.get("summary", ""),
+                    confidence=0.99,
+                    type="fact",
+                ),
+            )
+            chat_read_nodes.append(node_i)
 
         return chat_read_nodes
 
@@ -250,8 +154,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         else:
             processing_func = self._process_doc_data
 
-        # Process Q&A pairs concurrently with context propagation
-        with ContextThreadPoolExecutor() as executor:
+        # Process Q&A pairs concurrently
+        with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(processing_func, scene_data_info, info)
                 for scene_data_info in list_scene_data_info
@@ -289,9 +193,11 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 for item in items:
                     # Convert dictionary to string
                     if "chat_time" in item:
-                        result.append(item)
+                        mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
+                        result.append(mem)
                     else:
-                        result.append(item)
+                        mem = item["role"] + ":" + item["content"]
+                        result.append(mem)
                     if len(result) >= 10:
                         results.append(result)
                         context = copy.deepcopy(result[-2:])
@@ -301,22 +207,18 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         elif type == "doc":
             for item in scene_data:
                 try:
-                    if os.path.exists(item):
-                        try:
-                            parsed_text = parser.parse(item)
-                            results.append({"file": item, "text": parsed_text})
-                        except Exception as e:
-                            logger.error(f"[SceneParser] Error parsing {item}: {e}")
-                            continue
+                    if not isinstance(item, str):
+                        parsed_text = parser.parse(item)
+                        results.append({"file": "pure_text", "text": parsed_text})
                     else:
                         parsed_text = item
-                        results.append({"file": "pure_text", "text": parsed_text})
+                        results.append({"file": item, "text": parsed_text})
                 except Exception as e:
                     print(f"Error parsing file {item}: {e!s}")
 
         return results
 
-    def _process_doc_data(self, scene_data_info, info, **kwargs):
+    def _process_doc_data(self, scene_data_info, info):
         chunks = self.chunker.chunk(scene_data_info["text"])
         messages = []
         for chunk in chunks:
@@ -326,35 +228,36 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             message = [{"role": "user", "content": prompt}]
             messages.append(message)
 
+        processed_chunks = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(self.llm.generate, message) for message in messages]
+            for future in concurrent.futures.as_completed(futures):
+                chunk_result = future.result()
+                if chunk_result:
+                    processed_chunks.append(chunk_result)
+
+        processed_chunks = [self.parse_json_result(r) for r in processed_chunks]
         doc_nodes = []
-        scene_file = scene_data_info["file"]
-
-        with ContextThreadPoolExecutor(max_workers=50) as executor:
-            futures = {
-                executor.submit(
-                    _build_node,
-                    idx,
-                    msg,
-                    info,
-                    scene_file,
-                    self.llm,
-                    self.parse_json_result,
-                    self.embedder,
-                ): idx
-                for idx, msg in enumerate(messages)
-            }
-            total = len(futures)
-
-            for future in tqdm(
-                concurrent.futures.as_completed(futures), total=total, desc="Processing"
-            ):
-                try:
-                    node = future.result()
-                    if node:
-                        doc_nodes.append(node)
-                except Exception as e:
-                    tqdm.write(f"[ERROR] {e}")
-                    logger.error(f"[DocReader] Future task failed: {e}")
+        for i, chunk_res in enumerate(processed_chunks):
+            if chunk_res:
+                node_i = TextualMemoryItem(
+                    memory=chunk_res["value"],
+                    metadata=TreeNodeTextualMemoryMetadata(
+                        user_id=info.get("user_id"),
+                        session_id=info.get("session_id"),
+                        memory_type="LongTermMemory",
+                        status="activated",
+                        tags=chunk_res["tags"] if type(chunk_res["tags"]) is list else [],
+                        key=chunk_res["key"],
+                        embedding=self.embedder.embed([chunk_res["value"]])[0],
+                        usage=[],
+                        sources=[f"{scene_data_info['file']}_{i}"],
+                        background="",
+                        confidence=0.99,
+                        type="fact",
+                    ),
+                )
+                doc_nodes.append(node_i)
         return doc_nodes
 
     def parse_json_result(self, response_text):
@@ -362,14 +265,14 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             json_start = response_text.find("{")
             response_text = response_text[json_start:]
             response_text = response_text.replace("```", "").strip()
-            if not response_text.endswith("}"):
+            if response_text[-1] != "}":
                 response_text += "}"
-            return json.loads(response_text)
+            response_json = json.loads(response_text)
+            return response_json
         except json.JSONDecodeError as e:
-            logger.error(f"[JSONParse] Failed to decode JSON: {e}\nRaw:\n{response_text}")
-            return {}
-        except Exception as e:
-            logger.error(f"[JSONParse] Unexpected error: {e}")
+            logger.warning(
+                f"Failed to parse LLM response as JSON: {e}\nRaw response:\n{response_text}"
+            )
             return {}
 
     def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:
