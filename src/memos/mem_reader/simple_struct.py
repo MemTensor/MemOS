@@ -1,6 +1,7 @@
 import concurrent.futures
 import copy
 import json
+import re
 
 from abc import ABC
 from typing import Any
@@ -17,11 +18,30 @@ from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+    SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_PROMPT,
+    SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
 )
 
-
 logger = log.get_logger(__name__)
+PROMPT_DICT = {"en": SIMPLE_STRUCT_MEM_READER_PROMPT, "zh": SIMPLE_STRUCT_MEM_READER_PROMPT_ZH}
+PROMPT_EXAMPLE_DICT = {
+    "en": SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+    "zh": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
+}
+
+
+def detect_lang(text):
+    try:
+        if not text or not isinstance(text, str):
+            return "en"
+        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
+        chinese_chars = re.findall(chinese_pattern, text)
+        if len(chinese_chars) / len(re.sub(r"[\s\d\W]", "", text)) > 0.3:
+            return "zh"
+        return "en"
+    except Exception:
+        return "en"
 
 
 class SimpleStructMemReader(BaseMemReader, ABC):
@@ -40,11 +60,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     def _process_chat_data(self, scene_data_info, info):
-        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace(
-            "${conversation}", "\n".join(scene_data_info)
-        )
+        lang = detect_lang("\n".join(scene_data_info))
+        template = PROMPT_DICT[lang]
+        examples = PROMPT_DICT[lang]
+
+        prompt = template.replace("${conversation}", "\n".join(scene_data_info))
         if self.config.remove_prompt_example:
-            prompt = prompt.replace(SIMPLE_STRUCT_MEM_READER_EXAMPLE, "")
+            prompt = prompt.replace(examples, "")
 
         messages = [{"role": "user", "content": prompt}]
 
