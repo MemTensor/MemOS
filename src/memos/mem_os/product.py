@@ -677,7 +677,6 @@ class MOSProduct(MOSCore):
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
         response = self.chat_llm.generate(message_list)
         clean_response = clean_json_response(response)
-        print(f"clean_response: {clean_response}")
         response_json = json.loads(clean_response)
         return response_json["query"]
 
