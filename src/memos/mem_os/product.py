@@ -641,13 +641,17 @@ class MOSProduct(MOSCore):
 
     def _get_further_suggestion(self, message: MessageList | None = None) -> list[str]:
         """Get further suggestion prompt."""
-        dialogue_info = "\n".join([f"{msg['role']}: {msg['content']}" for msg in message[-2:]])
-        further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
-        message_list = [{"role": "system", "content": further_suggestion_prompt}]
-        response = self.chat_llm.generate(message_list)
-        clean_response = clean_json_response(response)
-        response_json = json.loads(clean_response)
-        return response_json["query"]
+        try:
+            dialogue_info = "\n".join([f"{msg['role']}: {msg['content']}" for msg in message[-2:]])
+            further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
+            message_list = [{"role": "system", "content": further_suggestion_prompt}]
+            response = self.chat_llm.generate(message_list)
+            clean_response = clean_json_response(response)
+            response_json = json.loads(clean_response)
+            return response_json["query"]
+        except Exception as e:
+            logger.error(f"Error getting further suggestion: {e}", exc_info=True)
+            return []
 
     def get_suggestion_query(
         self, user_id: str, language: str = "zh", message: MessageList | None = None
@@ -830,6 +834,11 @@ class MOSProduct(MOSCore):
         total_time = round(float(time_end - time_start), 1)
 
         yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': f'{speed_improvement}%'}})}\n\n"
+        # get further suggestion
+        current_messages.append({"role": "assistant", "content": full_response})
+        further_suggestion = self._get_further_suggestion(current_messages)
+        logger.info(f"further_suggestion: {further_suggestion}")
+        yield f"data: {json.dumps({'type': 'suggestion', 'data': further_suggestion})}\n\n"
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
         logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
