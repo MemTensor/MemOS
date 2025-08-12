@@ -161,3 +161,4 @@ class SuggestionRequest(BaseRequest):
 
     user_id: str = Field(..., description="User ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
+    message: list[MessageDict] | None = Field(None, description="List of messages to store.")

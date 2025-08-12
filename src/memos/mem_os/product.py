@@ -36,7 +36,13 @@ from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
-from memos.templates.mos_prompts import MEMOS_PRODUCT_BASE_PROMPT, MEMOS_PRODUCT_ENHANCE_PROMPT
+from memos.templates.mos_prompts import (
+    FURTHER_SUGGESTION_PROMPT,
+    MEMOS_PRODUCT_BASE_PROMPT,
+    MEMOS_PRODUCT_ENHANCE_PROMPT,
+    SUGGESTION_QUERY_PROMPT_EN,
+    SUGGESTION_QUERY_PROMPT_ZH,
+)
 from memos.types import MessageList
 
 
@@ -633,7 +639,19 @@ class MOSProduct(MOSCore):
         except Exception as e:
             return {"status": "error", "message": f"Failed to register user: {e!s}"}
 
-    def get_suggestion_query(self, user_id: str, language: str = "zh") -> list[str]:
+    def _get_further_suggestion(self, message: MessageList | None = None) -> list[str]:
+        """Get further suggestion prompt."""
+        dialogue_info = "\n".join([f"{msg['role']}: {msg['content']}" for msg in message[-2:]])
+        further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
+        message_list = [{"role": "system", "content": further_suggestion_prompt}]
+        response = self.chat_llm.generate(message_list)
+        clean_response = clean_json_response(response)
+        response_json = json.loads(clean_response)
+        return response_json["query"]
+
+    def get_suggestion_query(
+        self, user_id: str, language: str = "zh", message: MessageList | None = None
+    ) -> list[str]:
         """Get suggestion query from LLM.
         Args:
             user_id (str): User ID.
@@ -642,37 +660,13 @@ class MOSProduct(MOSCore):
         Returns:
             list[str]: The suggestion query list.
         """
-
+        if message:
+            further_suggestion = self._get_further_suggestion(message)
+            return further_suggestion
         if language == "zh":
-            suggestion_prompt = """
-            你是一个有用的助手，可以帮助用户生成建议查询。
-            我将获取用户最近的一些记忆，
-            你应该生成一些建议查询，这些查询应该是用户想要查询的内容，
-            用户最近的记忆是：
-            {memories}
-            请生成3个建议查询用中文，
-            输出应该是json格式，键是"query"，值是一个建议查询列表。
-
-            示例：
-            {{
-                "query": ["查询1", "查询2", "查询3"]
-            }}
-            """
+            suggestion_prompt = SUGGESTION_QUERY_PROMPT_ZH
         else:  # English
-            suggestion_prompt = """
-            You are a helpful assistant that can help users to generate suggestion query.
-            I will get some user recently memories,
-            you should generate some suggestion query, the query should be user what to query,
-            user recently memories is:
-            {memories}
-            if the user recently memories is empty, please generate 3 suggestion query in English,
-            output should be a json format, the key is "query", the value is a list of suggestion query.
-
-            example:
-            {{
-                "query": ["query1", "query2", "query3"]
-            }}
-            """
+            suggestion_prompt = SUGGESTION_QUERY_PROMPT_EN
         text_mem_result = super().search("my recently memories", user_id=user_id, top_k=3)[
             "text_mem"
         ]
@@ -683,6 +677,7 @@ class MOSProduct(MOSCore):
         message_list = [{"role": "system", "content": suggestion_prompt.format(memories=memories)}]
         response = self.chat_llm.generate(message_list)
         clean_response = clean_json_response(response)
+        print(f"clean_response: {clean_response}")
         response_json = json.loads(clean_response)
         return response_json["query"]
 

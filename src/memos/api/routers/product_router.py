@@ -148,7 +148,9 @@ def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
     try:
         mos_product = get_mos_product_instance()
         suggestions = mos_product.get_suggestion_query(
-            user_id=suggestion_req.user_id, language=suggestion_req.language
+            user_id=suggestion_req.user_id,
+            language=suggestion_req.language,
+            message=suggestion_req.message,
         )
         return SuggestionResponse(
             message="Suggestions retrieved successfully", data={"query": suggestions}

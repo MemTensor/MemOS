@@ -191,3 +191,57 @@ Former dialogue:
 {dialogue}
 Current question: {query}
 Answer:"""
+
+SUGGESTION_QUERY_PROMPT_ZH = """
+你是一个有用的助手，可以帮助用户生成建议查询。
+我将获取用户最近的一些记忆，
+你应该生成一些建议查询，这些查询应该是用户想要查询的内容，
+用户最近的记忆是：
+{memories}
+请生成3个建议查询用中文，如果用户最近的记忆是空，请直接随机生成3个建议查询用中文，不要有多余解释。
+输出应该是json格式，键是"query"，值是一个建议查询列表。
+
+示例：
+{{
+    "query": ["查询1", "查询2", "查询3"]
+}}
+"""
+
+SUGGESTION_QUERY_PROMPT_EN = """
+You are a helpful assistant that can help users to generate suggestion query.
+I will get some user recently memories,
+you should generate some suggestion query, the query should be user what to query,
+user recently memories is:
+{memories}
+if the user recently memories is empty, please generate 3 suggestion query in English,do not generate any other text,
+output should be a json format, the key is "query", the value is a list of suggestion query.
+
+example:
+{{
+    "query": ["query1", "query2", "query3"]
+}}
+"""
+
+FURTHER_SUGGESTION_PROMPT = """
+You are a helpful assistant.
+You are given a dialogue between a user and a assistant.
+You need to suggest a further question based on the dialogue.
+Requirements:
+1. The further question should be related to the dialogue.
+2. The further question should be concise and accurate.
+3. You must return ONLY a valid JSON object. Do not include any other text, explanations, or formatting.
+the lastest dialogue is:
+{dialogue}
+output should be a json format, the key is "query", the value is a list of suggestion query.
+if dialogue is chinese,the quersuggestion query should be in chinese,if dialogue is english,the suggestion query should be in english.
+please do not generate any other text.
+
+example english:
+{{
+    "query": ["query1", "query2", "query3"]
+}}
+example chinese:
+{{
+    "query": ["问题1", "问题2", "问题3"]
+}}
+"""
