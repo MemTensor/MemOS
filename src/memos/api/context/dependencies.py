@@ -1,5 +1,4 @@
 import logging
-import os
 
 from fastapi import Depends, Header, Request
 
@@ -23,13 +22,6 @@ def get_trace_id_from_header(
     Priority: g-trace-id > x-trace-id > trace-id
     """
     return g_trace_id or x_trace_id or trace_id
-
-
-def generate_trace_id() -> str:
-    """
-    Get a random trace_id.
-    """
-    return os.urandom(16).hex()
 
 
 def get_request_context(
@@ -65,9 +57,6 @@ def get_g_object(trace_id: str | None = Depends(get_trace_id_from_header)) -> G:
     This creates a RequestContext and sets it globally for access
     throughout the request lifecycle.
     """
-    if trace_id is None:
-        trace_id = generate_trace_id()
-
     g = RequestContext(trace_id=trace_id)
     set_request_context(g)
     logger.info(f"Request g object created with trace_id: {g.trace_id}")
