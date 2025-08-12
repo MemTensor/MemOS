@@ -371,6 +371,8 @@ class MOSProduct(MOSCore):
 
         # Build base prompt
         # Add memory context if available
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d (%A)")
         if memories_all:
             memory_context = "\n\n## Available ID Memories:\n"
             for i, memory in enumerate(memories_all, 1):
@@ -379,9 +381,9 @@ class MOSProduct(MOSCore):
                 memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
                 memory_content = memory_content.replace("\n", " ")
                 memory_context += f"{memory_id}: {memory_content}\n"
-            return MEMOS_PRODUCT_BASE_PROMPT + memory_context
+            return MEMOS_PRODUCT_BASE_PROMPT.format(formatted_date) + memory_context
 
-        return MEMOS_PRODUCT_BASE_PROMPT
+        return MEMOS_PRODUCT_BASE_PROMPT.format(formatted_date)
 
     def _build_enhance_system_prompt(
         self, user_id: str, memories_all: list[TextualMemoryItem]
@@ -389,6 +391,8 @@ class MOSProduct(MOSCore):
         """
         Build enhance prompt for the user with memory references.
         """
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d (%A)")
         if memories_all:
             personal_memory_context = "\n\n## Available ID and PersonalMemory Memories:\n"
             outer_memory_context = "\n\n## Available ID and OuterMemory Memories:\n"
@@ -411,8 +415,12 @@ class MOSProduct(MOSCore):
                     )
                     memory_content = memory_content.replace("\n", " ")
                     outer_memory_context += f"{memory_id}: {memory_content}\n"
-            return MEMOS_PRODUCT_ENHANCE_PROMPT + personal_memory_context + outer_memory_context
-        return MEMOS_PRODUCT_ENHANCE_PROMPT
+            return (
+                MEMOS_PRODUCT_ENHANCE_PROMPT.format(formatted_date)
+                + personal_memory_context
+                + outer_memory_context
+            )
+        return MEMOS_PRODUCT_ENHANCE_PROMPT.format(formatted_date)
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
