@@ -136,7 +136,7 @@ class APIConfig:
                                 "max_tokens": 5000,
                                 "top_p": 0.95,
                                 "top_k": 20,
-                                "api_key": "EMPTY",
+                                "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
                                 "api_base": os.getenv("MEMRADER_API_BASE"),
                                 "remove_think_prefix": True,
                                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
@@ -251,7 +251,6 @@ class APIConfig:
             "backend": "general_scheduler",
             "config": {
                 "top_k": int(os.getenv("MOS_SCHEDULER_TOP_K", "10")),
-                "top_n": int(os.getenv("MOS_SCHEDULER_TOP_N", "5")),
                 "act_mem_update_interval": int(
                     os.getenv("MOS_SCHEDULER_ACT_MEM_UPDATE_INTERVAL", "300")
                 ),
@@ -266,7 +265,7 @@ class APIConfig:
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"
                 ).lower()
                 == "true",
-                "enable_act_memory_update": True,
+                "enable_activation_memory": True,
             },
         }
 

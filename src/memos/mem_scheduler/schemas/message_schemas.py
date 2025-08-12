@@ -138,6 +138,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""
         return {
+            "content_preview:": self.log_content[:50],
             "log_id": self.item_id,
             "user_id": self.user_id,
             "mem_cube_id": self.mem_cube_id,

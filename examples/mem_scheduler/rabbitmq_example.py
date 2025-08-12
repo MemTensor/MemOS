@@ -21,7 +21,7 @@ def main():
         print("Please set configs for rabbitmq.")
         return
     else:
-        rabbitmq_module.initialize_rabbitmq(config=AuthConfig.from_local_yaml().rabbitmq)
+        rabbitmq_module.initialize_rabbitmq(config=AuthConfig.from_local_config().rabbitmq)
 
     try:
         rabbitmq_module.wait_for_connection_ready()
