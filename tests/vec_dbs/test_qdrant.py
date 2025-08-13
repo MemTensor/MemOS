@@ -113,3 +113,31 @@ def test_get_all(vec_db):
     results = vec_db.get_all()
     assert len(results) == 1
     assert isinstance(results[0], VecDBItem)
+
+
+def test_client_receives_api_key():
+    from unittest.mock import patch
+    from memos import settings
+    from memos.configs.vec_db import VectorDBConfigFactory
+    from memos.vec_dbs.factory import VecDBFactory
+
+    api_key = "your_secure_api_key_here_change_in_production"
+    with patch("qdrant_client.QdrantClient") as mock_client:
+        cfg = VectorDBConfigFactory.model_validate(
+            {
+                "backend": "qdrant",
+                "config": {
+                    "collection_name": "test_collection",
+                    "vector_dimension": 4,
+                    "distance_metric": "cosine",
+                    "path": str(settings.MEMOS_DIR / "qdrant"),
+                    "api_key": api_key,
+                },
+            }
+        )
+        _ = VecDBFactory.from_config(cfg)
+
+        # 断言 QdrantClient 被以 api_key 关键字参数调用
+        assert mock_client.called
+        kwargs = mock_client.call_args.kwargs
+        assert kwargs.get("api_key") == api_key
