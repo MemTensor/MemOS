@@ -40,7 +40,7 @@ def test_qdrant_vec_db_config():
         required_fields=[
             "collection_name",
         ],
-        optional_fields=["vector_dimension", "distance_metric", "host", "port", "path"],
+        optional_fields=["vector_dimension", "distance_metric", "host", "port", "path", "api_key"],
     )
 
     check_config_instantiation_valid(

@@ -27,6 +27,7 @@ class QdrantVecDBConfig(BaseVecDBConfig):
     host: str | None = Field(default=None, description="Host for Qdrant")
     port: int | None = Field(default=None, description="Port for Qdrant")
     path: str | None = Field(default=None, description="Path for Qdrant")
+    api_key: str | None = Field(default=None, description="Optional API key for Qdrant authentication")
 
     @model_validator(mode="after")
     def set_default_path(self):
