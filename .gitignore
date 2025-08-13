@@ -17,6 +17,9 @@ evaluation/configs/*
 .env
 evaluation/scripts/personamem
 
+# benchmarks
+benchmarks/
+   
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
