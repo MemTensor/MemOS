@@ -323,12 +323,11 @@ class Neo4jGraphDB(BaseGraphDB):
             return result.single() is not None
 
     # Graph Query & Reasoning
-    def get_node(self, id: str, include_embedding: bool = True) -> dict[str, Any] | None:
+    def get_node(self, id: str, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a node.
         Args:
             id: Node identifier.
-            include_embedding (bool): Whether to include the large embedding field.
         Returns:
             Dictionary of node fields, or None if not found.
         """
@@ -345,12 +344,11 @@ class Neo4jGraphDB(BaseGraphDB):
             record = session.run(query, params).single()
             return self._parse_node(dict(record["n"])) if record else None
 
-    def get_nodes(self, ids: list[str], include_embedding: bool = True) -> list[dict[str, Any]]:
+    def get_nodes(self, ids: list[str], **kwargs) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
             ids: List of Node identifier.
-            include_embedding (bool): Whether to include the large embedding field.
         Returns:
         list[dict]: Parsed node records containing 'id', 'memory', and 'metadata'.
 
@@ -833,7 +831,7 @@ class Neo4jGraphDB(BaseGraphDB):
             logger.error(f"[ERROR] Failed to clear database '{self.db_name}': {e}")
             raise
 
-    def export_graph(self, include_embedding: bool = True) -> dict[str, Any]:
+    def export_graph(self, **kwargs) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
 
@@ -914,13 +912,12 @@ class Neo4jGraphDB(BaseGraphDB):
                     target_id=edge["target"],
                 )
 
-    def get_all_memory_items(self, scope: str, include_embedding: bool = True) -> list[dict]:
+    def get_all_memory_items(self, scope: str, **kwargs) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
-            include_embedding (bool): Whether to include the large embedding field.
         Returns:
 
         Returns:
@@ -946,9 +943,7 @@ class Neo4jGraphDB(BaseGraphDB):
             results = session.run(query, params)
             return [self._parse_node(dict(record["n"])) for record in results]
 
-    def get_structure_optimization_candidates(
-        self, scope: str, include_embedding: bool = True
-    ) -> list[dict]:
+    def get_structure_optimization_candidates(self, scope: str, **kwargs) -> list[dict]:
         """
         Find nodes that are likely candidates for structure optimization:
         - Isolated nodes, nodes with empty background, or nodes with exactly one child.
