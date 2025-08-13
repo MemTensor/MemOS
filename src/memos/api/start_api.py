@@ -4,12 +4,11 @@ import os
 from typing import Any, Generic, TypeVar
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from memos.api.context.dependencies import get_g_object
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.main import MOS
 from memos.mem_user.user_manager import UserManager, UserRole
@@ -77,7 +76,6 @@ app = FastAPI(
     title="MemOS REST APIs",
     description="A REST API for managing and searching memories using MemOS.",
     version="1.0.0",
-    dependencies=[Depends(get_g_object)],
 )
 
 

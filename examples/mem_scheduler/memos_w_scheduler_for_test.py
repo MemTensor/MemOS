@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
     # default local graphdb uri
     if AuthConfig.default_config_exists():
-        auth_config = AuthConfig.from_local_yaml()
+        auth_config = AuthConfig.from_local_config()
 
         mos_config.mem_reader.config.llm.config.api_key = auth_config.openai.api_key
         mos_config.mem_reader.config.llm.config.api_base = auth_config.openai.base_url

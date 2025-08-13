@@ -145,19 +145,18 @@ class Searcher:
                     memory_type,
                 )
             )
-            if parsed_goal.internet_search:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_internet,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                        info,
-                        mode,
-                        memory_type,
-                    )
+            tasks.append(
+                executor.submit(
+                    self._retrieve_from_internet,
+                    query,
+                    parsed_goal,
+                    query_embedding,
+                    top_k,
+                    info,
+                    mode,
+                    memory_type,
                 )
+            )
 
             results = []
             for t in tasks:
@@ -223,16 +222,16 @@ class Searcher:
         self, query, parsed_goal, query_embedding, top_k, info, mode, memory_type
     ):
         """Retrieve and rerank from Internet source"""
-        if not self.internet_retriever or mode == "fast" or not parsed_goal.internet_search:
-            logger.info(
-                f"[PATH-C] '{query}' Skipped (no retriever, fast mode, or no internet_search flag)"
-            )
+        if not self.internet_retriever or mode == "fast":
+            logger.info(f"[PATH-C] '{query}' Skipped (no retriever, fast mode)")
             return []
         if memory_type not in ["All"]:
             return []
+        logger.info(f"[PATH-C] '{query}' Retrieving from internet...")
         items = self.internet_retriever.retrieve_from_internet(
             query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
         )
+        logger.info(f"[PATH-C] '{query}' Retrieved from internet {len(items)} items: {items}")
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embedding[0],

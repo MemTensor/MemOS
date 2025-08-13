@@ -332,9 +332,6 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             Dictionary of node fields, or None if not found.
         """
-        logger.warning(
-            "[Neo4jGraphDB.get_node] `include_embedding=False` is not supported in Neo4j. Ignoring this flag."
-        )
 
         where_user = ""
         params = {"id": id}
@@ -361,9 +358,6 @@ class Neo4jGraphDB(BaseGraphDB):
             - Assumes all provided IDs are valid and exist.
             - Returns empty list if input is empty.
         """
-        logger.warning(
-            "[Neo4jGraphDB.get_node] `include_embedding=False` is not supported in Neo4j. Ignoring this flag."
-        )
 
         if not ids:
             return []
@@ -849,9 +843,6 @@ class Neo4jGraphDB(BaseGraphDB):
                 "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
             }
         """
-        logger.warning(
-            "[Neo4jGraphDB.get_node] `include_embedding=False` is not supported in Neo4j. Ignoring this flag."
-        )
         with self.driver.session(database=self.db_name) as session:
             # Export nodes
             node_query = "MATCH (n:Memory)"
@@ -935,10 +926,6 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
-        if include_embedding:
-            logger.warning(
-                "[Neo4jGraphDB.get_node] `include_embedding=True` is not supported in Neo4j. Ignoring this flag."
-            )
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
@@ -967,9 +954,6 @@ class Neo4jGraphDB(BaseGraphDB):
         - Isolated nodes, nodes with empty background, or nodes with exactly one child.
         - Plus: the child of any parent node that has exactly one child.
         """
-        logger.warning(
-            "[Neo4jGraphDB.get_node] `include_embedding=True` is not supported in Neo4j. Ignoring this flag."
-        )
 
         where_clause = """
                 WHERE n.memory_type = $scope
