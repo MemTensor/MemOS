@@ -1,3 +1,8 @@
+from memos.memories.textual.item import (
+    TextualMemoryItem,
+)
+
+
 def split_continuous_references(text: str) -> str:
     """
     Split continuous reference tags into individual reference tags.
@@ -131,3 +136,18 @@ def process_streaming_references_complete(text_buffer: str) -> tuple[str, str]:
     # No reference-like patterns found, process all text
     processed_text = split_continuous_references(text_buffer)
     return processed_text, ""
+
+
+def prepare_reference_data(memories_list: list[TextualMemoryItem]) -> list[dict]:
+    # Prepare reference data
+    reference = []
+    for memories in memories_list:
+        memories_json = memories.model_dump()
+        memories_json["metadata"]["ref_id"] = f"{memories.id.split('-')[0]}"
+        memories_json["metadata"]["embedding"] = []
+        memories_json["metadata"]["sources"] = []
+        memories_json["metadata"]["memory"] = memories.memory
+        memories_json["metadata"]["id"] = memories.id
+        reference.append({"metadata": memories_json["metadata"]})
+
+    return reference
