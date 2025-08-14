@@ -1175,28 +1175,36 @@ class NebulaGraphDB(BaseGraphDB):
             data: A dictionary containing all nodes and edges to be loaded.
         """
         for node in data.get("nodes", []):
-            id, memory, metadata = _compose_node(node)
+            try:
+                id, memory, metadata = _compose_node(node)
 
-            if not self.config.use_multi_db and self.config.user_name:
-                metadata["user_name"] = self.config.user_name
+                if not self.config.use_multi_db and self.config.user_name:
+                    metadata["user_name"] = self.config.user_name
 
-            metadata = self._prepare_node_metadata(metadata)
-            metadata.update({"id": id, "memory": memory})
-            properties = ", ".join(f"{k}: {self._format_value(v, k)}" for k, v in metadata.items())
-            node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
-            self.execute_query(node_gql)
+                metadata = self._prepare_node_metadata(metadata)
+                metadata.update({"id": id, "memory": memory})
+                properties = ", ".join(
+                    f"{k}: {self._format_value(v, k)}" for k, v in metadata.items()
+                )
+                node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
+                self.execute_query(node_gql)
+            except Exception as e:
+                logger.error(f"Fail to load node: {node}, error: {e}")
 
         for edge in data.get("edges", []):
-            source_id, target_id = edge["source"], edge["target"]
-            edge_type = edge["type"]
-            props = ""
-            if not self.config.use_multi_db and self.config.user_name:
-                props = f'{{user_name: "{self.config.user_name}"}}'
-            edge_gql = f'''
-               MATCH (a@Memory {{id: "{source_id}"}}), (b@Memory {{id: "{target_id}"}})
-               INSERT OR IGNORE (a) -[e@{edge_type} {props}]-> (b)
-           '''
-            self.execute_query(edge_gql)
+            try:
+                source_id, target_id = edge["source"], edge["target"]
+                edge_type = edge["type"]
+                props = ""
+                if not self.config.use_multi_db and self.config.user_name:
+                    props = f'{{user_name: "{self.config.user_name}"}}'
+                edge_gql = f'''
+                   MATCH (a@Memory {{id: "{source_id}"}}), (b@Memory {{id: "{target_id}"}})
+                   INSERT OR IGNORE (a) -[e@{edge_type} {props}]-> (b)
+               '''
+                self.execute_query(edge_gql)
+            except Exception as e:
+                logger.error(f"Fail to load edge: {edge}, error: {e}")
 
     @timed
     def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> (list)[dict]:
