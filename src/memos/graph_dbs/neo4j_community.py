@@ -129,6 +129,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity using external vector DB.
@@ -157,7 +158,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if status:
             vec_filter["status"] = status
         vec_filter["vector_sync"] = "success"
-        vec_filter["user_name"] = self.config.user_name
+        if kwargs.get("cube_name"):
+            vec_filter["user_name"] = kwargs["cube_name"]
+        else:
+            vec_filter["user_name"] = self.config.user_name
 
         # Perform vector search
         results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)

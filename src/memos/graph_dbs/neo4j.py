@@ -365,7 +365,10 @@ class Neo4jGraphDB(BaseGraphDB):
 
         if not self.config.use_multi_db and self.config.user_name:
             where_user = " AND n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
+            if kwargs.get("cube_name"):
+                params["user_name"] = kwargs["cube_name"]
+            else:
+                params["user_name"] = self.config.user_name
 
         query = f"MATCH (n:Memory) WHERE n.id IN $ids{where_user} RETURN n"
 
@@ -603,6 +606,7 @@ class Neo4jGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
@@ -652,7 +656,10 @@ class Neo4jGraphDB(BaseGraphDB):
         if status:
             parameters["status"] = status
         if not self.config.use_multi_db and self.config.user_name:
-            parameters["user_name"] = self.config.user_name
+            if kwargs.get("cube_name"):
+                parameters["user_name"] = kwargs["cube_name"]
+            else:
+                parameters["user_name"] = self.config.user_name
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, parameters)

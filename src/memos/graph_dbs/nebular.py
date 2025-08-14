@@ -604,7 +604,9 @@ class NebulaGraphDB(BaseGraphDB):
             return None
 
     @timed
-    def get_nodes(self, ids: list[str], include_embedding: bool = False) -> list[dict[str, Any]]:
+    def get_nodes(
+        self, ids: list[str], include_embedding: bool = False, **kwargs
+    ) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
@@ -622,7 +624,10 @@ class NebulaGraphDB(BaseGraphDB):
 
         where_user = ""
         if not self.config.use_multi_db and self.config.user_name:
-            where_user = f" AND n.user_name = '{self.config.user_name}'"
+            if kwargs.get("cube_name"):
+                where_user = f" AND n.user_name = '{kwargs['cube_name']}'"
+            else:
+                where_user = f" AND n.user_name = '{self.config.user_name}'"
 
         # Safe formatting of the ID list
         id_list = ",".join(f'"{_id}"' for _id in ids)
@@ -862,6 +867,7 @@ class NebulaGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
@@ -896,7 +902,10 @@ class NebulaGraphDB(BaseGraphDB):
         if status:
             where_clauses.append(f'n.status = "{status}"')
         if not self.config.use_multi_db and self.config.user_name:
-            where_clauses.append(f'n.user_name = "{self.config.user_name}"')
+            if kwargs.get("cube_name"):
+                where_clauses.append(f'n.user_name = "{kwargs["cube_name"]}"')
+            else:
+                where_clauses.append(f'n.user_name = "{self.config.user_name}"')
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
