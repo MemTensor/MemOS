@@ -55,7 +55,9 @@ class User(Base):
 
     user_id = Column(String(255), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_name = Column(String(255), unique=True, nullable=False)
-    role = Column(String(20), default=UserRole.USER.value, nullable=False)
+    role = Column(
+        String(20), default=UserRole.USER.value, nullable=False
+    )  # for sqlite backend this is SQLEnum
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -65,7 +67,7 @@ class User(Base):
     owned_cubes = relationship("Cube", back_populates="owner", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<User(user_id='{self.user_id}', user_name='{self.user_name}', role='{self.role.value}')>"
+        return f"<User(user_id='{self.user_id}', user_name='{self.user_name}', role='{self.role}')>"
 
 
 class Cube(Base):
