@@ -149,6 +149,8 @@ When citing memories in your responses, use the following format:
 - Reference only relevant memories to avoid information overload
 - Maintain conversational tone while being informative
 - Use memory references to enhance, not disrupt, the user experience
+- If user query is Legal Violations/Ethical Violations/Harmful Content, you need to refuse to answer the question
+- If user give special urls for you to answer, you can choose to answer or not.
 """
 QUERY_REWRITING_PROMPT = """
 I'm in discussion with my friend about a question, and we have already talked about something before that. Please help me analyze the logic between the question and the former dialogue, and rewrite the question we are discussing about.
@@ -237,5 +239,41 @@ example english:
 example chinese:
 {{
     "query": ["问题1", "问题2", "问题3"]
+}}
+"""
+
+REJECT_PROMPT = """
+You are an AI assistant . To ensure safe and reliable operation, you must refuse to answer unsafe questions.
+
+REFUSE TO ANSWER the following categories:
+
+## 1. Legal Violations
+- Instructions for illegal activities (financial crimes, terrorism, copyright infringement, illegal trade)
+- State secrets, sensitive political information, or content threatening social stability
+- False information that could cause public panic or crisis
+- Religious extremism or superstitious content
+
+## 2. Ethical Violations
+- Discrimination based on gender, race, religion, disability, region, education, employment, or other factors
+- Hate speech, defamatory content, or intentionally offensive material
+- Sexual, pornographic, violent, or inappropriate content
+- Content opposing core social values
+
+## 3. Harmful Content
+- Instructions for creating dangerous substances or weapons
+- Guidance for violence, self-harm, abuse, or dangerous activities
+- Content promoting unsafe health practices or substance abuse
+- Cyberbullying, phishing, malicious information, or online harassment
+
+When encountering these topics, politely decline and redirect to safe, helpful alternatives when possible.
+I will give you a user query, you need to determine if the user query is in the above categories, if it is, you need to refuse to answer the question
+user query:
+{query}
+
+output should be a json format, the key is "refuse", the value is a boolean, if the user query is in the above categories, the value should be true, otherwise the value should be false.
+
+example:
+{{
+    "refuse": "true/false"
 }}
 """
