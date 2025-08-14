@@ -404,18 +404,17 @@ class MOSProduct(MOSCore):
         # Add memory context if available
         now = datetime.now()
         formatted_date = now.strftime("%Y-%m-%d (%A)")
-        system_prompt = get_memos_prompt(formatted_date, tone, verbosity, mode="base")
-        if memories_all:
-            memory_context = "\n\n## Available ID Memories:\n"
-            for i, memory in enumerate(memories_all, 1):
-                # Format: [memory_id]: memory_content
-                memory_id = f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
-                memory_content = memory_content.replace("\n", " ")
-                memory_context += f"{memory_id}: {memory_content}\n"
-            return system_prompt + memory_context
-
-        return system_prompt
+        sys_body = get_memos_prompt(
+            date=formatted_date, tone=tone, verbosity=verbosity, mode="base"
+        )
+        mem_block = _format_mem_block(memories_all)
+        prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
+        return (
+            prefix
+            + sys_body
+            + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n"
+            + mem_block
+        )
 
     def _build_enhance_system_prompt(
         self,
@@ -429,35 +428,11 @@ class MOSProduct(MOSCore):
         """
         now = datetime.now()
         formatted_date = now.strftime("%Y-%m-%d (%A)")
-        system_prompt = get_memos_prompt(formatted_date, tone, verbosity, mode="enhance")
-        if memories_all:
-            personal_memory_context = "\n\n## Available ID and PersonalMemory Memories:\n"
-            outer_memory_context = "\n\n## Available ID and OuterMemory Memories:\n"
-            for i, memory in enumerate(memories_all, 1):
-                # Format: [memory_id]: memory_content
-                if memory.metadata.memory_type != "OuterMemory":
-                    memory_id = (
-                        f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                    )
-                    memory_content = (
-                        memory.memory[:500] if hasattr(memory, "memory") else str(memory)
-                    )
-                    personal_memory_context += f"{memory_id}: {memory_content}\n"
-                else:
-                    memory_id = (
-                        f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                    )
-                    memory_content = (
-                        memory.memory[:500] if hasattr(memory, "memory") else str(memory)
-                    )
-                    memory_content = memory_content.replace("\n", " ")
-                    outer_memory_context += f"{memory_id}: {memory_content}\n"
-            return (
-                system_prompt.format(formatted_date)
-                + personal_memory_context
-                + outer_memory_context
-            )
-        return system_prompt.format(formatted_date)
+        sys_body = get_memos_prompt(
+            date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
+        )
+        mem_block = _format_mem_block(memories_all)
+        return sys_body + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
