@@ -1,3 +1,4 @@
+import json
 import traceback
 
 from contextlib import suppress
@@ -35,7 +36,28 @@ def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
 
 @timed
 def _escape_str(value: str) -> str:
-    return value.replace('"', '\\"')
+    out = []
+    for ch in value:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\b":
+            out.append("\\b")
+        elif ch == "\f":
+            out.append("\\f")
+        elif code < 0x20 or code in (0x2028, 0x2029):
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 @timed
@@ -1555,6 +1577,7 @@ class NebulaGraphDB(BaseGraphDB):
         # Normalize embedding type
         embedding = metadata.get("embedding")
         if embedding and isinstance(embedding, list):
+            metadata.pop("embedding")
             metadata[self.dim_field] = _normalize([float(x) for x in embedding])
 
         return metadata
@@ -1563,12 +1586,22 @@ class NebulaGraphDB(BaseGraphDB):
     def _format_value(self, val: Any, key: str = "") -> str:
         from nebulagraph_python.py_data_types import NVector
 
+        # None
+        if val is None:
+            return "NULL"
+        # bool
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        # str
         if isinstance(val, str):
             return f'"{_escape_str(val)}"'
+        # num
         elif isinstance(val, (int | float)):
             return str(val)
+        # time
         elif isinstance(val, datetime):
             return f'datetime("{val.isoformat()}")'
+        # list
         elif isinstance(val, list):
             if key == self.dim_field:
                 dim = len(val)
@@ -1576,13 +1609,18 @@ class NebulaGraphDB(BaseGraphDB):
                 return f"VECTOR<{dim}, FLOAT>([{joined}])"
             else:
                 return f"[{', '.join(self._format_value(v) for v in val)}]"
+        # NVector
         elif isinstance(val, NVector):
             if key == self.dim_field:
                 dim = len(val)
                 joined = ",".join(str(float(x)) for x in val)
                 return f"VECTOR<{dim}, FLOAT>([{joined}])"
-        elif val is None:
-            return "NULL"
+            else:
+                logger.warning("Invalid NVector")
+        # dict
+        if isinstance(val, dict):
+            j = json.dumps(val, ensure_ascii=False, separators=(",", ":"))
+            return f'"{_escape_str(j)}"'
         else:
             return f'"{_escape_str(str(val))}"'
 
