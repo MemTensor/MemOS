@@ -352,6 +352,7 @@ class MOSCore:
         self,
         memories: list[TextualMemoryItem] | list[str] | None = None,
         base_prompt: str | None = None,
+        **kwargs,
     ) -> str:
         """Build system prompt with optional memories context."""
         if base_prompt is None:

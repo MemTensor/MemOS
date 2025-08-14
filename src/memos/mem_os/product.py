@@ -38,10 +38,9 @@ from memos.memories.textual.item import (
 )
 from memos.templates.mos_prompts import (
     FURTHER_SUGGESTION_PROMPT,
-    MEMOS_PRODUCT_BASE_PROMPT,
-    MEMOS_PRODUCT_ENHANCE_PROMPT,
     SUGGESTION_QUERY_PROMPT_EN,
     SUGGESTION_QUERY_PROMPT_ZH,
+    get_memos_prompt,
 )
 from memos.types import MessageList
 
@@ -51,6 +50,35 @@ logger = get_logger(__name__)
 load_dotenv()
 
 CUBE_PATH = os.getenv("MOS_CUBE_PATH", "/tmp/data/")
+
+
+def _short_id(mem_id: str) -> str:
+    return (mem_id or "").split("-")[0] if mem_id else ""
+
+
+def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 320) -> str:
+    """
+    Modify TextualMemoryItem Format:
+      1:abcd :: [P] text...
+      2:ef01 :: [O] text...
+    sequence is [i:memId] i; [P]=PersonalMemory / [O]=OuterMemory
+    """
+    if not memories_all:
+        return "(none)"
+
+    lines = []
+    for idx, m in enumerate(memories_all[:max_items], 1):
+        mid = _short_id(getattr(m, "id", "") or "")
+        mtype = getattr(getattr(m, "metadata", {}), "memory_type", None) or getattr(
+            m, "metadata", {}
+        ).get("memory_type", "")
+        tag = "O" if "Outer" in str(mtype) else "P"
+        txt = (getattr(m, "memory", "") or "").replace("\n", " ").strip()
+        if len(txt) > max_chars_each:
+            txt = txt[: max_chars_each - 1] + "…"
+        mid = mid or f"mem_{idx}"
+        lines.append(f"{idx}:{mid} :: [{tag}] {txt}")
+    return "\n".join(lines)
 
 
 class MOSProduct(MOSCore):
@@ -356,7 +384,11 @@ class MOSProduct(MOSCore):
         return self._create_user_config(user_id, user_config)
 
     def _build_system_prompt(
-        self, memories_all: list[TextualMemoryItem], base_prompt: str | None = None
+        self,
+        memories_all: list[TextualMemoryItem],
+        base_prompt: str | None = None,
+        tone: str = "friendly",
+        verbosity: str = "mid",
     ) -> str:
         """
         Build custom system prompt for the user with memory references.
@@ -368,11 +400,11 @@ class MOSProduct(MOSCore):
         Returns:
             str: The custom system prompt.
         """
-
         # Build base prompt
         # Add memory context if available
         now = datetime.now()
         formatted_date = now.strftime("%Y-%m-%d (%A)")
+        system_prompt = get_memos_prompt(formatted_date, tone, verbosity, mode="base")
         if memories_all:
             memory_context = "\n\n## Available ID Memories:\n"
             for i, memory in enumerate(memories_all, 1):
@@ -381,18 +413,23 @@ class MOSProduct(MOSCore):
                 memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
                 memory_content = memory_content.replace("\n", " ")
                 memory_context += f"{memory_id}: {memory_content}\n"
-            return MEMOS_PRODUCT_BASE_PROMPT.format(formatted_date) + memory_context
+            return system_prompt + memory_context
 
-        return MEMOS_PRODUCT_BASE_PROMPT.format(formatted_date)
+        return system_prompt
 
     def _build_enhance_system_prompt(
-        self, user_id: str, memories_all: list[TextualMemoryItem]
+        self,
+        user_id: str,
+        memories_all: list[TextualMemoryItem],
+        tone: str = "friendly",
+        verbosity: str = "mid",
     ) -> str:
         """
         Build enhance prompt for the user with memory references.
         """
         now = datetime.now()
         formatted_date = now.strftime("%Y-%m-%d (%A)")
+        system_prompt = get_memos_prompt(formatted_date, tone, verbosity, mode="enhance")
         if memories_all:
             personal_memory_context = "\n\n## Available ID and PersonalMemory Memories:\n"
             outer_memory_context = "\n\n## Available ID and OuterMemory Memories:\n"
@@ -416,11 +453,11 @@ class MOSProduct(MOSCore):
                     memory_content = memory_content.replace("\n", " ")
                     outer_memory_context += f"{memory_id}: {memory_content}\n"
             return (
-                MEMOS_PRODUCT_ENHANCE_PROMPT.format(formatted_date)
+                system_prompt.format(formatted_date)
                 + personal_memory_context
                 + outer_memory_context
             )
-        return MEMOS_PRODUCT_ENHANCE_PROMPT.format(formatted_date)
+        return system_prompt.format(formatted_date)
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
