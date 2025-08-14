@@ -2,6 +2,8 @@
 Example demonstrating how to use MOSProduct for multi-user scenarios.
 """
 
+import os
+
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
@@ -16,26 +18,51 @@ def get_config(user_name):
         "top_p": 0.9,
         "top_k": 50,
         "remove_think_prefix": True,
-        "api_key": "your-api-key-here",
-        "api_base": "https://api.openai.com/v1",
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "api_base": os.getenv("OPENAI_API_BASE"),
     }
     # Create a default configuration
     default_config = MOSConfig(
         user_id="root",
         chat_model={"backend": "openai", "config": openapi_config},
         mem_reader={
-            "backend": "naive",
+            "backend": "simple_struct",
             "config": {
                 "llm": {
                     "backend": "openai",
                     "config": openapi_config,
                 },
                 "embedder": {
-                    "backend": "ollama",
+                    "backend": "universal_api",
                     "config": {
-                        "model_name_or_path": "nomic-embed-text:latest",
+                        "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
+                        "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
+                        "model_name_or_path": os.getenv(
+                            "MOS_EMBEDDER_MODEL", "text-embedding-3-large"
+                        ),
+                        "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                     },
                 },
+                "chunker": {
+                    "backend": "sentence",
+                    "config": {
+                        "tokenizer_or_token_counter": "gpt2",
+                        "chunk_size": 512,
+                        "chunk_overlap": 128,
+                        "min_sentences_per_chunk": 1,
+                    },
+                },
+            },
+        },
+        user_manager={
+            "backend": "mysql",
+            "config": {
+                "host": os.getenv("MYSQL_HOST", "localhost"),
+                "port": int(os.getenv("MYSQL_PORT", "3306")),
+                "username": os.getenv("MYSQL_USERNAME", "root"),
+                "password": os.getenv("MYSQL_PASSWORD", "12345678"),
+                "database": os.getenv("MYSQL_DATABASE", "memos_users"),
+                "charset": os.getenv("MYSQL_CHARSET", "utf8mb4"),
             },
         },
         enable_textual_memory=True,
@@ -55,17 +82,27 @@ def get_config(user_name):
                     "graph_db": {
                         "backend": "neo4j",
                         "config": {
-                            "uri": "bolt://localhost:7687",
-                            "user": "neo4j",
-                            "password": "12345678",
-                            "db_name": user_name,
+                            "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+                            "user": os.getenv("NEO4J_USER", "neo4j"),
+                            "password": os.getenv("NEO4J_PASSWORD", "12345678"),
+                            "db_name": os.getenv(
+                                "NEO4J_DB_NAME", "shared-tree-textual-memory-test"
+                            ),
+                            "user_name": f"memos{user_name.replace('-', '')}",
+                            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 768)),
+                            "use_multi_db": False,
                             "auto_create": True,
                         },
                     },
                     "embedder": {
-                        "backend": "ollama",
+                        "backend": "universal_api",
                         "config": {
-                            "model_name_or_path": "nomic-embed-text:latest",
+                            "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
+                            "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
+                            "model_name_or_path": os.getenv(
+                                "MOS_EMBEDDER_MODEL", "text-embedding-3-large"
+                            ),
+                            "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                         },
                     },
                 },
@@ -109,7 +146,7 @@ def main():
     print(f"\nSearch result for Alice: {search_result}")
 
     # Search memories for Alice
-    search_result = mos_product.get_all(query="conference", user_id="alice", memory_type="text_mem")
+    search_result = mos_product.get_all(user_id="alice", memory_type="text_mem")
     print(f"\nSearch result for Alice: {search_result}")
 
     # List all users
