@@ -24,6 +24,7 @@ from memos.mem_os.utils.format_utils import (
     sort_children_by_memory_type,
 )
 from memos.mem_os.utils.reference_utils import (
+    prepare_reference_data,
     process_streaming_references_complete,
 )
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -742,6 +743,7 @@ class MOSProduct(MOSCore):
             mode="fine",
             internet_search=internet_search,
         )["text_mem"]
+
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
         search_time_end = time.time()
         logger.info(
@@ -753,6 +755,9 @@ class MOSProduct(MOSCore):
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list)
+
+        reference = prepare_reference_data(memories_list)
+        yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         # Build custom system prompt with relevant memories)
         system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
         # Get chat history
@@ -841,18 +846,6 @@ class MOSProduct(MOSCore):
                 chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
                 yield chunk_data
 
-        # Prepare reference data
-        reference = []
-        for memories in memories_list:
-            memories_json = memories.model_dump()
-            memories_json["metadata"]["ref_id"] = f"{memories.id.split('-')[0]}"
-            memories_json["metadata"]["embedding"] = []
-            memories_json["metadata"]["sources"] = []
-            memories_json["metadata"]["memory"] = memories.memory
-            memories_json["metadata"]["id"] = memories.id
-            reference.append({"metadata": memories_json["metadata"]})
-
-        yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         # set kvcache improve speed
         speed_improvement = round(float((len(system_prompt) / 2) * 0.0048 + 44.5), 1)
         total_time = round(float(time_end - time_start), 1)
