@@ -169,14 +169,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Return consistent format
         return [{"id": r.id, "score": r.score} for r in results]
 
-    def get_all_memory_items(self, scope: str, include_embedding: bool = True) -> list[dict]:
+    def get_all_memory_items(self, scope: str, **kwargs) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
-            include_embedding (bool): Whether to include the large embedding field.
-
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
