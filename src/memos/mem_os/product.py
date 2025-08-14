@@ -547,12 +547,16 @@ class MOSProduct(MOSCore):
             self.mem_scheduler.submit_messages(messages=[message_item])
 
     def _filter_memories_by_threshold(
-        self, memories: list[TextualMemoryItem], threshold: float = 0.20
+        self, memories: list[TextualMemoryItem], threshold: float = 0.20, min_num: int = 3
     ) -> list[TextualMemoryItem]:
         """
         Filter memories by threshold.
         """
-        return [memory for memory in memories if memory.metadata.relativity >= threshold]
+        sorted_memories = sorted(memories, key=lambda m: m.metadata.relativity, reverse=True)
+        filtered = [m for m in sorted_memories if m.metadata.relativity >= threshold]
+        if len(filtered) < min_num:
+            filtered = sorted_memories[:min_num]
+        return filtered
 
     def register_mem_cube(
         self,
