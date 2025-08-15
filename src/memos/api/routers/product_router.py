@@ -248,6 +248,7 @@ def chat(chat_req: ChatRequest):
                     cube_id=chat_req.mem_cube_id,
                     history=chat_req.history,
                     internet_search=chat_req.internet_search,
+                    moscube=chat_req.moscube,
                 )
 
             except Exception as e:

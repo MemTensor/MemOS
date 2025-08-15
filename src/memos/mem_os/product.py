@@ -523,7 +523,7 @@ class MOSProduct(MOSCore):
             self.mem_scheduler.submit_messages(messages=[message_item])
 
     def _filter_memories_by_threshold(
-        self, memories: list[TextualMemoryItem], threshold: float = 0.20, min_num: int = 3
+        self, memories: list[TextualMemoryItem], threshold: float = 0.50, min_num: int = 3
     ) -> list[TextualMemoryItem]:
         """
         Filter memories by threshold.
@@ -717,6 +717,7 @@ class MOSProduct(MOSCore):
         history: MessageList | None = None,
         top_k: int = 10,
         internet_search: bool = False,
+        moscube: bool = False,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -742,6 +743,7 @@ class MOSProduct(MOSCore):
             top_k=top_k,
             mode="fine",
             internet_search=internet_search,
+            moscube=moscube,
         )["text_mem"]
 
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
