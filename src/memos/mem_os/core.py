@@ -546,6 +546,8 @@ class MOSCore:
         top_k: int | None = None,
         mode: Literal["fast", "fine"] = "fast",
         internet_search: bool = False,
+        moscube: bool = False,
+        **kwargs,
     ) -> MOSSearchResult:
         """
         Search for textual memories across all registered MemCubes.
@@ -603,6 +605,7 @@ class MOSCore:
                         "session_id": self.session_id,
                         "chat_history": chat_history.chat_history,
                     },
+                    moscube=moscube,
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(

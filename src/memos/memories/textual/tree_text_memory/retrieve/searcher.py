@@ -27,6 +27,7 @@ class Searcher:
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         internet_retriever: InternetRetrieverFactory | None = None,
+        moscube: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -38,6 +39,7 @@ class Searcher:
 
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
+        self.moscube = moscube
 
     @timed
     def search(
@@ -157,16 +159,17 @@ class Searcher:
                     memory_type,
                 )
             )
-            tasks.append(
-                executor.submit(
-                    self._retrieve_from_memcubes,
-                    query,
-                    parsed_goal,
-                    query_embedding,
-                    top_k,
-                    "memos_cube01",
+            if self.moscube:
+                tasks.append(
+                    executor.submit(
+                        self._retrieve_from_memcubes,
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        "memos_cube01",
+                    )
                 )
-            )
 
             results = []
             for t in tasks:
