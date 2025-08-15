@@ -78,7 +78,7 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
         if len(txt) > max_chars_each:
             txt = txt[: max_chars_each - 1] + "…"
         mid = mid or f"mem_{idx}"
-        lines.append(f"{idx}:{mid} :: [{tag}] {txt}")
+        lines.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
     return "\n".join(lines)
 
 
