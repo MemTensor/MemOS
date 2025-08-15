@@ -74,6 +74,51 @@ class GraphMemoryRetriever:
 
         return list(combined.values())
 
+    def retrieve_from_cube(
+        self,
+        top_k: int,
+        memory_scope: str,
+        query_embedding: list[list[float]] | None = None,
+        cube_name: str = "memos_cube01",
+    ) -> list[TextualMemoryItem]:
+        """
+        Perform hybrid memory retrieval:
+        - Run graph-based lookup from dispatch plan.
+        - Run vector similarity search from embedded query.
+        - Merge and return combined result set.
+
+        Args:
+            top_k (int): Number of candidates to return.
+            memory_scope (str): One of ['working', 'long_term', 'user'].
+            query_embedding(list of embedding): list of embedding of query
+            cube_name: specify cube_name
+
+        Returns:
+            list: Combined memory items.
+        """
+        if memory_scope not in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+            raise ValueError(f"Unsupported memory scope: {memory_scope}")
+
+        graph_results = self._vector_recall(
+            query_embedding, memory_scope, top_k, cube_name=cube_name
+        )
+
+        for result_i in graph_results:
+            result_i.metadata.memory_type = "OuterMemory"
+        # Merge and deduplicate by ID
+        combined = {item.id: item for item in graph_results}
+
+        graph_ids = {item.id for item in graph_results}
+        combined_ids = set(combined.keys())
+        lost_ids = graph_ids - combined_ids
+
+        if lost_ids:
+            print(
+                f"[DEBUG] The following nodes were in graph_results but missing in combined: {lost_ids}"
+            )
+
+        return list(combined.values())
+
     def _graph_recall(
         self, parsed_goal: ParsedTaskGoal, memory_scope: str
     ) -> list[TextualMemoryItem]:
@@ -135,6 +180,7 @@ class GraphMemoryRetriever:
         memory_scope: str,
         top_k: int = 20,
         max_num: int = 5,
+        cube_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """
         # TODO: tackle with post-filter and pre-filter(5.18+) better.
@@ -144,7 +190,9 @@ class GraphMemoryRetriever:
 
         def search_single(vec):
             return (
-                self.graph_store.search_by_embedding(vector=vec, top_k=top_k, scope=memory_scope)
+                self.graph_store.search_by_embedding(
+                    vector=vec, top_k=top_k, scope=memory_scope, cube_name=cube_name
+                )
                 or []
             )
 
@@ -159,6 +207,8 @@ class GraphMemoryRetriever:
 
         # Step 3: Extract matched IDs and retrieve full nodes
         unique_ids = set({r["id"] for r in all_matches})
-        node_dicts = self.graph_store.get_nodes(list(unique_ids), include_embedding=True)
+        node_dicts = self.graph_store.get_nodes(
+            list(unique_ids), include_embedding=True, cube_name=cube_name
+        )
 
         return [TextualMemoryItem.from_dict(record) for record in node_dicts]
