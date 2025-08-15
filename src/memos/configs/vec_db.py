@@ -39,6 +39,29 @@ class QdrantVecDBConfig(BaseVecDBConfig):
         return self
 
 
+class ChromaVecDBConfig(BaseVecDBConfig):
+    """Configuration for Chroma vector database."""
+
+    host: str | None = Field(default=None, description="Host for Chroma")
+    port: int | None = Field(default=None, description="Port for Chroma")
+    username: str | None = Field(default=None, description="Username for Chroma")
+    password: str | None = Field(default=None, description="Password for Chroma")
+    path: str | None = Field(default=None, description="Path for Chroma")
+    database: str | None = Field(default=None, description="Database name for Chroma")
+    tenant: str | None = Field(default=None, description="Tenant for Chroma")
+    ssl: bool = Field(default=False, description="Use SSL for Chroma connection")
+
+    @model_validator(mode="after")
+    def set_default_path(self):
+        if all(x is None for x in (self.host, self.port, self.path)):
+            logger.warning(
+                "No host, port, or path provided for Chroma. Defaulting to local path: %s",
+                settings.MEMOS_DIR / "chroma",
+            )
+            self.path = str(settings.MEMOS_DIR / "chroma")
+        return self
+
+
 class VectorDBConfigFactory(BaseConfig):
     """Factory class for creating vector database configurations."""
 
@@ -47,6 +70,7 @@ class VectorDBConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "qdrant": QdrantVecDBConfig,
+        "chroma": ChromaVecDBConfig,
     }
 
     @field_validator("backend")
