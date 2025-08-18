@@ -84,6 +84,7 @@ class ChatRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(True, description="Whether to use internet search")
+    moscube: bool = Field(False, description="Whether to use MemOSCube")
 
 
 class UserCreate(BaseRequest):
@@ -161,3 +162,4 @@ class SuggestionRequest(BaseRequest):
 
     user_id: str = Field(..., description="User ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
+    message: list[MessageDict] | None = Field(None, description="List of messages to store.")

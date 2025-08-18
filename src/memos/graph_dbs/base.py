@@ -81,7 +81,9 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_nodes(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
+    def get_nodes(
+        self, id: str, include_embedding: bool = False, **kwargs
+    ) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
@@ -141,7 +143,7 @@ class BaseGraphDB(ABC):
 
     # Search / recall operations
     @abstractmethod
-    def search_by_embedding(self, vector: list[float], top_k: int = 5) -> list[dict]:
+    def search_by_embedding(self, vector: list[float], top_k: int = 5, **kwargs) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
 

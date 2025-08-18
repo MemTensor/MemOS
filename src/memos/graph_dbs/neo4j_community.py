@@ -129,6 +129,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity using external vector DB.
@@ -157,7 +158,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if status:
             vec_filter["status"] = status
         vec_filter["vector_sync"] = "success"
-        vec_filter["user_name"] = self.config.user_name
+        if kwargs.get("cube_name"):
+            vec_filter["user_name"] = kwargs["cube_name"]
+        else:
+            vec_filter["user_name"] = self.config.user_name
 
         # Perform vector search
         results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)
@@ -169,14 +173,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Return consistent format
         return [{"id": r.id, "score": r.score} for r in results]
 
-    def get_all_memory_items(self, scope: str, include_embedding: bool = True) -> list[dict]:
+    def get_all_memory_items(self, scope: str, **kwargs) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
-            include_embedding (bool): Whether to include the large embedding field.
-
         Returns:
             list[dict]: Full list of memory items under this scope.
         """

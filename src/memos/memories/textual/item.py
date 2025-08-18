@@ -33,7 +33,7 @@ class TextualMemoryMetadata(BaseModel):
         default=None,
         description="A numeric score (float between 0 and 100) indicating how certain you are about the accuracy or reliability of the memory.",
     )
-    source: Literal["conversation", "retrieved", "web", "file"] | None = Field(
+    source: Literal["conversation", "retrieved", "web", "file", "system"] | None = Field(
         default=None, description="The origin of the memory"
     )
     tags: list[str] | None = Field(

@@ -1,3 +1,4 @@
+import json
 import traceback
 
 from contextlib import suppress
@@ -35,7 +36,28 @@ def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
 
 @timed
 def _escape_str(value: str) -> str:
-    return value.replace('"', '\\"')
+    out = []
+    for ch in value:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\b":
+            out.append("\\b")
+        elif ch == "\f":
+            out.append("\\f")
+        elif code < 0x20 or code in (0x2028, 0x2029):
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 @timed
@@ -582,7 +604,9 @@ class NebulaGraphDB(BaseGraphDB):
             return None
 
     @timed
-    def get_nodes(self, ids: list[str], include_embedding: bool = False) -> list[dict[str, Any]]:
+    def get_nodes(
+        self, ids: list[str], include_embedding: bool = False, **kwargs
+    ) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
@@ -600,7 +624,10 @@ class NebulaGraphDB(BaseGraphDB):
 
         where_user = ""
         if not self.config.use_multi_db and self.config.user_name:
-            where_user = f" AND n.user_name = '{self.config.user_name}'"
+            if kwargs.get("cube_name"):
+                where_user = f" AND n.user_name = '{kwargs['cube_name']}'"
+            else:
+                where_user = f" AND n.user_name = '{self.config.user_name}'"
 
         # Safe formatting of the ID list
         id_list = ",".join(f'"{_id}"' for _id in ids)
@@ -840,6 +867,7 @@ class NebulaGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
@@ -874,7 +902,10 @@ class NebulaGraphDB(BaseGraphDB):
         if status:
             where_clauses.append(f'n.status = "{status}"')
         if not self.config.use_multi_db and self.config.user_name:
-            where_clauses.append(f'n.user_name = "{self.config.user_name}"')
+            if kwargs.get("cube_name"):
+                where_clauses.append(f'n.user_name = "{kwargs["cube_name"]}"')
+            else:
+                where_clauses.append(f'n.user_name = "{self.config.user_name}"')
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -1153,28 +1184,36 @@ class NebulaGraphDB(BaseGraphDB):
             data: A dictionary containing all nodes and edges to be loaded.
         """
         for node in data.get("nodes", []):
-            id, memory, metadata = _compose_node(node)
+            try:
+                id, memory, metadata = _compose_node(node)
 
-            if not self.config.use_multi_db and self.config.user_name:
-                metadata["user_name"] = self.config.user_name
+                if not self.config.use_multi_db and self.config.user_name:
+                    metadata["user_name"] = self.config.user_name
 
-            metadata = self._prepare_node_metadata(metadata)
-            metadata.update({"id": id, "memory": memory})
-            properties = ", ".join(f"{k}: {self._format_value(v, k)}" for k, v in metadata.items())
-            node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
-            self.execute_query(node_gql)
+                metadata = self._prepare_node_metadata(metadata)
+                metadata.update({"id": id, "memory": memory})
+                properties = ", ".join(
+                    f"{k}: {self._format_value(v, k)}" for k, v in metadata.items()
+                )
+                node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
+                self.execute_query(node_gql)
+            except Exception as e:
+                logger.error(f"Fail to load node: {node}, error: {e}")
 
         for edge in data.get("edges", []):
-            source_id, target_id = edge["source"], edge["target"]
-            edge_type = edge["type"]
-            props = ""
-            if not self.config.use_multi_db and self.config.user_name:
-                props = f'{{user_name: "{self.config.user_name}"}}'
-            edge_gql = f'''
-               MATCH (a@Memory {{id: "{source_id}"}}), (b@Memory {{id: "{target_id}"}})
-               INSERT OR IGNORE (a) -[e@{edge_type} {props}]-> (b)
-           '''
-            self.execute_query(edge_gql)
+            try:
+                source_id, target_id = edge["source"], edge["target"]
+                edge_type = edge["type"]
+                props = ""
+                if not self.config.use_multi_db and self.config.user_name:
+                    props = f'{{user_name: "{self.config.user_name}"}}'
+                edge_gql = f'''
+                   MATCH (a@Memory {{id: "{source_id}"}}), (b@Memory {{id: "{target_id}"}})
+                   INSERT OR IGNORE (a) -[e@{edge_type} {props}]-> (b)
+               '''
+                self.execute_query(edge_gql)
+            except Exception as e:
+                logger.error(f"Fail to load edge: {edge}, error: {e}")
 
     @timed
     def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> (list)[dict]:
@@ -1555,6 +1594,7 @@ class NebulaGraphDB(BaseGraphDB):
         # Normalize embedding type
         embedding = metadata.get("embedding")
         if embedding and isinstance(embedding, list):
+            metadata.pop("embedding")
             metadata[self.dim_field] = _normalize([float(x) for x in embedding])
 
         return metadata
@@ -1563,12 +1603,22 @@ class NebulaGraphDB(BaseGraphDB):
     def _format_value(self, val: Any, key: str = "") -> str:
         from nebulagraph_python.py_data_types import NVector
 
+        # None
+        if val is None:
+            return "NULL"
+        # bool
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        # str
         if isinstance(val, str):
             return f'"{_escape_str(val)}"'
+        # num
         elif isinstance(val, (int | float)):
             return str(val)
+        # time
         elif isinstance(val, datetime):
             return f'datetime("{val.isoformat()}")'
+        # list
         elif isinstance(val, list):
             if key == self.dim_field:
                 dim = len(val)
@@ -1576,13 +1626,18 @@ class NebulaGraphDB(BaseGraphDB):
                 return f"VECTOR<{dim}, FLOAT>([{joined}])"
             else:
                 return f"[{', '.join(self._format_value(v) for v in val)}]"
+        # NVector
         elif isinstance(val, NVector):
             if key == self.dim_field:
                 dim = len(val)
                 joined = ",".join(str(float(x)) for x in val)
                 return f"VECTOR<{dim}, FLOAT>([{joined}])"
-        elif val is None:
-            return "NULL"
+            else:
+                logger.warning("Invalid NVector")
+        # dict
+        if isinstance(val, dict):
+            j = json.dumps(val, ensure_ascii=False, separators=(",", ":"))
+            return f'"{_escape_str(j)}"'
         else:
             return f'"{_escape_str(str(val))}"'
 

@@ -352,6 +352,7 @@ class MOSCore:
         self,
         memories: list[TextualMemoryItem] | list[str] | None = None,
         base_prompt: str | None = None,
+        **kwargs,
     ) -> str:
         """Build system prompt with optional memories context."""
         if base_prompt is None:
@@ -545,6 +546,8 @@ class MOSCore:
         top_k: int | None = None,
         mode: Literal["fast", "fine"] = "fast",
         internet_search: bool = False,
+        moscube: bool = False,
+        **kwargs,
     ) -> MOSSearchResult:
         """
         Search for textual memories across all registered MemCubes.
@@ -602,6 +605,7 @@ class MOSCore:
                         "session_id": self.session_id,
                         "chat_history": chat_history.chat_history,
                     },
+                    moscube=moscube,
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
@@ -971,7 +975,7 @@ class MOSCore:
         return {
             "user_id": user.user_id,
             "user_name": user.user_name,
-            "role": user.role.value,
+            "role": user.role.value if hasattr(user.role, "value") else user.role,
             "created_at": user.created_at.isoformat(),
             "accessible_cubes": [
                 {
