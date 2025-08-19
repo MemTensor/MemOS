@@ -630,7 +630,7 @@ class MOSProduct(MOSCore):
 
             # Create a default cube for the user using MOSCore's methods
             default_cube_name = f"{user_name}_{user_id}_default_cube"
-            mem_cube_name_or_path = f"{CUBE_PATH}/{default_cube_name}"
+            mem_cube_name_or_path = os.path.join(CUBE_PATH, default_cube_name)
             default_cube_id = self.create_cube_for_user(
                 cube_name=default_cube_name, owner_id=user_id, cube_path=mem_cube_name_or_path
             )
