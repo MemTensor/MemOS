@@ -52,9 +52,10 @@ def test_searcher_fast_path(mock_searcher):
         [make_item("lt1", 0.8)[0]],  # long-term
         [make_item("um1", 0.7)[0]],  # user
     ]
-    mock_searcher.reranker.rerank.side_effect = [
-        [make_item("wm1", 0.9)],
-        [make_item("lt1", 0.8), make_item("um1", 0.7)],
+    mock_searcher.reranker.rerank.return_value = [
+        make_item("wm1", 0.9),
+        make_item("lt1", 0.8),
+        make_item("um1", 0.7),
     ]
 
     result = mock_searcher.search(
