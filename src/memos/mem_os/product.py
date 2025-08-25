@@ -709,6 +709,42 @@ class MOSProduct(MOSCore):
         response_json = json.loads(clean_response)
         return response_json["query"]
 
+    def chat(
+        self,
+        query: str,
+        user_id: str,
+        cube_id: str | None = None,
+        history: MessageList | None = None,
+        base_prompt: str | None = None,
+        internet_search: bool = False,
+        moscube: bool = False,
+        base_prompt: str | None = None,
+        top_k: int = 10,
+    ) -> str:
+        """
+        Chat with LLM with memory references and complete response.
+        """
+        self._load_user_cubes(user_id, self.default_cube_config)
+        memories_result = super().search(
+            query,
+            user_id,
+            install_cube_ids=[cube_id] if cube_id else None,
+            top_k=top_k,
+            mode="fine",
+            internet_search=internet_search,
+            moscube=moscube,
+        )["text_mem"]
+        if memories_result:
+            memories_list = memories_result[0]["memories"]
+            memories_list = self._filter_memories_by_threshold(memories_list)
+        system_prompt = super()._build_system_prompt(memories_list, base_prompt)
+        current_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+        response = self.chat_llm.generate(current_messages)
+        return response
+
     def chat_with_references(
         self,
         query: str,

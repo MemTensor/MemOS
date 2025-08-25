@@ -12,6 +12,7 @@ from memos.api.config import APIConfig
 from memos.api.context.dependencies import G, get_g_object
 from memos.api.product_models import (
     BaseResponse,
+    ChatCompleteRequest,
     ChatRequest,
     GetMemoryRequest,
     MemoryCreateRequest,
@@ -268,6 +269,32 @@ def chat(chat_req: ChatRequest):
                 "Access-Control-Allow-Methods": "*",
             },
         )
+
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+    except Exception as err:
+        logger.error(f"Failed to start chat: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+
+@router.post("/chat/complete", summary="Chat with MemOS (Complete Response)")
+def chat_complete(chat_req: ChatCompleteRequest):
+    """Chat with MemOS for a specific user. Returns complete response (non-streaming)."""
+    try:
+        mos_product = get_mos_product_instance()
+
+        # Collect all responses from the generator
+        content = mos_product.chat(
+            query=chat_req.query,
+            user_id=chat_req.user_id,
+            cube_id=chat_req.mem_cube_id,
+            history=chat_req.history,
+            internet_search=chat_req.internet_search,
+            moscube=chat_req.moscube,
+        )
+
+        # Return the complete response
+        return {"message": "Chat completed successfully", "data": {"response": content}}
 
     except ValueError as err:
         raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
