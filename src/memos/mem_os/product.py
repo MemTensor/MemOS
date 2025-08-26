@@ -718,7 +718,6 @@ class MOSProduct(MOSCore):
         base_prompt: str | None = None,
         internet_search: bool = False,
         moscube: bool = False,
-        base_prompt: str | None = None,
         top_k: int = 10,
     ) -> str:
         """

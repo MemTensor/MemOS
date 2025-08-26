@@ -291,6 +291,7 @@ def chat_complete(chat_req: ChatCompleteRequest):
             history=chat_req.history,
             internet_search=chat_req.internet_search,
             moscube=chat_req.moscube,
+            base_prompt=chat_req.base_prompt,
         )
 
         # Return the complete response
