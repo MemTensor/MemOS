@@ -427,7 +427,7 @@ def search_query(client, query, metadata, frame, version, reversed_client=None, 
         )
     elif frame == "memos":
         context, duration_ms = memos_search(
-            client, query, conv_id, speaker_a, speaker_b, version, reversed_client
+            client, query, conv_id, speaker_a, speaker_b, reversed_client
         )
     elif frame == "memos-api":
         context, duration_ms = memos_api_search(
