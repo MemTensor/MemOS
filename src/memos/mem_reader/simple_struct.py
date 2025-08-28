@@ -1,6 +1,7 @@
 import concurrent.futures
 import copy
 import json
+import os
 import re
 
 from abc import ABC
@@ -19,10 +20,11 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
-    SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
-    SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
+    SIMPLE_STRUCT_MEM_READER_PROMPT,
+    SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
 )
+
 
 logger = log.get_logger(__name__)
 PROMPT_DICT = {
@@ -207,7 +209,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         elif type == "doc":
             for item in scene_data:
                 try:
-                    if not isinstance(item, str):
+                    if os.path.exists(item):
                         parsed_text = parser.parse(item)
                         results.append({"file": "pure_text", "text": parsed_text})
                     else:
