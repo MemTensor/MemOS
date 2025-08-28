@@ -663,7 +663,7 @@ class MOSCore:
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 add_memory = []
                 metadata = TextualMemoryMetadata(
-                    user_id=self.user_id, session_id=self.session_id, source="conversation"
+                    user_id=target_user_id, session_id=self.session_id, source="conversation"
                 )
                 for message in messages:
                     add_memory.append(
