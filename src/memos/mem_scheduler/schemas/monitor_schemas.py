@@ -1,3 +1,4 @@
+import json
 import threading
 
 from collections import Counter
@@ -30,6 +31,8 @@ class QueryMonitorItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
         description="Unique identifier for the query item", default_factory=lambda: str(uuid4())
     )
+    user_id: str = Field(..., description="Required user identifier", min_length=1)
+    mem_cube_id: str = Field(..., description="Required memory cube identifier", min_length=1)
     query_text: str = Field(
         ...,
         description="The actual user query text content",
@@ -131,6 +134,47 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
                 monitor.query_text
                 for monitor in sorted(self.queue, key=lambda x: x.timestamp, reverse=reverse)
             ]
+
+    def to_json(self) -> str:
+        """Serialize the queue to a JSON string.
+
+        Args:
+            item_serializer: Optional function to serialize individual items.
+                             If not provided, items must be JSON-serializable.
+
+        Returns:
+            A JSON string representing the queue's content and maxsize.
+        """
+        with self.mutex:
+            serialized_items = [item.to_json() for item in self.queue]
+
+        data = {"maxsize": self.maxsize, "items": serialized_items}
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "QueryMonitorQueue":
+        """Create a new AutoDroppingQueue from a JSON string.
+
+        Args:
+            json_str: JSON string created by to_json()
+            item_deserializer: Optional function to reconstruct items from dicts.
+                               If not provided, items are used as-is.
+
+        Returns:
+            A new AutoDroppingQueue instance with deserialized data.
+        """
+        data = json.loads(json_str)
+        maxsize = data.get("maxsize", 0)
+        item_strs = data.get("items", [])
+
+        queue = cls(maxsize=maxsize)
+
+        items = [QueryMonitorItem.from_json(json_str=item_str) for item_str in item_strs]
+
+        for item in items:
+            queue.put(item)  # Use put() to respect maxsize and auto-drop behavior
+
+        return queue
 
 
 # ============== Memories ==============

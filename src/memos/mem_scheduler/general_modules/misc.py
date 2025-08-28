@@ -20,6 +20,8 @@ BaseModelType = TypeVar("T", bound="BaseModel")
 class EnvConfigMixin(Generic[T]):
     """Abstract base class for environment variable configuration."""
 
+    ENV_PREFIX = "MEMSCHEDULER_"
+
     @classmethod
     def get_env_prefix(cls) -> str:
         """Automatically generates environment variable prefix from class name.
@@ -37,7 +39,8 @@ class EnvConfigMixin(Generic[T]):
         if class_name.endswith("Config"):
             class_name = class_name[:-6]
         # Convert to uppercase and add trailing underscore
-        return f"{class_name.upper()}_"
+
+        return f"{cls.ENV_PREFIX}{class_name.upper()}_"
 
     @classmethod
     def from_env(cls: type[T]) -> T:
@@ -111,6 +114,26 @@ class DictConversionMixin:
             dump_data["timestamp"] = self.serialize_datetime(self.timestamp, None)
         return dump_data
 
+    def to_json(self, **kwargs) -> str:
+        """
+        Convert model instance to a JSON string.
+        - Accepts the same kwargs as json.dumps (e.g., indent, ensure_ascii)
+        - Default settings make JSON human-readable and UTF-8 safe
+        """
+        return json.dumps(self.to_dict(), ensure_ascii=False, default=lambda o: str(o), **kwargs)
+
+    @classmethod
+    def from_json(cls: type[BaseModelType], json_str: str) -> BaseModelType:
+        """
+        Create model instance from a JSON string.
+        - Parses JSON into a dictionary and delegates to from_dict
+        """
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON string: {e}") from e
+        return cls.from_dict(data)
+
     @classmethod
     def from_dict(cls: type[BaseModelType], data: dict) -> BaseModelType:
         """
@@ -169,3 +192,11 @@ class AutoDroppingQueue(Queue[T]):
     def get_queue_content_without_pop(self) -> list[T]:
         """Return a copy of the queue's contents without modifying it."""
         return list(self.queue)
+
+    def clear(self) -> None:
+        """Remove all items from the queue.
+
+        This operation is thread-safe.
+        """
+        with self.mutex:
+            self.queue.clear()

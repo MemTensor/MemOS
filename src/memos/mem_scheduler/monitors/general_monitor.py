@@ -2,11 +2,18 @@ from datetime import datetime
 from threading import Lock
 from typing import Any
 
+from sqlalchemy.engine import Engine
+
 from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
+from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
+from memos.mem_scheduler.orm_modules.monitor_models import (
+    DBManagerForMemoryMonitorManager,
+    DBManagerForQueryMonitorQueue,
+)
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
     DEFAULT_WEIGHT_VECTOR_FOR_RANKING,
@@ -19,7 +26,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
 from memos.mem_scheduler.schemas.monitor_schemas import (
     MemoryMonitorItem,
     MemoryMonitorManager,
-    QueryMonitorItem,
     QueryMonitorQueue,
 )
 from memos.mem_scheduler.utils.misc_utils import extract_json_dict
@@ -32,7 +38,9 @@ logger = get_logger(__name__)
 class SchedulerGeneralMonitor(BaseSchedulerModule):
     """Monitors and manages scheduling operations with LLM integration."""
 
-    def __init__(self, process_llm: BaseLLM, config: BaseSchedulerConfig):
+    def __init__(
+        self, process_llm: BaseLLM, config: BaseSchedulerConfig, db_engine: Engine | None = None
+    ):
         super().__init__()
 
         # hyper-parameters
@@ -49,12 +57,22 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             "activation_mem_monitor_capacity", DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT
         )
 
-        # attributes
-        # recording query_messages
-        self.query_monitors: dict[UserID, dict[MemCubeID, QueryMonitorQueue[QueryMonitorItem]]] = {}
+        # ORM-based monitor managers
+        self.db_engine = db_engine
+        if self.db_engine is None:
+            logger.warning(
+                "No database engine provided; falling back to default temporary SQLite engine. "
+                "This is intended for testing only. Consider providing a configured engine for production use."
+            )
+            self.db_engine = BaseDBManager.create_default_engine()
 
-        self.working_memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]] = {}
-        self.activation_memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]] = {}
+        self.query_monitors: dict[UserID, dict[MemCubeID, DBManagerForQueryMonitorQueue]] = {}
+        self.working_memory_monitors: dict[
+            UserID, dict[MemCubeID, DBManagerForMemoryMonitorManager]
+        ] = {}
+        self.activation_memory_monitors: dict[
+            UserID, dict[MemCubeID, DBManagerForMemoryMonitorManager]
+        ] = {}
 
         # Lifecycle monitor
         self.last_activation_mem_update_time = datetime.min
@@ -96,40 +114,47 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             if user_id not in self.query_monitors:
                 self.query_monitors[user_id] = {}
             if mem_cube_id not in self.query_monitors[user_id]:
-                self.query_monitors[user_id][mem_cube_id] = QueryMonitorQueue(
-                    maxsize=self.config.context_window_size
-                )
+                if self.db_engine:
+                    # Create ORM manager with initial QueryMonitorQueue
+                    initial_queue = QueryMonitorQueue(maxsize=self.config.context_window_size)
+                    db_manager = DBManagerForQueryMonitorQueue(
+                        engine=self.db_engine,
+                        user_id=str(user_id),
+                        mem_cube_id=str(mem_cube_id),
+                        obj=initial_queue,
+                    )
+                    self.query_monitors[user_id][mem_cube_id] = db_manager
+                else:
+                    # Fallback to in-memory (this shouldn't happen with proper config)
+                    logger.warning("ORM persistence disabled, using in-memory fallback")
+                    # For backward compatibility, we'll need to handle this case differently
+                    raise RuntimeError("ORM persistence is required but not properly configured")
 
     def register_memory_manager_if_not_exists(
         self,
         user_id: UserID | str,
         mem_cube_id: MemCubeID | str,
-        memory_monitors: dict[UserID, dict[MemCubeID, MemoryMonitorManager]],
+        memory_monitors: dict[UserID, dict[MemCubeID, DBManagerForMemoryMonitorManager]],
         max_capacity: int,
     ) -> None:
         """
-        Register a new MemoryMonitorManager for the given user and memory cube if it doesn't exist.
+        Register a new MemoryMonitorManager ORM manager for the given user and memory cube if it doesn't exist.
         Thread-safe implementation using double-checked locking pattern.
 
-        Checks if a MemoryMonitorManager already exists for the specified user_id and mem_cube_id.
-        If not, creates a new MemoryMonitorManager with appropriate capacity settings and registers it.
+        Checks if a MemoryMonitorManager ORM manager already exists for the specified user_id and mem_cube_id.
+        If not, creates a new ORM manager with appropriate capacity settings and registers it.
 
         Args:
             user_id: The ID of the user to associate with the memory manager
             mem_cube_id: The ID of the memory cube to monitor
-            memory_monitors: Dictionary storing existing memory monitor managers
+            memory_monitors: Dictionary storing existing memory monitor ORM managers
             max_capacity: Maximum capacity for the new memory monitor manager
-            lock: Threading lock to ensure safe concurrent access
-
-        Note:
-            This function will update the loose_max_working_memory_capacity based on the current
-            WorkingMemory size plus partial retention number before creating a new manager.
         """
         # First check (lock-free, fast path)
         # Quickly verify existence without lock overhead
         if user_id in memory_monitors and mem_cube_id in memory_monitors[user_id]:
             logger.info(
-                f"MemoryMonitorManager already exists for user_id={user_id}, "
+                f"MemoryMonitorManager ORM manager already exists for user_id={user_id}, "
                 f"mem_cube_id={mem_cube_id} in the provided memory_monitors dictionary"
             )
             return
@@ -140,22 +165,33 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             # Re-check after acquiring lock, as another thread might have created it
             if user_id in memory_monitors and mem_cube_id in memory_monitors[user_id]:
                 logger.info(
-                    f"MemoryMonitorManager already exists for user_id={user_id}, "
+                    f"MemoryMonitorManager ORM manager already exists for user_id={user_id}, "
                     f"mem_cube_id={mem_cube_id} in the provided memory_monitors dictionary"
                 )
                 return
 
-            # Initialize MemoryMonitorManager with user ID, memory cube ID, and max capacity
-            monitor_manager = MemoryMonitorManager(
-                user_id=user_id, mem_cube_id=mem_cube_id, max_capacity=max_capacity
-            )
+            if self.db_engine:
+                # Initialize MemoryMonitorManager with user ID, memory cube ID, and max capacity
+                monitor_manager = MemoryMonitorManager(
+                    user_id=user_id, mem_cube_id=mem_cube_id, max_capacity=max_capacity
+                )
 
-            # Safely register the new manager in the nested dictionary structure
-            memory_monitors.setdefault(user_id, {})[mem_cube_id] = monitor_manager
-            logger.info(
-                f"Registered new MemoryMonitorManager for user_id={user_id},"
-                f" mem_cube_id={mem_cube_id} with max_capacity={max_capacity}"
-            )
+                # Create ORM manager
+                db_manager = DBManagerForMemoryMonitorManager(
+                    engine=self.db_engine,
+                    user_id=str(user_id),
+                    mem_cube_id=str(mem_cube_id),
+                    obj=monitor_manager,
+                )
+
+                # Safely register the new ORM manager in the nested dictionary structure
+                memory_monitors.setdefault(user_id, {})[mem_cube_id] = db_manager
+                logger.info(
+                    f"Registered new MemoryMonitorManager ORM manager for user_id={user_id},"
+                    f" mem_cube_id={mem_cube_id} with max_capacity={max_capacity}"
+                )
+            else:
+                raise RuntimeError("ORM persistence is required but not properly configured")
 
     def update_working_memory_monitors(
         self,
@@ -182,10 +218,14 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             max_capacity=self.working_mem_monitor_capacity,
         )
 
-        self.working_memory_monitors[user_id][mem_cube_id].update_memories(
+        # Get the ORM manager and update memories with database sync
+        db_manager = self.working_memory_monitors[user_id][mem_cube_id]
+        db_manager.obj.update_memories(
             new_memory_monitors=new_working_memory_monitors,
             partial_retention_number=self.partial_retention_number,
         )
+        # Sync with database
+        db_manager.sync_with_orm(size_limit=self.working_mem_monitor_capacity)
 
     def update_activation_memory_monitors(
         self, user_id: str, mem_cube_id: str, mem_cube: GeneralMemCube
@@ -199,17 +239,21 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
 
         # === update activation memory monitors ===
         # Sort by importance_score in descending order and take top k
+        working_db_manager = self.working_memory_monitors[user_id][mem_cube_id]
         top_k_memories = sorted(
-            self.working_memory_monitors[user_id][mem_cube_id].memories,
+            working_db_manager.obj.memories,
             key=lambda m: m.get_importance_score(weight_vector=DEFAULT_WEIGHT_VECTOR_FOR_RANKING),
             reverse=True,
         )[: self.activation_mem_monitor_capacity]
 
         # Update the activation memory monitors with these important memories
-        self.activation_memory_monitors[user_id][mem_cube_id].update_memories(
+        activation_db_manager = self.activation_memory_monitors[user_id][mem_cube_id]
+        activation_db_manager.obj.update_memories(
             new_memory_monitors=top_k_memories,
             partial_retention_number=self.partial_retention_number,
         )
+        # Sync with database
+        activation_db_manager.sync_with_orm(size_limit=self.activation_mem_monitor_capacity)
 
     def timed_trigger(self, last_time: datetime, interval_seconds: float) -> bool:
         now = datetime.utcnow()
@@ -255,9 +299,12 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             )
             return []
 
-        manager: MemoryMonitorManager = monitor_dict[user_id][mem_cube_id]
+        db_manager: DBManagerForMemoryMonitorManager = monitor_dict[user_id][mem_cube_id]
+        # Load latest data from database before accessing
+        db_manager.sync_with_orm()
+
         # Sort memories by recording_count in descending order and return top_k items
-        sorted_memory_monitors = manager.get_sorted_mem_monitors(reverse=True)
+        sorted_memory_monitors = db_manager.obj.get_sorted_mem_monitors(reverse=True)
         sorted_text_memories = [m.memory_text for m in sorted_memory_monitors[:top_k]]
         return sorted_text_memories
 
@@ -273,16 +320,19 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             return {}
 
         info_dict = {}
-        for manager in [
+        for db_manager in [
             self.working_memory_monitors[user_id][mem_cube_id],
             self.activation_memory_monitors[user_id][mem_cube_id],
         ]:
+            # Sync with database to get latest data
+            db_manager.sync_with_orm()
+            manager = db_manager.obj
             info_dict[str(type(manager))] = {
                 "user_id": user_id,
                 "mem_cube_id": mem_cube_id,
                 "memory_count": manager.memory_size,
                 "max_capacity": manager.max_capacity,
-                "top_memories": self.get_scheduler_working_memories(user_id, mem_cube_id, top_k=1),
+                "top_memories": self.get_monitor_memories(user_id, mem_cube_id, top_k=1),
             }
         return info_dict
 
@@ -308,3 +358,33 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
             logger.error(f"Fail to extract json dict from response: {response}")
             response = {"trigger_retrieval": False, "missing_evidences": q_list}
         return response
+
+    def close(self):
+        """Close all database connections and clean up resources"""
+        logger.info("Closing database connections for all monitors")
+
+        # Close all query monitor database managers
+        for user_monitors in self.query_monitors.values():
+            for db_manager in user_monitors.values():
+                try:
+                    db_manager.close()
+                except Exception as e:
+                    logger.error(f"Error closing query monitor DB manager: {e}")
+
+        # Close all working memory monitor database managers
+        for user_monitors in self.working_memory_monitors.values():
+            for db_manager in user_monitors.values():
+                try:
+                    db_manager.close()
+                except Exception as e:
+                    logger.error(f"Error closing working memory monitor DB manager: {e}")
+
+        # Close all activation memory monitor database managers
+        for user_monitors in self.activation_memory_monitors.values():
+            for db_manager in user_monitors.values():
+                try:
+                    db_manager.close()
+                except Exception as e:
+                    logger.error(f"Error closing activation memory monitor DB manager: {e}")
+
+        logger.info("All database connections closed")

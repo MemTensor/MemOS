@@ -27,6 +27,8 @@ class GeneralScheduler(BaseScheduler):
         """Initialize the scheduler with the given configuration."""
         super().__init__(config)
 
+        self.query_key_words_limit = self.config.get("query_key_words_limit", 20)
+
         # register handlers
         handlers = {
             QUERY_LABEL: self._query_message_consumer,
@@ -47,13 +49,17 @@ class GeneralScheduler(BaseScheduler):
         logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
 
         item = QueryMonitorItem(
+            user_id=user_id,
+            mem_cube_id=self.current_mem_cube_id,
             query_text=query,
             keywords=query_keywords,
             max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
         )
-        query_monitor = self.monitor.query_monitors[user_id][self.current_mem_cube_id]
-        query_monitor.put(item=item)
-        logger.debug(f"Queries in monitor are {query_monitor.get_queries_with_timesort()}.")
+        query_db_manager = self.monitor.query_monitors[user_id][self.current_mem_cube_id]
+        query_db_manager.obj.put(item=item)
+        # Sync with database after adding new item
+        query_db_manager.sync_with_orm()
+        logger.debug(f"Queries in monitor are {query_db_manager.obj.get_queries_with_timesort()}.")
 
         queries = [query]
 
@@ -155,21 +161,25 @@ class GeneralScheduler(BaseScheduler):
                             )
                             words = stripped_query  # Default to character count
 
-                        query_keywords = list(set(words[:20]))
+                        query_keywords = list(set(words[: self.query_key_words_limit]))
                         logger.error(
                             f"Keyword extraction failed for query. Using fallback keywords: {query_keywords[:10]}... (truncated)"
                         )
 
                     item = QueryMonitorItem(
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
                         query_text=query,
                         keywords=query_keywords,
                         max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
                     )
 
-                    self.monitor.query_monitors[user_id][mem_cube_id].put(item=item)
+                    query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
+                    query_db_manager.obj.put(item=item)
+                    # Sync with database after adding new item
+                    query_db_manager.sync_with_orm()
                 logger.debug(
-                    f"Queries in monitor are "
-                    f"{self.monitor.query_monitors[user_id][mem_cube_id].get_queries_with_timesort()}."
+                    f"Queries in monitor are {query_db_manager.obj.get_queries_with_timesort()}."
                 )
 
                 queries = [msg.content for msg in messages]

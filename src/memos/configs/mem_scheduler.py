@@ -64,6 +64,19 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=20, description="Capacity of the activation memory monitor"
     )
 
+    # Database configuration for ORM persistence
+    db_path: str | None = Field(
+        default=None,
+        description="Path to SQLite database file for ORM persistence. If None, uses default scheduler_orm.db",
+    )
+    db_url: str | None = Field(
+        default=None,
+        description="Database URL for ORM persistence (e.g., mysql://user:pass@host/db). Takes precedence over db_path",
+    )
+    enable_orm_persistence: bool = Field(
+        default=True, description="Whether to enable ORM-based persistence for monitors"
+    )
+
 
 class SchedulerConfigFactory(BaseConfig):
     """Factory class for creating scheduler configurations."""
@@ -111,10 +124,6 @@ class RabbitMQConfig(
         le=65535,  # Port must be <= 65535
     )
 
-    @classmethod
-    def get_env_prefix(cls) -> str:
-        return "RABBITMQ_"
-
 
 class GraphDBAuthConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     uri: str = Field(
@@ -131,10 +140,6 @@ class GraphDBAuthConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     auto_create: bool = Field(
         default=True, description="Whether to automatically create the database if it doesn't exist"
     )
-
-    @classmethod
-    def get_env_prefix(cls) -> str:
-        return "GRAPH_DB_"
 
 
 class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
