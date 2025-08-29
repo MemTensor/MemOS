@@ -1,6 +1,7 @@
 """
 Notification utilities for MemOS product.
 """
+
 import asyncio
 import logging
 
@@ -87,7 +88,7 @@ async def send_online_bot_notification_async(
                 other_data1=other_data1,
                 other_data2=other_data2,
                 emoji=emoji,
-            )
+            ),
         )
 
         logger.info(f"Online bot notification sent successfully (async): {header_name}")

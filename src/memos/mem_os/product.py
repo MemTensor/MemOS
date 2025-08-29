@@ -524,7 +524,6 @@ class MOSProduct(MOSCore):
             )
             self.mem_scheduler.submit_messages(messages=[message_item])
 
-
     async def _post_chat_processing(
         self,
         user_id: str,
@@ -541,16 +540,22 @@ class MOSProduct(MOSCore):
         Asynchronous processing of logs, notifications and memory additions
         """
         try:
-            logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
+            logger.info(
+                f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}"
+            )
             logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
 
-            clean_response, extracted_references = self._extract_references_from_response(full_response)
+            clean_response, extracted_references = self._extract_references_from_response(
+                full_response
+            )
             logger.info(f"Extracted {len(extracted_references)} references from response")
 
             # Send chat report notifications asynchronously
             if self.online_bot:
                 try:
-                    from memos.memos_tools.notification_utils import send_online_bot_notification_async
+                    from memos.memos_tools.notification_utils import (
+                        send_online_bot_notification_async,
+                    )
 
                     # 准备通知数据
                     chat_data = {
@@ -623,6 +628,7 @@ class MOSProduct(MOSCore):
         """
         Asynchronous processing of logs, notifications and memory additions, handle synchronous and asynchronous environments
         """
+
         def run_async_in_thread():
             """Running asynchronous tasks in a new thread"""
             try:
@@ -645,7 +651,10 @@ class MOSProduct(MOSCore):
                 finally:
                     loop.close()
             except Exception as e:
-                logger.error(f"Error in thread-based post-chat processing for user {user_id}: {e}", exc_info=True)
+                logger.error(
+                    f"Error in thread-based post-chat processing for user {user_id}: {e}",
+                    exc_info=True,
+                )
 
         try:
             # Try to get the current event loop
@@ -666,7 +675,10 @@ class MOSProduct(MOSCore):
             )
             # Add exception handling for the background task
             task.add_done_callback(
-                lambda t: logger.error(f"Error in background post-chat processing for user {user_id}: {t.exception()}", exc_info=True)
+                lambda t: logger.error(
+                    f"Error in background post-chat processing for user {user_id}: {t.exception()}",
+                    exc_info=True,
+                )
                 if t.exception()
                 else None
             )
@@ -676,10 +688,9 @@ class MOSProduct(MOSCore):
                 target=run_async_in_thread,
                 name=f"PostChatProcessing-{user_id}",
                 # Set as a daemon thread to avoid blocking program exit
-                daemon=True
+                daemon=True,
             )
             thread.start()
-
 
     def _filter_memories_by_threshold(
         self, memories: list[TextualMemoryItem], threshold: float = 0.50, min_num: int = 3
