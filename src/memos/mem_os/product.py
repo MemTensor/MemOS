@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import random
+import threading
 import time
 
 from collections.abc import Generator
@@ -24,6 +26,7 @@ from memos.mem_os.utils.format_utils import (
     sort_children_by_memory_type,
 )
 from memos.mem_os.utils.reference_utils import (
+    prepare_reference_data,
     process_streaming_references_complete,
 )
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -36,7 +39,12 @@ from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
     TextualMemoryItem,
 )
-from memos.templates.mos_prompts import MEMOS_PRODUCT_BASE_PROMPT, MEMOS_PRODUCT_ENHANCE_PROMPT
+from memos.templates.mos_prompts import (
+    FURTHER_SUGGESTION_PROMPT,
+    SUGGESTION_QUERY_PROMPT_EN,
+    SUGGESTION_QUERY_PROMPT_ZH,
+    get_memos_prompt,
+)
 from memos.types import MessageList
 
 
@@ -45,6 +53,35 @@ logger = get_logger(__name__)
 load_dotenv()
 
 CUBE_PATH = os.getenv("MOS_CUBE_PATH", "/tmp/data/")
+
+
+def _short_id(mem_id: str) -> str:
+    return (mem_id or "").split("-")[0] if mem_id else ""
+
+
+def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 320) -> str:
+    """
+    Modify TextualMemoryItem Format:
+      1:abcd :: [P] text...
+      2:ef01 :: [O] text...
+    sequence is [i:memId] i; [P]=PersonalMemory / [O]=OuterMemory
+    """
+    if not memories_all:
+        return "(none)"
+
+    lines = []
+    for idx, m in enumerate(memories_all[:max_items], 1):
+        mid = _short_id(getattr(m, "id", "") or "")
+        mtype = getattr(getattr(m, "metadata", {}), "memory_type", None) or getattr(
+            m, "metadata", {}
+        ).get("memory_type", "")
+        tag = "O" if "Outer" in str(mtype) else "P"
+        txt = (getattr(m, "memory", "") or "").replace("\n", " ").strip()
+        if len(txt) > max_chars_each:
+            txt = txt[: max_chars_each - 1] + "…"
+        mid = mid or f"mem_{idx}"
+        lines.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
+    return "\n".join(lines)
 
 
 class MOSProduct(MOSCore):
@@ -350,7 +387,11 @@ class MOSProduct(MOSCore):
         return self._create_user_config(user_id, user_config)
 
     def _build_system_prompt(
-        self, memories_all: list[TextualMemoryItem], base_prompt: str | None = None
+        self,
+        memories_all: list[TextualMemoryItem],
+        base_prompt: str | None = None,
+        tone: str = "friendly",
+        verbosity: str = "mid",
     ) -> str:
         """
         Build custom system prompt for the user with memory references.
@@ -362,51 +403,39 @@ class MOSProduct(MOSCore):
         Returns:
             str: The custom system prompt.
         """
-
         # Build base prompt
         # Add memory context if available
-        if memories_all:
-            memory_context = "\n\n## Available ID Memories:\n"
-            for i, memory in enumerate(memories_all, 1):
-                # Format: [memory_id]: memory_content
-                memory_id = f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                memory_content = memory.memory[:500] if hasattr(memory, "memory") else str(memory)
-                memory_content = memory_content.replace("\n", " ")
-                memory_context += f"{memory_id}: {memory_content}\n"
-            return MEMOS_PRODUCT_BASE_PROMPT + memory_context
-
-        return MEMOS_PRODUCT_BASE_PROMPT
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d (%A)")
+        sys_body = get_memos_prompt(
+            date=formatted_date, tone=tone, verbosity=verbosity, mode="base"
+        )
+        mem_block = _format_mem_block(memories_all)
+        prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
+        return (
+            prefix
+            + sys_body
+            + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n"
+            + mem_block
+        )
 
     def _build_enhance_system_prompt(
-        self, user_id: str, memories_all: list[TextualMemoryItem]
+        self,
+        user_id: str,
+        memories_all: list[TextualMemoryItem],
+        tone: str = "friendly",
+        verbosity: str = "mid",
     ) -> str:
         """
         Build enhance prompt for the user with memory references.
         """
-        if memories_all:
-            personal_memory_context = "\n\n## Available ID and PersonalMemory Memories:\n"
-            outer_memory_context = "\n\n## Available ID and OuterMemory Memories:\n"
-            for i, memory in enumerate(memories_all, 1):
-                # Format: [memory_id]: memory_content
-                if memory.metadata.memory_type != "OuterMemory":
-                    memory_id = (
-                        f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                    )
-                    memory_content = (
-                        memory.memory[:500] if hasattr(memory, "memory") else str(memory)
-                    )
-                    personal_memory_context += f"{memory_id}: {memory_content}\n"
-                else:
-                    memory_id = (
-                        f"{memory.id.split('-')[0]}" if hasattr(memory, "id") else f"mem_{i}"
-                    )
-                    memory_content = (
-                        memory.memory[:500] if hasattr(memory, "memory") else str(memory)
-                    )
-                    memory_content = memory_content.replace("\n", " ")
-                    outer_memory_context += f"{memory_id}: {memory_content}\n"
-            return MEMOS_PRODUCT_ENHANCE_PROMPT + personal_memory_context + outer_memory_context
-        return MEMOS_PRODUCT_ENHANCE_PROMPT
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d (%A)")
+        sys_body = get_memos_prompt(
+            date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
+        )
+        mem_block = _format_mem_block(memories_all)
+        return sys_body + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
@@ -495,13 +524,185 @@ class MOSProduct(MOSCore):
             )
             self.mem_scheduler.submit_messages(messages=[message_item])
 
+    async def _post_chat_processing(
+        self,
+        user_id: str,
+        cube_id: str,
+        query: str,
+        full_response: str,
+        system_prompt: str,
+        time_start: float,
+        time_end: float,
+        speed_improvement: float,
+        current_messages: list,
+    ) -> None:
+        """
+        Asynchronous processing of logs, notifications and memory additions
+        """
+        try:
+            logger.info(
+                f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}"
+            )
+            logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
+
+            clean_response, extracted_references = self._extract_references_from_response(
+                full_response
+            )
+            logger.info(f"Extracted {len(extracted_references)} references from response")
+
+            # Send chat report notifications asynchronously
+            if self.online_bot:
+                try:
+                    from memos.memos_tools.notification_utils import (
+                        send_online_bot_notification_async,
+                    )
+
+                    # 准备通知数据
+                    chat_data = {
+                        "query": query,
+                        "user_id": user_id,
+                        "cube_id": cube_id,
+                        "system_prompt": system_prompt,
+                        "full_response": full_response,
+                    }
+
+                    system_data = {
+                        "references": extracted_references,
+                        "time_start": time_start,
+                        "time_end": time_end,
+                        "speed_improvement": speed_improvement,
+                    }
+
+                    emoji_config = {"chat": "💬", "system_info": "📊"}
+
+                    await send_online_bot_notification_async(
+                        online_bot=self.online_bot,
+                        header_name="MemOS Chat Report",
+                        sub_title_name="chat_with_references",
+                        title_color="#00956D",
+                        other_data1=chat_data,
+                        other_data2=system_data,
+                        emoji=emoji_config,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send chat notification (async): {e}")
+
+            self._send_message_to_scheduler(
+                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
+            )
+
+            self.add(
+                user_id=user_id,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": query,
+                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": clean_response,  # Store clean text without reference markers
+                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    },
+                ],
+                mem_cube_id=cube_id,
+            )
+
+            logger.info(f"Post-chat processing completed for user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Error in post-chat processing for user {user_id}: {e}", exc_info=True)
+
+    def _start_post_chat_processing(
+        self,
+        user_id: str,
+        cube_id: str,
+        query: str,
+        full_response: str,
+        system_prompt: str,
+        time_start: float,
+        time_end: float,
+        speed_improvement: float,
+        current_messages: list,
+    ) -> None:
+        """
+        Asynchronous processing of logs, notifications and memory additions, handle synchronous and asynchronous environments
+        """
+
+        def run_async_in_thread():
+            """Running asynchronous tasks in a new thread"""
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        self._post_chat_processing(
+                            user_id=user_id,
+                            cube_id=cube_id,
+                            query=query,
+                            full_response=full_response,
+                            system_prompt=system_prompt,
+                            time_start=time_start,
+                            time_end=time_end,
+                            speed_improvement=speed_improvement,
+                            current_messages=current_messages,
+                        )
+                    )
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.error(
+                    f"Error in thread-based post-chat processing for user {user_id}: {e}",
+                    exc_info=True,
+                )
+
+        try:
+            # Try to get the current event loop
+            asyncio.get_running_loop()
+            # Create task and store reference to prevent garbage collection
+            task = asyncio.create_task(
+                self._post_chat_processing(
+                    user_id=user_id,
+                    cube_id=cube_id,
+                    query=query,
+                    full_response=full_response,
+                    system_prompt=system_prompt,
+                    time_start=time_start,
+                    time_end=time_end,
+                    speed_improvement=speed_improvement,
+                    current_messages=current_messages,
+                )
+            )
+            # Add exception handling for the background task
+            task.add_done_callback(
+                lambda t: logger.error(
+                    f"Error in background post-chat processing for user {user_id}: {t.exception()}",
+                    exc_info=True,
+                )
+                if t.exception()
+                else None
+            )
+        except RuntimeError:
+            # No event loop, run in a new thread
+            thread = threading.Thread(
+                target=run_async_in_thread,
+                name=f"PostChatProcessing-{user_id}",
+                # Set as a daemon thread to avoid blocking program exit
+                daemon=True,
+            )
+            thread.start()
+
     def _filter_memories_by_threshold(
-        self, memories: list[TextualMemoryItem], threshold: float = 0.20
+        self, memories: list[TextualMemoryItem], threshold: float = 0.50, min_num: int = 3
     ) -> list[TextualMemoryItem]:
         """
         Filter memories by threshold.
         """
-        return [memory for memory in memories if memory.metadata.relativity >= threshold]
+        sorted_memories = sorted(memories, key=lambda m: m.metadata.relativity, reverse=True)
+        filtered = [m for m in sorted_memories if m.metadata.relativity >= threshold]
+        if len(filtered) < min_num:
+            filtered = sorted_memories[:min_num]
+        return filtered
 
     def register_mem_cube(
         self,
@@ -599,7 +800,7 @@ class MOSProduct(MOSCore):
 
             # Create a default cube for the user using MOSCore's methods
             default_cube_name = f"{user_name}_{user_id}_default_cube"
-            mem_cube_name_or_path = f"{CUBE_PATH}/{default_cube_name}"
+            mem_cube_name_or_path = os.path.join(CUBE_PATH, default_cube_name)
             default_cube_id = self.create_cube_for_user(
                 cube_name=default_cube_name, owner_id=user_id, cube_path=mem_cube_name_or_path
             )
@@ -633,7 +834,23 @@ class MOSProduct(MOSCore):
         except Exception as e:
             return {"status": "error", "message": f"Failed to register user: {e!s}"}
 
-    def get_suggestion_query(self, user_id: str, language: str = "zh") -> list[str]:
+    def _get_further_suggestion(self, message: MessageList | None = None) -> list[str]:
+        """Get further suggestion prompt."""
+        try:
+            dialogue_info = "\n".join([f"{msg['role']}: {msg['content']}" for msg in message[-2:]])
+            further_suggestion_prompt = FURTHER_SUGGESTION_PROMPT.format(dialogue=dialogue_info)
+            message_list = [{"role": "system", "content": further_suggestion_prompt}]
+            response = self.chat_llm.generate(message_list)
+            clean_response = clean_json_response(response)
+            response_json = json.loads(clean_response)
+            return response_json["query"]
+        except Exception as e:
+            logger.error(f"Error getting further suggestion: {e}", exc_info=True)
+            return []
+
+    def get_suggestion_query(
+        self, user_id: str, language: str = "zh", message: MessageList | None = None
+    ) -> list[str]:
         """Get suggestion query from LLM.
         Args:
             user_id (str): User ID.
@@ -642,37 +859,13 @@ class MOSProduct(MOSCore):
         Returns:
             list[str]: The suggestion query list.
         """
-
+        if message:
+            further_suggestion = self._get_further_suggestion(message)
+            return further_suggestion
         if language == "zh":
-            suggestion_prompt = """
-            你是一个有用的助手，可以帮助用户生成建议查询。
-            我将获取用户最近的一些记忆，
-            你应该生成一些建议查询，这些查询应该是用户想要查询的内容，
-            用户最近的记忆是：
-            {memories}
-            请生成3个建议查询用中文，
-            输出应该是json格式，键是"query"，值是一个建议查询列表。
-
-            示例：
-            {{
-                "query": ["查询1", "查询2", "查询3"]
-            }}
-            """
+            suggestion_prompt = SUGGESTION_QUERY_PROMPT_ZH
         else:  # English
-            suggestion_prompt = """
-            You are a helpful assistant that can help users to generate suggestion query.
-            I will get some user recently memories,
-            you should generate some suggestion query, the query should be user what to query,
-            user recently memories is:
-            {memories}
-            if the user recently memories is empty, please generate 3 suggestion query in English,
-            output should be a json format, the key is "query", the value is a list of suggestion query.
-
-            example:
-            {{
-                "query": ["query1", "query2", "query3"]
-            }}
-            """
+            suggestion_prompt = SUGGESTION_QUERY_PROMPT_EN
         text_mem_result = super().search("my recently memories", user_id=user_id, top_k=3)[
             "text_mem"
         ]
@@ -686,6 +879,41 @@ class MOSProduct(MOSCore):
         response_json = json.loads(clean_response)
         return response_json["query"]
 
+    def chat(
+        self,
+        query: str,
+        user_id: str,
+        cube_id: str | None = None,
+        history: MessageList | None = None,
+        base_prompt: str | None = None,
+        internet_search: bool = False,
+        moscube: bool = False,
+        top_k: int = 10,
+    ) -> str:
+        """
+        Chat with LLM with memory references and complete response.
+        """
+        self._load_user_cubes(user_id, self.default_cube_config)
+        memories_result = super().search(
+            query,
+            user_id,
+            install_cube_ids=[cube_id] if cube_id else None,
+            top_k=top_k,
+            mode="fine",
+            internet_search=internet_search,
+            moscube=moscube,
+        )["text_mem"]
+        if memories_result:
+            memories_list = memories_result[0]["memories"]
+            memories_list = self._filter_memories_by_threshold(memories_list)
+        system_prompt = super()._build_system_prompt(memories_list, base_prompt)
+        current_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+        response = self.chat_llm.generate(current_messages)
+        return response
+
     def chat_with_references(
         self,
         query: str,
@@ -694,6 +922,7 @@ class MOSProduct(MOSCore):
         history: MessageList | None = None,
         top_k: int = 10,
         internet_search: bool = False,
+        moscube: bool = False,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -719,7 +948,9 @@ class MOSProduct(MOSCore):
             top_k=top_k,
             mode="fine",
             internet_search=internet_search,
+            moscube=moscube,
         )["text_mem"]
+
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
         search_time_end = time.time()
         logger.info(
@@ -731,6 +962,9 @@ class MOSProduct(MOSCore):
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list)
+
+        reference = prepare_reference_data(memories_list)
+        yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         # Build custom system prompt with relevant memories)
         system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
         # Get chat history
@@ -819,83 +1053,29 @@ class MOSProduct(MOSCore):
                 chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
                 yield chunk_data
 
-        # Prepare reference data
-        reference = []
-        for memories in memories_list:
-            memories_json = memories.model_dump()
-            memories_json["metadata"]["ref_id"] = f"{memories.id.split('-')[0]}"
-            memories_json["metadata"]["embedding"] = []
-            memories_json["metadata"]["sources"] = []
-            memories_json["metadata"]["memory"] = memories.memory
-            memories_json["metadata"]["id"] = memories.id
-            reference.append({"metadata": memories_json["metadata"]})
-
-        yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
         # set kvcache improve speed
         speed_improvement = round(float((len(system_prompt) / 2) * 0.0048 + 44.5), 1)
         total_time = round(float(time_end - time_start), 1)
 
         yield f"data: {json.dumps({'type': 'time', 'data': {'total_time': total_time, 'speed_improvement': f'{speed_improvement}%'}})}\n\n"
+        # get further suggestion
+        current_messages.append({"role": "assistant", "content": full_response})
+        further_suggestion = self._get_further_suggestion(current_messages)
+        logger.info(f"further_suggestion: {further_suggestion}")
+        yield f"data: {json.dumps({'type': 'suggestion', 'data': further_suggestion})}\n\n"
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
-        logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
-        logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
-
-        clean_response, extracted_references = self._extract_references_from_response(full_response)
-        logger.info(f"Extracted {len(extracted_references)} references from response")
-
-        # Send chat report if online_bot is available
-        try:
-            from memos.memos_tools.notification_utils import send_online_bot_notification
-
-            # Prepare data for online_bot
-            chat_data = {
-                "query": query,
-                "user_id": user_id,
-                "cube_id": cube_id,
-                "system_prompt": system_prompt,
-                "full_response": full_response,
-            }
-
-            system_data = {
-                "references": extracted_references,
-                "time_start": time_start,
-                "time_end": time_end,
-                "speed_improvement": speed_improvement,
-            }
-
-            emoji_config = {"chat": "💬", "system_info": "📊"}
-
-            send_online_bot_notification(
-                online_bot=self.online_bot,
-                header_name="MemOS Chat Report",
-                sub_title_name="chat_with_references",
-                title_color="#00956D",
-                other_data1=chat_data,
-                other_data2=system_data,
-                emoji=emoji_config,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send chat notification: {e}")
-
-        self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
-        )
-        self.add(
+        # Asynchronous processing of logs, notifications and memory additions
+        self._start_post_chat_processing(
             user_id=user_id,
-            messages=[
-                {
-                    "role": "user",
-                    "content": query,
-                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                },
-                {
-                    "role": "assistant",
-                    "content": clean_response,  # Store clean text without reference markers
-                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                },
-            ],
-            mem_cube_id=cube_id,
+            cube_id=cube_id,
+            query=query,
+            full_response=full_response,
+            system_prompt=system_prompt,
+            time_start=time_start,
+            time_end=time_end,
+            speed_improvement=speed_improvement,
+            current_messages=current_messages,
         )
 
     def get_all(

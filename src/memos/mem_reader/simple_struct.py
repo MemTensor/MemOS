@@ -1,6 +1,8 @@
 import concurrent.futures
 import copy
 import json
+import os
+import re
 
 from abc import ABC
 from typing import Any
@@ -16,12 +18,37 @@ from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemory
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
+    SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+    SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     SIMPLE_STRUCT_MEM_READER_PROMPT,
+    SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
 )
 
 
 logger = log.get_logger(__name__)
+PROMPT_DICT = {
+    "chat": {
+        "en": SIMPLE_STRUCT_MEM_READER_PROMPT,
+        "zh": SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
+        "en_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE,
+        "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
+    },
+    "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
+}
+
+
+def detect_lang(text):
+    try:
+        if not text or not isinstance(text, str):
+            return "en"
+        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
+        chinese_chars = re.findall(chinese_pattern, text)
+        if len(chinese_chars) / len(re.sub(r"[\s\d\W]", "", text)) > 0.3:
+            return "zh"
+        return "en"
+    except Exception:
+        return "en"
 
 
 class SimpleStructMemReader(BaseMemReader, ABC):
@@ -40,11 +67,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     def _process_chat_data(self, scene_data_info, info):
-        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace(
-            "${conversation}", "\n".join(scene_data_info)
-        )
+        lang = detect_lang("\n".join(scene_data_info))
+        template = PROMPT_DICT["chat"][lang]
+        examples = PROMPT_DICT["chat"][f"{lang}_example"]
+
+        prompt = template.replace("${conversation}", "\n".join(scene_data_info))
         if self.config.remove_prompt_example:
-            prompt = prompt.replace(SIMPLE_STRUCT_MEM_READER_EXAMPLE, "")
+            prompt = prompt.replace(examples, "")
 
         messages = [{"role": "user", "content": prompt}]
 
@@ -180,7 +209,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         elif type == "doc":
             for item in scene_data:
                 try:
-                    if not isinstance(item, str):
+                    if os.path.exists(item):
                         parsed_text = parser.parse(item)
                         results.append({"file": "pure_text", "text": parsed_text})
                     else:
@@ -193,15 +222,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def _process_doc_data(self, scene_data_info, info):
         chunks = self.chunker.chunk(scene_data_info["text"])
-        messages = [
-            [
-                {
-                    "role": "user",
-                    "content": SIMPLE_STRUCT_DOC_READER_PROMPT.replace("{chunk_text}", chunk.text),
-                }
-            ]
-            for chunk in chunks
-        ]
+        messages = []
+        for chunk in chunks:
+            lang = detect_lang(chunk.text)
+            template = PROMPT_DICT["doc"][lang]
+            prompt = template.replace("{chunk_text}", chunk.text)
+            message = [{"role": "user", "content": prompt}]
+            messages.append(message)
 
         processed_chunks = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:

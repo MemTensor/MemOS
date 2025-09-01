@@ -1,9 +1,7 @@
+import json
 import traceback
 
-from contextlib import suppress
 from datetime import datetime
-from queue import Empty, Queue
-from threading import Lock
 from typing import Any, Literal
 
 import numpy as np
@@ -35,7 +33,28 @@ def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
 
 @timed
 def _escape_str(value: str) -> str:
-    return value.replace('"', '\\"')
+    out = []
+    for ch in value:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\b":
+            out.append("\\b")
+        elif ch == "\f":
+            out.append("\\f")
+        elif code < 0x20 or code in (0x2028, 0x2029):
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 @timed
@@ -59,137 +78,6 @@ def _normalize_datetime(val):
     if isinstance(val, str) and not val.endswith(("+00:00", "Z", "+08:00")):
         return val + "+08:00"
     return str(val)
-
-
-class SessionPoolError(Exception):
-    pass
-
-
-class SessionPool:
-    @require_python_package(
-        import_name="nebulagraph_python",
-        install_command="pip install ... @Tianxing",
-        install_link=".....",
-    )
-    def __init__(
-        self,
-        hosts: list[str],
-        user: str,
-        password: str,
-        minsize: int = 1,
-        maxsize: int = 10000,
-    ):
-        self.hosts = hosts
-        self.user = user
-        self.password = password
-        self.minsize = minsize
-        self.maxsize = maxsize
-        self.pool = Queue(maxsize)
-        self.lock = Lock()
-
-        self.clients = []
-
-        for _ in range(minsize):
-            self._create_and_add_client()
-
-    @timed
-    def _create_and_add_client(self):
-        from nebulagraph_python import NebulaClient
-
-        client = NebulaClient(self.hosts, self.user, self.password)
-        self.pool.put(client)
-        self.clients.append(client)
-
-    @timed
-    def get_client(self, timeout: float = 5.0):
-        try:
-            return self.pool.get(timeout=timeout)
-        except Empty:
-            with self.lock:
-                if len(self.clients) < self.maxsize:
-                    from nebulagraph_python import NebulaClient
-
-                    client = NebulaClient(self.hosts, self.user, self.password)
-                    self.clients.append(client)
-                    return client
-            raise RuntimeError("NebulaClientPool exhausted") from None
-
-    @timed
-    def return_client(self, client):
-        try:
-            client.execute("YIELD 1")
-            self.pool.put(client)
-        except Exception:
-            logger.info("[Pool] Client dead, replacing...")
-            self.replace_client(client)
-
-    @timed
-    def close(self):
-        for client in self.clients:
-            with suppress(Exception):
-                client.close()
-        self.clients.clear()
-
-    @timed
-    def get(self):
-        """
-        Context manager: with pool.get() as client:
-        """
-
-        class _ClientContext:
-            def __init__(self, outer):
-                self.outer = outer
-                self.client = None
-
-            def __enter__(self):
-                self.client = self.outer.get_client()
-                return self.client
-
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                if self.client:
-                    self.outer.return_client(self.client)
-
-        return _ClientContext(self)
-
-    @timed
-    def reset_pool(self):
-        """⚠️ Emergency reset: Close all clients and clear the pool."""
-        logger.warning("[Pool] Resetting all clients. Existing sessions will be lost.")
-        with self.lock:
-            for client in self.clients:
-                try:
-                    client.close()
-                except Exception:
-                    logger.error("Fail to close!!!")
-            self.clients.clear()
-            while not self.pool.empty():
-                try:
-                    self.pool.get_nowait()
-                except Empty:
-                    break
-            for _ in range(self.minsize):
-                self._create_and_add_client()
-        logger.info("[Pool] Pool has been reset successfully.")
-
-    @timed
-    def replace_client(self, client):
-        try:
-            client.close()
-        except Exception:
-            logger.error("Fail to close client")
-
-        if client in self.clients:
-            self.clients.remove(client)
-
-        from nebulagraph_python import NebulaClient
-
-        new_client = NebulaClient(self.hosts, self.user, self.password)
-        self.clients.append(new_client)
-
-        self.pool.put(new_client)
-
-        logger.info("[Pool] Replaced dead client with a new one.")
-        return new_client
 
 
 class NebulaGraphDB(BaseGraphDB):
@@ -220,6 +108,7 @@ class NebulaGraphDB(BaseGraphDB):
                 "space": "test"
             }
         """
+        from nebulagraph_python.client.pool import NebulaPool, NebulaPoolConfig
 
         self.config = config
         self.db_name = config.space
@@ -252,12 +141,11 @@ class NebulaGraphDB(BaseGraphDB):
             else "embedding"
         )
         self.system_db_name = "system" if config.use_multi_db else config.space
-        self.pool = SessionPool(
+        self.pool = NebulaPool(
             hosts=config.get("uri"),
-            user=config.get("user"),
+            username=config.get("user"),
             password=config.get("password"),
-            minsize=1,
-            maxsize=config.get("max_client", 1000),
+            pool_config=NebulaPoolConfig(max_client_size=config.get("max_client", 1000)),
         )
 
         if config.auto_create:
@@ -272,18 +160,17 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def execute_query(self, gql: str, timeout: float = 5.0, auto_set_db: bool = True):
-        with self.pool.get() as client:
-            try:
-                if auto_set_db and self.db_name:
-                    client.execute(f"SESSION SET GRAPH `{self.db_name}`")
-                return client.execute(gql, timeout=timeout)
+        needs_use_prefix = ("SESSION SET GRAPH" not in gql) and ("USE " not in gql)
+        use_prefix = f"USE `{self.db_name}` " if auto_set_db and needs_use_prefix else ""
 
-            except Exception as e:
-                if "Session not found" in str(e) or "Connection not established" in str(e):
-                    logger.warning(f"[execute_query] {e!s}, replacing client...")
-                    self.pool.replace_client(client)
-                    return self.execute_query(gql, timeout, auto_set_db)
-                raise
+        ngql = use_prefix + gql
+
+        try:
+            with self.pool.borrow() as client:
+                return client.execute(ngql, timeout=timeout)
+        except Exception as e:
+            logger.error(f"[execute_query] Failed: {e}")
+            raise
 
     @timed
     def close(self):
@@ -582,7 +469,9 @@ class NebulaGraphDB(BaseGraphDB):
             return None
 
     @timed
-    def get_nodes(self, ids: list[str], include_embedding: bool = False) -> list[dict[str, Any]]:
+    def get_nodes(
+        self, ids: list[str], include_embedding: bool = False, **kwargs
+    ) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
         Args:
@@ -600,7 +489,10 @@ class NebulaGraphDB(BaseGraphDB):
 
         where_user = ""
         if not self.config.use_multi_db and self.config.user_name:
-            where_user = f" AND n.user_name = '{self.config.user_name}'"
+            if kwargs.get("cube_name"):
+                where_user = f" AND n.user_name = '{kwargs['cube_name']}'"
+            else:
+                where_user = f" AND n.user_name = '{self.config.user_name}'"
 
         # Safe formatting of the ID list
         id_list = ",".join(f'"{_id}"' for _id in ids)
@@ -840,6 +732,7 @@ class NebulaGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity.
@@ -874,7 +767,10 @@ class NebulaGraphDB(BaseGraphDB):
         if status:
             where_clauses.append(f'n.status = "{status}"')
         if not self.config.use_multi_db and self.config.user_name:
-            where_clauses.append(f'n.user_name = "{self.config.user_name}"')
+            if kwargs.get("cube_name"):
+                where_clauses.append(f'n.user_name = "{kwargs["cube_name"]}"')
+            else:
+                where_clauses.append(f'n.user_name = "{self.config.user_name}"')
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -1153,28 +1049,36 @@ class NebulaGraphDB(BaseGraphDB):
             data: A dictionary containing all nodes and edges to be loaded.
         """
         for node in data.get("nodes", []):
-            id, memory, metadata = _compose_node(node)
+            try:
+                id, memory, metadata = _compose_node(node)
 
-            if not self.config.use_multi_db and self.config.user_name:
-                metadata["user_name"] = self.config.user_name
+                if not self.config.use_multi_db and self.config.user_name:
+                    metadata["user_name"] = self.config.user_name
 
-            metadata = self._prepare_node_metadata(metadata)
-            metadata.update({"id": id, "memory": memory})
-            properties = ", ".join(f"{k}: {self._format_value(v, k)}" for k, v in metadata.items())
-            node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
-            self.execute_query(node_gql)
+                metadata = self._prepare_node_metadata(metadata)
+                metadata.update({"id": id, "memory": memory})
+                properties = ", ".join(
+                    f"{k}: {self._format_value(v, k)}" for k, v in metadata.items()
+                )
+                node_gql = f"INSERT OR IGNORE (n@Memory {{{properties}}})"
+                self.execute_query(node_gql)
+            except Exception as e:
+                logger.error(f"Fail to load node: {node}, error: {e}")
 
         for edge in data.get("edges", []):
-            source_id, target_id = edge["source"], edge["target"]
-            edge_type = edge["type"]
-            props = ""
-            if not self.config.use_multi_db and self.config.user_name:
-                props = f'{{user_name: "{self.config.user_name}"}}'
-            edge_gql = f'''
-               MATCH (a@Memory {{id: "{source_id}"}}), (b@Memory {{id: "{target_id}"}})
-               INSERT OR IGNORE (a) -[e@{edge_type} {props}]-> (b)
-           '''
-            self.execute_query(edge_gql)
+            try:
+                source_id, target_id = edge["source"], edge["target"]
+                edge_type = edge["type"]
+                props = ""
+                if not self.config.use_multi_db and self.config.user_name:
+                    props = f'{{user_name: "{self.config.user_name}"}}'
+                edge_gql = f'''
+                   MATCH (a@Memory {{id: "{source_id}"}}), (b@Memory {{id: "{target_id}"}})
+                   INSERT OR IGNORE (a) -[e@{edge_type} {props}]-> (b)
+               '''
+                self.execute_query(edge_gql)
+            except Exception as e:
+                logger.error(f"Fail to load edge: {edge}, error: {e}")
 
     @timed
     def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> (list)[dict]:
@@ -1555,6 +1459,7 @@ class NebulaGraphDB(BaseGraphDB):
         # Normalize embedding type
         embedding = metadata.get("embedding")
         if embedding and isinstance(embedding, list):
+            metadata.pop("embedding")
             metadata[self.dim_field] = _normalize([float(x) for x in embedding])
 
         return metadata
@@ -1563,12 +1468,22 @@ class NebulaGraphDB(BaseGraphDB):
     def _format_value(self, val: Any, key: str = "") -> str:
         from nebulagraph_python.py_data_types import NVector
 
+        # None
+        if val is None:
+            return "NULL"
+        # bool
+        if isinstance(val, bool):
+            return "true" if val else "false"
+        # str
         if isinstance(val, str):
             return f'"{_escape_str(val)}"'
+        # num
         elif isinstance(val, (int | float)):
             return str(val)
+        # time
         elif isinstance(val, datetime):
             return f'datetime("{val.isoformat()}")'
+        # list
         elif isinstance(val, list):
             if key == self.dim_field:
                 dim = len(val)
@@ -1576,13 +1491,18 @@ class NebulaGraphDB(BaseGraphDB):
                 return f"VECTOR<{dim}, FLOAT>([{joined}])"
             else:
                 return f"[{', '.join(self._format_value(v) for v in val)}]"
+        # NVector
         elif isinstance(val, NVector):
             if key == self.dim_field:
                 dim = len(val)
                 joined = ",".join(str(float(x)) for x in val)
                 return f"VECTOR<{dim}, FLOAT>([{joined}])"
-        elif val is None:
-            return "NULL"
+            else:
+                logger.warning("Invalid NVector")
+        # dict
+        if isinstance(val, dict):
+            j = json.dumps(val, ensure_ascii=False, separators=(",", ":"))
+            return f'"{_escape_str(j)}"'
         else:
             return f'"{_escape_str(str(val))}"'
 
