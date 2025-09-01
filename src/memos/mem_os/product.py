@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import random
+import threading
 import time
 
 from collections.abc import Generator
@@ -522,6 +524,174 @@ class MOSProduct(MOSCore):
             )
             self.mem_scheduler.submit_messages(messages=[message_item])
 
+    async def _post_chat_processing(
+        self,
+        user_id: str,
+        cube_id: str,
+        query: str,
+        full_response: str,
+        system_prompt: str,
+        time_start: float,
+        time_end: float,
+        speed_improvement: float,
+        current_messages: list,
+    ) -> None:
+        """
+        Asynchronous processing of logs, notifications and memory additions
+        """
+        try:
+            logger.info(
+                f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}"
+            )
+            logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
+
+            clean_response, extracted_references = self._extract_references_from_response(
+                full_response
+            )
+            logger.info(f"Extracted {len(extracted_references)} references from response")
+
+            # Send chat report notifications asynchronously
+            if self.online_bot:
+                try:
+                    from memos.memos_tools.notification_utils import (
+                        send_online_bot_notification_async,
+                    )
+
+                    # 准备通知数据
+                    chat_data = {
+                        "query": query,
+                        "user_id": user_id,
+                        "cube_id": cube_id,
+                        "system_prompt": system_prompt,
+                        "full_response": full_response,
+                    }
+
+                    system_data = {
+                        "references": extracted_references,
+                        "time_start": time_start,
+                        "time_end": time_end,
+                        "speed_improvement": speed_improvement,
+                    }
+
+                    emoji_config = {"chat": "💬", "system_info": "📊"}
+
+                    await send_online_bot_notification_async(
+                        online_bot=self.online_bot,
+                        header_name="MemOS Chat Report",
+                        sub_title_name="chat_with_references",
+                        title_color="#00956D",
+                        other_data1=chat_data,
+                        other_data2=system_data,
+                        emoji=emoji_config,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send chat notification (async): {e}")
+
+            self._send_message_to_scheduler(
+                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
+            )
+
+            self.add(
+                user_id=user_id,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": query,
+                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": clean_response,  # Store clean text without reference markers
+                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                    },
+                ],
+                mem_cube_id=cube_id,
+            )
+
+            logger.info(f"Post-chat processing completed for user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Error in post-chat processing for user {user_id}: {e}", exc_info=True)
+
+    def _start_post_chat_processing(
+        self,
+        user_id: str,
+        cube_id: str,
+        query: str,
+        full_response: str,
+        system_prompt: str,
+        time_start: float,
+        time_end: float,
+        speed_improvement: float,
+        current_messages: list,
+    ) -> None:
+        """
+        Asynchronous processing of logs, notifications and memory additions, handle synchronous and asynchronous environments
+        """
+
+        def run_async_in_thread():
+            """Running asynchronous tasks in a new thread"""
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        self._post_chat_processing(
+                            user_id=user_id,
+                            cube_id=cube_id,
+                            query=query,
+                            full_response=full_response,
+                            system_prompt=system_prompt,
+                            time_start=time_start,
+                            time_end=time_end,
+                            speed_improvement=speed_improvement,
+                            current_messages=current_messages,
+                        )
+                    )
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.error(
+                    f"Error in thread-based post-chat processing for user {user_id}: {e}",
+                    exc_info=True,
+                )
+
+        try:
+            # Try to get the current event loop
+            asyncio.get_running_loop()
+            # Create task and store reference to prevent garbage collection
+            task = asyncio.create_task(
+                self._post_chat_processing(
+                    user_id=user_id,
+                    cube_id=cube_id,
+                    query=query,
+                    full_response=full_response,
+                    system_prompt=system_prompt,
+                    time_start=time_start,
+                    time_end=time_end,
+                    speed_improvement=speed_improvement,
+                    current_messages=current_messages,
+                )
+            )
+            # Add exception handling for the background task
+            task.add_done_callback(
+                lambda t: logger.error(
+                    f"Error in background post-chat processing for user {user_id}: {t.exception()}",
+                    exc_info=True,
+                )
+                if t.exception()
+                else None
+            )
+        except RuntimeError:
+            # No event loop, run in a new thread
+            thread = threading.Thread(
+                target=run_async_in_thread,
+                name=f"PostChatProcessing-{user_id}",
+                # Set as a daemon thread to avoid blocking program exit
+                daemon=True,
+            )
+            thread.start()
+
     def _filter_memories_by_threshold(
         self, memories: list[TextualMemoryItem], threshold: float = 0.50, min_num: int = 3
     ) -> list[TextualMemoryItem]:
@@ -895,64 +1065,17 @@ class MOSProduct(MOSCore):
         yield f"data: {json.dumps({'type': 'suggestion', 'data': further_suggestion})}\n\n"
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
-        logger.info(f"user_id: {user_id}, cube_id: {cube_id}, current_messages: {current_messages}")
-        logger.info(f"user_id: {user_id}, cube_id: {cube_id}, full_response: {full_response}")
-
-        clean_response, extracted_references = self._extract_references_from_response(full_response)
-        logger.info(f"Extracted {len(extracted_references)} references from response")
-
-        # Send chat report if online_bot is available
-        try:
-            from memos.memos_tools.notification_utils import send_online_bot_notification
-
-            # Prepare data for online_bot
-            chat_data = {
-                "query": query,
-                "user_id": user_id,
-                "cube_id": cube_id,
-                "system_prompt": system_prompt,
-                "full_response": full_response,
-            }
-
-            system_data = {
-                "references": extracted_references,
-                "time_start": time_start,
-                "time_end": time_end,
-                "speed_improvement": speed_improvement,
-            }
-
-            emoji_config = {"chat": "💬", "system_info": "📊"}
-
-            send_online_bot_notification(
-                online_bot=self.online_bot,
-                header_name="MemOS Chat Report",
-                sub_title_name="chat_with_references",
-                title_color="#00956D",
-                other_data1=chat_data,
-                other_data2=system_data,
-                emoji=emoji_config,
-            )
-        except Exception as e:
-            logger.warning(f"Failed to send chat notification: {e}")
-
-        self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
-        )
-        self.add(
+        # Asynchronous processing of logs, notifications and memory additions
+        self._start_post_chat_processing(
             user_id=user_id,
-            messages=[
-                {
-                    "role": "user",
-                    "content": query,
-                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                },
-                {
-                    "role": "assistant",
-                    "content": clean_response,  # Store clean text without reference markers
-                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                },
-            ],
-            mem_cube_id=cube_id,
+            cube_id=cube_id,
+            query=query,
+            full_response=full_response,
+            system_prompt=system_prompt,
+            time_start=time_start,
+            time_end=time_end,
+            speed_improvement=speed_improvement,
+            current_messages=current_messages,
         )
 
     def get_all(
