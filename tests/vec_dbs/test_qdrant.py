@@ -137,7 +137,7 @@ def test_client_receives_api_key():
         )
         _ = VecDBFactory.from_config(cfg)
 
-        # 断言 QdrantClient 被以 api_key 关键字参数调用
+        # Assert that QdrantClient was called with api_key keyword argument
         assert mock_client.called
         kwargs = mock_client.call_args.kwargs
         assert kwargs.get("api_key") == api_key
