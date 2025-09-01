@@ -159,7 +159,7 @@ class NebulaGraphDB(BaseGraphDB):
         logger.info("Connected to NebulaGraph successfully.")
 
     @timed
-    def execute_query(self, gql: str, timeout: float = 5.0, auto_set_db: bool = True):
+    def execute_query(self, gql: str, timeout: float = 10.0, auto_set_db: bool = True):
         needs_use_prefix = ("SESSION SET GRAPH" not in gql) and ("USE " not in gql)
         use_prefix = f"USE `{self.db_name}` " if auto_set_db and needs_use_prefix else ""
 
