@@ -310,20 +310,18 @@ class Searcher:
         info_copy = dict(info or {})
         info_copy.pop("chat_history", None)
         usage_record = json.dumps({"time": now_time, "info": info_copy})
-
         payload = []
         for it in items:
             try:
                 item_id = getattr(it, "id", None)
-                usage = []
-                if (
-                    getattr(it, "metadata", None)
-                    and hasattr(it.metadata, "usage")
-                    and it.metadata.usage
-                ):
-                    usage = list(it.metadata.usage)
+                md = getattr(it, "metadata", None)
+                if md is None:
+                    continue
+                if not hasattr(md, "usage") or md.usage is None:
+                    md.usage = []
+                md.usage.append(usage_record)
                 if item_id:
-                    payload.append((item_id, usage))
+                    payload.append((item_id, list(md.usage)))
             except Exception:
                 logger.exception("[USAGE] snapshot item failed")
 
@@ -333,8 +331,6 @@ class Searcher:
     def _update_usage_history_worker(self, payload, usage_record: str):
         try:
             for item_id, usage_list in payload:
-                new_list = list(usage_list)
-                new_list.append(usage_record)
-                self.graph_store.update_node(item_id, {"usage": new_list})
+                self.graph_store.update_node(item_id, {"usage": usage_list})
         except Exception:
             logger.exception("[USAGE] update usage failed")
