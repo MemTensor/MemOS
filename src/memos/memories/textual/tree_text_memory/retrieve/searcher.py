@@ -41,6 +41,10 @@ class Searcher:
         self.internet_retriever = internet_retriever
         self.moscube = moscube
 
+        self._usage_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="usage"
+        )
+
     @timed
     def search(
         self, query: str, top_k: int, info=None, mode="fast", memory_type="All"
@@ -225,7 +229,7 @@ class Searcher:
             query=query,
             query_embedding=query_embedding[0],
             graph_results=results,
-            top_k=top_k * 2,
+            top_k=top_k,
             parsed_goal=parsed_goal,
         )
 
@@ -244,7 +248,7 @@ class Searcher:
             query=query,
             query_embedding=query_embedding[0],
             graph_results=results,
-            top_k=top_k * 2,
+            top_k=top_k,
             parsed_goal=parsed_goal,
         )
 
@@ -303,14 +307,34 @@ class Searcher:
     def _update_usage_history(self, items, info):
         """Update usage history in graph DB"""
         now_time = datetime.now().isoformat()
-        info.pop("chat_history", None)
-        # `info` should be a serializable dict or string
-        usage_record = json.dumps({"time": now_time, "info": info})
-        for item in items:
-            if (
-                hasattr(item, "id")
-                and hasattr(item, "metadata")
-                and hasattr(item.metadata, "usage")
-            ):
-                item.metadata.usage.append(usage_record)
-                self.graph_store.update_node(item.id, {"usage": item.metadata.usage})
+        info_copy = dict(info or {})
+        info_copy.pop("chat_history", None)
+        usage_record = json.dumps({"time": now_time, "info": info_copy})
+
+        payload = []
+        for it in items:
+            try:
+                item_id = getattr(it, "id", None)
+                usage = []
+                if (
+                    getattr(it, "metadata", None)
+                    and hasattr(it.metadata, "usage")
+                    and it.metadata.usage
+                ):
+                    usage = list(it.metadata.usage)
+                if item_id:
+                    payload.append((item_id, usage))
+            except Exception:
+                logger.exception("[USAGE] snapshot item failed")
+
+        if payload:
+            self._usage_executor.submit(self._update_usage_history_worker, payload, usage_record)
+
+    def _update_usage_history_worker(self, payload, usage_record: str):
+        try:
+            for item_id, usage_list in payload:
+                new_list = list(usage_list)
+                new_list.append(usage_record)
+                self.graph_store.update_node(item_id, {"usage": new_list})
+        except Exception:
+            logger.exception("[USAGE] update usage failed")
