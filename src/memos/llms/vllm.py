@@ -105,6 +105,7 @@ class VLLMLLM(BaseLLM):
                 "temperature": float(getattr(self.config, "temperature", 0.8)),
                 "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
                 "top_p": float(getattr(self.config, "top_p", 0.9)),
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             }
 
             response = self.client.chat.completions.create(**completion_kwargs)
@@ -142,6 +143,7 @@ class VLLMLLM(BaseLLM):
                 "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
                 "top_p": float(getattr(self.config, "top_p", 0.9)),
                 "stream": True,  # Enable streaming
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             }
 
             stream = self.client.chat.completions.create(**completion_kwargs)
