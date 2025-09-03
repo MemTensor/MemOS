@@ -1,8 +1,10 @@
 import json
 import traceback
 
+from contextlib import suppress
 from datetime import datetime
-from typing import Any, Literal
+from threading import Lock
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import numpy as np
 
@@ -11,6 +13,10 @@ from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 from memos.utils import timed
+
+
+if TYPE_CHECKING:
+    from nebulagraph_python.client.pool import NebulaPool
 
 
 logger = get_logger(__name__)
@@ -85,6 +91,95 @@ class NebulaGraphDB(BaseGraphDB):
     NebulaGraph-based implementation of a graph memory store.
     """
 
+    # ====== shared pool cache & refcount ======
+    # These are process-local; in a multi-process model each process will
+    # have its own cache.
+    _POOL_CACHE: ClassVar[dict[str, "NebulaPool"]] = {}
+    _POOL_REFCOUNT: ClassVar[dict[str, int]] = {}
+    _POOL_LOCK: ClassVar[Lock] = Lock()
+
+    @staticmethod
+    def _make_pool_key(cfg: NebulaGraphDBConfig) -> str:
+        """
+        Build a cache key that captures all connection-affecting options.
+        Keep this key stable and include fields that change the underlying pool behavior.
+        """
+        # NOTE: Do not include tenant-like or query-scope-only fields here.
+        # Only include things that affect the actual TCP/auth/session pool.
+        return "|".join(
+            [
+                "nebula",
+                str(getattr(cfg, "uri", "")),
+                str(getattr(cfg, "user", "")),
+                str(getattr(cfg, "password", "")),
+                # pool sizing / tls / timeouts if you have them in config:
+                str(getattr(cfg, "max_client", 1000)),
+                # multi-db mode can impact how we use sessions; keep it to be safe
+                str(getattr(cfg, "use_multi_db", False)),
+            ]
+        )
+
+    @classmethod
+    def _get_or_create_shared_pool(cls, cfg: NebulaGraphDBConfig):
+        """
+        Get a shared NebulaPool from cache or create one if missing.
+        Thread-safe with a lock; maintains a simple refcount.
+        """
+        from nebulagraph_python.client.pool import NebulaPool, NebulaPoolConfig
+
+        key = cls._make_pool_key(cfg)
+
+        with cls._POOL_LOCK:
+            pool = cls._POOL_CACHE.get(key)
+            if pool is None:
+                # Create a new pool and put into cache
+                pool = NebulaPool(
+                    hosts=cfg.get("uri"),
+                    username=cfg.get("user"),
+                    password=cfg.get("password"),
+                    pool_config=NebulaPoolConfig(max_client_size=cfg.get("max_client", 1000)),
+                )
+                cls._POOL_CACHE[key] = pool
+                cls._POOL_REFCOUNT[key] = 0
+                logger.info(f"[NebulaGraphDB] Created new shared NebulaPool for key={key}")
+
+            # Increase refcount for the caller
+            cls._POOL_REFCOUNT[key] = cls._POOL_REFCOUNT.get(key, 0) + 1
+            return key, pool
+
+    @classmethod
+    def _release_shared_pool(cls, key: str):
+        """
+        Decrease refcount for the given pool key; only close when refcount hits zero.
+        """
+        with cls._POOL_LOCK:
+            if key not in cls._POOL_CACHE:
+                return
+            cls._POOL_REFCOUNT[key] = max(0, cls._POOL_REFCOUNT.get(key, 0) - 1)
+            if cls._POOL_REFCOUNT[key] == 0:
+                try:
+                    cls._POOL_CACHE[key].close()
+                except Exception as e:
+                    logger.warning(f"[NebulaGraphDB] Error closing shared pool: {e}")
+                finally:
+                    cls._POOL_CACHE.pop(key, None)
+                    cls._POOL_REFCOUNT.pop(key, None)
+                    logger.info(f"[NebulaGraphDB] Closed and removed shared pool key={key}")
+
+    @classmethod
+    def close_all_shared_pools(cls):
+        """Force close all cached pools. Call this on graceful shutdown."""
+        with cls._POOL_LOCK:
+            for key, pool in list(cls._POOL_CACHE.items()):
+                try:
+                    pool.close()
+                except Exception as e:
+                    logger.warning(f"[NebulaGraphDB] Error closing pool key={key}: {e}")
+                finally:
+                    logger.info(f"[NebulaGraphDB] Closed pool key={key}")
+            cls._POOL_CACHE.clear()
+            cls._POOL_REFCOUNT.clear()
+
     @require_python_package(
         import_name="nebulagraph_python",
         install_command="pip install ... @Tianxing",
@@ -108,7 +203,6 @@ class NebulaGraphDB(BaseGraphDB):
                 "space": "test"
             }
         """
-        from nebulagraph_python.client.pool import NebulaPool, NebulaPoolConfig
 
         self.config = config
         self.db_name = config.space
@@ -135,19 +229,21 @@ class NebulaGraphDB(BaseGraphDB):
             "usage",
             "background",
         }
+        self.base_fields = set(self.common_fields) - {"usage"}
+        self.heavy_fields = {"usage"}
         self.dim_field = (
             f"embedding_{self.embedding_dimension}"
             if (str(self.embedding_dimension) != str(self.default_memory_dimension))
             else "embedding"
         )
         self.system_db_name = "system" if config.use_multi_db else config.space
-        self.pool = NebulaPool(
-            hosts=config.get("uri"),
-            username=config.get("user"),
-            password=config.get("password"),
-            pool_config=NebulaPoolConfig(max_client_size=config.get("max_client", 1000)),
-        )
 
+        # ---- NEW: pool acquisition strategy
+        # Get or create a shared pool from the class-level cache
+        self._pool_key, self.pool = self._get_or_create_shared_pool(config)
+        self._owns_pool = True  # We manage refcount for this instance
+
+        # auto-create graph type / graph / index if needed
         if config.auto_create:
             self._ensure_database_exists()
 
@@ -159,7 +255,7 @@ class NebulaGraphDB(BaseGraphDB):
         logger.info("Connected to NebulaGraph successfully.")
 
     @timed
-    def execute_query(self, gql: str, timeout: float = 5.0, auto_set_db: bool = True):
+    def execute_query(self, gql: str, timeout: float = 10.0, auto_set_db: bool = True):
         needs_use_prefix = ("SESSION SET GRAPH" not in gql) and ("USE " not in gql)
         use_prefix = f"USE `{self.db_name}` " if auto_set_db and needs_use_prefix else ""
 
@@ -174,7 +270,25 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def close(self):
-        self.pool.close()
+        """
+        Close the connection resource if this instance owns it.
+
+        - If pool was injected (`shared_pool`), do nothing.
+        - If pool was acquired via shared cache, decrement refcount and close
+          when the last owner releases it.
+        """
+        if not self._owns_pool:
+            logger.debug("[NebulaGraphDB] close() skipped (injected pool).")
+            return
+        if self._pool_key:
+            self._release_shared_pool(self._pool_key)
+            self._pool_key = None
+            self.pool = None
+
+    # NOTE: __del__ is best-effort; do not rely on GC order.
+    def __del__(self):
+        with suppress(Exception):
+            self.close()
 
     @timed
     def create_index(
@@ -253,12 +367,10 @@ class NebulaGraphDB(BaseGraphDB):
             filter_clause = f'n.memory_type = "{scope}" AND n.user_name = "{self.config.user_name}"'
         else:
             filter_clause = f'n.memory_type = "{scope}"'
-        return_fields = ", ".join(f"n.{field} AS {field}" for field in self.common_fields)
-
         query = f"""
         MATCH (n@Memory)
         WHERE {filter_clause}
-        RETURN {return_fields}
+        RETURN n.id AS id
         LIMIT 1
         """
 
@@ -455,10 +567,7 @@ class NebulaGraphDB(BaseGraphDB):
         try:
             result = self.execute_query(gql)
             for row in result:
-                if include_embedding:
-                    props = row.values()[0].as_node().get_properties()
-                else:
-                    props = {k: v.value for k, v in row.items()}
+                props = {k: v.value for k, v in row.items()}
                 node = self._parse_node(props)
                 return node
 
@@ -507,10 +616,7 @@ class NebulaGraphDB(BaseGraphDB):
         try:
             results = self.execute_query(query)
             for row in results:
-                if include_embedding:
-                    props = row.values()[0].as_node().get_properties()
-                else:
-                    props = {k: v.value for k, v in row.items()}
+                props = {k: v.value for k, v in row.items()}
                 nodes.append(self._parse_node(props))
         except Exception as e:
             logger.error(
@@ -579,6 +685,7 @@ class NebulaGraphDB(BaseGraphDB):
         exclude_ids: list[str],
         top_k: int = 5,
         min_overlap: int = 1,
+        include_embedding: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Find top-K neighbor nodes with maximum tag overlap.
@@ -588,6 +695,7 @@ class NebulaGraphDB(BaseGraphDB):
             exclude_ids: Node IDs to exclude (e.g., local cluster).
             top_k: Max number of neighbors to return.
             min_overlap: Minimum number of overlapping tags required.
+            include_embedding: with/without embedding
 
         Returns:
             List of dicts with node details and overlap count.
@@ -609,12 +717,13 @@ class NebulaGraphDB(BaseGraphDB):
         where_clause = " AND ".join(where_clauses)
         tag_list_literal = "[" + ", ".join(f'"{_escape_str(t)}"' for t in tags) + "]"
 
+        return_fields = self._build_return_fields(include_embedding)
         query = f"""
             LET tag_list = {tag_list_literal}
 
             MATCH (n@Memory)
             WHERE {where_clause}
-            RETURN n,
+            RETURN {return_fields},
                size( filter( n.tags, t -> t IN tag_list ) ) AS overlap_count
             ORDER BY overlap_count DESC
             LIMIT {top_k}
@@ -623,9 +732,8 @@ class NebulaGraphDB(BaseGraphDB):
         result = self.execute_query(query)
         neighbors: list[dict[str, Any]] = []
         for r in result:
-            node_props = r["n"].as_node().get_properties()
-            parsed = self._parse_node(node_props)  # --> {id, memory, metadata}
-
+            props = {k: v.value for k, v in r.items() if k != "overlap_count"}
+            parsed = self._parse_node(props)
             parsed["overlap_count"] = r["overlap_count"].value
             neighbors.append(parsed)
 
@@ -1112,10 +1220,7 @@ class NebulaGraphDB(BaseGraphDB):
         try:
             results = self.execute_query(query)
             for row in results:
-                if include_embedding:
-                    props = row.values()[0].as_node().get_properties()
-                else:
-                    props = {k: v.value for k, v in row.items()}
+                props = {k: v.value for k, v in row.items()}
                 nodes.append(self._parse_node(props))
         except Exception as e:
             logger.error(f"Failed to get memories: {e}")
@@ -1154,10 +1259,7 @@ class NebulaGraphDB(BaseGraphDB):
         try:
             results = self.execute_query(query)
             for row in results:
-                if include_embedding:
-                    props = row.values()[0].as_node().get_properties()
-                else:
-                    props = {k: v.value for k, v in row.items()}
+                props = {k: v.value for k, v in row.items()}
                 candidates.append(self._parse_node(props))
         except Exception as e:
             logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
@@ -1527,6 +1629,7 @@ class NebulaGraphDB(BaseGraphDB):
         return filtered_metadata
 
     def _build_return_fields(self, include_embedding: bool = False) -> str:
+        fields = set(self.base_fields)
         if include_embedding:
-            return "n"
-        return ", ".join(f"n.{field} AS {field}" for field in self.common_fields)
+            fields.add(self.dim_field)
+        return ", ".join(f"n.{f} AS {f}" for f in fields)
