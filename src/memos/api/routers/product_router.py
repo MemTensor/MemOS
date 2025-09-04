@@ -30,6 +30,7 @@ from memos.mem_os.product import MOSProduct
 from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 
 
+print(f"product_router.py {__name__}")
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/product", tags=["Product API"])
@@ -77,10 +78,12 @@ def set_config(config):
     MOS_PRODUCT_INSTANCE = MOSProduct(default_config=config)
     return SimpleResponse(message="Configuration set successfully")
 
+
 @router.post("/test", summary="Test", response_model=SimpleResponse)
 def test():
     """Test."""
     return SimpleResponse(message="Test successfully")
+
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
 def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
@@ -287,6 +290,7 @@ def chat_complete(chat_req: ChatCompleteRequest):
     try:
         mos_product = get_mos_product_instance()
 
+        print(f"Chat complete request: {chat_req}")
         logger.info(f"Chat complete request: {chat_req}")
 
         # Collect all responses from the generator
@@ -302,6 +306,7 @@ def chat_complete(chat_req: ChatCompleteRequest):
             threshold=chat_req.threshold,
         )
 
+        print(f"Chat completed successfully: {content}")
         logger.info(f"Chat completed successfully: {content}")
 
         # Return the complete response
