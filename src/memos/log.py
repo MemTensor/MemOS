@@ -155,12 +155,12 @@ LOGGING_CONFIG = {
         },
     },
     "root": {  # Root logger handles all logs
-        "level": logging.DEBUG if settings.DEBUG else logging.INFO,
+        "level": logging.DEBUG,
         "handlers": ["console", "file", "custom_logger"],
     },
     "loggers": {
         "memos": {
-            "level": logging.DEBUG if settings.DEBUG else logging.INFO,
+            "level": logging.DEBUG,
             "propagate": True,  # Let logs bubble up to root
         },
     },
