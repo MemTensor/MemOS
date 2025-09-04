@@ -33,6 +33,18 @@ def _setup_logfile() -> Path:
     return logfile
 
 
+class TraceIDFilter(logging.Filter):
+    """add trace_id to the log record"""
+
+    def filter(self, record):
+        try:
+            trace_id = get_current_trace_id()
+            record.trace_id = trace_id if trace_id else "no-trace-id"
+        except Exception:
+            record.trace_id = "no-trace-id"
+        return True
+
+
 class CustomLoggerRequestHandler(logging.Handler):
     _instance = None
     _lock = threading.Lock()
@@ -123,14 +135,15 @@ LOGGING_CONFIG = {
     "disable_existing_loggers": False,
     "formatters": {
         "standard": {
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "%(asctime)s [%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "no_datetime": {
-            "format": "%(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "[%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
     },
     "filters": {
-        "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX}
+        "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX},
+        "trace_id_filter": {"()": "memos.log.TraceIDFilter"},
     },
     "handlers": {
         "console": {
@@ -138,7 +151,7 @@ LOGGING_CONFIG = {
             "class": "logging.StreamHandler",
             "stream": stdout,
             "formatter": "no_datetime",
-            "filters": ["package_tree_filter"],
+            "filters": ["package_tree_filter", "trace_id_filter"],
         },
         "file": {
             "level": "DEBUG",
@@ -147,15 +160,16 @@ LOGGING_CONFIG = {
             "maxBytes": 1024**2 * 10,
             "backupCount": 10,
             "formatter": "standard",
+            "filters": ["trace_id_filter"],
         },
     },
     "root": {  # Root logger handles all logs
-        "level": logging.DEBUG if settings.DEBUG else logging.INFO,
+        "level": logging.DEBUG,  # 始终使用DEBUG级别
         "handlers": ["console", "file"],
     },
     "loggers": {
         "memos": {
-            "level": logging.DEBUG if settings.DEBUG else logging.INFO,
+            "level": logging.DEBUG,  # 始终使用DEBUG级别
             "propagate": True,  # Let logs bubble up to root
         },
     },
