@@ -19,7 +19,7 @@ from memos.api.context.context import get_current_trace_id
 # Load environment variables
 load_dotenv()
 
-selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
+selected_log_level = logging.DEBUG
 
 
 def _setup_logfile() -> Path:

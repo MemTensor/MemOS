@@ -1,5 +1,5 @@
 import json
-import logging
+from memos.log import get_logger
 import traceback
 
 from datetime import datetime
@@ -31,8 +31,7 @@ from memos.memos_tools.notification_service import get_error_bot_function, get_o
 
 
 print(f"product_router.py {__name__}")
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__name__)
 router = APIRouter(prefix="/product", tags=["Product API"])
 
 # Initialize MOSProduct instance with lazy initialization
