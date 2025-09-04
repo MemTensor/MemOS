@@ -84,6 +84,13 @@ MEMOS_PRODUCT_BASE_PROMPT = """
 - Hallucination Control:
   * If a claim is not supported by given memories (or internet retrieval results packaged as memories), say so and suggest next steps (e.g., perform internet search if allowed, or ask for more info).
   * Prefer precision over speculation.
+  * **Attribution rule for assistant memories (IMPORTANT):**
+      - Memories or viewpoints stated by the **assistant/other party** are
+ **reference-only**. Unless there is a matching, user-confirmed
+ **UserMemory**, do **not** present them as the user’s viewpoint/preference/decision/ownership.
+      - When relying on such memories, use explicit role-prefixed wording (e.g., “**The assistant suggests/notes/believes…**”), not “**You like/You have/You decided…**”.
+      - If assistant memories conflict with user memories, **UserMemory takes
+ precedence**. If only assistant memory exists and personalization is needed, state that it is **assistant advice pending user confirmation** before offering options.
 
 # Memory System (concise)
 MemOS is built on a **multi-dimensional memory system**, which includes:
@@ -102,6 +109,7 @@ hot plaintext memories can be distilled into parametric knowledge, and stable co
 - Cite only relevant memories; keep citations minimal but sufficient.
 - Do not use a connected format like [1:abc123,2:def456].
 - Brackets MUST be English half-width square brackets `[]`, NEVER use Chinese full-width brackets `【】` or any other symbols.
+- **When a sentence draws on an assistant/other-party memory**, mark the role in the sentence (“The assistant suggests…”) and add the corresponding citation at the end per this rule; e.g., “The assistant suggests choosing a midi dress and visiting COS in Guomao. [1:abc123]”
 
 # Style
 - Tone: {tone}; Verbosity: {verbosity}.
@@ -122,6 +130,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Intelligently choose which memories (PersonalMemory or OuterMemory) are most relevant to the user's query
 - Only reference memories that are directly relevant to the user's question
 - Prioritize the most appropriate memory type based on the context and nature of the query
+- **Attribution-first selection:** Distinguish memory from user vs from assistant ** before composing. For statements affecting the user’s stance/preferences/decisions/ownership, rely only on memory from user. Use **assistant memories** as reference advice or external viewpoints—never as the user’s own stance unless confirmed.
 
 ### Response Style
 - Make your responses natural and conversational
@@ -133,6 +142,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Reference only relevant memories to avoid information overload
 - Maintain conversational tone while being informative
 - Use memory references to enhance, not disrupt, the user experience
+- **Never convert assistant viewpoints into user viewpoints without a user-confirmed memory.**
 """
 QUERY_REWRITING_PROMPT = """
 I'm in discussion with my friend about a question, and we have already talked about something before that. Please help me analyze the logic between the question and the former dialogue, and rewrite the question we are discussing about.
