@@ -77,7 +77,8 @@ Another Example in Chinese (Note: when the user's language is Chinese, you must 
 
 对话（节选）：
 user｜2025-07-12 19:30：下个月同事婚礼，要买条裙子，预算1500内，别太暴露。
-assistant｜19:32：了解～婚礼场合建议中长款，端庄一些。可以看法式茶歇/直筒/裹身三路。颜色上，奶油白、浅粉、雾霾蓝都适合；面料可看醋酸/真丝混纺（垂感好但需干洗）。品牌与商场：COS/ Massimo Dutti / & Other Stories / Mango 比较好逛；想更法式可以看 Sandro / Maje。 我记得你很喜欢Maje？
+assistant｜19:32
+：了解～婚礼场合建议中长款，端庄一些。可以看法式茶歇/直筒/裹身三路。颜色上，奶油白、浅粉、雾霾蓝都适合；面料可看醋酸/真丝混纺（垂感好但需干洗）。品牌与商场：COS/ Massimo Dutti / & Other Stories / Mango 比较好逛；想更法式可以看 Sandro / Maje。 我记得你很喜欢Maje？
 user｜19:35：不喜欢亮色。国贸方便。
 assistant｜19:37：那亮度就压低些：雾霾蓝、藕粉、燕麦米白更稳。国贸有 COS / Massimo Dutti / &OS；可以先看 COS 直筒或裹身，再去 MD 看藕粉/雾霾蓝。搭配上，薄披肩/小西装都能压场。
 user｜19:40：165cm，S码；最好有口袋。
@@ -90,31 +91,31 @@ assistant｜19:54：记得看肩带可调/有无内衬，醋酸/真丝优先干�
 {
   "memory list": [
     {
-      "key": "Dress purchase for colleague’s wedding",
+      "key": "参加婚礼购买裙子",
       "memory_type": "UserMemory",
-      "value": "[user viewpoint] The user plans to attend a colleague’s wedding around August 2025 (exact date unclear), with a budget ≤ 1500 RMB and a non-revealing style; the user has decided to go to China World Mall on 2025-07-19 to try on dresses and purchase if suitable.",
-      "tags": ["wedding", "budget", "China World Mall", "plan"]
+      "value": "[user观点]用户计划于约2025年8月参加同事婚礼（具体日期不详），预算不超过1500元，整体风格不宜暴露；用户已决定在2025-07-19于国贸试穿并视合适即购买。",
+      "tags": ["婚礼", "预算", "国贸", "计划"]
     },
     {
-      "key": "Aesthetic and silhouette preferences",
+      "key": "审美与版型偏好",
       "memory_type": "UserMemory",
-      "value": "[user viewpoint] The user does not like bright colors and prefers low-brightness tones; for dresses, prefers dignified mid-length styles and accepts straight or light A-line silhouettes.",
-      "tags": ["preference", "color", "silhouette"]
+      "value": "[user观点]用户不喜欢亮色，倾向低亮度色系；裙装偏好端庄的中长款，接受直筒或轻A字。",
+      "tags": ["偏好", "颜色", "版型"]
     },
     {
-      "key": "Body size",
+      "key": "体型尺码",
       "memory_type": "UserMemory",
-      "value": "[user viewpoint] The user is about 165 cm tall, typically wears size S.",
-      "tags": ["body", "size"]
+      "value": [user观点]"用户身高约165cm、常穿S码",
+      "tags": ["体型", "尺码"]
     },
     {
-      "key": "Shopping route suggestions for the user",
+      "key": "关于用户选购裙子的建议",
       "memory_type": "LongTermMemory",
-      "value": "[assistant viewpoint] When asked about wedding attire, the assistant suggested first visiting COS at China World Mall to check straight mid-length options in slate blue as the primary choice, with Massimo Dutti’s lotus-pink mid-length as a backup; this aligns with the user’s responses (“China World is convenient”, “slate-blue straight is acceptable”). The assistant also mentioned the user likes Maje, but the user did not confirm this.",
-      "tags": ["wedding attire", "stores", "shopping route"]
+      "value": "[assistant观点]assistant在用户询问婚礼穿着时，建议在国贸优先逛COS查看雾霾蓝直筒中长为主选，Massimo Dutti藕粉中长为备选；该建议与用户“国贸方便”“雾霾蓝直筒也行”的回应相一致，另外assistant也提到user喜欢Maje，但User并未回应或证实该说法。",
+      "tags": ["婚礼穿着", "门店", "选购路线"]
     }
   ],
-  "summary": "The user plans to attend a colleague’s wedding around August 2025 with a budget of ≤1500 RMB and a preference for a dignified mid-length style; they have scheduled a try-on at China World Mall on 2025-07-19. The long-term profile shows: dislikes bright colors, prefers low-brightness tones and non-revealing cuts, is about 165 cm tall, wears size S, and prefers dresses with pockets. The assistant proposed a shopping route focusing on COS slate-blue straight mid-length as the main option and Massimo Dutti lotus-pink mid-length as a backup, consistent with the user’s responses, providing a clear path for in-store try-on and purchase."
+  "summary": "用户计划在约2025年8月参加同事婚礼，预算≤1500并偏好端庄的中长款；确定于2025-07-19在国贸试穿。其长期画像显示：不喜欢亮色、偏好低亮度色系与不过分暴露的版型，身高约165cm、S码且偏好裙装带口袋。助手提出的国贸选购路线以COS雾霾蓝直筒中长为主选、MD藕粉中长为备选，且与用户回应一致，为线下试穿与购买提供了明确路径。"
 }
 
 Always respond in the same language as the conversation.
