@@ -1,5 +1,5 @@
 import json
-import logging
+from memos.log import get_logger
 import traceback
 
 from datetime import datetime
@@ -30,7 +30,7 @@ from memos.mem_os.product import MOSProduct
 from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/product", tags=["Product API"])
 
