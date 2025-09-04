@@ -77,6 +77,10 @@ def set_config(config):
     MOS_PRODUCT_INSTANCE = MOSProduct(default_config=config)
     return SimpleResponse(message="Configuration set successfully")
 
+@router.post("/test", summary="Test", response_model=SimpleResponse)
+def test():
+    """Test."""
+    return SimpleResponse(message="Test successfully")
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
 def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
@@ -283,6 +287,8 @@ def chat_complete(chat_req: ChatCompleteRequest):
     try:
         mos_product = get_mos_product_instance()
 
+        logger.info(f"Chat complete request: {chat_req}")
+
         # Collect all responses from the generator
         content, references = mos_product.chat(
             query=chat_req.query,
@@ -295,6 +301,8 @@ def chat_complete(chat_req: ChatCompleteRequest):
             top_k=chat_req.top_k,
             threshold=chat_req.threshold,
         )
+
+        logger.info(f"Chat completed successfully: {content}")
 
         # Return the complete response
         return {
