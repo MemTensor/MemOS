@@ -306,7 +306,9 @@ def chat_complete(chat_req: ChatCompleteRequest):
         )
 
         print(f"Chat completed successfully: {content}")
+        print(f"Chat completed references: {references}")
         logger.info(f"Chat completed successfully: {content}")
+        logger.info(f"Chat completed references: {references}")
 
         # Return the complete response
         return {
