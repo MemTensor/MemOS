@@ -889,11 +889,13 @@ class MOSProduct(MOSCore):
         internet_search: bool = False,
         moscube: bool = False,
         top_k: int = 10,
+        threshold: float = 0.5,
     ) -> str:
         """
         Chat with LLM with memory references and complete response.
         """
         self._load_user_cubes(user_id, self.default_cube_config)
+        time_start = time.time()
         memories_result = super().search(
             query,
             user_id,
@@ -905,14 +907,30 @@ class MOSProduct(MOSCore):
         )["text_mem"]
         if memories_result:
             memories_list = memories_result[0]["memories"]
-            memories_list = self._filter_memories_by_threshold(memories_list)
+            memories_list = self._filter_memories_by_threshold(memories_list, threshold)
         system_prompt = super()._build_system_prompt(memories_list, base_prompt)
+        history_info = []
+        if history:
+            history_info = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
+            *history_info,
             {"role": "user", "content": query},
         ]
         response = self.chat_llm.generate(current_messages)
-        return response
+        time_end = time.time()
+        self._start_post_chat_processing(
+            user_id=user_id,
+            cube_id=cube_id,
+            query=query,
+            full_response=response,
+            system_prompt=system_prompt,
+            time_start=time_start,
+            time_end=time_end,
+            speed_improvement=0.0,
+            current_messages=current_messages,
+        )
+        return response, memories_list
 
     def chat_with_references(
         self,
@@ -973,7 +991,7 @@ class MOSProduct(MOSCore):
 
         chat_history = self.chat_history_manager[user_id]
         if history:
-            chat_history.chat_history = history[-10:]
+            chat_history.chat_history = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,

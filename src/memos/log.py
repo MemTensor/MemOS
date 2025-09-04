@@ -1,12 +1,19 @@
+import atexit
 import logging
+import os
+import threading
 
+from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
 
+import requests
+
 from dotenv import load_dotenv
 
 from memos import settings
+from memos.api.context.context import get_current_trace_id
 
 
 # Load environment variables
@@ -26,19 +33,117 @@ def _setup_logfile() -> Path:
     return logfile
 
 
+class TraceIDFilter(logging.Filter):
+    """add trace_id to the log record"""
+
+    def filter(self, record):
+        try:
+            trace_id = get_current_trace_id()
+            record.trace_id = trace_id if trace_id else "no-trace-id"
+        except Exception:
+            record.trace_id = "no-trace-id"
+        return True
+
+
+class CustomLoggerRequestHandler(logging.Handler):
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        """Initialize handler with minimal setup"""
+        if not self._initialized:
+            super().__init__()
+            workers = int(os.getenv("CUSTOM_LOGGER_WORKERS", "2"))
+            self._executor = ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="log_sender"
+            )
+            self._is_shutting_down = threading.Event()
+            self._session = requests.Session()
+            self._initialized = True
+            atexit.register(self._cleanup)
+
+    def emit(self, record):
+        """Process log records of INFO or ERROR level (non-blocking)"""
+        if os.getenv("CUSTOM_LOGGER_URL") is None or self._is_shutting_down.is_set():
+            return
+
+        if record.levelno in (logging.INFO, logging.ERROR):
+            try:
+                trace_id = (
+                    get_current_trace_id()
+                )  # TODO: get trace_id from request context instead of get_current_trace_id
+                if trace_id:
+                    self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
+            except Exception as e:
+                if not self._is_shutting_down.is_set():
+                    print(f"Error sending log: {e}")
+
+    def _send_log_sync(self, message, trace_id):
+        """Send log message synchronously in a separate thread"""
+        print(f"send_log_sync: {message} {trace_id}")
+        try:
+            logger_url = os.getenv("CUSTOM_LOGGER_URL")
+            token = os.getenv("CUSTOM_LOGGER_TOKEN")
+
+            headers = {"Content-Type": "application/json"}
+            post_content = {"message": message, "trace_id": trace_id}
+
+            # Add auth token if exists
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
+            # Add traceId to headers for consistency
+            headers["traceId"] = trace_id
+
+            # Add custom attributes from env
+            for key, value in os.environ.items():
+                if key.startswith("CUSTOM_LOGGER_ATTRIBUTE_"):
+                    attribute_key = key[len("CUSTOM_LOGGER_ATTRIBUTE_") :].lower()
+                    post_content[attribute_key] = value
+
+            self._session.post(logger_url, headers=headers, json=post_content, timeout=5)
+        except Exception:
+            # Silently ignore errors to avoid affecting main application
+            pass
+
+    def _cleanup(self):
+        """Clean up resources during program exit"""
+        if not self._initialized:
+            return
+
+        self._is_shutting_down.set()
+        try:
+            self._executor.shutdown(wait=False)
+            self._session.close()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+
+    def close(self):
+        """Override close to prevent premature shutdown"""
+
+
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "standard": {
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "%(asctime)s [%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "no_datetime": {
-            "format": "%(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "[%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
     },
     "filters": {
-        "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX}
+        "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX},
+        "trace_id_filter": {"()": "memos.log.TraceIDFilter"},
     },
     "handlers": {
         "console": {
@@ -46,7 +151,7 @@ LOGGING_CONFIG = {
             "class": "logging.StreamHandler",
             "stream": stdout,
             "formatter": "no_datetime",
-            "filters": ["package_tree_filter"],
+            "filters": ["package_tree_filter", "trace_id_filter"],
         },
         "file": {
             "level": "DEBUG",
@@ -55,6 +160,7 @@ LOGGING_CONFIG = {
             "maxBytes": 1024**2 * 10,
             "backupCount": 10,
             "formatter": "standard",
+            "filters": ["trace_id_filter"],
         },
     },
     "root": {  # Root logger handles all logs
