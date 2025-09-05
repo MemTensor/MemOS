@@ -85,17 +85,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Process the request
         response = await call_next(request)
 
-        # Get response body for logging
-        response_body = None
-        if hasattr(response, "body"):
-            try:
-                response_body = response.body.decode()
-            except:
-                response_body = str(response.body)
-
         # Log request completion with output
         logger.info(
-            f"Request completed: {request.method} {request.url.path} - trace_id: {trace_id} - status: {response.status_code} - output: {response_body}"
+            f"Request completed: {request.method} {request.url.path} - status: {response.status_code}"
         )
 
         # Add trace_id to response headers for debugging
