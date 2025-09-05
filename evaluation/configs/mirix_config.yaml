@@ -1,0 +1,9 @@
+agent_name: mirix
+model_name: gpt-4o-mini
+model_endpoint: http://123.129.219.111:3000/v1
+api_key: sk-DdYCtzDRelaQP5YrYTZJGruuHqof3FU48jG0iLfq0vqvyZSw
+embedding_model_name: text-embedding-3-small
+generation_config:
+  temperature: 0.8
+  max_tokens: 16192
+  context_window: 32768
