@@ -64,8 +64,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         context.set("path", request.url.path)
         context.set("client_ip", request.client.host if request.client else None)
 
-        # Log request start
-        logger.info(f"Request started: {request.method} {request.url.path} - trace_id: {trace_id}")
         # Log request start with parameters
         params_log = {}
 
@@ -81,7 +79,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             # If body is not JSON or empty, ignore it
 
         logger.info(
-            f"Request started: {request.method} {request.url.path} - Parameters: {params_log} trace_id: {trace_id}"
+            f"Request started: {request.method} {request.url.path} - Parameters: {params_log}"
         )
 
         # Process the request
