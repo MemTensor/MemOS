@@ -140,6 +140,9 @@ LOGGING_CONFIG = {
         "no_datetime": {
             "format": "[%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
+        "simplified": {
+            "format": "%(asctime)s | %(trace_id)s | %(levelname)s | %(filename)s | %(message)s"
+        },
     },
     "filters": {
         "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX},
@@ -159,7 +162,7 @@ LOGGING_CONFIG = {
             "filename": _setup_logfile(),
             "maxBytes": 1024**2 * 10,
             "backupCount": 10,
-            "formatter": "standard",
+            "formatter": "simplified",
             "filters": ["trace_id_filter"],
         },
     },

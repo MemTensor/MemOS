@@ -69,6 +69,13 @@ def get_mos_product_instance():
 
 get_mos_product_instance()
 
+@router.post("/test", summary="Test", response_model=SimpleResponse)
+async def test():
+    """Test."""
+    logger.info("Test endpoint called")
+    response = SimpleResponse(code=200, message="Test successfully", data=None)
+    logger.info(f"Test endpoint response: {response.model_dump()}")
+    return response
 
 @router.post("/configure", summary="Configure MOSProduct", response_model=SimpleResponse)
 def set_config(config):
