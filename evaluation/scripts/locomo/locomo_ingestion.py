@@ -22,17 +22,13 @@ import concurrent.futures
 import json
 import threading
 import time
-
 from datetime import datetime, timezone
-
 import pandas as pd
-
 from dotenv import load_dotenv
-from mem0 import MemoryClient
 from memobase import ChatBlob
 from tqdm import tqdm
 from utils.client import memobase_client, memos_client
-from zep_cloud.client import Zep
+from utils.mirix_utils import get_mirix_client
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
@@ -71,10 +67,12 @@ Generate personal memories that follow these guidelines:
 
 def get_client(frame: str, user_id: str | None = None, version: str = "default"):
     if frame == "zep":
+        from zep_cloud.client import Zep
         zep = Zep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
         return zep
 
     elif frame == "mem0" or frame == "mem0_graph":
+        from mem0 import MemoryClient
         mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         mem0.update_project(custom_instructions=custom_instructions)
         return mem0
@@ -110,8 +108,11 @@ def get_client(frame: str, user_id: str | None = None, version: str = "default")
             mem_cube_id=user_id,
             user_id=user_id,
         )
-
         return mos
+    elif frame == "mirix":
+        config_path = "configs/mirix_config.yaml"
+        client = get_mirix_client(config_path)
+        return client
 
 
 def string_to_uuid(s: str, salt="memobase_client") -> str:
@@ -193,7 +194,7 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                     f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
                 )
 
-            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
+            # print({"context": data, "conv_id": conv_id, "created_at": iso_date})
 
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
@@ -342,6 +343,14 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         thread_b.start()
         thread_a.join()
         thread_b.join()
+    elif frame == "mirix":
+        message = f"Conversation happened at {date_string}:\n\n"
+        for turn in session:
+            message += turn['speaker'] + ": " + turn['text']
+            message += "\n"
+        user = client.get_user_by_name(conv_id)
+        client.add(message, user_id=user.id)
+        client.save(f'results/locomo/mirix_{version}_{conv_id}')
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -350,7 +359,7 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
 
 
 def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
-    try:
+    # try:
         conversation = locomo_df["conversation"].iloc[conv_idx]
         max_session_count = 35
         start_time = time.time()
@@ -384,6 +393,10 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
             speaker_b_user_id = conv_id + "_speaker_b"
             client.delete_user(string_to_uuid(speaker_a_user_id))
             client.delete_user(string_to_uuid(speaker_b_user_id))
+        elif frame == "mirix":
+            client = get_client("mirix")
+            client.create_user("locomo_exp_user_" + str(conv_idx))
+
         sessions_to_process = []
         for session_idx in range(max_session_count):
             session_key = f"session_{session_idx}"
@@ -415,13 +428,13 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
             }
 
             for future in concurrent.futures.as_completed(futures):
-                session_key = futures[future]
-                try:
+                    session_key = futures[future]
+                # try:
                     session_time = future.result()
                     total_session_time += session_time
                     print(f"User {conv_idx}, {session_key} processed in {session_time} seconds")
-                except Exception as e:
-                    print(f"Error processing user {conv_idx}, session {session_key}: {e!s}")
+                # except Exception as e:
+                #     print(f"Error processing user {conv_idx}, session {session_key}: {e!s}")
 
         end_time = time.time()
         elapsed_time = round(end_time - start_time, 2)
@@ -429,8 +442,8 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
 
         return elapsed_time
 
-    except Exception as e:
-        return f"Error processing user {conv_idx}: {e!s}"
+    # except Exception as e:
+    #     return f"Error processing user {conv_idx}: {e!s}"
 
 
 def main(frame, version="default", num_workers=4):
@@ -446,14 +459,14 @@ def main(frame, version="default", num_workers=4):
     )
 
     for user_id in range(num_users):
-        try:
+        # try:
             result = process_user(user_id, frame, locomo_df, version, num_workers)
             if isinstance(result, float):
                 total_time += result
             else:
                 print(result)
-        except Exception as e:
-            print(f"Error processing user {user_id}: {e!s}")
+        # except Exception as e:
+        #     print(f"Error processing user {user_id}: {e!s}")
 
     if num_users > 0:
         average_time = total_time / num_users
@@ -477,16 +490,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
+        choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase", "mirix"],
+        default='mirix'
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="default",
+        default='0905',
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     args = parser.parse_args()
     lib = args.lib
