@@ -18,11 +18,8 @@ from memos.api.context.context import get_current_trace_id
 
 # Load environment variables
 load_dotenv()
-URL = os.getenv("CUSTOM_LOGGER_URL")
-print(f"CUSTOM_LOGGER_URL: {URL}")
 
-# selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
-selected_log_level = logging.INFO
+selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
 
 
 def _setup_logfile() -> Path:
@@ -82,7 +79,6 @@ class CustomLoggerRequestHandler(logging.Handler):
             try:
                 trace_id = get_current_trace_id()
 
-                print(f"emit log: {record.getMessage()}, trace_id: {trace_id}")
                 if trace_id:
                     self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
             except Exception as e:
@@ -159,7 +155,7 @@ LOGGING_CONFIG = {
             "filters": ["package_tree_filter", "trace_id_filter"],
         },
         "file": {
-            "level": selected_log_level,
+            "level": "DEBUG",
             "class": "logging.handlers.RotatingFileHandler",
             "filename": _setup_logfile(),
             "maxBytes": 1024**2 * 10,
@@ -179,7 +175,7 @@ LOGGING_CONFIG = {
     },
     "loggers": {
         "memos": {
-            "level": selected_log_level,
+            "level": logging.DEBUG if settings.DEBUG else logging.INFO,
             "propagate": True,  # Let logs bubble up to root
         },
     },
