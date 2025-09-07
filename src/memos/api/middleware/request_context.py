@@ -38,6 +38,7 @@ def extract_trace_id_from_headers(request: Request) -> str | None:
 
     return None
 
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """
     Middleware to automatically inject request context for every HTTP request.

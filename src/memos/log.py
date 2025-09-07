@@ -80,9 +80,7 @@ class CustomLoggerRequestHandler(logging.Handler):
 
         if record.levelno in (logging.INFO, logging.ERROR):
             try:
-                trace_id = (
-                    get_current_trace_id()
-                )
+                trace_id = get_current_trace_id()
 
                 print(f"emit log: {record.getMessage()}, trace_id: {trace_id}")
                 if trace_id:
