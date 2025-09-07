@@ -18,8 +18,11 @@ from memos.api.context.context import get_current_trace_id
 
 # Load environment variables
 load_dotenv()
+URL = os.getenv("CUSTOM_LOGGER_URL")
+print(f"CUSTOM_LOGGER_URL: {URL}")
 
-selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
+# selected_log_level = logging.DEBUG if settings.DEBUG else logging.WARNING
+selected_log_level = logging.INFO
 
 
 def _setup_logfile() -> Path:
@@ -79,7 +82,9 @@ class CustomLoggerRequestHandler(logging.Handler):
             try:
                 trace_id = (
                     get_current_trace_id()
-                )  # TODO: get trace_id from request context instead of get_current_trace_id
+                )
+
+                print(f"emit log: {record.getMessage()}, trace_id: {trace_id}")
                 if trace_id:
                     self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
             except Exception as e:
@@ -88,7 +93,6 @@ class CustomLoggerRequestHandler(logging.Handler):
 
     def _send_log_sync(self, message, trace_id):
         """Send log message synchronously in a separate thread"""
-        print(f"send_log_sync: {message} {trace_id}")
         try:
             logger_url = os.getenv("CUSTOM_LOGGER_URL")
             token = os.getenv("CUSTOM_LOGGER_TOKEN")
@@ -153,11 +157,11 @@ LOGGING_CONFIG = {
             "level": selected_log_level,
             "class": "logging.StreamHandler",
             "stream": stdout,
-            "formatter": "no_datetime",
+            "formatter": "simplified",
             "filters": ["package_tree_filter", "trace_id_filter"],
         },
         "file": {
-            "level": "DEBUG",
+            "level": selected_log_level,
             "class": "logging.handlers.RotatingFileHandler",
             "filename": _setup_logfile(),
             "maxBytes": 1024**2 * 10,
@@ -165,14 +169,19 @@ LOGGING_CONFIG = {
             "formatter": "simplified",
             "filters": ["trace_id_filter"],
         },
+        "custom_logger": {
+            "level": selected_log_level,
+            "class": "memos.log.CustomLoggerRequestHandler",
+            "formatter": "simplified",
+        },
     },
     "root": {  # Root logger handles all logs
-        "level": logging.DEBUG if settings.DEBUG else logging.INFO,
-        "handlers": ["console", "file"],
+        "level": selected_log_level,
+        "handlers": ["console", "file", "custom_logger"],
     },
     "loggers": {
         "memos": {
-            "level": logging.DEBUG if settings.DEBUG else logging.INFO,
+            "level": selected_log_level,
             "propagate": True,  # Let logs bubble up to root
         },
     },

@@ -28,7 +28,10 @@ from memos.api.product_models import (
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.product import MOSProduct
 from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
-
+import threading
+from concurrent.futures import as_completed
+from memos.api.context.context_thread import ContextThread, ContextThreadPoolExecutor
+import time
 
 logger = get_logger(__name__)
 
@@ -69,12 +72,55 @@ def get_mos_product_instance():
 
 get_mos_product_instance()
 
+
 @router.post("/configure", summary="Configure MOSProduct", response_model=SimpleResponse)
 def set_config(config):
     """Set MOSProduct configuration."""
     global MOS_PRODUCT_INSTANCE
     MOS_PRODUCT_INSTANCE = MOSProduct(default_config=config)
     return SimpleResponse(message="Configuration set successfully")
+
+def threading_task(task_name: str, delay: int):
+    """Threading task."""
+    logger.info(f"Threading task called start: {task_name}, delay: {delay}")
+    time.sleep(delay)
+    logger.info(f"Threading task called end: {task_name} finished")
+
+
+@router.post("/test", summary="Test", response_model=SimpleResponse)
+async def test(data: dict):
+    """Test endpoint with async delay to simulate processing time."""
+    import asyncio
+    import random
+    
+    
+    logger.info(f"Test called: {data.get('query')}")
+
+    #     # 创建子线程，显式传递 trace_id
+    # thread1 = ContextThread(
+    #     target=threading_task,
+    #     args=(f"任务1: {data.get('query')}", 1)
+    # )
+
+    # thread2 = ContextThread(
+    #     target=threading_task,
+    #     args=(f"任务2: {data.get('query')}", 2)
+    # )
+    
+
+
+    # # 启动子线程
+    # thread1.start()
+    # thread2.start()
+
+    # # 等待子线程完成
+    # thread1.join()
+    # thread2.join()
+
+    
+    
+    response = SimpleResponse(code=200, message="Test successfully")
+    return response
 
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
@@ -306,6 +352,38 @@ def chat_complete(chat_req: ChatCompleteRequest):
     except Exception as err:
         logger.error(f"Failed to start chat: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+
+@router.post("/test/thread_pool", summary="Test ContextThreadPoolExecutor", response_model=SimpleResponse)
+async def test_thread_pool(data: dict):
+    """测试 ContextThreadPoolExecutor 的基本功能"""
+    logger.info(f"Thread pool test called: {data.get('query')}")
+
+    def task_func(task_name: str, delay: int) -> None:
+        """测试任务函数"""
+        logger.info(f"Task started: {task_name}")
+        time.sleep(delay)
+        logger.info(f"Task finished: {task_name}")
+
+    # 准备测试任务
+    tasks = [
+        (f"任务{i}", i) for i in range(1, 5)  # 4个任务，延迟时间1-4秒
+    ]
+    
+    # 使用线程池执行任务
+    with ContextThreadPoolExecutor(max_workers=2) as executor:
+        # 方式1：使用submit提交任务
+        logger.info("Testing submit method:")
+        for task_name, delay in tasks[:2]:  # 前两个任务用submit
+            executor.submit(task_func, f"{task_name}: {data.get('query')}", delay)
+
+        # 方式2：使用map批量提交任务
+        logger.info("Testing map method:")
+        task_names = [t[0] for t in tasks[2:]]  # 后两个任务用map
+        delays = [t[1] for t in tasks[2:]]
+        list(executor.map(task_func, [f"{task_name}: {data.get('query')}" for task_name in task_names], delays))
+
+    return SimpleResponse(message="Thread pool test completed")
 
 
 @router.get("/users", summary="List all users", response_model=BaseResponse[list])

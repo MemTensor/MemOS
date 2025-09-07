@@ -38,7 +38,6 @@ def extract_trace_id_from_headers(request: Request) -> str | None:
 
     return None
 
-
 class RequestContextMiddleware(BaseHTTPMiddleware):
     """
     Middleware to automatically inject request context for every HTTP request.
@@ -86,9 +85,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
 
         # Log request completion with output
-        logger.info(
-            f"Request completed: {request.method} {request.url.path} - status: {response.status_code}"
-        )
+        logger.info(f"Request completed: {request.url.path}, status: {response.status_code}")
 
         # Add trace_id to response headers for debugging
         response.headers["x-trace-id"] = trace_id
