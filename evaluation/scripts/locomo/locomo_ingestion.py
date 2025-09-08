@@ -350,7 +350,6 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
             message += "\n"
         user = client.get_user_by_name(conv_id)
         client.add(message, user_id=user.id)
-        client.save(f'results/locomo/mirix_{version}_{conv_id}')
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -391,8 +390,11 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
             conv_id = "locomo_exp_user_" + str(conv_idx)
             speaker_a_user_id = conv_id + "_speaker_a"
             speaker_b_user_id = conv_id + "_speaker_b"
-            client.delete_user(string_to_uuid(speaker_a_user_id))
-            client.delete_user(string_to_uuid(speaker_b_user_id))
+            try:
+                client.delete_user(string_to_uuid(speaker_a_user_id))
+                client.delete_user(string_to_uuid(speaker_b_user_id))
+            except:
+                pass
         elif frame == "mirix":
             client = get_client("mirix")
             client.create_user("locomo_exp_user_" + str(conv_idx))
@@ -435,6 +437,9 @@ def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
                     print(f"User {conv_idx}, {session_key} processed in {session_time} seconds")
                 # except Exception as e:
                 #     print(f"Error processing user {conv_idx}, session {session_key}: {e!s}")
+
+        if frame == "mirix":
+            client.save(f'results/locomo/mirix_{version}_{"locomo_exp_user_" + str(conv_idx)}')
 
         end_time = time.time()
         elapsed_time = round(end_time - start_time, 2)

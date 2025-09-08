@@ -44,3 +44,26 @@ def memobase_search_memory(
             if retries >= max_retries:
                 raise e
             time.sleep(retry_delay)
+
+
+if __name__ == "__main__":
+    from memobase import MemoBaseClient, ChatBlob
+
+    client = MemoBaseClient(
+        project_url='http://106.15.45.221:8019',
+        api_key='secret',
+    )
+    client.ping()
+    uid = client.add_user({"name": "Gustavo"})
+    b = ChatBlob(messages=[
+        {"role": "user", "content": "Hi, I like apple very much!"}
+    ])
+    u = client.get_user(uid)
+    bid = u.insert(b)
+
+    u.flush()  # async
+    u.flush(sync=True)  # sync
+
+    u.context()
+
+

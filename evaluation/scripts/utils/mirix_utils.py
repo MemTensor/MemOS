@@ -6,7 +6,7 @@ from mirix import Mirix, EmbeddingConfig, LLMConfig
 from tqdm import tqdm
 
 
-def get_mirix_client(config_path):
+def get_mirix_client(config_path, load_from=None):
     if os.path.exists(os.path.expanduser(f"~/.mirix")):
         os.system(f"rm -rf ~/.mirix/*")
 
@@ -39,13 +39,13 @@ def get_mirix_client(config_path):
     mirix.EmbeddingConfig.default_config = embedding_default_config_func
     mirix.LLMConfig.default_config = llm_default_config_func
 
-    assistant = Mirix(api_key=agent_config['api_key'], config_path=config_path, model=agent_config['model_name'])
+    assistant = Mirix(api_key=agent_config['api_key'], config_path=config_path, model=agent_config['model_name'], load_from=load_from)
     return assistant
 
 
 if __name__ == '__main__':
     config_path = '/Users/wuhao/PycharmProjects/MemOS/evaluation/configs/mirix_config.yaml'
-    out_dir = '/Users/wuhao/PycharmProjects/MemOS/evaluation/results/mirix'
+    out_dir = '/Users/wuhao/PycharmProjects/MemOS/evaluation/results/mirix-test'
 
     assistant = get_mirix_client(config_path)
 
@@ -58,6 +58,9 @@ if __name__ == '__main__':
     for idx, chunk in tqdm(enumerate(chunks), total=len(chunks)):
         response = assistant.add(chunk)
 
+    assistant.save(out_dir)
+
+    assistant = get_mirix_client(config_path, load_from=out_dir)
     response = assistant.chat("What's my schedule like this week?")
 
     print(response)

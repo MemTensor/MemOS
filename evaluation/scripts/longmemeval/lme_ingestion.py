@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 
+from evaluation.scripts.utils.mirix_utils import get_mirix_client
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -67,10 +68,8 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                 f"\033[90m[{frame}]\033[0m 📝 User \033[1;94m{user_id}\033[0m 💬 Session \033[1;94m{session_id}\033[0m: [\033[93m{idx + 1}/{len(session)}\033[0m] Ingesting message: \033[1m{msg['role']}\033[0m - \033[96m{msg['content'][:50]}...\033[0m at \033[92m{date.isoformat()}\033[0m"
             )
 
-        real_uid = string_to_uuid(user_id)
-        user = client.get_user(real_uid)
+        user = client.get_user(user_id)
         memobase_add_memory(user, messages)
-        user.flash(sync=True)
         print(
             f"\033[90m[{frame}]\033[0m ✅ Session \033[1;94m{session_id}\033[0m: Ingested \033[93m{len(messages)}\033[0m messages at \033[92m{date.isoformat()}\033[0m"
         )
@@ -88,6 +87,13 @@ def ingest_session(session, date, user_id, session_id, frame, client):
             f"\033[90m[{frame}]\033[0m ✅ Session \033[1;94m{session_id}\033[0m: Ingested \033[93m{len(messages)}\033[0m messages at \033[92m{date.isoformat()}\033[0m"
         )
         client.mem_reorganizer_wait()
+    elif frame == "mirix":
+        message = f"Conversation happened at {date.isoformat()}:\n\n"
+        for turn in session:
+            message += turn['role'] + ": " + turn['content']
+            message += "\n"
+        user = client.get_user_by_name(user_id)
+        client.add(message, user_id=user.id)
 
 
 def ingest_conv(lme_df, version, conv_idx, frame):
@@ -140,8 +146,21 @@ def ingest_conv(lme_df, version, conv_idx, frame):
     elif frame == "memobase":
         client = memobase_client()
         print("🔌 \033[1mUsing \033[94mMemobase client\033[0m \033[1mfor ingestion...\033[0m")
-        client.delete_user(string_to_uuid(user_id))
-        print(f"🗑️  Deleted existing user \033[93m{user_id}\033[0m from Memobase memory...")
+        all_users = client.get_all_users()
+        for user in all_users:
+            try:
+                if user['additional_fields']['user_id'] == user_id:
+                    client.delete_user(user['id'])
+                    print(f"🗑️  Deleted existing user \033[93m{user_id}\033[0m from Memobase memory...")
+            except:
+                pass
+        memobase_user_id = client.add_user({"user_id": user_id})
+        user_id = memobase_user_id
+
+    elif frame == "mirix":
+        config_path = "configs/mirix_config.yaml"
+        client = get_mirix_client(config_path)
+        client.create_user(user_id)
 
     for idx, session in enumerate(sessions):
         session_id = user_id + "_lme_exper_session_" + str(idx)
@@ -169,6 +188,9 @@ def ingest_conv(lme_df, version, conv_idx, frame):
 
     if frame == "memos-local":
         client.mem_reorganizer_off()
+    if frame == "mirix":
+        client.save(f"results/lme/mirix_{version}_{user_id}")
+
     print("=" * 80)
 
 
@@ -195,7 +217,7 @@ def main(frame, version, num_workers=2):
             futures.append(future)
 
         for future in tqdm(
-            as_completed(futures), total=len(futures), desc="📊 Processing conversations"
+                as_completed(futures), total=len(futures), desc="📊 Processing conversations"
         ):
             try:
                 future.result()
@@ -223,13 +245,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase", "mirix"],
+        default="memobase"
     )
     parser.add_argument(
-        "--version", type=str, default="v1", help="Version of the evaluation framework."
+        "--version", type=str, default="0905", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=1, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()
