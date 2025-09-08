@@ -42,7 +42,16 @@ class TreeTextMemory(BaseTextMemory):
         self.is_reorganize = config.reorganize
 
         self.memory_manager: MemoryManager = MemoryManager(
-            self.graph_store, self.embedder, self.extractor_llm, is_reorganize=self.is_reorganize
+            self.graph_store,
+            self.embedder,
+            self.extractor_llm,
+            memory_size=config.memory_size
+            or {
+                "WorkingMemory": 20,
+                "LongTermMemory": 1500,
+                "UserMemory": 480,
+            },
+            is_reorganize=self.is_reorganize,
         )
 
         # Create internet retriever if configured

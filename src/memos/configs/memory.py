@@ -166,6 +166,14 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         description="Optional description for this memory configuration.",
     )
 
+    memory_size: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Maximum item counts per memory bucket, e.g.: "
+            '{"WorkingMemory": 20, "LongTermMemory": 10000, "UserMemory": 10000}'
+        ),
+    )
+
 
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 
