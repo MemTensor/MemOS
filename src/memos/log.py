@@ -3,7 +3,6 @@ import logging
 import os
 import threading
 
-from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
@@ -14,6 +13,7 @@ from dotenv import load_dotenv
 
 from memos import settings
 from memos.api.context.context import get_current_trace_id
+from memos.api.context.context_thread import ContextThreadPoolExecutor
 
 
 # Load environment variables
@@ -55,6 +55,9 @@ class CustomLoggerRequestHandler(logging.Handler):
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
+                    cls._instance._executor = None
+                    cls._instance._session = None
+                    cls._instance._is_shutting_down = None
         return cls._instance
 
     def __init__(self):
@@ -62,7 +65,7 @@ class CustomLoggerRequestHandler(logging.Handler):
         if not self._initialized:
             super().__init__()
             workers = int(os.getenv("CUSTOM_LOGGER_WORKERS", "2"))
-            self._executor = ThreadPoolExecutor(
+            self._executor = ContextThreadPoolExecutor(
                 max_workers=workers, thread_name_prefix="log_sender"
             )
             self._is_shutting_down = threading.Event()
@@ -75,15 +78,12 @@ class CustomLoggerRequestHandler(logging.Handler):
         if os.getenv("CUSTOM_LOGGER_URL") is None or self._is_shutting_down.is_set():
             return
 
-        if record.levelno in (logging.INFO, logging.ERROR):
-            try:
-                trace_id = get_current_trace_id()
-
-                if trace_id:
-                    self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
-            except Exception as e:
-                if not self._is_shutting_down.is_set():
-                    print(f"Error sending log: {e}")
+        try:
+            trace_id = get_current_trace_id() or "no-trace-id"
+            self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
+        except Exception as e:
+            if not self._is_shutting_down.is_set():
+                print(f"Error sending log: {e}")
 
     def _send_log_sync(self, message, trace_id):
         """Send log message synchronously in a separate thread"""
@@ -171,7 +171,7 @@ LOGGING_CONFIG = {
     },
     "root": {  # Root logger handles all logs
         "level": selected_log_level,
-        "handlers": ["console", "file", "custom_logger"],
+        "handlers": ["console", "file"],
     },
     "loggers": {
         "memos": {
@@ -190,6 +190,21 @@ def get_logger(name: str | None = None) -> logging.Logger:
     dictConfig(LOGGING_CONFIG)
 
     parent_logger = logging.getLogger("")
+
+    # Add custom logger handler if not already present
+    custom_handler = None
+    for handler in parent_logger.handlers:
+        if isinstance(handler, CustomLoggerRequestHandler):
+            custom_handler = handler
+            break
+
+    if custom_handler is None:
+        custom_handler = CustomLoggerRequestHandler()
+        custom_handler.setFormatter(
+            logging.Formatter(LOGGING_CONFIG["formatters"]["simplified"]["format"])
+        )
+        parent_logger.addHandler(custom_handler)
+
     if name:
         return parent_logger.getChild(name)
     return parent_logger
