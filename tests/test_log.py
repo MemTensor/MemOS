@@ -1,6 +1,17 @@
 import logging
+import os
+
+from dotenv import load_dotenv
 
 from memos import log
+
+
+load_dotenv()
+
+
+def generate_trace_id() -> str:
+    """Generate a random trace_id."""
+    return os.urandom(16).hex()
 
 
 def test_setup_logfile_creates_file(tmp_path, monkeypatch):

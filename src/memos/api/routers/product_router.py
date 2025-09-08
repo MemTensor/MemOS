@@ -1,5 +1,4 @@
 import json
-from memos.log import get_logger
 import traceback
 
 from datetime import datetime
@@ -26,6 +25,7 @@ from memos.api.product_models import (
     UserRegisterResponse,
 )
 from memos.configs.mem_os import MOSConfig
+from memos.log import get_logger
 from memos.mem_os.product import MOSProduct
 from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 

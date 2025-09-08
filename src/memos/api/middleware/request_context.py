@@ -64,16 +64,29 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         context.set("path", request.url.path)
         context.set("client_ip", request.client.host if request.client else None)
 
-        # Log request start
-        logger.info(f"Request started: {request.method} {request.url.path} - trace_id: {trace_id}")
+        # Log request start with parameters
+        params_log = {}
+
+        # Get query parameters
+        if request.query_params:
+            params_log["query_params"] = dict(request.query_params)
+
+        # Get request body if it's available
+        try:
+            params_log = await request.json()
+        except Exception as e:
+            logger.error(f"Error getting request body: {e}")
+            # If body is not JSON or empty, ignore it
+
+        logger.info(
+            f"Request started: {request.method} {request.url.path} - Parameters: {params_log}"
+        )
 
         # Process the request
         response = await call_next(request)
 
-        # Log request completion
-        logger.info(
-            f"Request completed: {request.method} {request.url.path} - trace_id: {trace_id} - status: {response.status_code}"
-        )
+        # Log request completion with output
+        logger.info(f"Request completed: {request.url.path}, status: {response.status_code}")
 
         # Add trace_id to response headers for debugging
         response.headers["x-trace-id"] = trace_id

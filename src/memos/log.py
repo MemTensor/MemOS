@@ -3,7 +3,6 @@ import logging
 import os
 import threading
 
-from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
@@ -14,6 +13,7 @@ from dotenv import load_dotenv
 
 from memos import settings
 from memos.api.context.context import get_current_trace_id
+from memos.api.context.context_thread import ContextThreadPoolExecutor
 
 
 # Load environment variables
@@ -55,6 +55,9 @@ class CustomLoggerRequestHandler(logging.Handler):
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
+                    cls._instance._executor = None
+                    cls._instance._session = None
+                    cls._instance._is_shutting_down = None
         return cls._instance
 
     def __init__(self):
@@ -62,7 +65,7 @@ class CustomLoggerRequestHandler(logging.Handler):
         if not self._initialized:
             super().__init__()
             workers = int(os.getenv("CUSTOM_LOGGER_WORKERS", "2"))
-            self._executor = ThreadPoolExecutor(
+            self._executor = ContextThreadPoolExecutor(
                 max_workers=workers, thread_name_prefix="log_sender"
             )
             self._is_shutting_down = threading.Event()
@@ -75,20 +78,15 @@ class CustomLoggerRequestHandler(logging.Handler):
         if os.getenv("CUSTOM_LOGGER_URL") is None or self._is_shutting_down.is_set():
             return
 
-        if record.levelno in (logging.INFO, logging.ERROR):
-            try:
-                trace_id = (
-                    get_current_trace_id()
-                )  # TODO: get trace_id from request context instead of get_current_trace_id
-                if trace_id:
-                    self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
-            except Exception as e:
-                if not self._is_shutting_down.is_set():
-                    print(f"Error sending log: {e}")
+        try:
+            trace_id = get_current_trace_id() or "no-trace-id"
+            self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
+        except Exception as e:
+            if not self._is_shutting_down.is_set():
+                print(f"Error sending log: {e}")
 
     def _send_log_sync(self, message, trace_id):
         """Send log message synchronously in a separate thread"""
-        print(f"send_log_sync: {message} {trace_id}")
         try:
             logger_url = os.getenv("CUSTOM_LOGGER_URL")
             token = os.getenv("CUSTOM_LOGGER_TOKEN")
@@ -140,6 +138,9 @@ LOGGING_CONFIG = {
         "no_datetime": {
             "format": "[%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
+        "simplified": {
+            "format": "%(asctime)s | %(trace_id)s | %(levelname)s | %(filename)s | %(message)s"
+        },
     },
     "filters": {
         "package_tree_filter": {"()": "logging.Filter", "name": settings.LOG_FILTER_TREE_PREFIX},
@@ -150,7 +151,7 @@ LOGGING_CONFIG = {
             "level": selected_log_level,
             "class": "logging.StreamHandler",
             "stream": stdout,
-            "formatter": "no_datetime",
+            "formatter": "simplified",
             "filters": ["package_tree_filter", "trace_id_filter"],
         },
         "file": {
@@ -159,13 +160,18 @@ LOGGING_CONFIG = {
             "filename": _setup_logfile(),
             "maxBytes": 1024**2 * 10,
             "backupCount": 10,
-            "formatter": "standard",
+            "formatter": "simplified",
             "filters": ["trace_id_filter"],
+        },
+        "custom_logger": {
+            "level": selected_log_level,
+            "class": "memos.log.CustomLoggerRequestHandler",
+            "formatter": "simplified",
         },
     },
     "root": {  # Root logger handles all logs
-        "level": logging.DEBUG if settings.DEBUG else logging.INFO,
-        "handlers": ["console", "file"],
+        "level": selected_log_level,
+        "handlers": ["console", "file", "custom_logger"],
     },
     "loggers": {
         "memos": {
