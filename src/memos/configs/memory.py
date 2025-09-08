@@ -7,6 +7,7 @@ from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
+from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
 
@@ -150,6 +151,10 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ...,
         default_factory=EmbedderConfigFactory,
         description="Embedder configuration for the memory embedding",
+    )
+    reranker: RerankerConfigFactory | None = Field(
+        None,
+        description="Reranker configuration (optional, defaults to cosine_local).",
     )
     graph_db: GraphDBConfigFactory = Field(
         ...,

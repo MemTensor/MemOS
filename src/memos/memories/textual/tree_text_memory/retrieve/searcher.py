@@ -8,12 +8,12 @@ from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
+from memos.reranker.base import BaseReranker
 from memos.utils import timed
 
 from .internet_retriever_factory import InternetRetrieverFactory
 from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
-from .reranker import MemoryReranker
 from .task_goal_parser import TaskGoalParser
 
 
@@ -26,6 +26,7 @@ class Searcher:
         dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
+        reranker: BaseReranker,
         internet_retriever: InternetRetrieverFactory | None = None,
         moscube: bool = False,
     ):
@@ -34,7 +35,7 @@ class Searcher:
 
         self.task_goal_parser = TaskGoalParser(dispatcher_llm)
         self.graph_retriever = GraphMemoryRetriever(self.graph_store, self.embedder)
-        self.reranker = MemoryReranker(dispatcher_llm, self.embedder)
+        self.reranker = reranker
         self.reasoner = MemoryReasoner(dispatcher_llm)
 
         # Create internet retriever from config if provided
