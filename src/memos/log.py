@@ -171,7 +171,7 @@ LOGGING_CONFIG = {
     },
     "root": {  # Root logger handles all logs
         "level": selected_log_level,
-        "handlers": ["console", "file"],
+        "handlers": ["console", "file", "custom_logger"],
     },
     "loggers": {
         "memos": {
@@ -190,21 +190,6 @@ def get_logger(name: str | None = None) -> logging.Logger:
     dictConfig(LOGGING_CONFIG)
 
     parent_logger = logging.getLogger("")
-
-    # Add custom logger handler if not already present
-    custom_handler = None
-    for handler in parent_logger.handlers:
-        if isinstance(handler, CustomLoggerRequestHandler):
-            custom_handler = handler
-            break
-
-    if custom_handler is None:
-        custom_handler = CustomLoggerRequestHandler()
-        custom_handler.setFormatter(
-            logging.Formatter(LOGGING_CONFIG["formatters"]["simplified"]["format"])
-        )
-        parent_logger.addHandler(custom_handler)
-
     if name:
         return parent_logger.getChild(name)
     return parent_logger
