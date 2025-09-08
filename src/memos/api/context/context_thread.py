@@ -49,7 +49,7 @@ class ContextThreadPoolExecutor(ThreadPoolExecutor):
     ThreadPoolExecutor that automatically propagates the main thread's trace_id to worker threads.
     """
 
-    def submit(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> "Future[T]":
+    def submit(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> Any:
         """
         Submit a callable to be executed with the given arguments.
         Automatically propagates the current thread's context to the worker thread.
