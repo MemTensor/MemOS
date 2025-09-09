@@ -91,6 +91,29 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_reranker_config() -> dict[str, Any]:
+        """Get embedder configuration."""
+        embedder_backend = os.getenv("MOS_RERANKER_BACKEND", "http_bge")
+
+        if embedder_backend == "http_bge":
+            return {
+                "backend": "universal_api",
+                "config": {
+                    "url": os.getenv("MOS_RERANKER_URL"),
+                    "model": "bge-reranker-v2-m3",
+                    "timeout": 10,
+                },
+            }
+        else:
+            return {
+                "backend": "cosine_local",
+                "config": {
+                    "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
+                    "level_field": "background",
+                },
+            }
+
+    @staticmethod
     def get_embedder_config() -> dict[str, Any]:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_EMBEDDER_BACKEND", "ollama")
@@ -492,6 +515,7 @@ class APIConfig:
                             },
                             "embedder": APIConfig.get_embedder_config(),
                             "internet_retriever": internet_config,
+                            "reranker": APIConfig.get_reranker_config(),
                         },
                     },
                     "act_mem": {}
@@ -545,6 +569,7 @@ class APIConfig:
                                 "config": graph_db_backend_map[graph_db_backend],
                             },
                             "embedder": APIConfig.get_embedder_config(),
+                            "reranker": APIConfig.get_reranker_config(),
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
                             "internet_retriever": internet_config,
