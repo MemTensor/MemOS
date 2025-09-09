@@ -13,6 +13,7 @@ def get_mirix_client(config_path, load_from=None):
     with open(config_path, "r") as f:
         agent_config = yaml.safe_load(f)
 
+    os.environ['OPENAI_API_KEY'] = agent_config['api_key']
     embedding_default_config = EmbeddingConfig(
         embedding_model=agent_config['embedding_model_name'],
         embedding_endpoint_type="openai",
@@ -64,9 +65,16 @@ if __name__ == '__main__':
     response = assistant.chat("What's my schedule like this week?")
 
     print(response)
-    assistant.get_user_by_name()
-    user1 = assistant.create_user(user_name='user1')
+    assistant.create_user(user_name='user1')
+    user1 = assistant.get_user_by_name(user_name='user1')
     assistant.add('i prefer tea over coffee', user_id=user1.id)
     response = assistant.chat("What drink do I prefer?", user_id=user1.id)
+
+
+    import pandas as pd
+    locomo_df = pd.read_json("/Users/wuhao/PycharmProjects/MemOS/evaluation/data/locomo/locomo10.json")
+    assistant = get_mirix_client(config_path, load_from='/Users/wuhao/PycharmProjects/MemOS/evaluation/results/locomo/mirix_0905_locomo_exp_user_0')
+    assistant.chat("When did Caroline go to the LGBTQ support group?")
+
 
 
