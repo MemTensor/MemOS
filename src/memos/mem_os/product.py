@@ -693,7 +693,7 @@ class MOSProduct(MOSCore):
             thread.start()
 
     def _filter_memories_by_threshold(
-        self, memories: list[TextualMemoryItem], threshold: float = 0.52, min_num: int = 0
+        self, memories: list[TextualMemoryItem], threshold: float = 0.30, min_num: int = 0
     ) -> list[TextualMemoryItem]:
         """
         Filter memories by threshold.
