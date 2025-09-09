@@ -108,9 +108,10 @@ class Searcher:
             context = list({node["memory"] for node in related_nodes})
 
             # optional: supplement context with internet knowledge
-            if self.internet_retriever:
+            """if self.internet_retriever:
                 extra = self.internet_retriever.retrieve_from_internet(query=query, top_k=3)
                 context.extend(item.memory.partition("\nContent: ")[-1] for item in extra)
+            """
 
         # parse goal using LLM
         parsed_goal = self.task_goal_parser.parse(

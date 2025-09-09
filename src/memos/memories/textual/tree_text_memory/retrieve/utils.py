@@ -19,7 +19,9 @@ $conversation
 Context (if any):
 \"\"\"$context\"\"\"
 
-Return strictly in this JSON format:
+Return strictly in this JSON format, note that the
+keys/tags/rephrased_instruction/memories should use the same language as the
+input query:
 {
   "keys": [...],
   "tags": [...],
