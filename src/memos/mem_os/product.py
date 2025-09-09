@@ -557,7 +557,7 @@ class MOSProduct(MOSCore):
                         send_online_bot_notification_async,
                     )
 
-                    # 准备通知数据
+                    # Prepare notification data
                     chat_data = {
                         "query": query,
                         "user_id": user_id,
