@@ -1,20 +1,24 @@
 from typing import List, Dict, Any, Union, Tuple
 
 
-def process_source(items: List[Tuple[Any, Union[str, Dict[str, Any], List[Any]]]] | None = None) -> str:
+def process_source(
+    items: List[Tuple[Any, Union[str, Dict[str, Any], List[Any]]]] | None = None, 
+    recent_num: int = 3
+    ) -> str:
     """
     Args:
         items: List of tuples where each tuple contains (memory, source).
                source can be str, Dict, or List.
+        recent_num: Number of recent items to concatenate.
     Returns:
         str: Concatenated source.
     """
     concat_data = []
     for item in items:
         memory, source = item
-        print(memory, source)
-        if isinstance(source, str):
-            concat_data.append(source)
+        for content in source[:3]:
+            if isinstance(content, str):
+                concat_data.append(content)
     return "\n".join(concat_data)
 
 
