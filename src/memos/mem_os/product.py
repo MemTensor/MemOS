@@ -942,6 +942,11 @@ class MOSProduct(MOSCore):
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list, threshold)
+            new_memories_list = []
+            for m in memories_list:
+                m.metadata.embedding = []
+                new_memories_list.append(m)
+            memories_list = new_memories_list
         system_prompt = super()._build_system_prompt(memories_list, base_prompt)
         history_info = []
         if history:
