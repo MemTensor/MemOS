@@ -414,7 +414,8 @@ class MOSProduct(MOSCore):
         sys_body = get_memos_prompt(
             date=formatted_date, tone=tone, verbosity=verbosity, mode="base"
         )
-        mem_block = _format_mem_block(memories_all)
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+        mem_block = mem_block_o + "\n" + mem_block_p
         prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
         return (
             prefix
