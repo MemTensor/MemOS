@@ -939,6 +939,8 @@ class MOSProduct(MOSCore):
             internet_search=internet_search,
             moscube=moscube,
         )["text_mem"]
+        
+        memories_list = []
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list, threshold)
