@@ -133,17 +133,6 @@ def memos_search(client, user_id, query, top_k, frame="memos-local"):
     return context, duration_ms
 
 
-def memobase_search(client, user_id, query, top_k=20):
-    start = time()
-    memories = memobase_search_memory(client, user_id, query, max_memory_context_size=top_k * 100)
-    context = MEMOBASE_CONTEXT_TEMPLATE.format(
-        user_id=user_id,
-        memories=memories,
-    )
-    duration_ms = (time() - start) * 1000
-    return context, duration_ms
-
-
 def process_user(lme_df, conv_idx, frame, version, top_k=20):
     row = lme_df.iloc[conv_idx]
     question = row["question"]
@@ -166,29 +155,29 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
 
     search_results = defaultdict(list)
     print("\n" + "-" * 80)
-    print(f"🔎 \033[1;36m[{conv_idx + 1}/{len(lme_df)}] Processing conversation {conv_idx}\033[0m")
-    print(f"❓ Question: \033[93m{question}\033[0m")
-    print(f"📅 Date: \033[92m{question_date}\033[0m")
-    print(f"🏷️  Type: \033[94m{question_type}\033[0m")
+    print(f"🔎 [{conv_idx + 1}/{len(lme_df)}] Processing conversation {conv_idx}")
+    print(f"❓ Question: {question}")
+    print(f"📅 Date: {question_date}")
+    print(f"🏷️  Type: {question_type}")
     print("-" * 80)
 
     existing_results, exists = load_existing_results(frame, version, conv_idx)
     if exists:
-        print(f"♻️  \033[93mUsing existing results for conversation {conv_idx}\033[0m")
+        print(f"♻️  Using existing results for conversation {conv_idx}")
         return existing_results
 
     if frame == "zep":
         client = zep_client()
-        print("🔌 \033[1mUsing \033[94mZep client\033[0m \033[1mfor search...\033[0m")
+        print("🔌 Using Zep client for search...")
         context, duration_ms = zep_search(client, user_id, question)
 
     elif frame == "mem0-local":
         client = mem0_client(mode="local")
-        print("🔌 \033[1mUsing \033[94mMem0 Local client\033[0m \033[1mfor search...\033[0m")
+        print("🔌 Using Mem0 Local client for search...")
         context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
     elif frame == "mem0-api":
         client = mem0_client(mode="api")
-        print("🔌 \033[1mUsing \033[94mMem0 API client\033[0m \033[1mfor search...\033[0m")
+        print("🔌 Using Mem0 API client for search...")
         context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
     elif frame == "memos-local":
         client = memos_client(
@@ -201,18 +190,18 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
             mem_os_config_path="configs/mos_memos_config.json",
             addorsearch="search",
         )
-        print("🔌 \033[1mUsing \033[94mMemos Local client\033[0m \033[1mfor search...\033[0m")
+        print("🔌 Using Memos Local client for search...")
         context, duration_ms = memos_search(client, user_id, question, frame=frame)
     elif frame == "memobase":
         client = memobase_client()
-        print("🔌 \033[1mUsing \033[94mMemobase client\033[0m \033[1mfor search...\033[0m")
-        context, duration_ms = memobase_search_memory(client, user_id, question, top_k=top_k)
+        print("🔌 Using Memobase client for search...")
+        context, duration_ms = memobase_search_memory(client, user_id, question, max_memory_context_size=3000)
 
     elif frame == "memos-api":
         client = memos_client(
             mode="api",
         )
-        print("🔌 \033[1mUsing \033[94mMemos API client\033[0m \033[1mfor search...\033[0m")
+        print("🔌 Using Memos API client for search...")
         context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
     search_results[user_id].append(
         {
@@ -231,7 +220,7 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{conv_idx}.json", "w"
     ) as f:
         json.dump(search_results, f, indent=4)
-    print(f"💾 \033[92mSearch results for conversation {conv_idx} saved...\033[0m")
+    print(f"💾 Search results for conversation {conv_idx} saved...")
     print("-" * 80)
 
     return search_results
@@ -246,23 +235,23 @@ def load_existing_results(frame, version, group_idx):
             with open(result_path) as f:
                 return json.load(f), True
         except Exception as e:
-            print(f"\033[91m❌ Error loading existing results for group {group_idx}: {e}\033[0m")
+            print(f"❌ Error loading existing results for group {group_idx}: {e}")
     return {}, False
 
 
 def main(frame, version, top_k=20, num_workers=2):
     print("\n" + "=" * 80)
-    print(f"🔍 \033[1;36mLONGMEMEVAL SEARCH - {frame.upper()} v{version}\033[0m".center(80))
+    print(f"🔍 LONGMEMEVAL SEARCH - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
     lme_df = pd.read_json("data/longmemeval/longmemeval_s.json")
     print(
-        "📚 \033[1mLoaded LongMemeval dataset\033[0m from \033[94mdata/longmemeval/longmemeval_s.json\033[0m"
+        "📚 Loaded LongMemeval dataset from data/longmemeval/longmemeval_s.json"
     )
     num_multi_sessions = len(lme_df)
-    print(f"👥 Number of users: \033[93m{num_multi_sessions}\033[0m")
+    print(f"👥 Number of users: {num_multi_sessions}")
     print(
-        f"⚙️  Search parameters: top_k=\033[94m{top_k}\033[0m, workers=\033[94m{num_workers}\033[0m"
+        f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}"
     )
     print("-" * 80)
 
@@ -284,26 +273,26 @@ def main(frame, version, top_k=20, num_workers=2):
                 for user_id, results in search_results.items():
                     all_search_results[user_id].extend(results)
             except Exception as e:
-                print(f"\033[91m❌ Error processing user {idx}: {e}\033[0m")
+                print(f"❌ Error processing user {idx}: {e}")
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
     elapsed_time_str = str(elapsed_time).split(".")[0]
 
     print("\n" + "=" * 80)
-    print("✅ \033[1;32mSEARCH COMPLETE\033[0m".center(80))
+    print("✅ SEARCH COMPLETE".center(80))
     print("=" * 80)
     print(
-        f"⏱️  Total time taken to search \033[93m{num_multi_sessions}\033[0m users: \033[92m{elapsed_time_str}\033[0m"
+        f"⏱️  Total time taken to search {num_multi_sessions} users: {elapsed_time_str}"
     )
     print(
-        f"🔄 Framework: \033[94m{frame}\033[0m | Version: \033[94m{version}\033[0m | Workers: \033[94m{num_workers}\033[0m"
+        f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}"
     )
 
     with open(f"results/lme/{frame}-{version}/{frame}_lme_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
     print(
-        f"📁 Results saved to: \033[1;94mresults/lme/{frame}-{version}/{frame}_lme_search_results.json\033[0m"
+        f"📁 Results saved to: results/lme/{frame}-{version}/{frame}_lme_search_results.json"
     )
     print("=" * 80 + "\n")
 
@@ -314,6 +303,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+        default='memobase'
     )
     parser.add_argument(
         "--version", type=str, default="v1", help="Version of the evaluation framework."
