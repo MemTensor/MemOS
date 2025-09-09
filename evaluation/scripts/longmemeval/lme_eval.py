@@ -199,7 +199,7 @@ async def process_qa(
     )
 
     print("\n" + "=" * 80)
-    print(f"🔍 Processed User: \033[1m{user_id}\033[0m")
+    print(f"🔍 Processed User: {user_id}")
     print("-" * 80)
     print(f"❓ Question: \n   {question}")
     print("-" * 80)
@@ -218,7 +218,7 @@ async def process_qa(
 
     judgments_formatted = []
     for run, correct in judgments_dict.items():
-        status = "\033[92m✓ CORRECT\033[0m" if correct else "\033[91m✗ WRONG\033[0m"
+        status = "✓ CORRECT" if correct else "✗ WRONG"
         judgments_formatted.append(f"{run}: {status}")
 
     print(f"⚖️  Judgments: \n   {', '.join(judgments_formatted)}")
@@ -309,25 +309,25 @@ async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
     run_scores, evaluated_count = evaluate_accuracy(lme_eval_results, num_runs)
 
     print("\n" + "=" * 80)
-    print("\033[1;36m📊 EVALUATION SUMMARY\033[0m".center(80))
+    print("📊 EVALUATION SUMMARY".center(80))
     print("=" * 80)
 
     if evaluated_count > 0:
         print(
-            f"📋 \033[1mEvaluated:\033[0m \033[93m{evaluated_count}\033[0m responses across \033[93m{num_runs}\033[0m runs"
+            f"📋 Evaluated: [93m{evaluated_count} responses across [93m{num_runs} runs"
         )
         print(
-            f"🎯 \033[1mLLM-as-a-Judge Mean Accuracy:\033[0m \033[92m{np.mean(run_scores):.4f}\033[0m"
+            f"🎯 LLM-as-a-Judge Mean Accuracy: {np.mean(run_scores):.4f}"
         )
-        print(f"🔍 \033[1mStandard Deviation:\033[0m \033[93m{np.std(run_scores):.4f}\033[0m")
+        print(f"🔍 Standard Deviation: [93m{np.std(run_scores):.4f}")
 
-        run_scores_formatted = [f"\033[94m{round(s, 4):.4f}\033[0m" for s in run_scores]
-        print(f"🔢 \033[1mIndividual run scores:\033[0m [{', '.join(run_scores_formatted)}]")
+        run_scores_formatted = [f"[94m{round(s, 4):.4f}" for s in run_scores]
+        print(f"🔢 Individual run scores: [{', '.join(run_scores_formatted)}]")
     else:
-        print("\033[91m⚠️  No responses were evaluated. LLM-as-a-Judge score: N/A (0/0)\033[0m")
+        print("⚠️  No responses were evaluated. LLM-as-a-Judge score: N/A (0/0)")
 
     if error_count > 0:
-        print(f"\033[91m⚠️  Encountered {error_count} errors during processing\033[0m")
+        print(f"⚠️  Encountered {error_count} errors during processing")
 
     print("-" * 80)
 
@@ -336,8 +336,8 @@ async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
     with open(judged_path, "w") as file:
         json.dump(lme_eval_results, file, indent=4)
 
-    print("\033[92m✅ Evaluation completed successfully!\033[0m")
-    print(f"📁 Results saved to: \033[1;94m{judged_path}\033[0m")
+    print("✅ Evaluation completed successfully!")
+    print(f"📁 Results saved to: {judged_path}")
     print("=" * 80 + "\n")
 
 
