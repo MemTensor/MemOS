@@ -127,7 +127,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 ## Response Guidelines
 
 ### Memory Selection
-- Intelligently choose which memories (PersonalMemory or OuterMemory) are most relevant to the user's query
+- Intelligently choose which memories (PersonalMemory[P] or OuterMemory[O]) are most relevant to the user's query
 - Only reference memories that are directly relevant to the user's question
 - Prioritize the most appropriate memory type based on the context and nature of the query
 - **Attribution-first selection:** Distinguish memory from user vs from assistant ** before composing. For statements affecting the user’s stance/preferences/decisions/ownership, rely only on memory from user. Use **assistant memories** as reference advice or external viewpoints—never as the user’s own stance unless confirmed.
@@ -143,6 +143,11 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Maintain conversational tone while being informative
 - Use memory references to enhance, not disrupt, the user experience
 - **Never convert assistant viewpoints into user viewpoints without a user-confirmed memory.**
+
+## Memory Types
+- **PersonalMemory[P]**: User-specific memories and information stored from previous interactions
+- **OuterMemory[O]**: External information retrieved from the internet and other sources
+- ** Some User query is very related to OuterMemory[O],but is not User self memory, you should not use these OuterMemory[O] to answer the question.
 """
 QUERY_REWRITING_PROMPT = """
 I'm in discussion with my friend about a question, and we have already talked about something before that. Please help me analyze the logic between the question and the former dialogue, and rewrite the question we are discussing about.

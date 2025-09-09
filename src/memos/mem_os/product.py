@@ -67,9 +67,10 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
     sequence is [i:memId] i; [P]=PersonalMemory / [O]=OuterMemory
     """
     if not memories_all:
-        return "(none)"
+        return "(none)", "(none)"
 
-    lines = []
+    lines_o = []
+    lines_p = []
     for idx, m in enumerate(memories_all[:max_items], 1):
         mid = _short_id(getattr(m, "id", "") or "")
         mtype = getattr(getattr(m, "metadata", {}), "memory_type", None) or getattr(
@@ -80,8 +81,11 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
         if len(txt) > max_chars_each:
             txt = txt[: max_chars_each - 1] + "…"
         mid = mid or f"mem_{idx}"
-        lines.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
-    return "\n".join(lines)
+        if tag == "O":
+            lines_o.append(f"[{idx}:{mid}] :: [{tag}] {txt}\n")
+        elif tag == "P":
+            lines_p.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
+    return "\n".join(lines_o), "\n".join(lines_p)
 
 
 class MOSProduct(MOSCore):
@@ -434,8 +438,8 @@ class MOSProduct(MOSCore):
         sys_body = get_memos_prompt(
             date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
         )
-        mem_block = _format_mem_block(memories_all)
-        return sys_body + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+        return sys_body + "\n\n# Memories\n## PersonalMemory (ordered)\n" + mem_block_p + "\n## OuterMemory (ordered)\n" + mem_block_o
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
@@ -1284,6 +1288,7 @@ class MOSProduct(MOSCore):
                 memories["metadata"]["memory"] = memories["memory"]
                 memories_list.append(memories)
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
+        logger.info(f"search memory list is : {reformat_memory_list}")
         search_result["text_mem"] = reformat_memory_list
         time_end = time.time()
         logger.info(
