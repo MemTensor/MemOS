@@ -97,7 +97,7 @@ class APIConfig:
 
         if embedder_backend == "http_bge":
             return {
-                "backend": "universal_api",
+                "backend": "http_bge",
                 "config": {
                     "url": os.getenv("MOS_RERANKER_URL"),
                     "model": "bge-reranker-v2-m3",
