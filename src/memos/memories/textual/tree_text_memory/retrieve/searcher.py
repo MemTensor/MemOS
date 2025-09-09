@@ -87,6 +87,12 @@ class Searcher:
         self._update_usage_history(final_results, info)
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
+        res_results = ""
+        for _num_i, result in enumerate(final_results):
+            res_results += "\n" + (
+                result.id + "|" + result.metadata.memory_type + "|" + result.memory
+            )
+        logger.info(f"[SEARCH] Results. {res_results}")
         return final_results
 
     @timed
