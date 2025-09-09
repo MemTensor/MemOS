@@ -704,11 +704,11 @@ class MOSProduct(MOSCore):
             thread.start()
 
     def _filter_memories_by_threshold(
-        self, 
-        memories: list[TextualMemoryItem], 
-        threshold: float = 0.30, 
-        min_num: int = 3, 
-        memory_type: Literal["OuterMemory"] = "OuterMemory"
+        self,
+        memories: list[TextualMemoryItem],
+        threshold: float = 0.30,
+        min_num: int = 3,
+        memory_type: Literal["OuterMemory"] = "OuterMemory",
     ) -> list[TextualMemoryItem]:
         """
         Filter memories by threshold and type, at least min_num memories for Non-OuterMemory.
@@ -734,7 +734,7 @@ class MOSProduct(MOSCore):
             filtered = filtered_person[:min_num] + filtered_outer[:min_num]
         else:
             if len(per_memory_count) < min_num:
-                filtered += filtered_person[per_memory_count: min_num]
+                filtered += filtered_person[per_memory_count:min_num]
         filtered_memory = sorted(filtered, key=lambda m: m.metadata.relativity, reverse=True)
         return filtered_memory
 
@@ -972,7 +972,7 @@ class MOSProduct(MOSCore):
         user_id: str,
         cube_id: str | None = None,
         history: MessageList | None = None,
-        top_k: int = 10,
+        top_k: int = 20,
         internet_search: bool = False,
         moscube: bool = False,
     ) -> Generator[str, None, None]:
