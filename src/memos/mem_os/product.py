@@ -439,7 +439,13 @@ class MOSProduct(MOSCore):
             date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
         )
         mem_block_o, mem_block_p = _format_mem_block(memories_all)
-        return sys_body + "\n\n# Memories\n## PersonalMemory (ordered)\n" + mem_block_p + "\n## OuterMemory (ordered)\n" + mem_block_o
+        return (
+            sys_body
+            + "\n\n# Memories\n## PersonalMemory (ordered)\n"
+            + mem_block_p
+            + "\n## OuterMemory (ordered)\n"
+            + mem_block_o
+        )
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
