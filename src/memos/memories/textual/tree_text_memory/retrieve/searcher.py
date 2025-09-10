@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import traceback
 
 from datetime import datetime
 
@@ -111,7 +112,20 @@ class Searcher:
                 self.graph_store.get_node(n["id"])
                 for n in self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
             ]
-            context = list({node["memory"] for node in related_nodes})
+            memories = []
+            for node in related_nodes:
+                try:
+                    m = (
+                        node.get("memory")
+                        if isinstance(node, dict)
+                        else (getattr(node, "memory", None))
+                    )
+                    if isinstance(m, str) and m:
+                        memories.append(m)
+                except Exception:
+                    logger.error(f"[SEARCH] Error during search: {traceback.format_exc()}")
+                    continue
+            context = list(dict.fromkeys(memories))
 
             # optional: supplement context with internet knowledge
             """if self.internet_retriever:
