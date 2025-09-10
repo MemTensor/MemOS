@@ -62,7 +62,7 @@ LOGGING_CONFIG = {
             "level": selected_log_level,
             "class": "logging.StreamHandler",
             "stream": stdout,
-            "formatter": "simplified",
+            "formatter": "no_datetime",
             "filters": ["package_tree_filter", "trace_id_filter"],
         },
         "file": {
@@ -71,7 +71,7 @@ LOGGING_CONFIG = {
             "filename": _setup_logfile(),
             "maxBytes": 1024**2 * 10,
             "backupCount": 10,
-            "formatter": "simplified",
+            "formatter": "standard",
             "filters": ["trace_id_filter"],
         },
     },
