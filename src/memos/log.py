@@ -171,7 +171,7 @@ LOGGING_CONFIG = {
     },
     "root": {  # Root logger handles all logs
         "level": selected_log_level,
-        "handlers": ["console", "file", "custom_logger"],
+        "handlers": ["console", "file"],
     },
     "loggers": {
         "memos": {
