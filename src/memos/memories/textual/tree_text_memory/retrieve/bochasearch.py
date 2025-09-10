@@ -4,6 +4,7 @@ import json
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Any
 
 import requests
 
@@ -193,7 +194,7 @@ class BochaAISearchRetriever:
         return list(unique_memory_items.values())
 
     def _process_result(
-        self, result: dict, query: str, parsed_goal: str, info: None
+        self, result: dict, query: str, parsed_goal: str, info: dict[str, Any]
     ) -> list[TextualMemoryItem]:
         """Process one Bocha search result into TextualMemoryItem."""
         title = result.get("name", "")

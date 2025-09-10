@@ -22,6 +22,7 @@ class GraphMemoryRetriever:
         top_k: int,
         memory_scope: str,
         query_embedding: list[list[float]] | None = None,
+        search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
@@ -35,7 +36,7 @@ class GraphMemoryRetriever:
             top_k (int): Number of candidates to return.
             memory_scope (str): One of ['working', 'long_term', 'user'].
             query_embedding(list of embedding): list of embedding of query
-
+            search_filter (dict, optional): Optional metadata filters for search results.
         Returns:
             list: Combined memory items.
         """
@@ -44,6 +45,7 @@ class GraphMemoryRetriever:
 
         if memory_scope == "WorkingMemory":
             # For working memory, retrieve all entries (no filtering)
+            # TODO: use search filter if exists
             working_memories = self.graph_store.get_all_memory_items(
                 scope="WorkingMemory", include_embedding=True
             )
@@ -51,10 +53,16 @@ class GraphMemoryRetriever:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # Structured graph-based retrieval
-            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope)
+            future_graph = executor.submit(
+                self._graph_recall, parsed_goal, memory_scope, search_filter
+            )
             # Vector similarity search
             future_vector = executor.submit(
-                self._vector_recall, query_embedding, memory_scope, top_k
+                self._vector_recall,
+                query_embedding or [],
+                memory_scope,
+                top_k,
+                search_filter=search_filter,
             )
 
             graph_results = future_graph.result()
@@ -120,9 +128,10 @@ class GraphMemoryRetriever:
         return list(combined.values())
 
     def _graph_recall(
-        self, parsed_goal: ParsedTaskGoal, memory_scope: str
+        self, parsed_goal: ParsedTaskGoal, memory_scope: str, search_filter: dict | None = None
     ) -> list[TextualMemoryItem]:
         """
+        TODO: use search filter if exists
         Perform structured node-based retrieval from Neo4j.
         - keys must match exactly (n.key IN keys)
         - tags must overlap with at least 2 input tags
@@ -181,8 +190,10 @@ class GraphMemoryRetriever:
         top_k: int = 20,
         max_num: int = 3,
         cube_name: str | None = None,
+        search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """
+        TODO: use search filter if exists
         # TODO: tackle with post-filter and pre-filter(5.18+) better.
         Perform vector-based similarity retrieval using query embedding.
         """
