@@ -146,9 +146,10 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+        default='memobase'
     )
     parser.add_argument(
-        "--version", type=str, default="v1", help="Version of the evaluation framework."
+        "--version", type=str, default="0905", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--workers", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."

@@ -306,7 +306,7 @@ if __name__ == "__main__":
         default='memobase'
     )
     parser.add_argument(
-        "--version", type=str, default="v1", help="Version of the evaluation framework."
+        "--version", type=str, default="0905", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."
