@@ -76,7 +76,7 @@ LOGGING_CONFIG = {
         },
     },
     "root": {  # Root logger handles all logs
-        "level": selected_log_level,
+        "level": logging.DEBUG if settings.DEBUG else logging.INFO,
         "handlers": ["console", "file"],
     },
     "loggers": {
