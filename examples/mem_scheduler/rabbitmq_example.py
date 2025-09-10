@@ -2,7 +2,7 @@ import threading
 import time
 
 from memos.configs.mem_scheduler import AuthConfig
-from memos.mem_scheduler.general_modules.rabbitmq_service import RabbitMQSchedulerModule
+from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
 
 
 def publish_message(rabbitmq_module, message):

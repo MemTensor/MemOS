@@ -125,12 +125,16 @@ class MOSCore:
                     "missing required 'llm' attribute"
                 )
                 self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm, process_llm=self.chat_llm
+                    chat_llm=self.chat_llm,
+                    process_llm=self.chat_llm,
+                    db_engine=self.user_manager.engine,
                 )
             else:
                 # Configure scheduler general_modules
                 self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm, process_llm=self.mem_reader.llm
+                    chat_llm=self.chat_llm,
+                    process_llm=self.mem_reader.llm,
+                    db_engine=self.user_manager.engine,
                 )
             self._mem_scheduler.start()
             return self._mem_scheduler

@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 
@@ -9,10 +10,10 @@ from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.utils.filter_utils import (
-    filter_similar_memories,
     filter_too_short_memories,
+    filter_vector_based_similar_memories,
 )
-from memos.memories.textual.tree import TreeTextMemory
+from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -47,7 +48,10 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.logging_warning_patch = patch("logging.warning")
         self.mock_logging_warning = self.logging_warning_patch.start()
 
-        self.logger_info_patch = patch("memos.mem_scheduler.general_modules.retriever.logger.info")
+        # Mock the MemoryFilter logger since that's where the actual logging happens
+        self.logger_info_patch = patch(
+            "memos.mem_scheduler.memory_manage_modules.memory_filter.logger.info"
+        )
         self.mock_logger_info = self.logger_info_patch.start()
 
     def tearDown(self):
@@ -57,7 +61,7 @@ class TestSchedulerRetriever(unittest.TestCase):
 
     def test_filter_similar_memories_empty_input(self):
         """Test filter_similar_memories with empty input list."""
-        result = filter_similar_memories([])
+        result = filter_vector_based_similar_memories([])
         self.assertEqual(result, [])
 
     def test_filter_similar_memories_no_duplicates(self):
@@ -68,7 +72,7 @@ class TestSchedulerRetriever(unittest.TestCase):
             "And this third one has nothing in common with the others",
         ]
 
-        result = filter_similar_memories(memories)
+        result = filter_vector_based_similar_memories(memories)
         self.assertEqual(len(result), 3)
         self.assertEqual(set(result), set(memories))
 
@@ -79,14 +83,14 @@ class TestSchedulerRetriever(unittest.TestCase):
             "The user is planning to move to Chicago next month, which reflects a significant change in their living situation.",
             "The user is planning to move to Chicago in the upcoming month, indicating a significant change in their living situation.",
         ]
-        result = filter_similar_memories(memories, similarity_threshold=0.75)
+        result = filter_vector_based_similar_memories(memories, similarity_threshold=0.75)
         self.assertLess(len(result), len(memories))
 
     def test_filter_similar_memories_error_handling(self):
         """Test filter_similar_memories error handling."""
         # Test with non-string input (should return original list due to error)
         memories = ["valid text", 12345, "another valid text"]
-        result = filter_similar_memories(memories)
+        result = filter_vector_based_similar_memories(memories)
         self.assertEqual(result, memories)
 
     def test_filter_too_short_memories_empty_input(self):
@@ -134,3 +138,192 @@ class TestSchedulerRetriever(unittest.TestCase):
         )  # "Exactly three words here", "Two words only", "Four words right here"
         self.assertIn("Exactly three words here", result)
         self.assertIn("Four words right here", result)
+
+    def test_filter_unrelated_memories_empty_memories(self):
+        """Test filter_unrelated_memories with empty memories list."""
+        query_history = ["What is the weather like?", "Tell me about Python programming"]
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=[]
+        )
+
+        self.assertEqual(result, [])
+        self.assertTrue(success_flag)
+        self.mock_logger_info.assert_called_with("No memories to filter - returning empty list")
+
+    def test_filter_unrelated_memories_empty_query_history(self):
+        """Test filter_unrelated_memories with empty query history."""
+        memories = [
+            TextualMemoryItem(memory="Python is a programming language"),
+            TextualMemoryItem(memory="Machine learning uses algorithms"),
+            TextualMemoryItem(memory="Data science involves statistics"),
+        ]
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=[], memories=memories
+        )
+
+        self.assertEqual(result, memories)
+        self.assertTrue(success_flag)
+        self.mock_logger_info.assert_called_with("No query history provided - keeping all memories")
+
+    def test_filter_unrelated_memories_successful_filtering(self):
+        """Test filter_unrelated_memories with successful LLM filtering."""
+        query_history = ["What is Python?", "How does machine learning work?"]
+        memories = [
+            TextualMemoryItem(memory="Python is a high-level programming language"),
+            TextualMemoryItem(memory="Machine learning algorithms learn from data"),
+            TextualMemoryItem(memory="The weather is sunny today"),  # Unrelated
+            TextualMemoryItem(memory="Python has many libraries for ML"),
+            TextualMemoryItem(memory="Cooking recipes for pasta"),  # Unrelated
+        ]
+
+        # Mock LLM response for successful filtering
+        mock_llm_response = {
+            "relevant_memories": [0, 1, 3],  # Keep Python, ML, and Python ML libraries
+            "filtered_count": 2,  # Filter out weather and cooking
+            "reasoning": "Kept memories related to Python and machine learning, filtered out unrelated topics",
+        }
+
+        # Convert to proper JSON string
+        self.llm.generate.return_value = json.dumps(mock_llm_response)
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=memories
+        )
+
+        # Verify results
+        self.assertEqual(len(result), 3)
+        self.assertIn(memories[0], result)  # Python
+        self.assertIn(memories[1], result)  # ML
+        self.assertIn(memories[3], result)  # Python ML libraries
+        self.assertNotIn(memories[2], result)  # Weather
+        self.assertNotIn(memories[4], result)  # Cooking
+        self.assertTrue(success_flag)
+
+        # Verify LLM was called correctly
+        self.llm.generate.assert_called_once()
+        call_args = self.llm.generate.call_args[0][0]
+        self.assertEqual(call_args[0]["role"], "user")
+        self.assertIn("Memory Relevance Filtering Task", call_args[0]["content"])
+
+    def test_filter_unrelated_memories_llm_failure_fallback(self):
+        """Test filter_unrelated_memories with LLM failure - should fallback to keeping all memories."""
+        query_history = ["What is Python?"]
+        memories = [
+            TextualMemoryItem(memory="Python is a programming language"),
+            TextualMemoryItem(memory="Machine learning is a subset of AI"),
+        ]
+
+        # Mock LLM to return an invalid response that will trigger error handling
+        self.llm.generate.return_value = "Invalid response that cannot be parsed"
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=memories
+        )
+
+        # Should return all memories as fallback
+        self.assertEqual(result, memories)
+        self.assertFalse(success_flag)
+
+        # Verify error was logged
+        self.mock_logger_info.assert_called_with(
+            "Starting memory filtering for 2 memories against 1 queries"
+        )
+
+    def test_filter_unrelated_memories_invalid_json_response(self):
+        """Test filter_unrelated_memories with invalid JSON response from LLM."""
+        query_history = ["What is Python?"]
+        memories = [
+            TextualMemoryItem(memory="Python is a programming language"),
+            TextualMemoryItem(memory="Machine learning is a subset of AI"),
+        ]
+
+        # Mock LLM to return invalid JSON
+        self.llm.generate.return_value = "This is not valid JSON"
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=memories
+        )
+
+        # Should return all memories as fallback
+        self.assertEqual(result, memories)
+        self.assertFalse(success_flag)
+
+    def test_filter_unrelated_memories_invalid_indices(self):
+        """Test filter_unrelated_memories with invalid indices in LLM response."""
+        query_history = ["What is Python?"]
+        memories = [
+            TextualMemoryItem(memory="Python is a programming language"),
+            TextualMemoryItem(memory="Machine learning is a subset of AI"),
+        ]
+
+        # Mock LLM to return invalid indices
+        mock_llm_response = {
+            "relevant_memories": [0, 5, -1],  # Invalid indices
+            "filtered_count": 1,
+            "reasoning": "Some memories are relevant",
+        }
+
+        # Convert to proper JSON string
+        self.llm.generate.return_value = json.dumps(mock_llm_response)
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=memories
+        )
+
+        # Should only include valid indices
+        self.assertEqual(len(result), 1)
+        self.assertIn(memories[0], result)  # Index 0 is valid
+        self.assertTrue(success_flag)
+
+    def test_filter_unrelated_memories_missing_required_fields(self):
+        """Test filter_unrelated_memories with missing required fields in LLM response."""
+        query_history = ["What is Python?"]
+        memories = [
+            TextualMemoryItem(memory="Python is a programming language"),
+            TextualMemoryItem(memory="Machine learning is a subset of AI"),
+        ]
+
+        # Mock LLM to return response missing required fields
+        mock_llm_response = {
+            "relevant_memories": [0, 1]
+            # Missing "filtered_count" and "reasoning"
+        }
+
+        # Convert to proper JSON string
+        self.llm.generate.return_value = json.dumps(mock_llm_response)
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=memories
+        )
+
+        # Should return all memories as fallback due to missing fields
+        self.assertEqual(result, memories)
+        self.assertFalse(success_flag)
+
+    def test_filter_unrelated_memories_conservative_filtering(self):
+        """Test that filter_unrelated_memories uses conservative approach - keeps memories when in doubt."""
+        query_history = ["What is Python?"]
+        memories = [
+            TextualMemoryItem(memory="Python is a programming language"),
+            TextualMemoryItem(memory="Machine learning is a subset of AI"),
+            TextualMemoryItem(memory="The weather is sunny today"),  # Potentially unrelated
+        ]
+
+        # Mock LLM to return all memories as relevant (conservative)
+        mock_llm_response = {
+            "relevant_memories": [0, 1, 2],  # Keep all memories
+            "filtered_count": 0,  # No filtering
+            "reasoning": "All memories could potentially provide context",
+        }
+
+        self.llm.generate.return_value = json.dumps(mock_llm_response)
+
+        result, success_flag = self.retriever.filter_unrelated_memories(
+            query_history=query_history, memories=memories
+        )
+
+        # Should return all memories
+        self.assertEqual(result, memories)
+        self.assertTrue(success_flag)

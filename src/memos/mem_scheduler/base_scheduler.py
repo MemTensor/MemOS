@@ -13,10 +13,8 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
-from memos.mem_scheduler.general_modules.rabbitmq_service import RabbitMQSchedulerModule
-from memos.mem_scheduler.general_modules.redis_service import RedisSchedulerModule
-from memos.mem_scheduler.general_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
+from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -35,6 +33,8 @@ from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
 from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
 )
+from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
+from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
@@ -73,12 +73,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         )
 
         # internal message queue
-        self.max_internal_message_queue_size = 100
+        self.max_internal_message_queue_size = self.config.get(
+            "max_internal_message_queue_size", 100
+        )
         self.memos_message_queue: Queue[ScheduleMessageItem] = Queue(
             maxsize=self.max_internal_message_queue_size
         )
+        self.max_web_log_queue_size = self.config.get("max_web_log_queue_size", 50)
         self._web_log_message_queue: Queue[ScheduleLogForWebItem] = Queue(
-            maxsize=self.max_internal_message_queue_size
+            maxsize=self.max_web_log_queue_size
         )
         self._consumer_thread = None  # Reference to our consumer thread
         self._running = False
@@ -112,6 +115,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.monitor = SchedulerGeneralMonitor(
                 process_llm=self.process_llm, config=self.config, db_engine=self.db_engine
             )
+            self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
             self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
 
@@ -228,6 +232,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
             # Sync with database to get latest query history
             query_db_manager.sync_with_orm()
+
             query_history = query_db_manager.obj.get_queries_with_timesort()
             memories_with_new_order, rerank_success_flag = (
                 self.retriever.process_and_rerank_memories(
@@ -238,7 +243,26 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 )
             )
 
-            # update working memory monitors
+            # Filter completely unrelated memories according to query_history
+            logger.info(f"Filtering memories based on query history: {len(query_history)} queries")
+            filtered_memories, filter_success_flag = self.retriever.filter_unrelated_memories(
+                query_history=query_history,
+                memories=memories_with_new_order,
+            )
+
+            if filter_success_flag:
+                logger.info(
+                    f"Memory filtering completed successfully. "
+                    f"Filtered from {len(memories_with_new_order)} to {len(filtered_memories)} memories"
+                )
+                memories_with_new_order = filtered_memories
+            else:
+                logger.warning(
+                    "Memory filtering failed - keeping all memories as fallback. "
+                    f"Original count: {len(memories_with_new_order)}"
+                )
+
+            # Update working memory monitors
             query_keywords = query_db_manager.obj.get_keywords_collections()
             logger.info(
                 f"Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
@@ -447,6 +471,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             messages = [messages]  # transform single message to list
 
         for message in messages:
+            if not isinstance(message, ScheduleMessageItem):
+                error_msg = f"Invalid message type: {type(message)}, expected ScheduleMessageItem"
+                logger.error(error_msg)
+                raise TypeError(error_msg)
+
             self.memos_message_queue.put(message)
             logger.info(f"Submitted message: {message.label} - {message.content}")
 
@@ -462,6 +491,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             messages = [messages]  # transform single message to list
 
         for message in messages:
+            if not isinstance(message, ScheduleLogForWebItem):
+                error_msg = f"Invalid message type: {type(message)}, expected ScheduleLogForWebItem"
+                logger.error(error_msg)
+                raise TypeError(error_msg)
+
             self._web_log_message_queue.put(message)
             message_info = message.debug_info()
             logger.debug(f"Submitted Scheduling log for web: {message_info}")

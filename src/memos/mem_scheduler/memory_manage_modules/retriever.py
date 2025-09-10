@@ -17,6 +17,8 @@ from memos.mem_scheduler.utils.misc_utils import (
 )
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
+from .memory_filter import MemoryFilter
+
 
 logger = get_logger(__name__)
 
@@ -31,6 +33,9 @@ class SchedulerRetriever(BaseSchedulerModule):
 
         self.config: BaseSchedulerConfig = config
         self.process_llm = process_llm
+
+        # Initialize memory filter
+        self.memory_filter = MemoryFilter(process_llm=process_llm, config=config)
 
     def search(
         self,
@@ -203,187 +208,23 @@ class SchedulerRetriever(BaseSchedulerModule):
         query_history: list[str],
         memories: list[TextualMemoryItem],
     ) -> (list[TextualMemoryItem], bool):
-        """
-        Filter out memories that are completely unrelated to the query history using LLM.
+        return self.memory_filter.filter_unrelated_memories(query_history, memories)
 
-        Args:
-            query_history: List of query strings to determine relevance
-            memories: List of TextualMemoryItem objects to be filtered
+    def filter_redundant_memories(
+        self,
+        query_history: list[str],
+        memories: list[TextualMemoryItem],
+    ) -> (list[TextualMemoryItem], bool):
+        return self.memory_filter.filter_redundant_memories(query_history, memories)
 
-        Returns:
-            Tuple of (filtered_memories, success_flag)
-            - filtered_memories: List of TextualMemoryItem objects that are relevant to queries
-            - success_flag: Boolean indicating if LLM filtering was successful
-
-        Note:
-            If LLM filtering fails, returns all memories (conservative approach)
-        """
-        success_flag = False
-
-        if not memories:
-            logger.info("No memories to filter - returning empty list")
-            return [], True
-
-        if not query_history:
-            logger.info("No query history provided - keeping all memories")
-            return memories, True
-
-        logger.info(
-            f"Starting memory filtering for {len(memories)} memories against {len(query_history)} queries"
-        )
-
-        # Extract memory texts for LLM processing
-        memory_texts = [mem.memory for mem in memories]
-
-        # Build LLM prompt for memory filtering
-        prompt = self.build_prompt(
-            "memory_filtering",
-            query_history=[f"[{i}] {query}" for i, query in enumerate(query_history)],
-            memories=[f"[{i}] {mem}" for i, mem in enumerate(memory_texts)],
-        )
-        logger.debug(f"Generated filtering prompt: {prompt[:200]}...")  # Log first 200 chars
-
-        # Get LLM response
-        response = self.process_llm.generate([{"role": "user", "content": prompt}])
-        logger.debug(f"Received LLM filtering response: {response[:200]}...")  # Log first 200 chars
-
-        try:
-            # Parse JSON response
-            response = extract_json_dict(response)
-            relevant_indices = response["relevant_memories"]
-            filtered_count = response["filtered_count"]
-            reasoning = response["reasoning"]
-
-            # Validate indices
-            if not isinstance(relevant_indices, list):
-                raise ValueError("relevant_memories must be a list")
-
-            # Filter memories based on relevant indices
-            filtered_memories = []
-            for idx in relevant_indices:
-                if isinstance(idx, int) and 0 <= idx < len(memories):
-                    filtered_memories.append(memories[idx])
-                else:
-                    logger.warning(f"Invalid memory index {idx} - skipping")
-
-            logger.info(
-                f"Successfully filtered memories. Kept {len(filtered_memories)} out of {len(memories)} memories. "
-                f"Filtered out {filtered_count} unrelated memories. "
-                f"Filtering reasoning: {reasoning}"
-            )
-            success_flag = True
-
-        except Exception as e:
-            logger.error(
-                f"Failed to filter memories with LLM. Exception: {e}. Raw response: {response}",
-                exc_info=True,
-            )
-            # Conservative approach: keep all memories if filtering fails
-            filtered_memories = memories
-            success_flag = False
-
-        return filtered_memories, success_flag
-
-    def filter_redundant_and_noisy_memories(
+    def filter_unrelated_and_redundant_memories(
         self,
         query_history: list[str],
         memories: list[TextualMemoryItem],
     ) -> (list[TextualMemoryItem], bool):
         """
-        Filter out redundant and noisy memories using LLM analysis.
+        Filter out both unrelated and redundant memories using LLM analysis.
 
-        This function performs two types of filtering:
-        1. Remove redundant memories: If multiple memories contain the same fact relevant to queries,
-           keep the one with less noise/irrelevant information
-        2. Remove completely useless memories: Remove memories that provide no value for answering
-           any query in the query history
-
-        Args:
-            query_history: List of query strings to determine relevance and value
-            memories: List of TextualMemoryItem objects to be filtered
-
-        Returns:
-            Tuple of (filtered_memories, success_flag)
-            - filtered_memories: List of TextualMemoryItem objects after redundancy and noise filtering
-            - success_flag: Boolean indicating if LLM filtering was successful
-
-        Note:
-            If LLM filtering fails, returns all memories (conservative approach)
+        This method delegates to the MemoryFilter class.
         """
-        success_flag = False
-
-        if not memories:
-            logger.info("No memories to filter for redundancy/noise - returning empty list")
-            return [], True
-
-        if not query_history:
-            logger.info("No query history provided - keeping all memories")
-            return memories, True
-
-        if len(memories) <= 1:
-            logger.info("Only one memory - no redundancy to filter")
-            return memories, True
-
-        logger.info(
-            f"Starting redundancy and noise filtering for {len(memories)} memories against {len(query_history)} queries"
-        )
-
-        # Extract memory texts for LLM processing
-        memory_texts = [mem.memory for mem in memories]
-
-        # Build LLM prompt for redundancy and noise filtering
-        prompt = self.build_prompt(
-            "memory_redundancy_noise_filtering",
-            query_history=[f"[{i}] {query}" for i, query in enumerate(query_history)],
-            memories=[f"[{i}] {mem}" for i, mem in enumerate(memory_texts)],
-        )
-        logger.debug(
-            f"Generated redundancy filtering prompt: {prompt[:200]}..."
-        )  # Log first 200 chars
-
-        # Get LLM response
-        response = self.process_llm.generate([{"role": "user", "content": prompt}])
-        logger.debug(
-            f"Received LLM redundancy filtering response: {response[:200]}..."
-        )  # Log first 200 chars
-
-        try:
-            # Parse JSON response
-            response = extract_json_dict(response)
-            kept_indices = response["kept_memories"]
-            redundant_groups = response.get("redundant_groups", [])
-            noise_removed_count = response.get("noise_removed_count", 0)
-            reasoning = response["reasoning"]
-
-            # Validate indices
-            if not isinstance(kept_indices, list):
-                raise ValueError("kept_memories must be a list")
-
-            # Filter memories based on kept indices
-            filtered_memories = []
-            for idx in kept_indices:
-                if isinstance(idx, int) and 0 <= idx < len(memories):
-                    filtered_memories.append(memories[idx])
-                else:
-                    logger.warning(f"Invalid memory index {idx} - skipping")
-
-            logger.info(
-                f"Successfully filtered redundant and noisy memories. "
-                f"Kept {len(filtered_memories)} out of {len(memories)} memories. "
-                f"Removed {len(memories) - len(filtered_memories)} redundant/noisy memories. "
-                f"Redundant groups identified: {len(redundant_groups)}. "
-                f"Noise removal count: {noise_removed_count}. "
-                f"Filtering reasoning: {reasoning}"
-            )
-            success_flag = True
-
-        except Exception as e:
-            logger.error(
-                f"Failed to filter redundant and noisy memories with LLM. Exception: {e}. Raw response: {response}",
-                exc_info=True,
-            )
-            # Conservative approach: keep all memories if filtering fails
-            filtered_memories = memories
-            success_flag = False
-
-        return filtered_memories, success_flag
+        return self.memory_filter.filter_unrelated_and_redundant_memories(query_history, memories)

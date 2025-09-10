@@ -104,10 +104,17 @@ class DBManagerForMemoryMonitorManager(BaseDBManager):
         Returns:
             Updated obj_instance with merged items
         """
-        # Deserialize the database instance
-        db_instance: MemoryMonitorManager = MemoryMonitorManager.from_json(
-            orm_instance.serialized_data
-        )
+        logger.debug(f"Starting merge_items for MemoryMonitorManager with size_limit={size_limit}")
+
+        try:
+            # Deserialize the database instance
+            db_instance: MemoryMonitorManager = MemoryMonitorManager.from_json(
+                orm_instance.serialized_data
+            )
+        except Exception as e:
+            logger.error(f"Failed to deserialize database instance: {e}", exc_info=True)
+            logger.warning("Skipping merge due to deserialization error, using current object only")
+            return obj_instance
 
         # Merge items - prioritize existing ones in current object
         merged_items: list[MemoryMonitorItem] = []
@@ -127,10 +134,23 @@ class DBManagerForMemoryMonitorManager(BaseDBManager):
 
         # Apply size limit if specified (keep most recent items)
         if size_limit is not None and size_limit > 0:
-            # Sort by timestamp descending (newest first) and take top N
-            merged_items = sorted(merged_items, key=lambda x: x.timestamp, reverse=True)[
-                :size_limit
-            ]
+            try:
+                # Sort by sorting_score descending (highest priority first) and take top N
+                # Note: MemoryMonitorItem doesn't have timestamp, so we use sorting_score instead
+                merged_items = sorted(merged_items, key=lambda x: x.sorting_score, reverse=True)[
+                    :size_limit
+                ]
+                logger.debug(f"Applied size limit of {size_limit}, kept {len(merged_items)} items")
+            except AttributeError as e:
+                logger.error(f"Error sorting MemoryMonitorItem objects: {e}")
+                logger.error(
+                    "Available attributes: "
+                    + ", ".join(dir(merged_items[0]) if merged_items else [])
+                )
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error during sorting: {e}")
+                raise
 
         # Update the object with merged items
         obj_instance.memories = merged_items
@@ -196,8 +216,15 @@ class DBManagerForQueryMonitorQueue(BaseDBManager):
         Returns:
             Updated obj_instance with merged items
         """
-        # Deserialize the database instance
-        db_instance: QueryMonitorQueue = QueryMonitorQueue.from_json(orm_instance.serialized_data)
+        try:
+            # Deserialize the database instance
+            db_instance: QueryMonitorQueue = QueryMonitorQueue.from_json(
+                orm_instance.serialized_data
+            )
+        except Exception as e:
+            logger.error(f"Failed to deserialize database instance: {e}")
+            logger.warning("Skipping merge due to deserialization error, using current object only")
+            return obj_instance
 
         # Merge items - prioritize existing ones in current object
         merged_items: list[QueryMonitorItem] = []

@@ -21,7 +21,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         super().__init__()
         self.config: BaseSchedulerConfig = config
 
-        self.check_interval = self.config.get("dispatcher_monitor_check_interval", 60)
+        self.check_interval = self.config.get("dispatcher_monitor_check_interval", 300)
         self.max_failures = self.config.get("dispatcher_monitor_max_failures", 2)
 
         # Registry of monitored thread pools

@@ -40,6 +40,9 @@ class LockableORM(Base):
     lock_acquired = Column(Boolean, default=False)
     lock_expiry = Column(DateTime, nullable=True)
 
+    # Version control tag (0-255, cycles back to 0)
+    version_control = Column(String(3), default="0")
+
 
 class BaseDBManager(UserManager):
     """Abstract base class for database managers with proper locking mechanism
@@ -71,6 +74,7 @@ class BaseDBManager(UserManager):
         self.user_id = user_id
         self.mem_cube_id = mem_cube_id
         self.lock_timeout = lock_timeout
+        self.last_version_control = None  # Track the last version control tag
 
         self.init_manager(
             engine=self.engine,
@@ -292,6 +296,24 @@ class BaseDBManager(UserManager):
         """
         return {"user_id": self.user_id, "mem_cube_id": self.mem_cube_id}
 
+    def _increment_version_control(self, current_tag: str) -> str:
+        """Increment the version control tag, cycling from 255 back to 0
+
+        Args:
+            current_tag: Current version control tag as string
+
+        Returns:
+            Next version control tag as string
+        """
+        try:
+            current_value = int(current_tag)
+            next_value = (current_value + 1) % 256  # Cycle from 255 back to 0
+            return str(next_value)
+        except (ValueError, TypeError):
+            # If current_tag is invalid, start from 0
+            logger.warning(f"Invalid version_control '{current_tag}', resetting to '0'")
+            return "0"
+
     @abstractmethod
     def merge_items(self, orm_instance, obj_instance, size_limit):
         """Merge items from database with current object instance
@@ -315,6 +337,9 @@ class BaseDBManager(UserManager):
             size_limit: Optional maximum number of items to keep after synchronization.
                        If specified, only the most recent items will be retained.
         """
+        logger.info(
+            f"Starting sync_with_orm for {self.user_id}/{self.mem_cube_id} with size_limit={size_limit}"
+        )
         user_id = self.user_id
         mem_cube_id = self.mem_cube_id
 
@@ -344,6 +369,7 @@ class BaseDBManager(UserManager):
                     user_id=user_id,
                     mem_cube_id=mem_cube_id,
                     serialized_data=self.obj.to_json(),
+                    version_control="0",  # Start with tag 0 for new records
                 )
                 logger.info(
                     "No existing ORM instance found. Created a new one. "
@@ -351,16 +377,44 @@ class BaseDBManager(UserManager):
                 )
                 session.add(orm_instance)
                 session.commit()
+                # Update last_version_control for new record
+                self.last_version_control = "0"
                 return
 
-            # 2. Merge data from database with current object
+            # 2. Check version control and merge data from database with current object
             if self.obj is not None:
-                self.merge_items(
-                    orm_instance=orm_instance, obj_instance=self.obj, size_limit=size_limit
-                )
+                current_db_tag = orm_instance.version_control
+                new_tag = self._increment_version_control(current_db_tag)
+                # Check if this is the first sync (last_version_control is None)
+                if self.last_version_control is None:
+                    # First sync, increment version and perform merge
+                    logger.info(
+                        f"First sync, incrementing version from {current_db_tag} to {new_tag} for {self.user_id}/{self.mem_cube_id}"
+                    )
+                elif current_db_tag == self.last_version_control:
+                    logger.info(
+                        f"Version control unchanged ({current_db_tag}), directly update {self.user_id}/{self.mem_cube_id}"
+                    )
+                else:
+                    # Version control has changed, increment it and perform merge
+                    logger.info(
+                        f"Version control changed from {self.last_version_control} to {current_db_tag}, incrementing to {new_tag} for {self.user_id}/{self.mem_cube_id}"
+                    )
+                    try:
+                        self.merge_items(
+                            orm_instance=orm_instance, obj_instance=self.obj, size_limit=size_limit
+                        )
+                    except Exception as merge_error:
+                        logger.error(f"Error during merge_items: {merge_error}", exc_info=True)
+                        logger.warning("Continuing with current object data without merge")
 
                 # 3. Write merged data back to database
                 orm_instance.serialized_data = self.obj.to_json()
+                orm_instance.version_control = new_tag
+                logger.info(f"Updated serialized_data for {self.user_id}/{self.mem_cube_id}")
+
+                # Update last_version_control to current value
+                self.last_version_control = orm_instance.version_control
             else:
                 logger.warning("No current object to merge with database data")
 
@@ -369,7 +423,9 @@ class BaseDBManager(UserManager):
 
         except Exception as e:
             session.rollback()
-            logger.error(f"Error during synchronization for {user_id}/{mem_cube_id}: {e}")
+            logger.error(
+                f"Error during synchronization for {user_id}/{mem_cube_id}: {e}", exc_info=True
+            )
         finally:
             # Always release locks and close session
             self.release_locks(user_id=user_id, mem_cube_id=mem_cube_id)
@@ -403,14 +459,26 @@ class BaseDBManager(UserManager):
             if orm_instance is None:
                 # Create new record
                 orm_instance = self.orm_class(
-                    user_id=user_id, mem_cube_id=mem_cube_id, serialized_data=obj_instance.to_json()
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    serialized_data=obj_instance.to_json(),
+                    version_control="0",  # Start with version 0 for new records
                 )
                 session.add(orm_instance)
                 logger.info(f"Created new database record for {user_id}/{mem_cube_id}")
+                # Update last_version_control for new record
+                self.last_version_control = "0"
             else:
-                # Update existing record
+                # Update existing record with version control
+                current_version = orm_instance.version_control
+                new_version = self._increment_version_control(current_version)
                 orm_instance.serialized_data = obj_instance.to_json()
-                logger.info(f"Updated existing database record for {user_id}/{mem_cube_id}")
+                orm_instance.version_control = new_version
+                logger.info(
+                    f"Updated existing database record for {user_id}/{mem_cube_id} with version {new_version}"
+                )
+                # Update last_version_control
+                self.last_version_control = new_version
 
             session.commit()
 
@@ -456,7 +524,11 @@ class BaseDBManager(UserManager):
 
             # Deserialize the business object from JSON
             db_instance = self.obj_class.from_json(orm_instance.serialized_data)
-            logger.info(f"Successfully loaded object from database for {user_id}/{mem_cube_id}")
+            # Update last_version_control to track the loaded version
+            self.last_version_control = orm_instance.version_control
+            logger.info(
+                f"Successfully loaded object from database for {user_id}/{mem_cube_id} with version {orm_instance.version_control}"
+            )
 
             return db_instance
 

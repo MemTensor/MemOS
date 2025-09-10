@@ -87,6 +87,7 @@ class SchedulerConfigFactory(BaseConfig):
     model_config = ConfigDict(extra="forbid", strict=True)
     backend_to_class: ClassVar[dict[str, Any]] = {
         "general_scheduler": GeneralSchedulerConfig,
+        "optimized_scheduler": GeneralSchedulerConfig,  # optimized_scheduler uses same config as general_scheduler
     }
 
     @field_validator("backend")
