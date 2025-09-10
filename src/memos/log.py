@@ -7,7 +7,7 @@ from sys import stdout
 from dotenv import load_dotenv
 
 from memos import settings
-from memos.api.context.context import get_current_trace_id
+from memos.api.context.context import generate_trace_id, get_current_trace_id
 
 
 # Load environment variables
@@ -33,9 +33,9 @@ class TraceIDFilter(logging.Filter):
     def filter(self, record):
         try:
             trace_id = get_current_trace_id()
-            record.trace_id = trace_id if trace_id else "no-trace-id"
+            record.trace_id = trace_id if trace_id else generate_trace_id()
         except Exception:
-            record.trace_id = "no-trace-id"
+            record.trace_id = generate_trace_id()
         return True
 
 
