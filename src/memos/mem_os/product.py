@@ -67,9 +67,10 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
     sequence is [i:memId] i; [P]=PersonalMemory / [O]=OuterMemory
     """
     if not memories_all:
-        return "(none)"
+        return "(none)", "(none)"
 
-    lines = []
+    lines_o = []
+    lines_p = []
     for idx, m in enumerate(memories_all[:max_items], 1):
         mid = _short_id(getattr(m, "id", "") or "")
         mtype = getattr(getattr(m, "metadata", {}), "memory_type", None) or getattr(
@@ -80,8 +81,11 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
         if len(txt) > max_chars_each:
             txt = txt[: max_chars_each - 1] + "…"
         mid = mid or f"mem_{idx}"
-        lines.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
-    return "\n".join(lines)
+        if tag == "O":
+            lines_o.append(f"[{idx}:{mid}] :: [{tag}] {txt}\n")
+        elif tag == "P":
+            lines_p.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
+    return "\n".join(lines_o), "\n".join(lines_p)
 
 
 class MOSProduct(MOSCore):
@@ -410,7 +414,8 @@ class MOSProduct(MOSCore):
         sys_body = get_memos_prompt(
             date=formatted_date, tone=tone, verbosity=verbosity, mode="base"
         )
-        mem_block = _format_mem_block(memories_all)
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+        mem_block = mem_block_o + "\n" + mem_block_p
         prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
         return (
             prefix
@@ -434,8 +439,14 @@ class MOSProduct(MOSCore):
         sys_body = get_memos_prompt(
             date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
         )
-        mem_block = _format_mem_block(memories_all)
-        return sys_body + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+        return (
+            sys_body
+            + "\n\n# Memories\n## PersonalMemory (ordered)\n"
+            + mem_block_p
+            + "\n## OuterMemory (ordered)\n"
+            + mem_block_o
+        )
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
@@ -693,16 +704,39 @@ class MOSProduct(MOSCore):
             thread.start()
 
     def _filter_memories_by_threshold(
-        self, memories: list[TextualMemoryItem], threshold: float = 0.52, min_num: int = 0
+        self,
+        memories: list[TextualMemoryItem],
+        threshold: float = 0.30,
+        min_num: int = 3,
+        memory_type: Literal["OuterMemory"] = "OuterMemory",
     ) -> list[TextualMemoryItem]:
         """
-        Filter memories by threshold.
+        Filter memories by threshold and type, at least min_num memories for Non-OuterMemory.
+        Args:
+            memories: list[TextualMemoryItem],
+            threshold: float,
+            min_num: int,
+            memory_type: Literal["OuterMemory"],
+        Returns:
+            list[TextualMemoryItem]
         """
         sorted_memories = sorted(memories, key=lambda m: m.metadata.relativity, reverse=True)
-        filtered = [m for m in sorted_memories if m.metadata.relativity >= threshold]
+        filtered_person = [m for m in memories if m.metadata.memory_type != memory_type]
+        filtered_outer = [m for m in memories if m.metadata.memory_type == memory_type]
+        filtered = []
+        per_memory_count = 0
+        for m in sorted_memories:
+            if m.metadata.relativity >= threshold:
+                if m.metadata.memory_type != memory_type:
+                    per_memory_count += 1
+                filtered.append(m)
         if len(filtered) < min_num:
-            filtered = sorted_memories[:min_num]
-        return filtered
+            filtered = filtered_person[:min_num] + filtered_outer[:min_num]
+        else:
+            if per_memory_count < min_num:
+                filtered += filtered_person[per_memory_count:min_num]
+        filtered_memory = sorted(filtered, key=lambda m: m.metadata.relativity, reverse=True)
+        return filtered_memory
 
     def register_mem_cube(
         self,
@@ -905,9 +939,16 @@ class MOSProduct(MOSCore):
             internet_search=internet_search,
             moscube=moscube,
         )["text_mem"]
+
+        memories_list = []
         if memories_result:
             memories_list = memories_result[0]["memories"]
             memories_list = self._filter_memories_by_threshold(memories_list, threshold)
+            new_memories_list = []
+            for m in memories_list:
+                m.metadata.embedding = []
+                new_memories_list.append(m)
+            memories_list = new_memories_list
         system_prompt = super()._build_system_prompt(memories_list, base_prompt)
         history_info = []
         if history:
@@ -938,7 +979,7 @@ class MOSProduct(MOSCore):
         user_id: str,
         cube_id: str | None = None,
         history: MessageList | None = None,
-        top_k: int = 10,
+        top_k: int = 20,
         internet_search: bool = False,
         moscube: bool = False,
     ) -> Generator[str, None, None]:
@@ -1284,6 +1325,7 @@ class MOSProduct(MOSCore):
                 memories["metadata"]["memory"] = memories["memory"]
                 memories_list.append(memories)
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
+        logger.info(f"search memory list is : {reformat_memory_list}")
         search_result["text_mem"] = reformat_memory_list
         time_end = time.time()
         logger.info(

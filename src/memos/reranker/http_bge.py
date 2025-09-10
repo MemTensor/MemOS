@@ -1,6 +1,8 @@
 # memos/reranker/http_bge.py
 from __future__ import annotations
 
+import re
+
 from typing import TYPE_CHECKING
 
 import requests
@@ -14,6 +16,8 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from memos.memories.textual.item import TextualMemoryItem
+
+_TAG1 = re.compile(r"^\s*\[[^\]]*\]\s*")
 
 
 class HTTPBGEReranker(BaseReranker):
@@ -53,10 +57,14 @@ class HTTPBGEReranker(BaseReranker):
         if self.concat_source:
             documents = concat_original_source(graph_results)
         else:
-            documents = [getattr(item, "memory", None) for item in graph_results]
+            documents = [
+                (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
+                for item in graph_results
+            ]
             documents = [d for d in documents if isinstance(d, str) and d]
 
         logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
+
         if not documents:
             return []
 

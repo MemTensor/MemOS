@@ -218,7 +218,9 @@ class BochaAISearchRetriever:
         memory_items = []
         for read_item_i in read_items[0]:
             read_item_i.memory = (
-                f"Title: {title}\nNewsTime: {publish_time}\nSummary: {summary}\n"
+                f"[Outer internet view] Title: {title}\nNewsTime:"
+                f" {publish_time}\nSummary:"
+                f" {summary}\n"
                 f"Content: {read_item_i.memory}"
             )
             read_item_i.metadata.source = "web"

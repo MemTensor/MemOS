@@ -87,6 +87,12 @@ class Searcher:
         self._update_usage_history(final_results, info)
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
+        res_results = ""
+        for _num_i, result in enumerate(final_results):
+            res_results += "\n" + (
+                result.id + "|" + result.metadata.memory_type + "|" + result.memory
+            )
+        logger.info(f"[SEARCH] Results. {res_results}")
         return final_results
 
     @timed
@@ -108,9 +114,10 @@ class Searcher:
             context = list({node["memory"] for node in related_nodes})
 
             # optional: supplement context with internet knowledge
-            if self.internet_retriever:
+            """if self.internet_retriever:
                 extra = self.internet_retriever.retrieve_from_internet(query=query, top_k=3)
                 context.extend(item.memory.partition("\nContent: ")[-1] for item in extra)
+            """
 
         # parse goal using LLM
         parsed_goal = self.task_goal_parser.parse(
