@@ -74,11 +74,6 @@ LOGGING_CONFIG = {
             "formatter": "simplified",
             "filters": ["trace_id_filter"],
         },
-        "custom_logger": {
-            "level": selected_log_level,
-            "class": "memos.log.CustomLoggerRequestHandler",
-            "formatter": "simplified",
-        },
     },
     "root": {  # Root logger handles all logs
         "level": selected_log_level,
