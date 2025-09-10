@@ -12,8 +12,11 @@ import requests
 from dotenv import load_dotenv
 
 from memos import settings
-from memos.api.context.context import generate_trace_id, get_current_trace_id
-from memos.api.context.context_thread import ContextThreadPoolExecutor
+from memos.api.context.context import (
+    ContextThreadPoolExecutor,
+    generate_trace_id,
+    get_current_trace_id,
+)
 
 
 # Load environment variables
