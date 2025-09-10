@@ -1,10 +1,9 @@
-from typing import List, Dict, Any, Union, Tuple
+from typing import Any
 
 
 def process_source(
-    items: List[Tuple[Any, Union[str, Dict[str, Any], List[Any]]]] | None = None, 
-    recent_num: int = 3
-    ) -> str:
+    items: list[tuple[Any, str | dict[str, Any] | list[Any]]] | None = None, recent_num: int = 3
+) -> str:
     """
     Args:
         items: List of tuples where each tuple contains (memory, source).
@@ -13,6 +12,8 @@ def process_source(
     Returns:
         str: Concatenated source.
     """
+    if items is None:
+        items = []
     concat_data = []
     for item in items:
         memory, source = item
@@ -24,7 +25,7 @@ def process_source(
 
 def concat_original_source(
     graph_results: list,
-    merge_field: List[str]=["sources"],
+    merge_field: list[str] | None = None,
 ) -> list[str]:
     """
     Merge memory items with original dialogue.
@@ -34,6 +35,8 @@ def concat_original_source(
     Returns:
         list[str]: List of memory and concat orginal memory.
     """
+    if merge_field is None:
+        merge_field = ["sources"]
     documents = []
     for item in graph_results:
         memory = getattr(item, "memory", "")
