@@ -16,7 +16,7 @@ if __name__ == '__main__':
     config_path = './configs/mirix_config.yaml'
     lme_df = pd.read_json("./data/longmemeval/longmemeval_s.json")
     success_results = []
-    success_idx = []
+    success_qid = []
 
     if os.path.exists('./results/lme/mirix_lme_test_result.json'):
         results = [json.loads(i) for i in open("./results/lme/mirix_lme_test_result.json", 'r').readlines()]
@@ -24,7 +24,7 @@ if __name__ == '__main__':
             with open("./results/lme/mirix_lme_test_result.json", "w") as f:
                 if res['response'] and "ERROR" not in res['response']:
                     f.write(json.dumps(res, ensure_ascii=False) + "\n")
-                    success_idx.append(res['index'])
+                    success_qid.append(res['question_id'])
 
     f = open("./results/lme/mirix_lme_test_result.json", "a+")
 
@@ -76,7 +76,7 @@ if __name__ == '__main__':
 
 
     for i in tqdm(range(len(lme_df))):
-        if i not in success_idx:
+        if lme_df.iloc[i]['question_id'] not in success_qid:
             try:
                 res = process_one(i)
                 f.write(json.dumps(res, ensure_ascii=False) + "\n")
