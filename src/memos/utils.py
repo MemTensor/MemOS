@@ -14,7 +14,7 @@ def timed(func):
         start = time.perf_counter()
         result = func(*args, **kwargs)
         elapsed = time.perf_counter() - start
-        if settings.TIMED_LOG:
+        if settings.DEBUG:
             logger.info(f"[TIMER] {func.__name__} took {elapsed:.2f} s")
         return result
 
