@@ -42,6 +42,7 @@ class UserRegisterRequest(BaseRequest):
     user_id: str = Field(
         default_factory=lambda: str(uuid.uuid4()), description="User ID for registration"
     )
+    mem_cube_id: str | None = Field(None, description="Cube ID for registration")
     user_name: str | None = Field(None, description="User name for registration")
     interests: str | None = Field(None, description="User interests")
 
