@@ -13,6 +13,7 @@ from memos.configs.graph_db import NebulaGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
+from memos.settings import settings
 from memos.utils import timed
 
 
@@ -146,7 +147,9 @@ class SessionPool:
             client.execute("YIELD 1")
             self.pool.put(client)
         except Exception:
-            logger.info("[Pool] Client dead, replacing...")
+            if settings.debug:
+                logger.info("[Pool] Client dead, replacing...")
+
             self.replace_client(client)
 
     @timed
@@ -214,7 +217,9 @@ class SessionPool:
 
         self.pool.put(new_client)
 
-        logger.info("[Pool] Replaced dead client with a new one.")
+        if settings.debug:
+            logger.info(f"[Pool] Replaced dead client with a new one. {new_client}")
+
         return new_client
 
 
