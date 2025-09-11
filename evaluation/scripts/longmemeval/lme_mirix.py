@@ -75,7 +75,7 @@ if __name__ == '__main__':
 
 
     # for i in tqdm(range(len(lme_df))):
-    for i in tqdm(range(int(sys.argv[0]), int(sys.argv[1]))):
+    for i in tqdm(range(int(sys.argv[1]), int(sys.argv[2]))):
         if lme_df.iloc[i]['question_id'] not in success_qid:
             try:
                 res = process_one(i)
