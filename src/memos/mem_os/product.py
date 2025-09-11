@@ -642,8 +642,6 @@ class MOSProduct(MOSCore):
 
         def run_async_in_thread():
             """Running asynchronous tasks in a new thread"""
-
-            logger.info(f"Running asynchronous tasks in a new thread for user {user_id}")
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
