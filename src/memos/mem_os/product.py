@@ -67,9 +67,10 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
     sequence is [i:memId] i; [P]=PersonalMemory / [O]=OuterMemory
     """
     if not memories_all:
-        return "(none)"
+        return "(none)", "(none)"
 
-    lines = []
+    lines_o = []
+    lines_p = []
     for idx, m in enumerate(memories_all[:max_items], 1):
         mid = _short_id(getattr(m, "id", "") or "")
         mtype = getattr(getattr(m, "metadata", {}), "memory_type", None) or getattr(
@@ -80,8 +81,11 @@ def _format_mem_block(memories_all, max_items: int = 20, max_chars_each: int = 3
         if len(txt) > max_chars_each:
             txt = txt[: max_chars_each - 1] + "…"
         mid = mid or f"mem_{idx}"
-        lines.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
-    return "\n".join(lines)
+        if tag == "O":
+            lines_o.append(f"[{idx}:{mid}] :: [{tag}] {txt}\n")
+        elif tag == "P":
+            lines_p.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
+    return "\n".join(lines_o), "\n".join(lines_p)
 
 
 class MOSProduct(MOSCore):
@@ -410,7 +414,8 @@ class MOSProduct(MOSCore):
         sys_body = get_memos_prompt(
             date=formatted_date, tone=tone, verbosity=verbosity, mode="base"
         )
-        mem_block = _format_mem_block(memories_all)
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+        mem_block = mem_block_o + "\n" + mem_block_p
         prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
         return (
             prefix
@@ -434,8 +439,14 @@ class MOSProduct(MOSCore):
         sys_body = get_memos_prompt(
             date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
         )
-        mem_block = _format_mem_block(memories_all)
-        return sys_body + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+        return (
+            sys_body
+            + "\n\n# Memories\n## PersonalMemory (ordered)\n"
+            + mem_block_p
+            + "\n## OuterMemory (ordered)\n"
+            + mem_block_o
+        )
 
     def _extract_references_from_response(self, response: str) -> tuple[str, list[dict]]:
         """
@@ -557,7 +568,7 @@ class MOSProduct(MOSCore):
                         send_online_bot_notification_async,
                     )
 
-                    # 准备通知数据
+                    # Prepare notification data
                     chat_data = {
                         "query": query,
                         "user_id": user_id,
@@ -693,16 +704,39 @@ class MOSProduct(MOSCore):
             thread.start()
 
     def _filter_memories_by_threshold(
-        self, memories: list[TextualMemoryItem], threshold: float = 0.50, min_num: int = 3
+        self,
+        memories: list[TextualMemoryItem],
+        threshold: float = 0.30,
+        min_num: int = 3,
+        memory_type: Literal["OuterMemory"] = "OuterMemory",
     ) -> list[TextualMemoryItem]:
         """
-        Filter memories by threshold.
+        Filter memories by threshold and type, at least min_num memories for Non-OuterMemory.
+        Args:
+            memories: list[TextualMemoryItem],
+            threshold: float,
+            min_num: int,
+            memory_type: Literal["OuterMemory"],
+        Returns:
+            list[TextualMemoryItem]
         """
         sorted_memories = sorted(memories, key=lambda m: m.metadata.relativity, reverse=True)
-        filtered = [m for m in sorted_memories if m.metadata.relativity >= threshold]
+        filtered_person = [m for m in memories if m.metadata.memory_type != memory_type]
+        filtered_outer = [m for m in memories if m.metadata.memory_type == memory_type]
+        filtered = []
+        per_memory_count = 0
+        for m in sorted_memories:
+            if m.metadata.relativity >= threshold:
+                if m.metadata.memory_type != memory_type:
+                    per_memory_count += 1
+                filtered.append(m)
         if len(filtered) < min_num:
-            filtered = sorted_memories[:min_num]
-        return filtered
+            filtered = filtered_person[:min_num] + filtered_outer[:min_num]
+        else:
+            if per_memory_count < min_num:
+                filtered += filtered_person[per_memory_count:min_num]
+        filtered_memory = sorted(filtered, key=lambda m: m.metadata.relativity, reverse=True)
+        return filtered_memory
 
     def register_mem_cube(
         self,
@@ -889,11 +923,13 @@ class MOSProduct(MOSCore):
         internet_search: bool = False,
         moscube: bool = False,
         top_k: int = 10,
+        threshold: float = 0.5,
     ) -> str:
         """
         Chat with LLM with memory references and complete response.
         """
         self._load_user_cubes(user_id, self.default_cube_config)
+        time_start = time.time()
         memories_result = super().search(
             query,
             user_id,
@@ -903,16 +939,39 @@ class MOSProduct(MOSCore):
             internet_search=internet_search,
             moscube=moscube,
         )["text_mem"]
+
+        memories_list = []
         if memories_result:
             memories_list = memories_result[0]["memories"]
-            memories_list = self._filter_memories_by_threshold(memories_list)
+            memories_list = self._filter_memories_by_threshold(memories_list, threshold)
+            new_memories_list = []
+            for m in memories_list:
+                m.metadata.embedding = []
+                new_memories_list.append(m)
+            memories_list = new_memories_list
         system_prompt = super()._build_system_prompt(memories_list, base_prompt)
+        history_info = []
+        if history:
+            history_info = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
+            *history_info,
             {"role": "user", "content": query},
         ]
         response = self.chat_llm.generate(current_messages)
-        return response
+        time_end = time.time()
+        self._start_post_chat_processing(
+            user_id=user_id,
+            cube_id=cube_id,
+            query=query,
+            full_response=response,
+            system_prompt=system_prompt,
+            time_start=time_start,
+            time_end=time_end,
+            speed_improvement=0.0,
+            current_messages=current_messages,
+        )
+        return response, memories_list
 
     def chat_with_references(
         self,
@@ -920,7 +979,7 @@ class MOSProduct(MOSCore):
         user_id: str,
         cube_id: str | None = None,
         history: MessageList | None = None,
-        top_k: int = 10,
+        top_k: int = 20,
         internet_search: bool = False,
         moscube: bool = False,
     ) -> Generator[str, None, None]:
@@ -973,7 +1032,7 @@ class MOSProduct(MOSCore):
 
         chat_history = self.chat_history_manager[user_id]
         if history:
-            chat_history.chat_history = history[-10:]
+            chat_history.chat_history = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
@@ -1006,7 +1065,7 @@ class MOSProduct(MOSCore):
             elif self.config.chat_model.backend == "vllm":
                 response_stream = self.chat_llm.generate_stream(current_messages)
         else:
-            if self.config.chat_model.backend in ["huggingface", "vllm"]:
+            if self.config.chat_model.backend in ["huggingface", "vllm", "openai"]:
                 response_stream = self.chat_llm.generate_stream(current_messages)
             else:
                 response_stream = self.chat_llm.generate(current_messages)
@@ -1023,7 +1082,7 @@ class MOSProduct(MOSCore):
         full_response = ""
         token_count = 0
         # Use tiktoken for proper token-based chunking
-        if self.config.chat_model.backend not in ["huggingface", "vllm"]:
+        if self.config.chat_model.backend not in ["huggingface", "vllm", "openai"]:
             # For non-huggingface backends, we need to collect the full response first
             full_response_text = ""
             for chunk in response_stream:
@@ -1266,6 +1325,7 @@ class MOSProduct(MOSCore):
                 memories["metadata"]["memory"] = memories["memory"]
                 memories_list.append(memories)
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
+        logger.info(f"search memory list is : {reformat_memory_list}")
         search_result["text_mem"] = reformat_memory_list
         time_end = time.time()
         logger.info(

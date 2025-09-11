@@ -7,6 +7,8 @@ import re
 from abc import ABC
 from typing import Any
 
+from tqdm import tqdm
+
 from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
@@ -49,6 +51,48 @@ def detect_lang(text):
         return "en"
     except Exception:
         return "en"
+
+
+def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder):
+    # generate
+    raw = llm.generate(message)
+    if not raw:
+        return None
+
+    # parse_json_result
+    chunk_res = parse_json_result(raw)
+    if not chunk_res:
+        return None
+
+    value = chunk_res.get("value")
+    if not value:
+        return None
+
+    # embed
+    embedding = embedder.embed([value])[0]
+
+    # TextualMemoryItem
+    tags = chunk_res["tags"] if isinstance(chunk_res.get("tags"), list) else []
+    key = chunk_res.get("key", None)
+
+    node_i = TextualMemoryItem(
+        memory=value,
+        metadata=TreeNodeTextualMemoryMetadata(
+            user_id=info.get("user_id"),
+            session_id=info.get("session_id"),
+            memory_type="LongTermMemory",
+            status="activated",
+            tags=tags,
+            key=key,
+            embedding=embedding,
+            usage=[],
+            sources=[f"{scene_file}_{idx}"],
+            background="",
+            confidence=0.99,
+            type="fact",
+        ),
+    )
+    return node_i
 
 
 class SimpleStructMemReader(BaseMemReader, ABC):
@@ -230,36 +274,34 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             message = [{"role": "user", "content": prompt}]
             messages.append(message)
 
-        processed_chunks = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(self.llm.generate, message) for message in messages]
-            for future in concurrent.futures.as_completed(futures):
-                chunk_result = future.result()
-                if chunk_result:
-                    processed_chunks.append(chunk_result)
-
-        processed_chunks = [self.parse_json_result(r) for r in processed_chunks]
         doc_nodes = []
-        for i, chunk_res in enumerate(processed_chunks):
-            if chunk_res:
-                node_i = TextualMemoryItem(
-                    memory=chunk_res["value"],
-                    metadata=TreeNodeTextualMemoryMetadata(
-                        user_id=info.get("user_id"),
-                        session_id=info.get("session_id"),
-                        memory_type="LongTermMemory",
-                        status="activated",
-                        tags=chunk_res["tags"] if type(chunk_res["tags"]) is list else [],
-                        key=chunk_res["key"],
-                        embedding=self.embedder.embed([chunk_res["value"]])[0],
-                        usage=[],
-                        sources=[f"{scene_data_info['file']}_{i}"],
-                        background="",
-                        confidence=0.99,
-                        type="fact",
-                    ),
-                )
-                doc_nodes.append(node_i)
+        scene_file = scene_data_info["file"]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+            futures = {
+                executor.submit(
+                    _build_node,
+                    idx,
+                    msg,
+                    info,
+                    scene_file,
+                    self.llm,
+                    self.parse_json_result,
+                    self.embedder,
+                ): idx
+                for idx, msg in enumerate(messages)
+            }
+            total = len(futures)
+
+            for future in tqdm(
+                concurrent.futures.as_completed(futures), total=total, desc="Processing"
+            ):
+                try:
+                    node = future.result()
+                    if node:
+                        doc_nodes.append(node)
+                except Exception as e:
+                    tqdm.write(f"[ERROR] {e}")
         return doc_nodes
 
     def parse_json_result(self, response_text):

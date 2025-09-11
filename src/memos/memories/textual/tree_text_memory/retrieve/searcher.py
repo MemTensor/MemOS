@@ -8,12 +8,12 @@ from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
+from memos.reranker.base import BaseReranker
 from memos.utils import timed
 
 from .internet_retriever_factory import InternetRetrieverFactory
 from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
-from .reranker import MemoryReranker
 from .task_goal_parser import TaskGoalParser
 
 
@@ -26,6 +26,7 @@ class Searcher:
         dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
+        reranker: BaseReranker,
         internet_retriever: InternetRetrieverFactory | None = None,
         moscube: bool = False,
     ):
@@ -34,12 +35,16 @@ class Searcher:
 
         self.task_goal_parser = TaskGoalParser(dispatcher_llm)
         self.graph_retriever = GraphMemoryRetriever(self.graph_store, self.embedder)
-        self.reranker = MemoryReranker(dispatcher_llm, self.embedder)
+        self.reranker = reranker
         self.reasoner = MemoryReasoner(dispatcher_llm)
 
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
+
+        self._usage_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="usage"
+        )
 
     @timed
     def search(
@@ -82,6 +87,12 @@ class Searcher:
         self._update_usage_history(final_results, info)
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
+        res_results = ""
+        for _num_i, result in enumerate(final_results):
+            res_results += "\n" + (
+                result.id + "|" + result.metadata.memory_type + "|" + result.memory
+            )
+        logger.info(f"[SEARCH] Results. {res_results}")
         return final_results
 
     @timed
@@ -103,9 +114,10 @@ class Searcher:
             context = list({node["memory"] for node in related_nodes})
 
             # optional: supplement context with internet knowledge
-            if self.internet_retriever:
+            """if self.internet_retriever:
                 extra = self.internet_retriever.retrieve_from_internet(query=query, top_k=3)
                 context.extend(item.memory.partition("\nContent: ")[-1] for item in extra)
+            """
 
         # parse goal using LLM
         parsed_goal = self.task_goal_parser.parse(
@@ -225,7 +237,7 @@ class Searcher:
             query=query,
             query_embedding=query_embedding[0],
             graph_results=results,
-            top_k=top_k * 2,
+            top_k=top_k,
             parsed_goal=parsed_goal,
         )
 
@@ -244,7 +256,7 @@ class Searcher:
             query=query,
             query_embedding=query_embedding[0],
             graph_results=results,
-            top_k=top_k * 2,
+            top_k=top_k,
             parsed_goal=parsed_goal,
         )
 
@@ -303,14 +315,30 @@ class Searcher:
     def _update_usage_history(self, items, info):
         """Update usage history in graph DB"""
         now_time = datetime.now().isoformat()
-        info.pop("chat_history", None)
-        # `info` should be a serializable dict or string
-        usage_record = json.dumps({"time": now_time, "info": info})
-        for item in items:
-            if (
-                hasattr(item, "id")
-                and hasattr(item, "metadata")
-                and hasattr(item.metadata, "usage")
-            ):
-                item.metadata.usage.append(usage_record)
-                self.graph_store.update_node(item.id, {"usage": item.metadata.usage})
+        info_copy = dict(info or {})
+        info_copy.pop("chat_history", None)
+        usage_record = json.dumps({"time": now_time, "info": info_copy})
+        payload = []
+        for it in items:
+            try:
+                item_id = getattr(it, "id", None)
+                md = getattr(it, "metadata", None)
+                if md is None:
+                    continue
+                if not hasattr(md, "usage") or md.usage is None:
+                    md.usage = []
+                md.usage.append(usage_record)
+                if item_id:
+                    payload.append((item_id, list(md.usage)))
+            except Exception:
+                logger.exception("[USAGE] snapshot item failed")
+
+        if payload:
+            self._usage_executor.submit(self._update_usage_history_worker, payload, usage_record)
+
+    def _update_usage_history_worker(self, payload, usage_record: str):
+        try:
+            for item_id, usage_list in payload:
+                self.graph_store.update_node(item_id, {"usage": usage_list})
+        except Exception:
+            logger.exception("[USAGE] update usage failed")

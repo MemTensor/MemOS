@@ -1,5 +1,4 @@
 import json
-import logging
 import traceback
 
 from datetime import datetime
@@ -26,11 +25,12 @@ from memos.api.product_models import (
     UserRegisterResponse,
 )
 from memos.configs.mem_os import MOSConfig
+from memos.log import get_logger
 from memos.mem_os.product import MOSProduct
 from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/product", tags=["Product API"])
 
@@ -284,7 +284,7 @@ def chat_complete(chat_req: ChatCompleteRequest):
         mos_product = get_mos_product_instance()
 
         # Collect all responses from the generator
-        content = mos_product.chat(
+        content, references = mos_product.chat(
             query=chat_req.query,
             user_id=chat_req.user_id,
             cube_id=chat_req.mem_cube_id,
@@ -292,10 +292,15 @@ def chat_complete(chat_req: ChatCompleteRequest):
             internet_search=chat_req.internet_search,
             moscube=chat_req.moscube,
             base_prompt=chat_req.base_prompt,
+            top_k=chat_req.top_k,
+            threshold=chat_req.threshold,
         )
 
         # Return the complete response
-        return {"message": "Chat completed successfully", "data": {"response": content}}
+        return {
+            "message": "Chat completed successfully",
+            "data": {"response": content, "references": references},
+        }
 
     except ValueError as err:
         raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
