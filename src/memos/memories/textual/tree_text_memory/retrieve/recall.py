@@ -44,11 +44,26 @@ class GraphMemoryRetriever:
             raise ValueError(f"Unsupported memory scope: {memory_scope}")
 
         if memory_scope == "WorkingMemory":
-            # For working memory, retrieve all entries (no filtering)
-            # TODO: use search filter if exists
+            # For working memory, retrieve all entries with optional filtering
             working_memories = self.graph_store.get_all_memory_items(
                 scope="WorkingMemory", include_embedding=True
             )
+
+            # Apply search_filter if provided
+            if search_filter:
+                filtered_memories = []
+                for record in working_memories:
+                    metadata = record.get("metadata", {})
+                    # Check if all search_filter conditions are met
+                    match = True
+                    for key, value in search_filter.items():
+                        if metadata.get(key) != value:
+                            match = False
+                            break
+                    if match:
+                        filtered_memories.append(record)
+                working_memories = filtered_memories
+
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -131,11 +146,11 @@ class GraphMemoryRetriever:
         self, parsed_goal: ParsedTaskGoal, memory_scope: str, search_filter: dict | None = None
     ) -> list[TextualMemoryItem]:
         """
-        TODO: use search filter if exists
         Perform structured node-based retrieval from Neo4j.
         - keys must match exactly (n.key IN keys)
         - tags must overlap with at least 2 input tags
         - scope filters by memory_type if provided
+        - search_filter applies additional metadata filtering
         """
         candidate_ids = set()
 
@@ -179,6 +194,14 @@ class GraphMemoryRetriever:
                 overlap = len(set(node_tags) & set(parsed_goal.tags))
                 if overlap >= 2:
                     keep = True
+
+            # Apply search_filter if provided
+            if keep and search_filter:
+                for key, value in search_filter.items():
+                    if meta.get(key) != value:
+                        keep = False
+                        break
+
             if keep:
                 final_nodes.append(TextualMemoryItem.from_dict(node))
         return final_nodes
