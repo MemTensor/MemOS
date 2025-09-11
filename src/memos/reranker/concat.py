@@ -1,5 +1,7 @@
-from typing import Any
 import re
+
+from typing import Any
+
 
 _TAG1 = re.compile(r"^\s*\[[^\]]*\]\s*")
 
@@ -42,7 +44,7 @@ def concat_original_source(
         merge_field = ["sources"]
     documents = []
     for item in graph_results:
-        memory = (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
+        memory = _TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m
         sources = []
         for field in merge_field:
             source = getattr(item.metadata, field, "")
