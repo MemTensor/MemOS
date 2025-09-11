@@ -1,3 +1,4 @@
+import json
 import threading
 
 from collections import Counter
@@ -30,6 +31,8 @@ class QueryMonitorItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
         description="Unique identifier for the query item", default_factory=lambda: str(uuid4())
     )
+    user_id: str = Field(..., description="Required user identifier", min_length=1)
+    mem_cube_id: str = Field(..., description="Required memory cube identifier", min_length=1)
     query_text: str = Field(
         ...,
         description="The actual user query text content",
@@ -111,7 +114,8 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
         """
         with self.mutex:
             logger.debug(f"Thread {threading.get_ident()} acquired mutex.")
-            all_keywords = [kw for item in self.queue for kw in item.keywords]
+            # Fix: Handle None keywords safely
+            all_keywords = [kw for item in self.queue if item.keywords for kw in item.keywords]
             return Counter(all_keywords)
 
     def get_queries_with_timesort(self, reverse: bool = True) -> list[str]:
@@ -132,9 +136,62 @@ class QueryMonitorQueue(AutoDroppingQueue[QueryMonitorItem]):
                 for monitor in sorted(self.queue, key=lambda x: x.timestamp, reverse=reverse)
             ]
 
+    def to_json(self) -> str:
+        """Serialize the queue to a JSON string.
+
+        Args:
+            item_serializer: Optional function to serialize individual items.
+                             If not provided, items must be JSON-serializable.
+
+        Returns:
+            A JSON string representing the queue's content and maxsize.
+        """
+        with self.mutex:
+            serialized_items = [item.to_json() for item in self.queue]
+
+        data = {"maxsize": self.maxsize, "items": serialized_items}
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "QueryMonitorQueue":
+        """Create a new AutoDroppingQueue from a JSON string.
+
+        Args:
+            json_str: JSON string created by to_json()
+            item_deserializer: Optional function to reconstruct items from dicts.
+                               If not provided, items are used as-is.
+
+        Returns:
+            A new AutoDroppingQueue instance with deserialized data.
+        """
+        data = json.loads(json_str)
+        maxsize = data.get("maxsize", 0)
+        item_strs = data.get("items", [])
+
+        queue = cls(maxsize=maxsize)
+
+        items = [QueryMonitorItem.from_json(json_str=item_str) for item_str in item_strs]
+
+        # Fix: Add error handling for put operations
+        for item in items:
+            try:
+                queue.put(item)  # Use put() to respect maxsize and auto-drop behavior
+            except Exception as e:
+                logger.error(f"Failed to add item to queue: {e}")
+                # Continue with other items instead of failing completely
+
+        return queue
+
 
 # ============== Memories ==============
 class MemoryMonitorItem(BaseModel, DictConversionMixin):
+    """
+    Represents a memory item in the monitoring system.
+
+    Note: This class does NOT have a timestamp field, unlike QueryMonitorItem.
+    For sorting by recency, use sorting_score or importance_score instead.
+    """
+
     item_id: str = Field(
         description="Unique identifier for the memory item", default_factory=lambda: str(uuid4())
     )
@@ -167,7 +224,7 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
     recording_count: int = Field(
         default=1,
         description="How many times this memory has been recorded",
-        ge=1,  # Greater than or equal to 1
+        ge=1,
     )
 
     @field_validator("tree_memory_item_mapping_key", mode="before")
@@ -177,27 +234,28 @@ class MemoryMonitorItem(BaseModel, DictConversionMixin):
         return v
 
     def get_importance_score(self, weight_vector: list[float] | None = None) -> float:
-        """
-        Calculate the effective score for the memory item.
+        return self._get_complex_importance_score(weight_vector=weight_vector)
 
-        Returns:
-            float: The importance_score if it has been initialized (>=0),
-                   otherwise the recording_count converted to float.
-
-        Note:
-            This method provides a unified way to retrieve a comparable score
-            for memory items, regardless of whether their importance has been explicitly set.
-        """
+    def _get_complex_importance_score(self, weight_vector: list[float] | None = None) -> float:
+        """Calculate traditional importance score using existing logic"""
         if weight_vector is None:
-            logger.warning("weight_vector of get_importance_score is None.")
+            logger.warning("weight_vector of get_complex_score is None.")
             weight_vector = DEFAULT_WEIGHT_VECTOR_FOR_RANKING
-        assert sum(weight_vector) == 1
-        normalized_keywords_score = min(self.keywords_score * weight_vector[1], 5)
+
+        # Fix: Add proper validation for weight_vector
+        if not weight_vector or len(weight_vector) != 3 or abs(sum(weight_vector) - 1.0) > 1e-6:
+            raise ValueError("weight_vector must be provided, have length 3, and sum to 1.0")
+
+        # Fix: Handle uninitialized scores safely
+        sorting_score = self.sorting_score if self.sorting_score != NOT_INITIALIZED else 0.0
+        keywords_score = self.keywords_score if self.keywords_score != NOT_INITIALIZED else 0.0
+
+        normalized_keywords_score = min(keywords_score * weight_vector[1], 5)
         normalized_recording_count_score = min(self.recording_count * weight_vector[2], 2)
         self.importance_score = (
-            self.sorting_score * weight_vector[0]
-            + normalized_keywords_score
-            + normalized_recording_count_score
+            sorting_score * weight_vector[0]
+            + normalized_keywords_score * weight_vector[1]
+            + normalized_recording_count_score * weight_vector[2]
         )
         return self.importance_score
 
@@ -258,7 +316,7 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
 
     def update_memories(
         self, new_memory_monitors: list[MemoryMonitorItem], partial_retention_number: int
-    ) -> MemoryMonitorItem:
+    ) -> list[MemoryMonitorItem]:  # Fix: Correct return type
         """
         Update memories based on monitor_working_memories.
         """
@@ -302,6 +360,13 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
             reverse=True,
         )
 
+        # Fix: Add bounds checking to prevent IndexError
+        if partial_retention_number > len(sorted_old_mem_monitors):
+            partial_retention_number = len(sorted_old_mem_monitors)
+            logger.info(
+                f"partial_retention_number adjusted to {partial_retention_number} to match available old memories"
+            )
+
         # Keep the top N old memories
         memories_to_remove = sorted_old_mem_monitors[partial_retention_number:]
         memories_to_change_score = sorted_old_mem_monitors[:partial_retention_number]
@@ -312,19 +377,21 @@ class MemoryMonitorManager(BaseModel, DictConversionMixin):
 
         for memory in memories_to_change_score:
             memory.sorting_score = 0
-            memory.recording_count = 0
+            memory.recording_count = 1
             memory.keywords_score = 0
 
         # Step 4: Enforce max_capacity if set
-        sorted_memories = sorted(
-            self.memories,
-            key=lambda item: item.get_importance_score(
-                weight_vector=DEFAULT_WEIGHT_VECTOR_FOR_RANKING
-            ),
-            reverse=True,
-        )
-        # Keep only the top max_capacity memories
-        self.memories = sorted_memories[: self.max_capacity]
+        # Fix: Handle max_capacity safely
+        if self.max_capacity is not None:
+            sorted_memories = sorted(
+                self.memories,
+                key=lambda item: item.get_importance_score(
+                    weight_vector=DEFAULT_WEIGHT_VECTOR_FOR_RANKING
+                ),
+                reverse=True,
+            )
+            # Keep only the top max_capacity memories
+            self.memories = sorted_memories[: self.max_capacity]
 
         # Log the update result
         logger.info(

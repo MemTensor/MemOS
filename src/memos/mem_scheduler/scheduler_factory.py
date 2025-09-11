@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
+from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
 
 
 class SchedulerFactory(BaseScheduler):
@@ -10,6 +11,7 @@ class SchedulerFactory(BaseScheduler):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "general_scheduler": GeneralScheduler,
+        "optimized_scheduler": OptimizedScheduler,
     }
 
     @classmethod

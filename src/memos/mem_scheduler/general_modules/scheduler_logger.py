@@ -69,7 +69,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 and mem_cube_id in self.monitor.activation_memory_monitors[user_id]
             ):
                 activation_monitor = self.monitor.activation_memory_monitors[user_id][mem_cube_id]
-                transformed_act_memory_size = len(activation_monitor.memories)
+                transformed_act_memory_size = len(activation_monitor.obj.memories)
                 logger.info(
                     f'activation_memory_monitors currently has "{transformed_act_memory_size}" transformed memory size'
                 )
@@ -98,6 +98,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         )
         return log_message
 
+    # TODO: 日志打出来数量不对
     @log_exceptions(logger=logger)
     def log_working_memory_replacement(
         self,
@@ -125,6 +126,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         added_memories = list(new_set - original_set)  # Present in new but not original
 
         # recording messages
+        log_messages = []
         for memory in added_memories:
             normalized_mem = transform_name_to_key(name=memory)
             if normalized_mem not in memory_type_map:
@@ -145,11 +147,13 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
-            log_func_callback([log_message])
-            logger.info(
-                f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
-                f"transformed to {WORKING_MEMORY_TYPE} memories."
-            )
+            log_messages.append(log_message)
+
+        logger.info(
+            f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
+            f"transformed to {WORKING_MEMORY_TYPE} memories."
+        )
+        log_func_callback(log_messages)
 
     @log_exceptions(logger=logger)
     def log_activation_memory_update(
@@ -170,6 +174,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         added_memories = list(new_set - original_set)  # Present in new but not original
 
         # recording messages
+        log_messages = []
         for mem in added_memories:
             log_message_a = self.create_autofilled_log_item(
                 log_content=mem,
@@ -194,12 +199,13 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
-            logger.info(
-                f"{len(added_memories)} {ACTIVATION_MEMORY_TYPE} memorie(s) "
-                f"transformed to {PARAMETER_MEMORY_TYPE} memories."
-            )
 
-            log_func_callback([log_message_a, log_message_b])
+            log_messages.extend([log_message_a, log_message_b])
+        logger.info(
+            f"{len(added_memories)} {ACTIVATION_MEMORY_TYPE} memorie(s) "
+            f"transformed to {PARAMETER_MEMORY_TYPE} memories."
+        )
+        log_func_callback(log_messages)
 
     @log_exceptions(logger=logger)
     def log_adding_memory(

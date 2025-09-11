@@ -12,8 +12,8 @@ from memos.configs.mem_os import MOSConfig
 from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
+from memos.mem_scheduler.analyzer.mos_for_test_scheduler import MOSForTestScheduler
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.mos_for_test_scheduler import MOSForTestScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
     NOT_APPLICABLE_TYPE,
 )

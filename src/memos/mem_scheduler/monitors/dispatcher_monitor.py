@@ -21,7 +21,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         super().__init__()
         self.config: BaseSchedulerConfig = config
 
-        self.check_interval = self.config.get("dispatcher_monitor_check_interval", 60)
+        self.check_interval = self.config.get("dispatcher_monitor_check_interval", 300)
         self.max_failures = self.config.get("dispatcher_monitor_max_failures", 2)
 
         # Registry of monitored thread pools
@@ -177,10 +177,11 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
                 else:
                     pool_info["failure_count"] += 1
                     pool_info["healthy"] = False
-                    logger.warning(
-                        f"Pool '{name}' unhealthy ({pool_info['failure_count']}/{self.max_failures}): {reason}"
+                    logger.info(
+                        f"Pool '{name}' unhealthy ({pool_info['failure_count']}/{self.max_failures}): {reason}."
+                        f" Note: This status does not necessarily indicate a problem with the pool itself - "
+                        f"it may also be considered unhealthy if no tasks have been scheduled for an extended period"
                     )
-
             if (
                 pool_info["failure_count"] >= self.max_failures
                 and pool_info["restart"]
@@ -236,7 +237,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             return
 
         self._restart_in_progress = True
-        logger.warning(f"Attempting to restart thread pool '{name}'")
+        logger.info(f"Attempting to restart thread pool '{name}'")
 
         try:
             old_executor = pool_info["executor"]
