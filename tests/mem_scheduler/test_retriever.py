@@ -5,7 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from memos.configs.mem_scheduler import SchedulerConfigFactory
+from memos.configs.mem_scheduler import (
+    AuthConfig,
+    GraphDBAuthConfig,
+    OpenAIConfig,
+    RabbitMQConfig,
+    SchedulerConfigFactory,
+)
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
@@ -22,6 +28,25 @@ sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
 
 
 class TestSchedulerRetriever(unittest.TestCase):
+    def _create_mock_auth_config(self):
+        """Create a mock AuthConfig for testing purposes."""
+        # Create mock configs with valid test values
+        graph_db_config = GraphDBAuthConfig(
+            uri="bolt://localhost:7687",
+            user="neo4j",
+            password="test_password_123",  # 8+ characters to pass validation
+            db_name="neo4j",
+            auto_create=True,
+        )
+
+        rabbitmq_config = RabbitMQConfig(
+            host_name="localhost", port=5672, user_name="guest", password="guest", virtual_host="/"
+        )
+
+        openai_config = OpenAIConfig(api_key="test_api_key_123", default_model="gpt-3.5-turbo")
+
+        return AuthConfig(rabbitmq=rabbitmq_config, openai=openai_config, graph_db=graph_db_config)
+
     def setUp(self):
         """Initialize test environment with mock objects."""
         example_scheduler_config_path = (
@@ -37,6 +62,13 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.tree_text_memory = MagicMock(spec=TreeTextMemory)
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
+
+        # Mock AuthConfig.from_local_env() to return our test config
+        mock_auth_config = self._create_mock_auth_config()
+        self.auth_config_patch = patch(
+            "memos.configs.mem_scheduler.AuthConfig.from_local_env", return_value=mock_auth_config
+        )
+        self.auth_config_patch.start()
 
         # Initialize general_modules with mock LLM
         self.scheduler.initialize_modules(chat_llm=self.llm, process_llm=self.llm)
@@ -58,6 +90,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         """Clean up patches."""
         self.logging_warning_patch.stop()
         self.logger_info_patch.stop()
+        self.auth_config_patch.stop()
 
     def test_filter_similar_memories_empty_input(self):
         """Test filter_similar_memories with empty input list."""
