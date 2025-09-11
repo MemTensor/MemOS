@@ -1,12 +1,11 @@
-import concurrent
 import json
+import os
+import sys
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
+
 import pandas as pd
 from tqdm import tqdm
-import sys
-import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.mirix_utils import get_mirix_client
@@ -75,7 +74,8 @@ if __name__ == '__main__':
         return res
 
 
-    for i in tqdm(range(len(lme_df))):
+    # for i in tqdm(range(len(lme_df))):
+    for i in tqdm(range(int(sys.argv[0]), int(sys.argv[1]))):
         if lme_df.iloc[i]['question_id'] not in success_qid:
             try:
                 res = process_one(i)
