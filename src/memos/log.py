@@ -2,7 +2,9 @@ import atexit
 import logging
 import os
 import threading
+import time
 
+from concurrent.futures import ThreadPoolExecutor
 from logging.config import dictConfig
 from pathlib import Path
 from sys import stdout
@@ -12,11 +14,7 @@ import requests
 from dotenv import load_dotenv
 
 from memos import settings
-from memos.api.context.context import (
-    ContextThreadPoolExecutor,
-    generate_trace_id,
-    get_current_trace_id,
-)
+from memos.context.context import get_current_api_path, get_current_trace_id
 
 
 # Load environment variables
@@ -42,9 +40,9 @@ class TraceIDFilter(logging.Filter):
     def filter(self, record):
         try:
             trace_id = get_current_trace_id()
-            record.trace_id = trace_id if trace_id else generate_trace_id()
+            record.trace_id = trace_id if trace_id else "trace-id"
         except Exception:
-            record.trace_id = generate_trace_id()
+            record.trace_id = "trace-id"
         return True
 
 
@@ -68,7 +66,7 @@ class CustomLoggerRequestHandler(logging.Handler):
         if not self._initialized:
             super().__init__()
             workers = int(os.getenv("CUSTOM_LOGGER_WORKERS", "2"))
-            self._executor = ContextThreadPoolExecutor(
+            self._executor = ThreadPoolExecutor(
                 max_workers=workers, thread_name_prefix="log_sender"
             )
             self._is_shutting_down = threading.Event()
@@ -86,20 +84,27 @@ class CustomLoggerRequestHandler(logging.Handler):
             return
 
         try:
-            trace_id = get_current_trace_id() or "no-trace-id"
-            self._executor.submit(self._send_log_sync, record.getMessage(), trace_id)
+            trace_id = get_current_trace_id() or "trace-id"
+            api_path = get_current_api_path()
+            if api_path is not None:
+                self._executor.submit(self._send_log_sync, record.getMessage(), trace_id, api_path)
         except Exception as e:
             if not self._is_shutting_down.is_set():
                 print(f"Error sending log: {e}")
 
-    def _send_log_sync(self, message, trace_id):
+    def _send_log_sync(self, message, trace_id, api_path):
         """Send log message synchronously in a separate thread"""
         try:
             logger_url = os.getenv("CUSTOM_LOGGER_URL")
             token = os.getenv("CUSTOM_LOGGER_TOKEN")
 
             headers = {"Content-Type": "application/json"}
-            post_content = {"message": message, "trace_id": trace_id}
+            post_content = {
+                "message": message,
+                "trace_id": trace_id,
+                "action": api_path,
+                "current_time": round(time.time(), 3),
+            }
 
             # Add auth token if exists
             if token:
@@ -146,7 +151,7 @@ LOGGING_CONFIG = {
             "format": "[%(trace_id)s] - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "simplified": {
-            "format": "%(asctime)s | %(trace_id)s | %(levelname)s | %(filename)s | %(message)s"
+            "format": "%(asctime)s | %(trace_id)s | %(levelname)s | %(filename)s:%(lineno)d: %(funcName)s | %(message)s"
         },
     },
     "filters": {
@@ -155,7 +160,7 @@ LOGGING_CONFIG = {
     },
     "handlers": {
         "console": {
-            "level": selected_log_level,
+            "level": "INFO",
             "class": "logging.StreamHandler",
             "stream": stdout,
             "formatter": "simplified",

@@ -9,7 +9,6 @@ and request isolation.
 import functools
 import os
 import threading
-import uuid
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -30,8 +29,9 @@ class RequestContext:
     This provides a Flask g-like object for FastAPI applications.
     """
 
-    def __init__(self, trace_id: str | None = None):
-        self.trace_id = trace_id or str(uuid.uuid4())
+    def __init__(self, trace_id: str | None = None, api_path: str | None = None):
+        self.trace_id = trace_id or "trace-id"
+        self.api_path = api_path
         self._data: dict[str, Any] = {}
 
     def set(self, key: str, value: Any) -> None:
@@ -43,7 +43,7 @@ class RequestContext:
         return self._data.get(key, default)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name.startswith("_") or name == "trace_id":
+        if name.startswith("_") or name in ("trace_id", "api_path"):
             super().__setattr__(name, value)
         else:
             if not hasattr(self, "_data"):
@@ -58,7 +58,7 @@ class RequestContext:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert context to dictionary."""
-        return {"trace_id": self.trace_id, "data": self._data.copy()}
+        return {"trace_id": self.trace_id, "api_path": self.api_path, "data": self._data.copy()}
 
 
 def set_request_context(context: RequestContext) -> None:
@@ -83,6 +83,16 @@ def get_current_trace_id() -> str | None:
     return None
 
 
+def get_current_api_path() -> str | None:
+    """
+    Get the current request's api path.
+    """
+    context = _request_context.get()
+    if context:
+        return context.get("api_path")
+    return None
+
+
 def get_current_context() -> RequestContext | None:
     """
     Get the current request context.
@@ -92,7 +102,9 @@ def get_current_context() -> RequestContext | None:
     """
     context_dict = _request_context.get()
     if context_dict:
-        ctx = RequestContext(trace_id=context_dict.get("trace_id"))
+        ctx = RequestContext(
+            trace_id=context_dict.get("trace_id"), api_path=context_dict.get("api_path")
+        )
         ctx._data = context_dict.get("data", {}).copy()
         return ctx
     return None
@@ -128,13 +140,16 @@ class ContextThread(threading.Thread):
         self.kwargs = kwargs or {}
 
         self.main_trace_id = get_current_trace_id()
+        self.main_api_path = get_current_api_path()
         self.main_context = get_current_context()
 
     def run(self):
         # Create a new RequestContext with the main thread's trace_id
         if self.main_context:
             # Copy the context data
-            child_context = RequestContext(trace_id=self.main_trace_id)
+            child_context = RequestContext(
+                trace_id=self.main_trace_id, api_path=self.main_context.api_path
+            )
             child_context._data = self.main_context._data.copy()
 
             # Set the context in the child thread
@@ -155,13 +170,14 @@ class ContextThreadPoolExecutor(ThreadPoolExecutor):
         Automatically propagates the current thread's context to the worker thread.
         """
         main_trace_id = get_current_trace_id()
+        main_api_path = get_current_api_path()
         main_context = get_current_context()
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if main_context:
                 # Create and set new context in worker thread
-                child_context = RequestContext(trace_id=main_trace_id)
+                child_context = RequestContext(trace_id=main_trace_id, api_path=main_api_path)
                 child_context._data = main_context._data.copy()
                 set_request_context(child_context)
 
@@ -181,13 +197,14 @@ class ContextThreadPoolExecutor(ThreadPoolExecutor):
         Automatically propagates the current thread's context to worker threads.
         """
         main_trace_id = get_current_trace_id()
+        main_api_path = get_current_api_path()
         main_context = get_current_context()
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if main_context:
                 # Create and set new context in worker thread
-                child_context = RequestContext(trace_id=main_trace_id)
+                child_context = RequestContext(trace_id=main_trace_id, api_path=main_api_path)
                 child_context._data = main_context._data.copy()
                 set_request_context(child_context)
 

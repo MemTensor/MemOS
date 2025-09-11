@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import random
-import threading
 import time
 
 from collections.abc import Generator
@@ -14,6 +13,7 @@ from transformers import AutoTokenizer
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
+from memos.context.context import ContextThread
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
@@ -642,6 +642,8 @@ class MOSProduct(MOSCore):
 
         def run_async_in_thread():
             """Running asynchronous tasks in a new thread"""
+
+            logger.info(f"Running asynchronous tasks in a new thread for user {user_id}")
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
@@ -694,8 +696,8 @@ class MOSProduct(MOSCore):
                 else None
             )
         except RuntimeError:
-            # No event loop, run in a new thread
-            thread = threading.Thread(
+            # No event loop, run in a new thread with context propagation
+            thread = ContextThread(
                 target=run_async_in_thread,
                 name=f"PostChatProcessing-{user_id}",
                 # Set as a daemon thread to avoid blocking program exit
