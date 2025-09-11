@@ -624,6 +624,7 @@ class MOSCore:
         doc_path: str | None = None,
         mem_cube_id: str | None = None,
         user_id: str | None = None,
+        **kwargs,
     ) -> None:
         """
         Add textual memories to a MemCube.

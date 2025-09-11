@@ -193,16 +193,19 @@ class GraphMemoryRetriever:
         search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """
-        TODO: use search filter if exists
-        # TODO: tackle with post-filter and pre-filter(5.18+) better.
         Perform vector-based similarity retrieval using query embedding.
+        # TODO: tackle with post-filter and pre-filter(5.18+) better.
         """
         all_matches = []
 
         def search_single(vec):
             return (
                 self.graph_store.search_by_embedding(
-                    vector=vec, top_k=top_k, scope=memory_scope, cube_name=cube_name
+                    vector=vec,
+                    top_k=top_k,
+                    scope=memory_scope,
+                    cube_name=cube_name,
+                    search_filter=search_filter,
                 )
                 or []
             )
