@@ -6,6 +6,7 @@ when using the API components. It uses ContextVar to ensure thread safety
 and request isolation.
 """
 
+import os
 import uuid
 
 from collections.abc import Callable
@@ -115,6 +116,11 @@ TraceIdGetter = Callable[[], str | None]
 
 # Global variable to hold the trace_id getter function
 _trace_id_getter: TraceIdGetter | None = None
+
+
+def generate_trace_id() -> str:
+    """Generate a random trace_id."""
+    return os.urandom(16).hex()
 
 
 def set_trace_id_getter(getter: TraceIdGetter) -> None:
