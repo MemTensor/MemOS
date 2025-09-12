@@ -3779,7 +3779,7 @@ version = "1.1.2"
 description = "Pure Python MySQL Driver"
 optional = false
 python-versions = ">=3.8"
-groups = ["main"]
+groups = ["main", "mem-user"]
 files = [
     {file = "pymysql-1.1.2-py3-none-any.whl", hash = "sha256:e6b1d89711dd51f8f74b1631fe08f039e7d76cf67a42a323d3178f0f25762ed9"},
     {file = "pymysql-1.1.2.tar.gz", hash = "sha256:4961d3e165614ae65014e361811a724e2044ad3ea3739de9903ae7c21f539f03"},
@@ -6301,12 +6301,13 @@ cffi = {version = ">=1.11", markers = "platform_python_implementation == \"PyPy\
 cffi = ["cffi (>=1.11)"]
 
 [extras]
-all = ["chonkie", "markitdown", "neo4j", "pika", "qdrant-client", "redis", "schedule", "sentence-transformers", "torch", "volcengine-python-sdk"]
+all = ["chonkie", "markitdown", "neo4j", "pika", "pymysql", "qdrant-client", "redis", "schedule", "sentence-transformers", "torch", "volcengine-python-sdk"]
 mem-reader = ["chonkie", "markitdown"]
 mem-scheduler = ["pika", "redis"]
+mem-user = ["pymysql"]
 tree-mem = ["neo4j", "schedule"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "d8bc3fed94d84d40795f820fbe38ba648f04b00e9e6d54cb2ca1629d6912a7cb"
+content-hash = "d85cb8a08870d67df6e462610231f1e735ba5293bd3fe5b0c4a212b3ccff7b72"

@@ -106,6 +106,7 @@ def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_o
             interests=user_req.interests,
             config=user_config,
             default_mem_cube=default_mem_cube,
+            mem_cube_id=user_req.mem_cube_id,
         )
 
         if result["status"] == "success":
