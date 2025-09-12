@@ -2,8 +2,12 @@ import concurrent.futures
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
+
+
+logger = get_logger(__name__)
 
 
 class GraphMemoryRetriever:
@@ -14,6 +18,8 @@ class GraphMemoryRetriever:
     def __init__(self, graph_store: Neo4jGraphDB, embedder: OllamaEmbedder):
         self.graph_store = graph_store
         self.embedder = embedder
+        self.max_workers = 10
+        self.filter_weight = 0.6
 
     def retrieve(
         self,
@@ -44,33 +50,15 @@ class GraphMemoryRetriever:
             raise ValueError(f"Unsupported memory scope: {memory_scope}")
 
         if memory_scope == "WorkingMemory":
-            # For working memory, retrieve all entries with optional filtering
+            # For working memory, retrieve all entries (no filtering)
             working_memories = self.graph_store.get_all_memory_items(
                 scope="WorkingMemory", include_embedding=True
             )
-
-            # Apply search_filter if provided
-            if search_filter:
-                filtered_memories = []
-                for record in working_memories:
-                    metadata = record.get("metadata", {})
-                    # Check if all search_filter conditions are met
-                    match = True
-                    for key, value in search_filter.items():
-                        if metadata.get(key) != value:
-                            match = False
-                            break
-                    if match:
-                        filtered_memories.append(record)
-                working_memories = filtered_memories
-
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # Structured graph-based retrieval
-            future_graph = executor.submit(
-                self._graph_recall, parsed_goal, memory_scope, search_filter
-            )
+            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope)
             # Vector similarity search
             future_vector = executor.submit(
                 self._vector_recall,
@@ -143,14 +131,13 @@ class GraphMemoryRetriever:
         return list(combined.values())
 
     def _graph_recall(
-        self, parsed_goal: ParsedTaskGoal, memory_scope: str, search_filter: dict | None = None
+        self, parsed_goal: ParsedTaskGoal, memory_scope: str
     ) -> list[TextualMemoryItem]:
         """
         Perform structured node-based retrieval from Neo4j.
         - keys must match exactly (n.key IN keys)
         - tags must overlap with at least 2 input tags
         - scope filters by memory_type if provided
-        - search_filter applies additional metadata filtering
         """
         candidate_ids = set()
 
@@ -194,14 +181,6 @@ class GraphMemoryRetriever:
                 overlap = len(set(node_tags) & set(parsed_goal.tags))
                 if overlap >= 2:
                     keep = True
-
-            # Apply search_filter if provided
-            if keep and search_filter:
-                for key, value in search_filter.items():
-                    if meta.get(key) != value:
-                        keep = False
-                        break
-
             if keep:
                 final_nodes.append(TextualMemoryItem.from_dict(node))
         return final_nodes
@@ -219,33 +198,47 @@ class GraphMemoryRetriever:
         Perform vector-based similarity retrieval using query embedding.
         # TODO: tackle with post-filter and pre-filter(5.18+) better.
         """
-        all_matches = []
+        if not query_embedding:
+            return []
 
-        def search_single(vec):
+        def search_single(vec, filt=None):
             return (
                 self.graph_store.search_by_embedding(
                     vector=vec,
                     top_k=top_k,
                     scope=memory_scope,
                     cube_name=cube_name,
-                    search_filter=search_filter,
+                    search_filter=filt,
                 )
                 or []
             )
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(search_single, vec) for vec in query_embedding[:max_num]]
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                all_matches.extend(result)
+        all_hits = []
+        # Path A: without filter
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            futures = [ex.submit(search_single, vec, None) for vec in query_embedding[:max_num]]
+            for f in concurrent.futures.as_completed(futures):
+                all_hits.extend(f.result() or [])
 
-        if not all_matches:
+        # Path B: with filter
+        if search_filter:
+            with concurrent.futures.ThreadPoolExecutor() as ex:
+                futures = [
+                    ex.submit(search_single, vec, search_filter)
+                    for vec in query_embedding[:max_num]
+                ]
+                for f in concurrent.futures.as_completed(futures):
+                    all_hits.extend(f.result() or [])
+
+        if not all_hits:
             return []
 
-        # Step 3: Extract matched IDs and retrieve full nodes
-        unique_ids = set({r["id"] for r in all_matches})
-        node_dicts = self.graph_store.get_nodes(
-            list(unique_ids), include_embedding=True, cube_name=cube_name
+        # merge and deduplicate
+        unique_ids = {r["id"] for r in all_hits if r.get("id")}
+        node_dicts = (
+            self.graph_store.get_nodes(
+                list(unique_ids), include_embedding=True, cube_name=cube_name
+            )
+            or []
         )
-
-        return [TextualMemoryItem.from_dict(record) for record in node_dicts]
+        return [TextualMemoryItem.from_dict(n) for n in node_dicts]
