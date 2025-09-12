@@ -223,6 +223,7 @@ def search_memories(search_req: SearchRequest):
             user_id=search_req.user_id,
             install_cube_ids=[search_req.mem_cube_id] if search_req.mem_cube_id else None,
             top_k=search_req.top_k,
+            session_id=search_req.session_id,
         )
         return SearchResponse(message="Search completed successfully", data=result)
 
@@ -250,6 +251,7 @@ def chat(chat_req: ChatRequest):
                     history=chat_req.history,
                     internet_search=chat_req.internet_search,
                     moscube=chat_req.moscube,
+                    session_id=chat_req.session_id,
                 )
 
             except Exception as e:
@@ -294,6 +296,7 @@ def chat_complete(chat_req: ChatCompleteRequest):
             base_prompt=chat_req.base_prompt,
             top_k=chat_req.top_k,
             threshold=chat_req.threshold,
+            session_id=chat_req.session_id,
         )
 
         # Return the complete response

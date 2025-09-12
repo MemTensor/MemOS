@@ -547,6 +547,7 @@ class MOSCore:
         mode: Literal["fast", "fine"] = "fast",
         internet_search: bool = False,
         moscube: bool = False,
+        session_id: str | None = None,
         **kwargs,
     ) -> MOSSearchResult:
         """
@@ -575,6 +576,11 @@ class MOSCore:
             self._register_chat_history(target_user_id)
         chat_history = self.chat_history_manager[target_user_id]
 
+        # Create search filter if session_id is provided
+        search_filter = None
+        if session_id is not None:
+            search_filter = {"session_id": session_id}
+
         result: MOSSearchResult = {
             "text_mem": [],
             "act_mem": [],
@@ -602,10 +608,11 @@ class MOSCore:
                     manual_close_internet=not internet_search,
                     info={
                         "user_id": target_user_id,
-                        "session_id": self.session_id,
+                        "session_id": session_id if session_id is not None else self.session_id,
                         "chat_history": chat_history.chat_history,
                     },
                     moscube=moscube,
+                    search_filter=search_filter,
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
