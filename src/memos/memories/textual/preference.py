@@ -7,23 +7,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from memos.configs.memory import GeneralTextMemoryConfig
+from memos.configs.memory import PreferenceTextMemoryConfig
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder, ArkEmbedder, SenTranEmbedder, UniversalAPIEmbedder
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem
-from memos.types import MessageList
+from memos.types import ChatHistory, MessageList
 from memos.llms.base import BaseLLM
 from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory
+from memos.memories.textual.prefer_text_memory.factory import BuilderFactory, RetrieverFactory, UpdaterFactory, AssemblerFactory
 
 
 class PreferenceTextMemory(BaseTextMemory):
     """Preference textual memory implementation for storing and retrieving memories."""
 
-    def __init__(self, config: GeneralTextMemoryConfig):
+    def __init__(self, config: PreferenceTextMemoryConfig):
         """Initialize memory with the given configuration."""
-        self.config: GeneralTextMemoryConfig = config
+        self.config: PreferenceTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
         )
@@ -31,10 +32,67 @@ class PreferenceTextMemory(BaseTextMemory):
         self.embedder: OllamaEmbedder | ArkEmbedder | SenTranEmbedder | UniversalAPIEmbedder = \
             EmbedderFactory.from_config(config.embedder)
 
+        self.builder = BuilderFactory.from_config(
+            config.builder, 
+            llm_provider=self.extractor_llm,
+            embedder=self.embedder,
+            vector_db=self.vector_db
+        )
+        self.retriever = RetrieverFactory.from_config(
+            config.retriever,
+            llm_provider=self.extractor_llm,
+            embedder=self.embedder,
+            vector_db=self.vector_db
+        )
+        self.updater = UpdaterFactory.from_config(
+            config.updater,
+            llm_provider=self.extractor_llm,
+            embedder=self.embedder,
+            vector_db=self.vector_db
+        )
+        self.assembler = AssemblerFactory.from_config(
+            config.assembler,
+            llm_provider=self.extractor_llm,
+            embedder=self.embedder,
+            vector_db=self.vector_db
+        )
 
-    def build_memory():
-        """Build memory from the original dialogs. (Initialize memory)"""
-        pass
+    def build_memory(self, history: ChatHistory) -> None:
+        """Build memory from the original dialogs. (Initialize memory)
+        
+        Args:
+            history: The chat history to build memory from.
+            
+        Returns:
+            Memory content string formatted according to the build strategy
+        """
+        return self.builder.build(history)
+
+    def update_memory(self, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
+        """Update a memory by new memory."""
+        self.updater.update(new_memory)
+    
+    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
+        """Search for memories based on a query.
+        Args:
+            query (str): The query to search for.
+            top_k (int): The number of top results to return.
+            info (dict): Leave a record of memory consumption.
+        Returns:
+            list[TextualMemoryItem]: List of matching memories.
+        """
+        return self.retriever.retrieve(query, top_k, info)
+
+            
+    def get_prompt(self, query: str, memories: list[TextualMemoryItem]) -> str:
+        """Construct the prompt for the query with memories.
+        Args:
+            query (str): The query to get the prompt for.
+            memories (list[TextualMemoryItem]): The memories to get the prompt for.
+        Returns:
+            str: The prompt for the query with memories.
+        """
+        return self.assembler.assemble(query, memories)
 
     def extract(self, messages: MessageList) -> list[TextualMemoryItem]:
         """Extract memories based on the messages.
@@ -42,15 +100,6 @@ class PreferenceTextMemory(BaseTextMemory):
             messages (MessageList): The messages to extract memories from.
         Returns:
             list[TextualMemoryItem]: List of extracted memory items.
-        """
-        pass
-    
-    def get_prompt(self, memories: list[TextualMemoryItem]) -> str:
-        """Get the prompt for the memory.
-        Args:
-            memories (list[TextualMemoryItem]): The memories to get the prompt for.
-        Returns:
-            str: The prompt for the memory.
         """
         pass
 
@@ -64,17 +113,6 @@ class PreferenceTextMemory(BaseTextMemory):
     
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         """Update a memory by memory_id."""
-        pass
-    
-    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
-        """Search for memories based on a query.
-        Args:
-            query (str): The query to search for.
-            top_k (int): The number of top results to return.
-            info (dict): Leave a record of memory consumption.
-        Returns:
-            list[TextualMemoryItem]: List of matching memories.
-        """
         pass
     
     def get(self, memory_id: str) -> TextualMemoryItem:

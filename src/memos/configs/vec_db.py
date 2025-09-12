@@ -39,6 +39,12 @@ class QdrantVecDBConfig(BaseVecDBConfig):
         return self
 
 
+class MilvusVecDBConfig(BaseVecDBConfig):
+    """Configuration for Milvus vector database."""
+
+    uri: str = Field(..., description="URI for Milvus connection")
+    collection_name: list[str] = Field(..., description="Name(s) of the collection(s)")
+
 class VectorDBConfigFactory(BaseConfig):
     """Factory class for creating vector database configurations."""
 
@@ -47,6 +53,7 @@ class VectorDBConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "qdrant": QdrantVecDBConfig,
+        "milvus": MilvusVecDBConfig,
     }
 
     @field_validator("backend")

@@ -2,6 +2,9 @@ from memos.configs.base import BaseConfig
 from typing import Any, ClassVar
 from pydantic import Field
 from pydantic import field_validator, model_validator
+from memos.configs.vec_db import VectorDBConfigFactory
+from memos.configs.embedder import EmbedderConfigFactory
+from memos.configs.llm import LLMConfigFactory
 
 
 
@@ -11,6 +14,7 @@ class BaseBuilderConfig(BaseConfig):
 
 class NaiveBuilderConfig(BaseBuilderConfig):
     """Configuration for Naive Builder."""
+    # No additional config needed since components are passed from parent
 
 
 
