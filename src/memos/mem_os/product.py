@@ -801,6 +801,7 @@ class MOSProduct(MOSCore):
         interests: str | None = None,
         default_mem_cube: GeneralMemCube | None = None,
         default_cube_config: GeneralMemCubeConfig | None = None,
+        mem_cube_id: str | None = None,
     ) -> dict[str, str]:
         """Register a new user with configuration and default cube.
 
@@ -836,7 +837,10 @@ class MOSProduct(MOSCore):
             default_cube_name = f"{user_name}_{user_id}_default_cube"
             mem_cube_name_or_path = os.path.join(CUBE_PATH, default_cube_name)
             default_cube_id = self.create_cube_for_user(
-                cube_name=default_cube_name, owner_id=user_id, cube_path=mem_cube_name_or_path
+                cube_name=default_cube_name,
+                owner_id=user_id,
+                cube_path=mem_cube_name_or_path,
+                cube_id=mem_cube_id,
             )
 
             if default_mem_cube:
