@@ -204,6 +204,7 @@ def create_memory(memory_req: MemoryCreateRequest):
             mem_cube_id=memory_req.mem_cube_id,
             source=memory_req.source,
             user_profile=memory_req.user_profile,
+            session_id=memory_req.session_id,
         )
         return SimpleResponse(message="Memory created successfully")
 
