@@ -13,6 +13,26 @@ ALLOWED_ROLES = {"user", "assistant", "system"}
 
 
 class SourceMessage(BaseModel):
+    """
+    Purpose: **memory provenance / traceability**.
+
+    Capture the minimal, reproducible origin context of a memory item so it can be
+    audited, traced, rolled back, or de-duplicated later.
+
+    Fields & conventions:
+        - type: Source kind (e.g., "chat", "doc", "web", "file", "system", ...).
+            If not provided, upstream logic may infer it:
+            presence of `role` ⇒ "chat"; otherwise ⇒ "doc".
+        - role: Conversation role ("user" | "assistant" | "system") when the
+            source is a chat turn.
+        - content: Minimal reproducible snippet from the source. If omitted,
+            upstream may fall back to `doc_path` / `url` / `message_id`.
+        - chat_time / message_id / doc_path: Locators for precisely pointing back
+            to the original record (timestamp, message id, document path).
+        - Extra fields: Allowed (`model_config.extra="allow"`) to carry arbitrary
+            provenance attributes (e.g., url, page, offset, span, local_confidence).
+    """
+
     type: str | None = "chat"
     role: Literal["user", "assistant", "system"] | None = None
     chat_time: str | None = None
