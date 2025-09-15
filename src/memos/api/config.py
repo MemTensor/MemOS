@@ -100,8 +100,10 @@ class APIConfig:
                 "backend": "http_bge",
                 "config": {
                     "url": os.getenv("MOS_RERANKER_URL"),
-                    "model": "bge-reranker-v2-m3",
+                    "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
+                    "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
+                    "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
                 },
             }
         else:
