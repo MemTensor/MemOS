@@ -563,7 +563,7 @@ class MOSCore:
         Returns:
             MemoryResult: A dictionary containing the search results.
         """
-        target_user_id = user_id if user_id is not None else self.user_ids
+        target_user_id = user_id if user_id is not None else self.user_id
 
         self._validate_user_exists(target_user_id)
         # Get all cubes accessible by the target user
