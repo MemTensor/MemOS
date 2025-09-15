@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from memos.api.context.context import RequestContext, generate_trace_id, set_request_context
+from memos.context.context import RequestContext, generate_trace_id, set_request_context
 
 
 logger = logging.getLogger(__name__)
