@@ -20,11 +20,15 @@ def process_source(
     if items is None:
         items = []
     concat_data = []
+    memory = None
     for item in items:
         memory, source = item
-        for content in source[:3]:
+        for content in source:
             if isinstance(content, str):
+                if "assistant:" in content:
+                    continue
                 concat_data.append(content)
+    concat_data = [memory] + concat_data
     return "\n".join(concat_data)
 
 

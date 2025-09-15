@@ -43,7 +43,9 @@ class HTTPBGEReranker(BaseReranker):
         self.model = model
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
-        self.concat_source = concat_source or ["sources"]
+        # self.concat_source = concat_source or ["sources"]
+        self.concat_source = []
+        
 
     def rerank(
         self,
