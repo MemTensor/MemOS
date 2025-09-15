@@ -34,7 +34,7 @@ class HTTPBGEReranker(BaseReranker):
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
         headers_extra: dict | None = None,
-        concat_source: list[str] | None = None,
+        rerank_source: list[str] | None = None,
     ):
         if not reranker_url:
             raise ValueError("reranker_url must not be empty")
@@ -43,9 +43,7 @@ class HTTPBGEReranker(BaseReranker):
         self.model = model
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
-        # self.concat_source = concat_source or ["sources"]
-        self.concat_source = []
-        
+        self.concat_source = rerank_source
 
     def rerank(
         self,
@@ -59,7 +57,7 @@ class HTTPBGEReranker(BaseReranker):
 
         documents = []
         if self.concat_source:
-            documents = concat_original_source(graph_results)
+            documents = concat_original_source(graph_results, self.concat_source)
         else:
             documents = [
                 (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)

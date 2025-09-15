@@ -28,7 +28,8 @@ def process_source(
                 if "assistant:" in content:
                     continue
                 concat_data.append(content)
-    concat_data = [memory] + concat_data
+    if memory is not None:
+        concat_data = [memory, *concat_data]
     return "\n".join(concat_data)
 
 
