@@ -111,11 +111,19 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     def _process_chat_data(self, scene_data_info, info):
-        lang = detect_lang("\n".join(scene_data_info))
+        mem_list = []
+        for item in scene_data_info:
+            if "chat_time" in item:
+                mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
+                mem_list.append(mem)
+            else:
+                mem = item["role"] + ":" + item["content"]
+                mem_list.append(mem)
+        lang = detect_lang("\n".join(mem_list))
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
 
-        prompt = template.replace("${conversation}", "\n".join(scene_data_info))
+        prompt = template.replace("${conversation}", "\n".join(mem_list))
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
 
@@ -239,11 +247,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 for item in items:
                     # Convert dictionary to string
                     if "chat_time" in item:
-                        mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
-                        result.append(mem)
+                        result.append(item)
                     else:
-                        mem = item["role"] + ":" + item["content"]
-                        result.append(mem)
+                        result.append(item)
                     if len(result) >= 10:
                         results.append(result)
                         context = copy.deepcopy(result[-2:])
@@ -264,7 +270,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         return results
 
-    def _process_doc_data(self, scene_data_info, info):
+    def _process_doc_data(self, scene_data_info, info, **kwargs):
         chunks = self.chunker.chunk(scene_data_info["text"])
         messages = []
         for chunk in chunks:

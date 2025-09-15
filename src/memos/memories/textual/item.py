@@ -3,9 +3,16 @@
 import uuid
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class SourceMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    chat_time: str | None = None
+    message_id: str | None = None
+    content: str
 
 
 class TextualMemoryMetadata(BaseModel):
@@ -62,7 +69,7 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"] = Field(
         default="WorkingMemory", description="Memory lifecycle type."
     )
-    sources: list[str] | None = Field(
+    sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )
     embedding: list[float] | None = Field(
@@ -74,8 +81,8 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         description="The timestamp of the first creation to the memory. Useful "
         "for tracking memory initialization. Format: ISO 8601.",
     )
-    usage: list[str] | None = Field(
-        default=[],
+    usage: list[str] = Field(
+        default_factory=list,
         description="Usage history of this node",
     )
     background: str | None = Field(
@@ -83,12 +90,27 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         description="background of this node",
     )
 
-    @field_validator("sources")
+    @field_validator("sources", mode="before")
     @classmethod
-    def validate_sources(cls, v):
-        if v is not None and not isinstance(v, list):
-            raise ValueError("Sources must be a list of strings.")
-        return v
+    def coerce_sources(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise TypeError("sources must be a list")
+        out = []
+        for item in v:
+            if isinstance(item, SourceMessage):
+                out.append(item)
+            elif isinstance(item, dict):
+                # check required field
+                out.append(SourceMessage(**item))
+            elif isinstance(item, str):
+                # pure text
+                out.append(SourceMessage(role="user", content=item))
+            else:
+                # default
+                out.append(SourceMessage(role="system", content=str(item)))
+        return out
 
     def __str__(self) -> str:
         """Pretty string representation of the metadata."""
@@ -114,19 +136,17 @@ class TextualMemoryItem(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     memory: str
     metadata: (
-        TextualMemoryMetadata
+        SearchedTreeNodeTextualMemoryMetadata
         | TreeNodeTextualMemoryMetadata
-        | SearchedTreeNodeTextualMemoryMetadata
+        | TextualMemoryMetadata
     ) = Field(default_factory=TextualMemoryMetadata)
 
     model_config = ConfigDict(extra="forbid")
 
+    @field_validator("id")
     @classmethod
-    def validate_id(cls, v):
-        try:
-            uuid.UUID(v)
-        except ValueError as e:
-            raise ValueError("Invalid UUID format") from e
+    def _validate_id(cls, v: str) -> str:
+        uuid.UUID(v)
         return v
 
     @classmethod
@@ -135,6 +155,24 @@ class TextualMemoryItem(BaseModel):
 
     def to_dict(self) -> dict:
         return self.model_dump(exclude_none=True)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _coerce_metadata(cls, v: Any):
+        if isinstance(
+            v,
+            SearchedTreeNodeTextualMemoryMetadata
+            | TreeNodeTextualMemoryMetadata
+            | TextualMemoryMetadata,
+        ):
+            return v
+        if isinstance(v, dict):
+            if v.get("relativity") is not None:
+                return SearchedTreeNodeTextualMemoryMetadata(**v)
+            if any(k in v for k in ("sources", "memory_type", "embedding", "background", "usage")):
+                return TreeNodeTextualMemoryMetadata(**v)
+            return TextualMemoryMetadata(**v)
+        return v
 
     def __str__(self) -> str:
         """Pretty string representation of the memory item."""

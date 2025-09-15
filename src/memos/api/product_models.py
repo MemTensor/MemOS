@@ -1,26 +1,14 @@
 import uuid
 
-from typing import Generic, Literal, TypeAlias, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+
+# Import message types from core types module
+from memos.types import MessageDict
 
 
 T = TypeVar("T")
-
-
-# ─── Message Types ──────────────────────────────────────────────────────────────
-
-# Chat message roles
-MessageRole: TypeAlias = Literal["user", "assistant", "system"]
-
-
-# Message structure
-class MessageDict(TypedDict):
-    """Typed dictionary for chat message dictionaries."""
-
-    role: MessageRole
-    content: str
 
 
 class BaseRequest(BaseModel):

@@ -355,8 +355,7 @@ class Searcher:
         final_items = []
         for item, score in sorted_results:
             meta_data = item.metadata.model_dump()
-            if "relativity" not in meta_data:
-                meta_data["relativity"] = score
+            meta_data["relativity"] = score
             final_items.append(
                 TextualMemoryItem(
                     id=item.id,
