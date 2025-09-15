@@ -8,7 +8,7 @@ tmp/
 # evaluation data
 *.csv
 *.jsonl
-**settings.json
+**settings.json**
 evaluation/*tmp/
 evaluation/results
 evaluation/.env
