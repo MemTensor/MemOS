@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import numpy as np
 
+from memos import settings
 from memos.configs.graph_db import NebulaGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
@@ -93,9 +94,9 @@ class SessionPoolError(Exception):
 
 class SessionPool:
     @require_python_package(
-        import_name="nebulagraph_python",
-        install_command="pip install ... @Tianxing",
-        install_link=".....",
+        import_name="nebula3",
+        install_command="pip install nebula3-python",
+        install_link="https://pypi.org/project/nebula3-python/",
     )
     def __init__(
         self,
@@ -146,7 +147,9 @@ class SessionPool:
             client.execute("YIELD 1")
             self.pool.put(client)
         except Exception:
-            logger.info("[Pool] Client dead, replacing...")
+            if settings.DEBUG:
+                logger.info("[Pool] Client dead, replacing...")
+
             self.replace_client(client)
 
     @timed
@@ -214,7 +217,9 @@ class SessionPool:
 
         self.pool.put(new_client)
 
-        logger.info("[Pool] Replaced dead client with a new one.")
+        if settings.DEBUG:
+            logger.info(f"[Pool] Replaced dead client with a new one. {new_client}")
+
         return new_client
 
 
@@ -312,9 +317,9 @@ class NebulaGraphDB(BaseGraphDB):
             cls._POOL_REFCOUNT.clear()
 
     @require_python_package(
-        import_name="nebulagraph_python",
-        install_command="pip install ... @Tianxing",
-        install_link=".....",
+        import_name="nebula3",
+        install_command="pip install nebula3-python",
+        install_link="https://pypi.org/project/nebula3-python/",
     )
     def __init__(self, config: NebulaGraphDBConfig):
         """

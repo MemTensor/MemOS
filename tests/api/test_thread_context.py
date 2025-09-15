@@ -1,7 +1,12 @@
 import time
 
-from memos.api.context.context import RequestContext, get_current_context, set_request_context
-from memos.api.context.context_thread import ContextThread, ContextThreadPoolExecutor
+from memos.context.context import (
+    ContextThread,
+    ContextThreadPoolExecutor,
+    RequestContext,
+    get_current_context,
+    set_request_context,
+)
 from memos.log import get_logger
 
 

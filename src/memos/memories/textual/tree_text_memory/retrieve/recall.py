@@ -1,5 +1,6 @@
 import concurrent.futures
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.memories.textual.item import TextualMemoryItem
@@ -49,7 +50,7 @@ class GraphMemoryRetriever:
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
             # Structured graph-based retrieval
             future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope)
             # Vector similarity search
@@ -196,7 +197,7 @@ class GraphMemoryRetriever:
                 or []
             )
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with ContextThreadPoolExecutor() as executor:
             futures = [executor.submit(search_single, vec) for vec in query_embedding[:max_num]]
             for future in concurrent.futures.as_completed(futures):
                 result = future.result()
