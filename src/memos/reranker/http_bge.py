@@ -7,7 +7,13 @@ from typing import TYPE_CHECKING
 
 import requests
 
+from memos.log import get_logger
+
 from .base import BaseReranker
+from .concat import concat_original_source
+
+
+logger = get_logger(__name__)
 
 
 if TYPE_CHECKING:
@@ -28,6 +34,7 @@ class HTTPBGEReranker(BaseReranker):
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
         headers_extra: dict | None = None,
+        rerank_source: list[str] | None = None,
     ):
         if not reranker_url:
             raise ValueError("reranker_url must not be empty")
@@ -36,6 +43,7 @@ class HTTPBGEReranker(BaseReranker):
         self.model = model
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
+        self.concat_source = rerank_source
 
     def rerank(
         self,
@@ -47,11 +55,18 @@ class HTTPBGEReranker(BaseReranker):
         if not graph_results:
             return []
 
-        documents = [
-            (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
-            for item in graph_results
-        ]
-        documents = [d for d in documents if isinstance(d, str) and d]
+        documents = []
+        if self.concat_source:
+            documents = concat_original_source(graph_results, self.concat_source)
+        else:
+            documents = [
+                (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
+                for item in graph_results
+            ]
+            documents = [d for d in documents if isinstance(d, str) and d]
+
+        logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
+
         if not documents:
             return []
 
@@ -95,5 +110,5 @@ class HTTPBGEReranker(BaseReranker):
                 return [(item, 0.0) for item in graph_results[:top_k]]
 
         except Exception as e:
-            print(f"[HTTPBGEReranker] request failed: {e}")
+            logger.error(f"[HTTPBGEReranker] request failed: {e}")
             return [(item, 0.0) for item in graph_results[:top_k]]
