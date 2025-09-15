@@ -1,5 +1,6 @@
 """Defines memory item types for textual memory."""
 
+import json
 import uuid
 
 from datetime import datetime
@@ -8,11 +9,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+ALLOWED_ROLES = {"user", "assistant", "system"}
+
+
 class SourceMessage(BaseModel):
-    role: Literal["user", "assistant", "system"]
+    type: str | None = "chat"
+    role: Literal["user", "assistant", "system"] | None = None
     chat_time: str | None = None
     message_id: str | None = None
-    content: str
+    content: str | None = None
+    doc_path: str | None = None
+
+    model_config = ConfigDict(extra="allow")
 
 
 class TextualMemoryMetadata(BaseModel):
@@ -101,15 +109,28 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         for item in v:
             if isinstance(item, SourceMessage):
                 out.append(item)
+
             elif isinstance(item, dict):
-                # check required field
-                out.append(SourceMessage(**item))
+                d = dict(item)
+                if d.get("type") is None:
+                    d["type"] = "chat" if d.get("role") in ALLOWED_ROLES else "doc"
+                out.append(SourceMessage(**d))
+
             elif isinstance(item, str):
-                # pure text
-                out.append(SourceMessage(role="user", content=item))
+                try:
+                    parsed = json.loads(item)
+                except Exception:
+                    parsed = None
+
+                if isinstance(parsed, dict):
+                    if parsed.get("type") is None:
+                        parsed["type"] = "chat" if parsed.get("role") in ALLOWED_ROLES else "doc"
+                    out.append(SourceMessage(**parsed))
+                else:
+                    out.append(SourceMessage(type="doc", content=item))
+
             else:
-                # default
-                out.append(SourceMessage(role="system", content=str(item)))
+                out.append(SourceMessage(type="doc", content=str(item)))
         return out
 
     def __str__(self) -> str:
