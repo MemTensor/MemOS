@@ -16,6 +16,9 @@ services:
     environment:
       - PYTHONPATH=/app/src
       - HF_ENDPOINT=https://hf-mirror.com
+      - QDRANT_HOST=qdrant-docker
+      - QDRANT_PORT=6333
+      - NEO4J_URI=bolt://neo4j-docker:7687
     volumes:
       - ../src:/app/src
       - .:/app/docker
@@ -29,7 +32,7 @@ services:
       - "7474:7474"   # HTTP
       - "7687:7687"   # Bolt
     healthcheck:
-      test: wget http://localhost:7687 || exit 1
+      test: wget http://localhost:7474 || exit 1
       interval: 1s
       timeout: 10s
       retries: 20
