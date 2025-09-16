@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import re
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 import requests
 
@@ -23,6 +24,28 @@ if TYPE_CHECKING:
 # before sending text to the reranker. This keeps inputs clean and
 # avoids misleading the model with bracketed prefixes.
 _TAG1 = re.compile(r"^\s*\[[^\]]*\]\s*")
+DEFAULT_BOOST_WEIGHTS = {"user_id": 0.5, "tags": 0.2, "session_id": 0.3}
+
+
+def _value_matches(item_value: Any, wanted: Any) -> bool:
+    """
+    Generic matching:
+    - if item_value is list/tuple/set: check membership (any match if wanted is iterable)
+    - else: equality (any match if wanted is iterable)
+    """
+
+    def _iterable(x):
+        # exclude strings from "iterable"
+        return isinstance(x, Iterable) and not isinstance(x, str | bytes)
+
+    if _iterable(item_value):
+        if _iterable(wanted):
+            return any(w in item_value for w in wanted)
+        return wanted in item_value
+    else:
+        if _iterable(wanted):
+            return any(item_value == w for w in wanted)
+        return item_value == wanted
 
 
 class HTTPBGEReranker(BaseReranker):
@@ -58,6 +81,9 @@ class HTTPBGEReranker(BaseReranker):
         timeout: int = 10,
         headers_extra: dict | None = None,
         rerank_source: list[str] | None = None,
+        boost_weights: dict[str, float] | None = None,
+        boost_default: float = 0.0,
+        warn_unknown_filter_keys: bool = True,
         **kwargs,
     ):
         """
@@ -82,6 +108,15 @@ class HTTPBGEReranker(BaseReranker):
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
         self.concat_source = rerank_source
+
+        self.boost_weights = (
+            DEFAULT_BOOST_WEIGHTS.copy()
+            if boost_weights is None
+            else {k: float(v) for k, v in boost_weights.items()}
+        )
+        self.boost_default = float(boost_default)
+        self.warn_unknown_filter_keys = bool(warn_unknown_filter_keys)
+        self._warned_missing_keys: set[str] = set()
 
     def rerank(
         self,
@@ -117,7 +152,6 @@ class HTTPBGEReranker(BaseReranker):
         # Build a mapping from "payload docs index" -> "original graph_results index"
         # Only include items that have a non-empty string memory. This ensures that
         # any index returned by the server can be mapped back correctly.
-        documents = []
         if self.concat_source:
             documents = concat_original_source(graph_results, self.concat_source)
         else:
@@ -155,8 +189,11 @@ class HTTPBGEReranker(BaseReranker):
                     # The returned index refers to 'documents' (i.e., our 'pairs' order),
                     # so we must map it back to the original graph_results index.
                     if isinstance(idx, int) and 0 <= idx < len(graph_results):
-                        score = float(r.get("relevance_score", r.get("score", 0.0)))
-                        scored_items.append((graph_results[idx], score))
+                        raw_score = float(r.get("relevance_score", r.get("score", 0.0)))
+                        item = graph_results[idx]
+                        # generic boost
+                        score = self._apply_boost_generic(item, raw_score, search_filter)
+                        scored_items.append((item, score))
 
                 scored_items.sort(key=lambda x: x[1], reverse=True)
                 return scored_items[: min(top_k, len(scored_items))]
@@ -172,8 +209,11 @@ class HTTPBGEReranker(BaseReranker):
                 elif len(score_list) > len(graph_results):
                     score_list = score_list[: len(graph_results)]
 
-                # Map back to original items using 'pairs'
-                scored_items = list(zip(graph_results, score_list, strict=False))
+                scored_items = []
+                for item, raw_score in zip(graph_results, score_list, strict=False):
+                    score = self._apply_boost_generic(item, raw_score, search_filter)
+                    scored_items.append((item, score))
+
                 scored_items.sort(key=lambda x: x[1], reverse=True)
                 return scored_items[: min(top_k, len(scored_items))]
 
@@ -187,3 +227,86 @@ class HTTPBGEReranker(BaseReranker):
             # Degrade gracefully by returning first top_k valid docs with 0.0 score.
             logger.error(f"[HTTPBGEReranker] request failed: {e}")
             return [(item, 0.0) for item in graph_results[:top_k]]
+
+    def _get_attr_or_key(self, obj: Any, key: str) -> Any:
+        """
+        Resolve `key` on `obj` with one-level fallback into `obj.metadata`.
+
+        Priority:
+          1) obj.<key>
+          2) obj[key]
+          3) obj.metadata.<key>
+          4) obj.metadata[key]
+        """
+        if obj is None:
+            return None
+
+        # support input like "metadata.user_id"
+        if "." in key:
+            head, tail = key.split(".", 1)
+            base = self._get_attr_or_key(obj, head)
+            return self._get_attr_or_key(base, tail)
+
+        def _resolve(o: Any, k: str):
+            if o is None:
+                return None
+            v = getattr(o, k, None)
+            if v is not None:
+                return v
+            if hasattr(o, "get"):
+                try:
+                    return o.get(k)
+                except Exception:
+                    return None
+            return None
+
+        # 1) find in obj
+        v = _resolve(obj, key)
+        if v is not None:
+            return v
+
+        # 2) find in obj.metadata
+        meta = _resolve(obj, "metadata")
+        if meta is not None:
+            return _resolve(meta, key)
+
+        return None
+
+    def _apply_boost_generic(
+        self,
+        item: TextualMemoryItem,
+        base_score: float,
+        search_filter: dict | None,
+    ) -> float:
+        """
+        Multiply base_score by (1 + weight) for each matching key in search_filter.
+        - key resolution: self._get_attr_or_key(item, key)
+        - weight = boost_weights.get(key, self.boost_default)
+        - unknown key -> one-time warning
+        """
+        if not search_filter:
+            return base_score
+
+        score = float(base_score)
+
+        for key, wanted in search_filter.items():
+            # _get_attr_or_key automatically find key in item and
+            # item.metadata ("metadata.user_id" supported)
+            resolved = self._get_attr_or_key(item, key)
+
+            if resolved is None:
+                if self.warn_unknown_filter_keys and key not in self._warned_missing_keys:
+                    logger.warning(
+                        "[HTTPBGEReranker] search_filter key '%s' not found on TextualMemoryItem or metadata",
+                        key,
+                    )
+                    self._warned_missing_keys.add(key)
+                continue
+
+            if _value_matches(resolved, wanted):
+                w = float(self.boost_weights.get(key, self.boost_default))
+                if w != 0.0:
+                    score *= 1.0 + w
+                    score = min(max(0.0, score), 1.0)
+
+        return score
