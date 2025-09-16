@@ -12,7 +12,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import SourceMessage, TextualMemoryItem
 
 
 logger = get_logger(__name__)
@@ -227,7 +227,7 @@ class BochaAISearchRetriever:
             )
             read_item_i.metadata.source = "web"
             read_item_i.metadata.memory_type = "OuterMemory"
-            read_item_i.metadata.sources = [url] if url else []
+            read_item_i.metadata.sources = [SourceMessage(type="web", doc_path=url)] if url else []
             read_item_i.metadata.visibility = "public"
             memory_items.append(read_item_i)
         return memory_items
