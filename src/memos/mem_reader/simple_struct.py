@@ -13,6 +13,7 @@ from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.configs.parser import ParserConfigFactory
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
@@ -74,7 +75,6 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
     # TextualMemoryItem
     tags = chunk_res["tags"] if isinstance(chunk_res.get("tags"), list) else []
     key = chunk_res.get("key", None)
-
     node_i = TextualMemoryItem(
         memory=value,
         metadata=TreeNodeTextualMemoryMetadata(
@@ -86,7 +86,7 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
             key=key,
             embedding=embedding,
             usage=[],
-            sources=[f"{scene_file}_{idx}"],
+            sources=[{"type": "doc", "doc_path": f"{scene_file}_{idx}"}],
             background="",
             confidence=0.99,
             type="fact",
@@ -111,11 +111,19 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     def _process_chat_data(self, scene_data_info, info):
-        lang = detect_lang("\n".join(scene_data_info))
+        mem_list = []
+        for item in scene_data_info:
+            if "chat_time" in item:
+                mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
+                mem_list.append(mem)
+            else:
+                mem = item["role"] + ":" + item["content"]
+                mem_list.append(mem)
+        lang = detect_lang("\n".join(mem_list))
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
 
-        prompt = template.replace("${conversation}", "\n".join(scene_data_info))
+        prompt = template.replace("${conversation}", "\n".join(mem_list))
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
 
@@ -126,14 +134,21 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
+            memory_type = (
+                memory_i_raw.get("memory_type", "LongTermMemory")
+                .replace("长期记忆", "LongTermMemory")
+                .replace("用户记忆", "UserMemory")
+            )
+
+            if memory_type not in ["LongTermMemory", "UserMemory"]:
+                memory_type = "LongTermMemory"
+
             node_i = TextualMemoryItem(
                 memory=memory_i_raw.get("value", ""),
                 metadata=TreeNodeTextualMemoryMetadata(
                     user_id=info.get("user_id"),
                     session_id=info.get("session_id"),
-                    memory_type=memory_i_raw.get("memory_type", "")
-                    .replace("长期记忆", "LongTermMemory")
-                    .replace("用户记忆", "UserMemory"),
+                    memory_type=memory_type,
                     status="activated",
                     tags=memory_i_raw.get("tags", [])
                     if type(memory_i_raw.get("tags", [])) is list
@@ -200,8 +215,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         else:
             processing_func = self._process_doc_data
 
-        # Process Q&A pairs concurrently
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        # Process Q&A pairs concurrently with context propagation
+        with ContextThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(processing_func, scene_data_info, info)
                 for scene_data_info in list_scene_data_info
@@ -239,11 +254,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 for item in items:
                     # Convert dictionary to string
                     if "chat_time" in item:
-                        mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
-                        result.append(mem)
+                        result.append(item)
                     else:
-                        mem = item["role"] + ":" + item["content"]
-                        result.append(mem)
+                        result.append(item)
                     if len(result) >= 10:
                         results.append(result)
                         context = copy.deepcopy(result[-2:])
@@ -255,16 +268,16 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 try:
                     if os.path.exists(item):
                         parsed_text = parser.parse(item)
-                        results.append({"file": "pure_text", "text": parsed_text})
+                        results.append({"file": item, "text": parsed_text})
                     else:
                         parsed_text = item
-                        results.append({"file": item, "text": parsed_text})
+                        results.append({"file": "pure_text", "text": parsed_text})
                 except Exception as e:
                     print(f"Error parsing file {item}: {e!s}")
 
         return results
 
-    def _process_doc_data(self, scene_data_info, info):
+    def _process_doc_data(self, scene_data_info, info, **kwargs):
         chunks = self.chunker.chunk(scene_data_info["text"])
         messages = []
         for chunk in chunks:
@@ -277,7 +290,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         doc_nodes = []
         scene_file = scene_data_info["file"]
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        with ContextThreadPoolExecutor(max_workers=50) as executor:
             futures = {
                 executor.submit(
                     _build_node,

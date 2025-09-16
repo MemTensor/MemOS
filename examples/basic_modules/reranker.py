@@ -88,6 +88,20 @@ def main():
     for it, emb in zip(items, doc_embeddings, strict=False):
         it.metadata.embedding = emb
 
+    items[0].metadata.user_id = "u_123"
+    items[0].metadata.session_id = "s_abc"
+    items[0].metadata.tags = [*items[0].metadata.tags, "paris"]
+
+    items[1].metadata.user_id = "u_124"
+    items[1].metadata.session_id = "s_xyz"
+    items[1].metadata.tags = [*items[1].metadata.tags, "germany"]
+    items[2].metadata.user_id = "u_125"
+    items[2].metadata.session_id = "s_ss3"
+    items[3].metadata.user_id = "u_126"
+    items[3].metadata.session_id = "s_ss4"
+    items[4].metadata.user_id = "u_127"
+    items[4].metadata.session_id = "s_ss5"
+
     # -------------------------------
     # 4) Rerank with cosine_local (uses your real embeddings)
     # -------------------------------
@@ -124,7 +138,7 @@ def main():
                     "url": bge_url,
                     "model": os.getenv("BGE_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": int(os.getenv("BGE_RERANKER_TIMEOUT", "10")),
-                    # "headers_extra": {"Authorization": f"Bearer {os.getenv('BGE_RERANKER_TOKEN')}"}
+                    "boost_weights": {"user_id": 0.5, "tags": 0.2},
                 },
             }
         )
@@ -136,6 +150,20 @@ def main():
             top_k=10,
         )
         show_ranked("HTTP BGE Reranker (OpenAI-style API)", ranked_http, top_n=5)
+
+        # --- NEW: search_filter with rerank ---
+        # hit rule:
+        # - user_id == "u_123" → score * (1 + 0.5) = 1.5
+        # - tags including "paris" → score * (1 + 0.2) = 1.2
+        # - project_id(not exist) → warning unrelated with score
+        search_filter = {"session_id": "germany", "tags": "germany", "project_id": "demo-p1"}
+        ranked_http_boosted = http_reranker.rerank(
+            query=query,
+            graph_results=items,
+            top_k=10,
+            search_filter=search_filter,
+        )
+        show_ranked("HTTP BGE Reranker (with search_filter boosts)", ranked_http_boosted, top_n=5)
     else:
         print("\n[Info] Skipped HTTP BGE scenario because BGE_RERANKER_URL is not set.")
 

@@ -122,6 +122,7 @@ class TreeTextMemory(BaseTextMemory):
         memory_type: str = "All",
         manual_close_internet: bool = False,
         moscube: bool = False,
+        search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -136,6 +137,12 @@ class TreeTextMemory(BaseTextMemory):
             memory_type (str): Type restriction for search.
             ['All', 'WorkingMemory', 'LongTermMemory', 'UserMemory']
             manual_close_internet (bool): If True, the internet retriever will be closed by this search, it high priority than config.
+            moscube (bool): whether you use moscube to answer questions
+            search_filter (dict, optional): Optional metadata filters for search results.
+                - Keys correspond to memory metadata fields (e.g., "user_id", "session_id").
+                - Values are exact-match conditions.
+                Example: {"user_id": "123", "session_id": "abc"}
+                If None, no additional filtering is applied.
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
@@ -160,7 +167,7 @@ class TreeTextMemory(BaseTextMemory):
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
             )
-        return searcher.search(query, top_k, info, mode, memory_type)
+        return searcher.search(query, top_k, info, mode, memory_type, search_filter)
 
     def get_relevant_subgraph(
         self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"
