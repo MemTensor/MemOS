@@ -27,8 +27,9 @@ class MessageDict(TypedDict, total=False):
 
     role: MessageRole
     content: str
-    chat_time: str  # Optional timestamp for the message, format is not restricted, it can be any vague or precise time string.
-    message_id: str  # Optional unique identifier for the message
+    chat_time: str | None  # Optional timestamp for the message, format is not
+    # restricted, it can be any vague or precise time string.
+    message_id: str | None  # Optional unique identifier for the message
 
 
 # Message collections
