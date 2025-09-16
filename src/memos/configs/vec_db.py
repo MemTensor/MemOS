@@ -44,6 +44,7 @@ class MilvusVecDBConfig(BaseVecDBConfig):
 
     uri: str = Field(..., description="URI for Milvus connection")
     collection_name: list[str] = Field(..., description="Name(s) of the collection(s)")
+    max_length: int = Field(default=65535, description="Maximum length for string fields (varChar type)")
 
 class VectorDBConfigFactory(BaseConfig):
     """Factory class for creating vector database configurations."""

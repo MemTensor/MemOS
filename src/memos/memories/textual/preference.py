@@ -15,7 +15,8 @@ from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem
 from memos.types import ChatHistory, MessageList
 from memos.llms.base import BaseLLM
-from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory
+from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory, MilvusVecDB
+from memos.vec_dbs.item import VecDBItem
 from memos.memories.textual.prefer_text_memory.factory import BuilderFactory, RetrieverFactory, UpdaterFactory, AssemblerFactory
 
 
@@ -28,7 +29,7 @@ class PreferenceTextMemory(BaseTextMemory):
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
         )
-        self.vector_db: QdrantVecDB = VecDBFactory.from_config(config.vector_db)
+        self.vector_db: MilvusVecDB | QdrantVecDB = VecDBFactory.from_config(config.vector_db)
         self.embedder: OllamaEmbedder | ArkEmbedder | SenTranEmbedder | UniversalAPIEmbedder = \
             EmbedderFactory.from_config(config.embedder)
 
@@ -57,7 +58,7 @@ class PreferenceTextMemory(BaseTextMemory):
             vector_db=self.vector_db
         )
 
-    def build_memory(self, history: ChatHistory) -> None:
+    def build_preferences(self, history: ChatHistory) -> None:
         """Build memory from the original dialogs. (Initialize memory)
         
         Args:
@@ -68,9 +69,21 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.builder.build(history)
 
-    def update_memory(self, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
-        """Update a memory by new memory."""
-        self.updater.update(new_memory)
+    def update_preferences(self, new_dialog: MessageList) -> None:
+        """Update a memory by new dialog.
+        Args:
+            new_dialog (MessageList): The new dialog to update.
+        """
+        self.updater.update(new_dialog)
+
+    def search_preferences(self, query: str, top_k: int, info=None) -> list[TextualMemoryItem]:
+        """Search for preferences based on a query.
+        Args:
+            query (str): The query to search for.
+            top_k (int): The number of top results to return.
+            info (dict): Leave a record of memory consumption.
+        """
+        return self.retriever.retrieve(query, top_k, info)
     
     def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -94,6 +107,24 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.assembler.assemble(query, memories)
 
+    def load(self, dir: str) -> None:
+        """Load memories from the specified directory.
+        Args:
+            dir (str): The directory containing the memory files.
+        """
+        # For preference memory, we don't need to load from files
+        # as the data is stored in the vector database
+        pass
+
+    def dump(self, dir: str) -> None:
+        """Dump memories to the specified directory.
+        Args:
+            dir (str): The directory where the memory files will be saved.
+        """
+        # For preference memory, we don't need to dump to files
+        # as the data is stored in the vector database
+        pass
+
     def extract(self, messages: MessageList) -> list[TextualMemoryItem]:
         """Extract memories based on the messages.
         Args:
@@ -109,7 +140,27 @@ class PreferenceTextMemory(BaseTextMemory):
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
         """
-        pass
+        if self.config.backend == "naive":
+            pass
+        else:
+            memory_items = [TextualMemoryItem(**m) if isinstance(m, dict) else m for m in memories]
+
+            # Memory encode
+            embed_memories = self.embedder.embed([m.memory for m in memory_items])
+
+            # Create vector db items
+            vec_db_items = []
+            for item, emb in zip(memory_items, embed_memories, strict=True):
+                vec_db_items.append(
+                    VecDBItem(
+                        id=item.id,
+                        payload=item.model_dump(),
+                        vector=emb,
+                    )
+                )
+
+            # Add to vector db
+            self.vector_db.add(vec_db_items)
     
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         """Update a memory by memory_id."""

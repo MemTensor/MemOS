@@ -106,9 +106,9 @@ Your task is to analyze all information in this cluster and extract three key co
 
 # Output Format:
 {
-  "cluster_name": "",
-  "cluster_description": "",
-  "cluster_preferences": ""
+  "topic_cluster_name": "",
+  "topic_cluster_description": "",
+  "topic_preferences": ""
 }
 
 # Notes:
@@ -125,8 +125,9 @@ Your task is to analyze all information in this cluster and extract three key co
 NAIVE_USER_PREFERENCE_EXTRACT_PROMPT = """
 You are an advanced information integration assistant. You will be given a user's preference list across different topic clusters, where each cluster contains:
 
-- cluster_name: The name of the topic cluster
-- cluster_preferences: Natural language description of preferences in that cluster
+- topic_cluster_name: The name of the topic cluster
+- topic_cluster_description: The description of the topic cluster
+- topic_preferences: Natural language description of preferences in that cluster
 
 Your task is to extract the user's **highest-level common preferences** by focusing on these three key dimensions:
 
@@ -156,7 +157,7 @@ Your task is to extract the user's **highest-level common preferences** by focus
 
 # Output Format:
 {
-  "user_overall_preferences": "Write the synthesized highest-level common preferences here, covering content preferences, interaction style, and value orientations"
+  "user_preferences": "Write the synthesized highest-level common preferences here, covering content preferences, interaction style, and value orientations"
 }
 
 # Notes:
@@ -197,4 +198,69 @@ Please extract the main topic name and topic description from this conversation 
 
 # Conversation Content
 {qa_pair}
+"""
+
+
+NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT = """
+You are a content comparison expert. Now you are given old and new information, each containing a question, answer topic name and topic description.
+Please judge whether these two information express the **same question or core content**, regardless of expression differences, details or example differences. The judgment criteria are as follows:
+
+- Core content is consistent, that is, the essence of the question, goal or core concept to be solved is the same, it counts as "same".
+- Different expressions, different examples, but the core meaning is consistent, also counts as "same".
+- If the question goals, concepts involved or solution ideas are different, it counts as "different".
+
+Please output JSON format:
+{
+  "is_same": true/false,
+  "reasoning": "Briefly explain the judgment basis, highlighting whether the core content is consistent"
+}
+
+**Old Information:**
+{old_information}
+
+**New Information:**
+{new_information}
+"""
+
+
+NAIVE_PREFERENCE_INTEGRATION_PROMPT = """
+You are a preference integration expert. Your task is to integrate preference constraints from different sources and generate a final prompt that can be directly input to an LLM. Please note the following information sources and their priority levels (from high to low):
+
+Sources:
+1. Current query preferences: Constraints explicitly stated in the current user question
+2. Related dialogue preferences: Preference references from Q&A pairs related to the current query
+3. Related topic preferences: Preference references from topics related to the current query
+4. User preferences: Common preference references from the user's historical conversations
+
+Priority: Current query preferences > Related dialogue preferences > Related topic preferences > User preferences > Implicit preferences
+
+Requirements:
+- If conflicts exist between preferences, strictly follow the priority order, with higher priority preferences overriding lower priority ones.
+- Generate a comprehensive prompt that includes all integrated preferences and constraints.
+- The final prompt should be ready to be input directly to an LLM for answering the user's query.
+- Keep the integrated preferences specific and actionable.
+- Ensure the prompt is clear, structured, and contains all necessary context and constraints.
+
+Please generate the final integrated prompt based on the input, strictly resolve conflicts by priority, and output in JSON format as follows:
+{{
+  "final_prompt": "Complete prompt ready for LLM input, including query, context, and all integrated preferences",
+  "conflict_handling": ["Conflict resolution explanation 1", "Conflict resolution explanation 2", "..."],
+  "preference_summary": "Summary of all integrated preferences and constraints"
+}}
+
+# Current query
+{query_preference}
+
+# Related dialogue preferences
+{explicit_preference}
+
+# Implicit preferences
+{implicit_preference}
+
+# Related topic preferences
+{topic_preference}
+
+# User preferences
+{user_preference}
+
 """

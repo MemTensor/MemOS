@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from datetime import datetime
+import uuid
 
 
 class BaseClusterer(ABC):
@@ -82,8 +83,8 @@ class HDBSCANClusterer(BaseClusterer):
             
             # Convert to cluster information
             cluster_info = []
-            for cluster_id, items_in_cluster in clusters.items():
-                if cluster_id == -1:  # Skip noise points
+            for cluster_label, items_in_cluster in clusters.items():
+                if cluster_label == -1:  # Skip noise points
                     continue
                 
                 # Calculate cluster center
@@ -95,7 +96,8 @@ class HDBSCANClusterer(BaseClusterer):
                 center_index = items_in_cluster[closest_idx]["index"]
                 
                 cluster_info.append({
-                    "cluster_id": cluster_id,
+                    "cluster_id": str(uuid.uuid4()),
+                    "cluster_label": cluster_label,
                     "center_index": center_index,
                     "center_vector": center_vector.tolist(),
                     "size": len(items_in_cluster),
@@ -108,7 +110,8 @@ class HDBSCANClusterer(BaseClusterer):
         except ImportError:
             # Fallback: create single cluster
             return [{
-                "cluster_id": 0,
+                "cluster_id": str(uuid.uuid4()),
+                "cluster_label": -1,
                 "center_index": 0,
                 "center_vector": vectors[0] if vectors else [],
                 "size": len(vectors),

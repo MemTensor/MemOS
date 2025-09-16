@@ -42,11 +42,27 @@ class MilvusVecDB(BaseVecDB):
                 dimension=self.config.vector_dimension,
                 metric_type=self._get_metric_type(),
                 id_type="string",  # Use string ID type, align with VecDBItem id type
+                max_length=self.config.max_length,  # Use max_length from config
             )
 
             logger.info(
                 f"Collection '{collection_name}' created with {self.config.vector_dimension} dimensions."
             )
+
+    def create_collection_by_name(self, collection_name: str) -> None:
+        """Create a new collection with specified parameters."""
+        if self.collection_exists(collection_name):
+            logger.warning(
+                f"Collection '{collection_name}' already exists. Skipping creation."
+            )
+            return
+        
+        self.client.create_collection(
+            collection_name=collection_name,
+            dimension=self.config.vector_dimension,
+            metric_type=self._get_metric_type(),
+            id_type="string",  # Use string ID type, align with VecDBItem id type
+        )
 
     def list_collections(self) -> list[str]:
         """List all collections."""
@@ -164,34 +180,46 @@ class MilvusVecDB(BaseVecDB):
 
     def get_by_filter(self, collection_name: str, filter: dict[str, Any], scroll_limit: int = 100) -> list[VecDBItem]:
         """
-        Retrieve all items that match the given filter criteria.
+        Retrieve all items that match the given filter criteria using query_iterator.
 
         Args:
             filter: Payload filters to match against stored items
-            scroll_limit: Maximum number of items to retrieve per scroll request
+            scroll_limit: Maximum number of items to retrieve per batch (batch_size)
 
         Returns:
             List of items including vectors and payload that match the filter
         """
         expr = self._dict_to_expr(filter) if filter else None
+        all_items = []
         
-        results = self.client.query(
+        # Use query_iterator for efficient pagination
+        iterator = self.client.query_iterator(
             collection_name=collection_name,
             filter=expr,
-            limit=scroll_limit,
+            batch_size=scroll_limit,
         )
+        
+        # Iterate through all batches
+        while True:
+            batch_results = iterator.next()
+            
+            if not batch_results:
+                break
+                
+            # Convert batch results to VecDBItem objects
+            for entity in batch_results:
+                payload = {k: v for k, v in entity.items() if k not in ["id", "vector"]}
+                all_items.append(VecDBItem(
+                    id=entity["id"],
+                    vector=entity.get("vector"),
+                    payload=payload,
+                ))
+        
+        # Close the iterator
+        iterator.close()
 
-        items = []
-        for entity in results:
-            payload = {k: v for k, v in entity.items() if k not in ["id", "vector"]}
-            items.append(VecDBItem(
-                id=entity["id"],
-                vector=entity.get("vector"),
-                payload=payload,
-            ))
-
-        logger.info(f"Milvus retrieve by filter completed with {len(items)} results.")
-        return items
+        logger.info(f"Milvus retrieve by filter completed with {len(all_items)} results.")
+        return all_items
 
     def get_all(self, collection_name: str, scroll_limit=100) -> list[VecDBItem]:
         """Retrieve all items in the vector database."""

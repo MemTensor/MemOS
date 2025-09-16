@@ -104,6 +104,62 @@ class SearchedTreeNodeTextualMemoryMetadata(TreeNodeTextualMemoryMetadata):
     )
 
 
+class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
+    """Metadata for preference memory item."""
+
+    preference_type: Literal["explicit_preference", "implicit_preference", "topic_preference", "user_preference"] = Field(
+        default="explicit_preference", description="Type of preference."
+    )
+    dialog_id: str | None = Field(
+        default=None, description="ID of the dialog."
+    )
+    dialog_msgs: list[str] | None = Field(
+        default=None, description="Messages of the dialog."
+    )
+    dialog_str: str | None = Field(
+        default=None, description="String of the dialog."
+    )
+    dialog_vector: list[float] | None = Field(
+        default=None, description="Vector of the dialog."
+    )
+    topic_name: str | None = Field(
+        default=None, description="Name of the topic."
+    )
+    topic_description: str | None = Field(
+        default=None, description="Description of the topic."
+    )
+    topic_vector: list[float] | None = Field(
+        default=None, description="Vector of the topic."
+    )
+    explicit_preference: str | None = Field(
+        default=None, description="Explicit preference."
+    )
+    center_dialog: str | None = Field(
+        default=None, description="String of the center dialog."
+    )
+    center_vector: list[float] | None = Field(
+        default=None, description="Vector of the center dialog."
+    )
+    created_at: str | None = Field(
+        default=None, description="Timestamp of the dialog."
+    )
+    implicit_preference: str | None = Field(
+        default=None, description="Implicit preference."
+    )
+    topic_cluster_name: str | None = Field(
+        default=None, description="Name of the topic cluster."
+    )
+    topic_cluster_description: str | None = Field(
+        default=None, description="Description of the topic cluster."
+    )
+    topic_preferences: str | None = Field(
+        default=None, description="Preferences of the topic."
+    )
+    user_preferences: str | None = Field(
+        default=None, description="Preferences of the user."
+    )
+
+
 class TextualMemoryItem(BaseModel):
     """Represents a single memory item in the textual memory.
 
@@ -117,6 +173,7 @@ class TextualMemoryItem(BaseModel):
         TextualMemoryMetadata
         | TreeNodeTextualMemoryMetadata
         | SearchedTreeNodeTextualMemoryMetadata
+        | PreferenceTextualMemoryMetadata
     ) = Field(default_factory=TextualMemoryMetadata)
 
     model_config = ConfigDict(extra="forbid")
