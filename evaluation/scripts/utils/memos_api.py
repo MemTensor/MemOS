@@ -1,5 +1,7 @@
 import json
 import os
+import traceback
+
 import requests
 from dotenv import load_dotenv
 
@@ -16,29 +18,44 @@ class MemOSAPI:
 
     def add(self, messages: list[dict], user_id: str | None = None, conv_id: str | None = None):
         """Create memories."""
+        retry = 0
+        while retry < 6:
+            try:
+                url = f"{self.base_url}/add/message"
+                payload = json.dumps({"messages": messages, "userId": user_id, "conversationId": conv_id})
+                response = requests.request("POST", url, data=payload, headers=self.headers)
+                return response.text
+            except Exception as e:
+                print(f'**********************\ncall memos api add failed {e} retry time {retry}')
+                # traceback.print_exc()
+                retry += 1
+        assert retry != 6, "add memory failed"
 
-        url = f"{self.base_url}/add/message"
-        payload = json.dumps({"messages": messages, "userId": user_id, "conversationId": conv_id})
-        response = requests.request("POST", url, data=payload, headers=self.headers)
-        return response.text
 
     def search(self, query: str, user_id: str | None = None, conv_id: str | None = '', top_k: int = 10):
         """Search memories."""
-        url = f"{self.base_url}/search/memory"
-        payload = json.dumps(
-            {
-                "query": query,
-                "userId": user_id,
-                "conversationId": conv_id,
-                "memoryLimitNumber": top_k
-            }
-        )
+        retry = 0
+        while retry < 6:
+            try:
+                url = f"{self.base_url}/search/memory"
+                payload = json.dumps(
+                    {
+                        "query": query,
+                        "userId": user_id,
+                        "conversationId": conv_id,
+                        "memoryLimitNumber": top_k
+                    }
+                )
 
-        response = requests.request("POST", url, data=payload, headers=self.headers)
-        if response.status_code != 200:
-            response.raise_for_status()
-        else:
-            return json.loads(response.text)["data"]
+                response = requests.request("POST", url, data=payload, headers=self.headers)
+                if response.status_code != 200:
+                    response.raise_for_status()
+                else:
+                    return json.loads(response.text)["data"]
+            except Exception as e:
+                print(f'**********************\ncall memos api search failed {e} retry time {retry}')
+                # traceback.print_exc()
+                retry += 1
 
 
 if __name__ == "__main__":
