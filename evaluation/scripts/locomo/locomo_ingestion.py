@@ -120,11 +120,11 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         for chat in session:
             data = chat.get("speaker") + ": " + chat.get("text")
             if chat.get("speaker") == metadata["speaker_a"]:
-                messages.append({"role": "user", "content": data, "chat_time": iso_date})
-                messages_reverse.append({"role": "assistant", "content": data, "chat_time": iso_date})
+                messages.append({"role": "user", "content": data, "chatTime": iso_date})
+                messages_reverse.append({"role": "assistant", "content": data, "chatTime": iso_date})
             elif chat.get("speaker") == metadata["speaker_b"]:
-                messages.append({"role": "assistant", "content": data, "chat_time": iso_date})
-                messages_reverse.append({"role": "user", "content": data, "chat_time": iso_date})
+                messages.append({"role": "assistant", "content": data, "chatTime": iso_date})
+                messages_reverse.append({"role": "user", "content": data, "chatTime": iso_date})
             else:
                 raise ValueError(f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}")
 
@@ -404,7 +404,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default='0905-test',
+        default='0905',
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
