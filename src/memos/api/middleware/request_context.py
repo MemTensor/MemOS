@@ -2,18 +2,18 @@
 Request context middleware for automatic trace_id injection.
 """
 
-import logging
-
 from collections.abc import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+import memos.log
+
 from memos.context.context import RequestContext, generate_trace_id, set_request_context
 
 
-logger = logging.getLogger(__name__)
+logger = memos.log.get_logger(__name__)
 
 
 def extract_trace_id_from_headers(request: Request) -> str | None:
