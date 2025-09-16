@@ -213,7 +213,6 @@ class HTTPBGEReranker(BaseReranker):
                 for item, raw_score in zip(graph_results, score_list, strict=False):
                     score = self._apply_boost_generic(item, raw_score, search_filter)
                     scored_items.append((item, score))
-
                 scored_items.sort(key=lambda x: x[1], reverse=True)
                 return scored_items[: min(top_k, len(scored_items))]
 
