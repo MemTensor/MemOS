@@ -255,6 +255,7 @@ class Searcher:
             graph_results=items,
             top_k=top_k,
             parsed_goal=parsed_goal,
+            search_filter=search_filter,
         )
 
     # --- Path B
@@ -294,6 +295,7 @@ class Searcher:
             graph_results=results,
             top_k=top_k,
             parsed_goal=parsed_goal,
+            search_filter=search_filter,
         )
 
     @timed
