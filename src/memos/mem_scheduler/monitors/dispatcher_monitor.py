@@ -1,11 +1,11 @@
 import threading
 import time
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from time import perf_counter
 
 from memos.configs.mem_scheduler import BaseSchedulerConfig
+from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
@@ -49,7 +49,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
     def register_pool(
         self,
         name: str,
-        executor: ThreadPoolExecutor,
+        executor: ContextThreadPoolExecutor,
         max_workers: int,
         restart_on_failure: bool = True,
     ) -> bool:
@@ -243,7 +243,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             self.dispatcher.shutdown()
 
             # Create new executor with same parameters
-            new_executor = ThreadPoolExecutor(
+            new_executor = ContextThreadPoolExecutor(
                 max_workers=pool_info["max_workers"],
                 thread_name_prefix=self.dispatcher.thread_name_prefix,  # pylint: disable=protected-access
             )

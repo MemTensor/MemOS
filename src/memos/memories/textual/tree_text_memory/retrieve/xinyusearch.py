@@ -3,11 +3,12 @@
 import json
 import uuid
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime
 
 import requests
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
@@ -150,7 +151,7 @@ class XinyuSearchRetriever:
         # Convert to TextualMemoryItem format
         memory_items: list[TextualMemoryItem] = []
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
                 executor.submit(self._process_result, result, query, parsed_goal, info)
                 for result in search_results

@@ -29,6 +29,7 @@ class RerankerFactory:
                 model=c.get("model", "bge-reranker-v2-m3"),
                 timeout=int(c.get("timeout", 10)),
                 headers_extra=c.get("headers_extra"),
+                rerank_source=c.get("rerank_source"),
             )
 
         if backend in {"cosine_local", "cosine"}:
