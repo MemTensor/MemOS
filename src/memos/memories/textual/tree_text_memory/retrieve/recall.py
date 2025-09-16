@@ -217,7 +217,9 @@ class GraphMemoryRetriever:
         all_hits = []
         # Path A: without filter
         with ContextThreadPoolExecutor() as executor:
-            futures = [ex.submit(search_single, vec, None) for vec in query_embedding[:max_num]]
+            futures = [
+                executor.submit(search_single, vec, None) for vec in query_embedding[:max_num]
+            ]
             for f in concurrent.futures.as_completed(futures):
                 all_hits.extend(f.result() or [])
 
