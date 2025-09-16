@@ -3,6 +3,7 @@ import sys
 import uuid
 
 
+
 sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 )
@@ -23,7 +24,7 @@ import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time, sleep
-
+from utils.memos_api import MemOSAPI
 import pandas as pd
 
 from dotenv import load_dotenv
@@ -218,24 +219,22 @@ def memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client=N
 
 
 def memos_api_search(
-    client, query, conv_id, speaker_a, speaker_b, top_k, version, reversed_client=None
+    client, query, conv_id, speaker_a, speaker_b, top_k, version
 ):
     start = time()
-    speaker_a_user_id = conv_id + "_speaker_a"
     search_a_results = client.search(
-        query=query, user_id=f"{speaker_a_user_id.replace('_', '')}{version}", top_k=top_k
+        query=query, user_id=f"{conv_id}_speaker_a_{version}", top_k=top_k
     )
     speaker_a_context = ""
-    for item in search_a_results:
-        speaker_a_context += f"{item}\n"
+    for item in search_a_results['memoryDetailList']:
+        speaker_a_context += f"{item['memoryValue']}\n"
 
-    speaker_b_user_id = conv_id + "_speaker_b"
-    search_b_results = reversed_client.search(
-        query=query, user_id=f"{speaker_b_user_id.replace('_', '')}{version}", top_k=top_k
+    search_b_results = client.search(
+        query=query, user_id=f"{conv_id}_speaker_b_{version}", top_k=top_k
     )
     speaker_b_context = ""
-    for item in search_b_results:
-        speaker_b_context += f"{item}\n"
+    for item in search_b_results['memoryDetailList']:
+        speaker_b_context += f"{item['memoryValue']}\n"
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,
@@ -402,7 +401,7 @@ def search_query(client, query, metadata, frame, version, reversed_client=None, 
         )
     elif frame == "memos-api":
         context, duration_ms = memos_api_search(
-            client, query, conv_id, speaker_a, speaker_b, top_k, version, reversed_client
+            client, query, conv_id, speaker_a, speaker_b, top_k, version
         )
     elif frame == "memobase":
         speaker_a_user_id = conv_id + "_speaker_a"
@@ -455,12 +454,7 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         client = get_client(frame, speaker_a_user_id, version, top_k=top_k)
         reversed_client = get_client(frame, speaker_b_user_id, version, top_k=top_k)
     elif frame == "memos-api":
-        speaker_a_user_id = conv_id + "_speaker_a"
-        speaker_b_user_id = conv_id + "_speaker_b"
-        client = memos_client(mode="api")
-        reversed_client = memos_client(mode="api")
-        client.user_register(user_id=f"{speaker_a_user_id.replace('_', '')}{version}")
-        reversed_client.user_register(user_id=f"{speaker_b_user_id.replace('_', '')}{version}")
+        client = MemOSAPI()
     elif frame == "memobase":
         client = memobase_client()
     else:
@@ -529,12 +523,12 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
-        default='memobase'
+        default='memos-api'
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="0905",
+        default="0916-test",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
