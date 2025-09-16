@@ -227,7 +227,7 @@ class BochaAISearchRetriever:
             )
             read_item_i.metadata.source = "web"
             read_item_i.metadata.memory_type = "OuterMemory"
-            read_item_i.metadata.sources = [SourceMessage(type="web", doc_path=url)] if url else []
+            read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
             read_item_i.metadata.visibility = "public"
             memory_items.append(read_item_i)
         return memory_items
