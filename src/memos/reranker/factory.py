@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from .cosine_local import CosineLocalReranker
 from .http_bge import HTTPBGEReranker
 from .noop import NoopReranker
+from .http_bge_strategy import HTTPBGEWithStrategyReranker
 
 
 if TYPE_CHECKING:
@@ -40,5 +41,13 @@ class RerankerFactory:
 
         if backend in {"noop", "none", "disabled"}:
             return NoopReranker()
+
+        if backend in {"http_bge_strategy", "bge_strategy"}:
+            return HTTPBGEWithStrategyReranker(
+                reranker_url=c.get("url") or c.get("endpoint") or c.get("reranker_url"),
+                model=c.get("model", "bge-reranker-v2-m3"),
+                timeout=int(c.get("timeout", 10)),
+                headers_extra=c.get("headers_extra")
+            )
 
         raise ValueError(f"Unknown reranker backend: {cfg.backend}")
