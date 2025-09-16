@@ -1,105 +1,21 @@
-import asyncio
-import os
-import sys
-
-
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-)
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ),
-        "evaluation",
-        "scripts",
-    ),
-)
-
 import argparse
+import asyncio
 import concurrent.futures
 import json
+import os
 import time
 from datetime import datetime, timezone
+
 import pandas as pd
 from dotenv import load_dotenv
-from utils.client import memobase_client
-from utils.memos_api import MemOSAPI
-from utils.memobase_utils import memobase_add_memory
+from mem0 import MemoryClient
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-
-custom_instructions = """
-Generate personal memories that follow these guidelines:
-
-1. Each memory should be self-contained with complete context, including:
-   - The person's name, do not use "user" while creating memories
-   - Personal details (career aspirations, hobbies, life circumstances)
-   - Emotional states and reactions
-   - Ongoing journeys or future plans
-   - Specific dates when events occurred
-
-2. Include meaningful personal narratives focusing on:
-   - Identity and self-acceptance journeys
-   - Family planning and parenting
-   - Creative outlets and hobbies
-   - Mental health and self-care activities
-   - Career aspirations and education goals
-   - Important life events and milestones
-
-3. Make each memory rich with specific details rather than general statements
-   - Include timeframes (exact dates when possible)
-   - Name specific activities (e.g., "charity race for mental health" rather than just "exercise")
-   - Include emotional context and personal growth elements
-
-4. Extract memories only from user messages, not incorporating assistant responses
-
-5. Format each memory as a paragraph with a clear narrative structure that captures the person's experience, challenges, and aspirations
-"""
-
-
-def get_client(frame: str, user_id: str | None = None, version: str = "default"):
-    if frame == "mem0" or frame == "mem0_graph":
-        from mem0 import MemoryClient
-        mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
-        mem0.update_project(custom_instructions=custom_instructions)
-        return mem0
-
-    elif frame == "memos":
-        mos_config_path = "configs/mos_memos_config.json"
-        with open(mos_config_path) as f:
-            mos_config_data = json.load(f)
-        mos_config_data["top_k"] = 20
-        mos_config = MOSConfig(**mos_config_data)
-        mos = MOS(mos_config)
-        mos.create_user(user_id=user_id)
-
-        mem_cube_config_path = "configs/mem_cube_config.json"
-        with open(mem_cube_config_path) as f:
-            mem_cube_config_data = json.load(f)
-        mem_cube_config_data["user_id"] = user_id
-        mem_cube_config_data["cube_id"] = user_id
-        mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["db_name"] = (
-            f"{user_id.replace('_', '')}{version}"
-        )
-        mem_cube_config = GeneralMemCubeConfig.model_validate(mem_cube_config_data)
-        mem_cube = GeneralMemCube(mem_cube_config)
-
-        storage_path = f"results/locomo/{frame}-{version}/storages/{user_id}"
-        try:
-            mem_cube.dump(storage_path)
-        except Exception as e:
-            print(f"dumping memory cube: {e!s} already exists, will use it")
-
-        mos.register_mem_cube(
-            mem_cube_name_or_path=storage_path,
-            mem_cube_id=user_id,
-            user_id=user_id,
-        )
-        return mos
+from utils.client import memobase_client
+from utils.memobase_utils import memobase_add_memory
+from utils.memos_api import MemOSAPI
 
 
 def ingest_session(client, session, frame, version, metadata, revised_client=None):
@@ -131,8 +47,8 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
         if frame == "memos-api":
-            client.add(messages=messages, user_id=f"{speaker_a_user_id}_{version}", conv_id=f"{conv_id}_{metadata['session_key']}")
-            client.add(messages=messages_reverse, user_id=f"{speaker_b_user_id}_{version}", conv_id=f"{conv_id}_{metadata['session_key']}")
+            client.add(messages=messages, user_id=f"{speaker_a_user_id}{version}", conv_id=conv_id)
+            client.add(messages=messages_reverse, user_id=f"{speaker_b_user_id}{version}", conv_id=conv_id)
         elif frame == "memos":
             client.add(messages=messages,user_id=speaker_a_user_id,)
             revised_client.add(messages=messages_reverse,user_id=speaker_b_user_id,)
@@ -243,6 +159,7 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         memobase_add_memory(user_a, messages)
         memobase_add_memory(user_b, messages_reverse)
 
+
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
 
@@ -258,16 +175,10 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     revised_client = None
     if frame == "mem0" or frame == "mem0_graph":
-        client = get_client(frame)
+        client = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         client.delete_all(user_id=f"locomo_exp_user_{conv_idx}")
         client.delete_all(user_id=f"{conversation.get('speaker_a')}_{conv_idx}")
         client.delete_all(user_id=f"{conversation.get('speaker_b')}_{conv_idx}")
-    elif frame == "memos":
-        conv_id = "locomo_exp_user_" + str(conv_idx)
-        speaker_a_user_id = conv_id + "_speaker_a"
-        speaker_b_user_id = conv_id + "_speaker_b"
-        client = get_client("memos", speaker_a_user_id, version)
-        revised_client = get_client("memos", speaker_b_user_id, version)
     elif frame == "memos-api":
         client = MemOSAPI()
     elif frame == "memobase":
@@ -323,7 +234,7 @@ def process_user(conv_idx, frame, locomo_df, version):
 
 async def main(frame, version="default", num_workers=4):
     load_dotenv()
-    locomo_df = pd.read_json("data/locomo/locomo10.json")
+    loong_data = [json.loads(i) for i in open("evaluation/data/loong/loong.jsonl")]
 
     num_users = 10
     start_time = time.time()
@@ -399,16 +310,16 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
-        default='memos-api'
+        default='mem0'
     )
     parser.add_argument(
         "--version",
         type=str,
-        default='0905-test',
+        default='0905',
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=5, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     args = parser.parse_args()
     lib = args.lib

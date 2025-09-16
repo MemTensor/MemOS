@@ -8,6 +8,7 @@ import sys
 
 import nltk
 import numpy as np
+import tiktoken
 import transformers
 
 from bert_score import score as bert_score
@@ -25,7 +26,7 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prompts import LME_JUDGE_MODEL_TEMPLATE
 
-
+encoding = tiktoken.get_encoding("cl100k_base")
 logging.basicConfig(level=logging.CRITICAL)
 transformers.logging.set_verbosity_error()
 
@@ -133,7 +134,7 @@ def calculate_nlp_metrics(golden_answer, response, context, options=None):
     response = str(response) if response is not None else ""
     context = str(context) if context is not None else ""
 
-    metrics = {"context_tokens": len(nltk.word_tokenize(context)) if context else 0}
+    metrics = {"context_tokens": len(encoding.encode(context)) if context else 0}
 
     if "lexical" in options:
         gold_tokens = nltk.word_tokenize(golden_answer.lower())
@@ -314,14 +315,14 @@ async def main(frame, version, nlp_options, num_runs=3, num_workers=5):
 
     if evaluated_count > 0:
         print(
-            f"📋 Evaluated: [93m{evaluated_count} responses across [93m{num_runs} runs"
+            f"📋 Evaluated: {evaluated_count} responses across {num_runs} runs"
         )
         print(
             f"🎯 LLM-as-a-Judge Mean Accuracy: {np.mean(run_scores):.4f}"
         )
-        print(f"🔍 Standard Deviation: [93m{np.std(run_scores):.4f}")
+        print(f"🔍 Standard Deviation: {np.std(run_scores):.4f}")
 
-        run_scores_formatted = [f"[94m{round(s, 4):.4f}" for s in run_scores]
+        run_scores_formatted = [f"{round(s, 4):.4f}" for s in run_scores]
         print(f"🔢 Individual run scores: [{', '.join(run_scores_formatted)}]")
     else:
         print("⚠️  No responses were evaluated. LLM-as-a-Judge score: N/A (0/0)")
@@ -347,23 +348,24 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "zep", "memos-api", "zep", "memobase"],
+        default="mirix"
     )
     parser.add_argument(
-        "--version", type=str, default="v1", help="Version of the evaluation framework."
+        "--version", type=str, default="0905", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--options",
         type=str,
         nargs="+",
-        default=["lexical", "semantic"],
+        default=[],
         choices=["lexical", "semantic"],
         help="NLP options to use for evaluation.",
     )
     parser.add_argument(
-        "--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--num_runs", type=int, default=1, help="Number of runs for LLM-as-a-Judge evaluation."
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=10, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()

@@ -38,26 +38,29 @@ ANSWER_PROMPT_MEM0 = """
 
 
 ANSWER_PROMPT_ZEP = """
-    You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
-
     # CONTEXT:
-    You have access to memories from a conversation. These memories contain
-    timestamped information that may be relevant to answering the question.
+    You have access to facts and entities from a conversation.
 
     # INSTRUCTIONS:
     1. Carefully analyze all provided memories
     2. Pay special attention to the timestamps to determine the answer
     3. If the question asks about a specific event or fact, look for direct evidence in the memories
     4. If the memories contain contradictory information, prioritize the most recent memory
-    5. If there is a question about time references (like "last year", "two months ago", etc.),
-       calculate the actual date based on the memory timestamp. For example, if a memory from
-       4 May 2022 mentions "went to India last year," then the trip occurred in 2021.
-    6. Always convert relative time references to specific dates, months, or years. For example,
-       convert "last year" to "2022" or "two months ago" to "March 2023" based on the memory
-       timestamp. Ignore the reference while answering the question.
-    7. Focus only on the content of the memories. Do not confuse character
-       names mentioned in memories with the actual users who created those memories.
-    8. The answer should be less than 5-6 words.
+    5. Always convert relative time references to specific dates, months, or years.
+    6. Be as specific as possible when talking about people, places, and events
+    7. Timestamps in memories represent the actual time the event occurred, not the time the event was mentioned in a message.
+    
+    Clarification:
+    When interpreting memories, use the timestamp to determine when the described event happened, not when someone talked about the event.
+    
+    Example:
+    
+    Memory: (2023-03-15T16:33:00Z) I went to the vet yesterday.
+    Question: What day did I go to the vet?
+    Correct Answer: March 15, 2023
+    Explanation:
+    Even though the phrase says "yesterday," the timestamp shows the event was recorded as happening on March 15th. Therefore, the actual vet visit happened on that date, regardless of the word "yesterday" in the text.
+
 
     # APPROACH (Think step by step):
     1. First, examine all memories that contain information related to the question
@@ -73,8 +76,7 @@ ANSWER_PROMPT_ZEP = """
     {context}
 
     Question: {question}
-    Answer:
-    """
+    Answer:"""
 
 ANSWER_PROMPT_MEMOS = """
     You are a knowledgeable and helpful AI assistant.

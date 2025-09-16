@@ -4,10 +4,6 @@ import uuid
 from memobase import ChatBlob
 
 
-def string_to_uuid(s: str, salt="memobase_client") -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
-
-
 def memobase_add_memory(user, message, retries=3):
     for attempt in range(retries):
         try:
@@ -24,7 +20,6 @@ def memobase_add_memory(user, message, retries=3):
 def memobase_search_memory(
     client, user_id, query, max_memory_context_size, max_retries=3, retry_delay=1
 ):
-
     users = client.get_all_users(limit=5000)
     for u in users:
         try:
@@ -37,13 +32,14 @@ def memobase_search_memory(
 
     while retries < max_retries:
         try:
+            t = time.time()
             memories = user.context(
                 max_token_size=max_memory_context_size,
                 chats=[{"role": "user", "content": query}],
                 event_similarity_threshold=0.2,
                 fill_window_with_events=True,
             )
-            return memories
+            return memories, (time.time()-t) * 1000
         except Exception as e:
             print(f"Error during memory search: {e}")
             print("Retrying...")
@@ -74,12 +70,13 @@ if __name__ == "__main__":
     u.context()
 
 
+    # all_users = client.get_all_users(limit=10000)
+    # for user in all_users:
+    #     if not user['additional_fields']:
+    #         client.delete_user(user['id'])
 
-
-
-    memories = user.context(
-        max_token_size=2000,
-        chats=[{"role": "user", "content": 'hello'}],
-        event_similarity_threshold=0.2,
-        fill_window_with_events=True,
+    a = memobase_search_memory(
+        client, "lme_exper_user_0", 'What degree did I graduate with?', 3000, max_retries=3, retry_delay=1
     )
+
+

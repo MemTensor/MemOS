@@ -10,7 +10,6 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.mirix_utils import get_mirix_client
 
-
 if __name__ == '__main__':
     config_path = './configs/mirix_config.yaml'
     lme_df = pd.read_json("./data/longmemeval/longmemeval_s.json")
@@ -19,17 +18,17 @@ if __name__ == '__main__':
 
     if os.path.exists('./results/lme/mirix_lme_test_result.json'):
         results = [json.loads(i) for i in open("./results/lme/mirix_lme_test_result.json", 'r').readlines()]
-        for res in results:
-            with open("./results/lme/mirix_lme_test_result.json", "w") as f:
+        with open("./results/lme/mirix_lme_test_result.json", "w") as f:
+            for res in results:
                 if res['response'] and "ERROR" not in res['response']:
                     f.write(json.dumps(res, ensure_ascii=False) + "\n")
                     success_qid.append(res['question_id'])
 
     f = open("./results/lme/mirix_lme_test_result.json", "a+")
+    assistant = get_mirix_client(config_path)
 
 
     def process_one(index):
-        assistant = get_mirix_client(config_path)
         conversation = lme_df.iloc[index]
         sessions = conversation["haystack_sessions"]
         dates = conversation["haystack_dates"]
@@ -85,8 +84,18 @@ if __name__ == '__main__':
                 traceback.print_exc()
                 print(f"❌ Error processing {exc}")
 
+import json
 
-
-
-
-
+res = {}
+for i in open(
+        '/Users/wuhao/PycharmProjects/MemOS/evaluation/results/lme/mirix-0905/mirix_lme_test_result1.json').readlines():
+    line = json.loads(i)
+    res[line['question_id']] = {'question': line['question'],
+                                'golden_answer': line['answer'],
+                                'context': '',
+                                'answer': line['response'],
+                                'category': line['question_type'],
+                                'response_duration_ms': 0,
+                                'search_duration_ms': 0
+                                }
+json.dump(res, open('/Users/wuhao/PycharmProjects/MemOS/evaluation/results/lme/mirix-0905/mirix_lme_responses.json', 'w'), indent=2)

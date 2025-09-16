@@ -12,6 +12,7 @@ from tqdm import tqdm
 from utils.client import mem0_client, memobase_client, memos_client, zep_client
 from utils.memobase_utils import memobase_add_memory, string_to_uuid
 from utils.mirix_utils import get_mirix_client
+from utils.memos_api import MemOSAPI
 from zep_cloud.types import Message
 
 
@@ -71,9 +72,12 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                     "chat_time": date.isoformat(),
                 }
             )
-        client.add(messages=messages, user_id=user_id)
+        if frame == "memos-local":
+            client.add(messages=messages, user_id=user_id)
+            client.mem_reorganizer_wait()
+        elif frame == "memos-api":
+            client.add(messages=messages, user_id=user_id, conv_id=session_id)
         print(f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}")
-        client.mem_reorganizer_wait()
     elif frame == "mirix":
         user = client.get_user_by_name(user_name=user_id)
         message = f"Conversation happened at {date.isoformat()}:\n\n"
@@ -129,11 +133,11 @@ def ingest_conv(lme_df, version, conv_idx, frame, client):
         )
         print("🔌 Using Memos Local client for ingestion...")
     elif frame == "memos-api":
-        client = memos_client(mode="api")
+        client = MemOSAPI()
     elif frame == "memobase":
         client = memobase_client()
         print("🔌 Using Memobase client for ingestion...")
-        all_users = client.get_all_users()
+        all_users = client.get_all_users(limit=5000)
         for user in all_users:
             try:
                 if user['additional_fields']['user_id'] == user_id:

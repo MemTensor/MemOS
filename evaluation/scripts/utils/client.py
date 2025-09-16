@@ -87,9 +87,6 @@ def memos_client(
             default_mem_cube=mem_cube,
         )
 
-    elif mode == "api":
-        memos = MemOSAPI(base_url=os.getenv("MEMOS_BASE_URL"))
-
     return memos
 
 

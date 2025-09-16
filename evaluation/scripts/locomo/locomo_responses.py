@@ -29,6 +29,11 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
             context=context,
             question=question,
         )
+    elif frame == "memobase":
+        prompt = ANSWER_PROMPT_MEMOS.format(
+            context=context,
+            question=question,
+        )
     response = await llm_client.chat.completions.create(
         model=os.getenv("CHAT_MODEL"),
         messages=[
@@ -125,12 +130,12 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
-        default='memos'
+        default='memobase'
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="4b-dpo-test-0826",
+        default="0905",
         help="Version identifier for loading results (e.g., 1010)",
     )
     args = parser.parse_args()
