@@ -606,6 +606,7 @@ class Neo4jGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        search_filter: dict | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -618,6 +619,8 @@ class Neo4jGraphDB(BaseGraphDB):
             status (str, optional): Node status filter (e.g., 'active', 'archived').
                             If provided, restricts results to nodes with matching status.
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
+            search_filter (dict, optional): Additional metadata filters for search results.
+                            Keys should match node properties, values are the expected values.
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
@@ -627,6 +630,7 @@ class Neo4jGraphDB(BaseGraphDB):
             - If scope is provided, it restricts results to nodes with matching memory_type.
             - If 'status' is provided, only nodes with the matching status will be returned.
             - If threshold is provided, only results with score >= threshold will be returned.
+            - If search_filter is provided, additional WHERE clauses will be added for metadata filtering.
             - Typical use case: restrict to 'status = activated' to avoid
             matching archived or merged nodes.
         """
@@ -639,6 +643,12 @@ class Neo4jGraphDB(BaseGraphDB):
         if not self.config.use_multi_db and self.config.user_name:
             where_clauses.append("node.user_name = $user_name")
 
+        # Add search_filter conditions
+        if search_filter:
+            for key, _ in search_filter.items():
+                param_name = f"filter_{key}"
+                where_clauses.append(f"node.{key} = ${param_name}")
+
         where_clause = ""
         if where_clauses:
             where_clause = "WHERE " + " AND ".join(where_clauses)
@@ -650,7 +660,8 @@ class Neo4jGraphDB(BaseGraphDB):
             RETURN node.id AS id, score
         """
 
-        parameters = {"embedding": vector, "k": top_k, "scope": scope}
+        parameters = {"embedding": vector, "k": top_k}
+
         if scope:
             parameters["scope"] = scope
         if status:
@@ -660,6 +671,12 @@ class Neo4jGraphDB(BaseGraphDB):
                 parameters["user_name"] = kwargs["cube_name"]
             else:
                 parameters["user_name"] = self.config.user_name
+
+        # Add search_filter parameters
+        if search_filter:
+            for key, value in search_filter.items():
+                param_name = f"filter_{key}"
+                parameters[param_name] = value
 
         with self.driver.session(database=self.db_name) as session:
             result = session.run(query, parameters)

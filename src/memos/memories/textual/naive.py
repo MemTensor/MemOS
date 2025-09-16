@@ -115,7 +115,7 @@ class NaiveTextMemory(BaseTextMemory):
                 self.memories[i] = memory_dict
                 break
 
-    def search(self, query: str, top_k: int) -> list[TextualMemoryItem]:
+    def search(self, query: str, top_k: int, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query."""
         sims = [
             (memory, len(set(query.split()) & set(memory["memory"].split())))

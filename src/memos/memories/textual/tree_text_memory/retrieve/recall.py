@@ -3,8 +3,12 @@ import concurrent.futures
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
+
+
+logger = get_logger(__name__)
 
 
 class GraphMemoryRetriever:
@@ -15,6 +19,8 @@ class GraphMemoryRetriever:
     def __init__(self, graph_store: Neo4jGraphDB, embedder: OllamaEmbedder):
         self.graph_store = graph_store
         self.embedder = embedder
+        self.max_workers = 10
+        self.filter_weight = 0.6
 
     def retrieve(
         self,
@@ -23,6 +29,7 @@ class GraphMemoryRetriever:
         top_k: int,
         memory_scope: str,
         query_embedding: list[list[float]] | None = None,
+        search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
@@ -36,7 +43,7 @@ class GraphMemoryRetriever:
             top_k (int): Number of candidates to return.
             memory_scope (str): One of ['working', 'long_term', 'user'].
             query_embedding(list of embedding): list of embedding of query
-
+            search_filter (dict, optional): Optional metadata filters for search results.
         Returns:
             list: Combined memory items.
         """
@@ -55,7 +62,11 @@ class GraphMemoryRetriever:
             future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope)
             # Vector similarity search
             future_vector = executor.submit(
-                self._vector_recall, query_embedding, memory_scope, top_k
+                self._vector_recall,
+                query_embedding or [],
+                memory_scope,
+                top_k,
+                search_filter=search_filter,
             )
 
             graph_results = future_graph.result()
@@ -182,34 +193,55 @@ class GraphMemoryRetriever:
         top_k: int = 20,
         max_num: int = 3,
         cube_name: str | None = None,
+        search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """
-        # TODO: tackle with post-filter and pre-filter(5.18+) better.
         Perform vector-based similarity retrieval using query embedding.
+        # TODO: tackle with post-filter and pre-filter(5.18+) better.
         """
-        all_matches = []
+        if not query_embedding:
+            return []
 
-        def search_single(vec):
+        def search_single(vec, filt=None):
             return (
                 self.graph_store.search_by_embedding(
-                    vector=vec, top_k=top_k, scope=memory_scope, cube_name=cube_name
+                    vector=vec,
+                    top_k=top_k,
+                    scope=memory_scope,
+                    cube_name=cube_name,
+                    search_filter=filt,
                 )
                 or []
             )
 
+        all_hits = []
+        # Path A: without filter
         with ContextThreadPoolExecutor() as executor:
-            futures = [executor.submit(search_single, vec) for vec in query_embedding[:max_num]]
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                all_matches.extend(result)
+            futures = [
+                executor.submit(search_single, vec, None) for vec in query_embedding[:max_num]
+            ]
+            for f in concurrent.futures.as_completed(futures):
+                all_hits.extend(f.result() or [])
 
-        if not all_matches:
+        # Path B: with filter
+        if search_filter:
+            with ContextThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(search_single, vec, search_filter)
+                    for vec in query_embedding[:max_num]
+                ]
+                for f in concurrent.futures.as_completed(futures):
+                    all_hits.extend(f.result() or [])
+
+        if not all_hits:
             return []
 
-        # Step 3: Extract matched IDs and retrieve full nodes
-        unique_ids = set({r["id"] for r in all_matches})
-        node_dicts = self.graph_store.get_nodes(
-            list(unique_ids), include_embedding=True, cube_name=cube_name
+        # merge and deduplicate
+        unique_ids = {r["id"] for r in all_hits if r.get("id")}
+        node_dicts = (
+            self.graph_store.get_nodes(
+                list(unique_ids), include_embedding=True, cube_name=cube_name
+            )
+            or []
         )
-
-        return [TextualMemoryItem.from_dict(record) for record in node_dicts]
+        return [TextualMemoryItem.from_dict(n) for n in node_dicts]
