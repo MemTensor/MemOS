@@ -5,10 +5,10 @@ from typing import Any
 
 import requests
 
-import memos.log
+from memos.log import get_logger
 
 
-logger = memos.log.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class MemOSClient:
@@ -49,7 +49,7 @@ class MemOSClient:
                 response.raise_for_status()
                 return response.text
             except Exception as e:
-                logger.warning(f"Failed to add memory (retry {retry + 1}/3): {e}")
+                logger.error(f"Failed to add memory (retry {retry + 1}/3): {e}")
                 if retry == 2:
                     raise
 
@@ -78,6 +78,6 @@ class MemOSClient:
                 response.raise_for_status()
                 return response.text
             except Exception as e:
-                logger.warning(f"Failed to search memory (retry {retry + 1}/3): {e}")
+                logger.error(f"Failed to search memory (retry {retry + 1}/3): {e}")
                 if retry == 2:
                     raise
