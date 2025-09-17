@@ -547,6 +547,7 @@ class MOSCore:
         mode: Literal["fast", "fine"] = "fast",
         internet_search: bool = False,
         moscube: bool = False,
+        session_id: str | None = None,
         **kwargs,
     ) -> MOSSearchResult:
         """
@@ -563,6 +564,7 @@ class MOSCore:
             MemoryResult: A dictionary containing the search results.
         """
         target_user_id = user_id if user_id is not None else self.user_id
+
         self._validate_user_exists(target_user_id)
         # Get all cubes accessible by the target user
         accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
@@ -574,6 +576,11 @@ class MOSCore:
         if target_user_id not in self.chat_history_manager:
             self._register_chat_history(target_user_id)
         chat_history = self.chat_history_manager[target_user_id]
+
+        # Create search filter if session_id is provided
+        search_filter = None
+        if session_id is not None:
+            search_filter = {"session_id": session_id}
 
         result: MOSSearchResult = {
             "text_mem": [],
@@ -602,10 +609,11 @@ class MOSCore:
                     manual_close_internet=not internet_search,
                     info={
                         "user_id": target_user_id,
-                        "session_id": self.session_id,
+                        "session_id": session_id if session_id is not None else self.session_id,
                         "chat_history": chat_history.chat_history,
                     },
                     moscube=moscube,
+                    search_filter=search_filter,
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
@@ -624,6 +632,8 @@ class MOSCore:
         doc_path: str | None = None,
         mem_cube_id: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
     ) -> None:
         """
         Add textual memories to a MemCube.
@@ -636,11 +646,13 @@ class MOSCore:
                 If None, the default MemCube for the user is used.
             user_id (str, optional): The identifier of the user to add the memories to.
                 If None, the default user is used.
+            session_id (str, optional): session_id
         """
         # user input messages
         assert (messages is not None) or (memory_content is not None) or (doc_path is not None), (
             "messages_or_doc_path or memory_content or doc_path must be provided."
         )
+        self.session_id = session_id
         target_user_id = user_id if user_id is not None else self.user_id
         if mem_cube_id is None:
             # Try to find a default cube for the user

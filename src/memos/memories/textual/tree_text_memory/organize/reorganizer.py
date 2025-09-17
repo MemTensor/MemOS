@@ -4,12 +4,13 @@ import time
 import traceback
 
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from queue import PriorityQueue
 from typing import Literal
 
 import numpy as np
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
@@ -223,7 +224,7 @@ class GraphStructureReorganizer:
                 f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )
 
-            with ThreadPoolExecutor(max_workers=4) as executor:
+            with ContextThreadPoolExecutor(max_workers=4) as executor:
                 futures = []
                 for cluster_nodes in partitioned_groups:
                     futures.append(
@@ -282,7 +283,7 @@ class GraphStructureReorganizer:
         nodes_to_check = cluster_nodes
         exclude_ids = [n.id for n in nodes_to_check]
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ContextThreadPoolExecutor(max_workers=4) as executor:
             futures = []
             for node in nodes_to_check:
                 futures.append(

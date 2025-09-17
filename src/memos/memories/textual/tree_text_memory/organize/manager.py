@@ -1,8 +1,9 @@
 import uuid
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
@@ -55,7 +56,7 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self._process_memory, m): m for m in memories}
             for future in as_completed(futures):
                 try:
@@ -82,7 +83,7 @@ class MemoryManager:
         Replace WorkingMemory
         """
         working_memory_top_k = memories[: self.memory_size["WorkingMemory"]]
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
                 executor.submit(self._add_memory_to_db, memory, "WorkingMemory")
                 for memory in working_memory_top_k

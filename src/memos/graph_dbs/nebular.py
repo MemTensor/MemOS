@@ -268,7 +268,6 @@ class NebulaGraphDB(BaseGraphDB):
                 gql = f"""USE `{self.db_name}`
                        {gql}"""
             return self._client.execute(gql, timeout=timeout)
-
         except Exception as e:
             emsg = str(e)
             if "Session not found" in emsg or "Connection not established" in emsg:
@@ -855,6 +854,7 @@ class NebulaGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        search_filter: dict | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -867,6 +867,8 @@ class NebulaGraphDB(BaseGraphDB):
             status (str, optional): Node status filter (e.g., 'active', 'archived').
                             If provided, restricts results to nodes with matching status.
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
+            search_filter (dict, optional): Additional metadata filters for search results.
+                            Keys should match node properties, values are the expected values.
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
@@ -876,6 +878,7 @@ class NebulaGraphDB(BaseGraphDB):
             - If scope is provided, it restricts results to nodes with matching memory_type.
             - If 'status' is provided, only nodes with the matching status will be returned.
             - If threshold is provided, only results with score >= threshold will be returned.
+            - If search_filter is provided, additional WHERE clauses will be added for metadata filtering.
             - Typical use case: restrict to 'status = activated' to avoid
             matching archived or merged nodes.
         """
@@ -894,6 +897,14 @@ class NebulaGraphDB(BaseGraphDB):
                 where_clauses.append(f'n.user_name = "{kwargs["cube_name"]}"')
             else:
                 where_clauses.append(f'n.user_name = "{self.config.user_name}"')
+
+                # Add search_filter conditions
+                if search_filter:
+                    for key, value in search_filter.items():
+                        if isinstance(value, str):
+                            where_clauses.append(f'n.{key} = "{value}"')
+                        else:
+                            where_clauses.append(f"n.{key} = {value}")
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
