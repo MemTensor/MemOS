@@ -55,46 +55,10 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def search(self, query: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Search memories with flexible filtering
-
-        Args:
-            query: Search query string
-            filters: Filter conditions for search scope
-
-        Filters Format:
-            {
-                "user_id": "user1",                 # Required, single user ID
-                "memory_limit_number": 6,           # Optional, defaults to 6
-                "conversation_id": "conv1"          # Optional, single conversation ID
-            }
-
-        Usage Examples:
-            # Basic search with single user and conversation
-            search("Python", {"user_id": "user1", "conversation_id": "conv1"})
-
-            # Search with custom limit
-            search("Python", {"user_id": "user1", "memory_limit_number": 10})
-
-            # Search only by user (all conversations)
-            search("Python", {"user_id": "user1"})
-
-            # Search only by conversation for a specific user
-            search("Python", {"user_id": "user1", "conversation_id": "conv1"})
-
-        Returns:
-            List of memory dictionaries matching the search criteria
-        """
-
-        # Set default filters if not provided
-        if filters is None:
-            filters = {}
-
-        # Extract filter values with defaults
-        memory_limit_number = filters.get("memory_limit_number", 6)
-        user_id = filters.get("user_id")
-        conversation_id = filters.get("conversation_id")
-
+    def search(
+        self, query: str, user_id: str, conversation_id: str, memory_limit_number: int = 6
+    ) -> list[dict[str, Any]]:
+        """Search memories"""
         # Validate required parameters
         self._validate_required_params(query=query, user_id=user_id)
 
@@ -102,14 +66,9 @@ class MemOSClient:
         payload = {
             "query": query,
             "userId": user_id,
+            "conversationId": conversation_id,
+            "memoryLimitNumber": memory_limit_number,
         }
-
-        # Add optional conversation_id to payload
-        if conversation_id:
-            payload["conversationId"] = conversation_id
-
-        if memory_limit_number:
-            payload["memoryLimitNumber"] = memory_limit_number
 
         for retry in range(MAX_RETRY_COUNT):
             try:
