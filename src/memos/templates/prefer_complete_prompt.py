@@ -6,7 +6,7 @@ You are an information extraction assistant. You will be given a QA pair (user q
 Please extract the user's explicit preferences from the Q and implicit preferences from the A, and output JSON strictly according to the requirements.
 
 # Extraction Rules
-Explicit preferences (explicit_preferences): Extract only from the user's Q. Including but not limited to:
+Explicit preferences, extract only from the user's Q. Including but not limited to:
 - Role descriptions (e.g., "You are a history teacher")
 - Style constraints (e.g., "humorous style", "academic style")
 - Format requirements (e.g., "table", "Markdown")
@@ -17,7 +17,7 @@ Explicit preferences (explicit_preferences): Extract only from the user's Q. Inc
 
 # Output Format
 {
-  "explicit_preferences": {
+  "explicit_preference": {
     "role": "",
     "style": "",
     "format": "",
@@ -66,7 +66,7 @@ Your task is to extract the user's **implicit preferences** from these QA pairs.
 
 # Output Format:
 {
-  "implicit_preferences": [
+  "implicit_preference": [
     "preference 1",
     "preference 2",
     "preference 3"
@@ -108,7 +108,7 @@ Your task is to analyze all information in this cluster and extract three key co
 {
   "topic_cluster_name": "",
   "topic_cluster_description": "",
-  "topic_preferences": ""
+  "topic_preference": ""
 }
 
 # Notes:
@@ -157,7 +157,7 @@ Your task is to extract the user's **highest-level common preferences** by focus
 
 # Output Format:
 {
-  "user_preferences": "Write the synthesized highest-level common preferences here, covering content preferences, interaction style, and value orientations"
+  "user_preference": "Write the synthesized highest-level common preferences here, covering content preferences, interaction style, and value orientations"
 }
 
 # Notes:
@@ -230,7 +230,7 @@ Sources:
 1. Current query preferences: Constraints explicitly stated in the current user question
 2. Related dialogue preferences: Preference references from Q&A pairs related to the current query
 3. Related topic preferences: Preference references from topics related to the current query
-4. User preferences: Common preference references from the user's historical conversations
+4. User preference: Common preference references from the user's historical conversations
 
 Priority: Current query preferences > Related dialogue preferences > Related topic preferences > User preferences > Implicit preferences
 

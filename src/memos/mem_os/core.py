@@ -579,6 +579,7 @@ class MOSCore:
             "text_mem": [],
             "act_mem": [],
             "para_mem": [],
+            "pref_mem": [],
         }
         if install_cube_ids is None:
             install_cube_ids = user_cube_ids
@@ -615,6 +616,32 @@ class MOSCore:
                 logger.info(
                     f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
                 )
+            
+            if (
+                (mem_cube_id in install_cube_ids)
+                and (mem_cube.pref_mem is not None)
+                and self.config.enable_preference_memory
+            ):
+                memories = mem_cube.pref_mem.search(
+                    query,
+                    top_k=top_k if top_k else self.config.top_k,
+                    mode=mode,
+                    info={
+                        "user_id": target_user_id,
+                        "session_id": self.session_id,
+                        "chat_history": chat_history.chat_history,
+                    },
+                    moscube=moscube,
+                )
+                result["pref_mem"].append({"cube_id": mem_cube_id, "memories": memories})
+                logger.info(
+                    f"🧠 [Memory] Searched preferences from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                )
+                search_time_end = time.time()
+                logger.info(
+                    f"time search pref: search pref time user_id: {target_user_id} time is: {search_time_end - time_start}"
+                )
+
         return result
 
     def add(
@@ -698,6 +725,21 @@ class MOSCore:
                         timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
+
+        if (
+            (messages is not None)
+            and self.config.enable_preference_memory
+            and self.mem_cubes[mem_cube_id].pref_mem
+        ):
+            messages_list = [messages]
+            pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
+                messages_list, 
+                msg_type="chat", 
+                info={"user_id": target_user_id, "session_id": self.session_id})
+            preferences = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
+            logger.info(
+                f"Added preferences user {target_user_id} to memcube {mem_cube_id}: {preferences}"
+            )
 
         # user profile
         if (
@@ -965,7 +1007,7 @@ class MOSCore:
         load_dir: str,
         user_id: str | None = None,
         mem_cube_id: str | None = None,
-        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Dump the MemCube to a dictionary.
         Args:

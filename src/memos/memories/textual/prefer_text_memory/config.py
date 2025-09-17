@@ -8,24 +8,24 @@ from memos.configs.llm import LLMConfigFactory
 
 
 
-class BaseBuilderConfig(BaseConfig):
-    """Base configuration class for Builder."""
+class BaseAdderConfig(BaseConfig):
+    """Base configuration class for Adder."""
 
 
-class NaiveBuilderConfig(BaseBuilderConfig):
-    """Configuration for Naive Builder."""
+class NaiveAdderConfig(BaseAdderConfig):
+    """Configuration for Naive Adder."""
     # No additional config needed since components are passed from parent
 
 
 
-class BuilderConfigFactory(BaseConfig):
-    """Factory class for creating Builder configurations."""
+class AdderConfigFactory(BaseConfig):
+    """Factory class for creating Adder configurations."""
 
-    backend: str = Field(..., description="Backend for Builder")
-    config: dict[str, Any] = Field(..., description="Configuration for the Builder backend")
+    backend: str = Field(..., description="Backend for Adder")
+    config: dict[str, Any] = Field(..., description="Configuration for the Adder backend")
 
     backend_to_class: ClassVar[dict[str, Any]] = {
-        "naive": NaiveBuilderConfig,
+        "naive": NaiveAdderConfig,
     }
 
     @field_validator("backend")
@@ -37,14 +37,45 @@ class BuilderConfigFactory(BaseConfig):
         return backend
 
     @model_validator(mode="after")
-    def create_config(self) -> "BuilderConfigFactory":
+    def create_config(self) -> "AdderConfigFactory":
         config_class = self.backend_to_class[self.backend]
         self.config = config_class(**self.config)
         return self
 
 
+class BaseExtractorConfig(BaseConfig):
+    """Base configuration class for Extractor."""
+
+
+class NaiveExtractorConfig(BaseExtractorConfig):
+    """Configuration for Naive Extractor."""
+
+class ExtractorConfigFactory(BaseConfig):
+    """Factory class for creating Extractor configurations."""
+
+    backend: str = Field(..., description="Backend for Extractor")
+    config: dict[str, Any] = Field(..., description="Configuration for the Extractor backend")
+
+    backend_to_class: ClassVar[dict[str, Any]] = {
+        "naive": NaiveExtractorConfig,
+    }
+
+    @field_validator("backend")
+    @classmethod
+    def validate_backend(cls, backend: str) -> str:
+        """Validate the backend field."""
+        if backend not in cls.backend_to_class:
+            raise ValueError(f"Invalid backend: {backend}")
+        return backend
+
+    @model_validator(mode="after")
+    def create_config(self) -> "ExtractorConfigFactory":
+        config_class = self.backend_to_class[self.backend]
+        self.config = config_class(**self.config)
+        return self
+
 class BaseRetrieverConfig(BaseConfig):
-    """Base configuration class for Retriever."""
+    """Base configuration class for Retrievers."""
 
 
 class NaiveRetrieverConfig(BaseRetrieverConfig):

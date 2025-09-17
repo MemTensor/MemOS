@@ -11,7 +11,8 @@ from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
 from memos.memories.textual.prefer_text_memory.config import (
-    BuilderConfigFactory, 
+    AdderConfigFactory, 
+    ExtractorConfigFactory,
     RetrieverConfigFactory, 
     UpdaterConfigFactory, 
     AssemblerConfigFactory)
@@ -203,10 +204,15 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
         default_factory=EmbedderConfigFactory,
         description="Embedder configuration for the memory embedding",
     )
-    builder: BuilderConfigFactory = Field(
+    extractor: ExtractorConfigFactory = Field(
         ...,
-        default_factory=BuilderConfigFactory,
-        description="Builder configuration for the memory building",
+        default_factory=ExtractorConfigFactory,
+        description="Extractor configuration for the memory extracting",
+    )
+    adder: AdderConfigFactory = Field(
+        ...,
+        default_factory=AdderConfigFactory,
+        description="Adder configuration for the memory adding",
     )
     retriever: RetrieverConfigFactory = Field(
         ...,
@@ -237,7 +243,7 @@ class MemoryConfigFactory(BaseConfig):
         "naive_text": NaiveTextMemoryConfig,
         "general_text": GeneralTextMemoryConfig,
         "tree_text": TreeTextMemoryConfig,
-        "preference_text": PreferenceTextMemoryConfig,
+        "pref_text": PreferenceTextMemoryConfig,
         "kv_cache": KVCacheMemoryConfig,
         "vllm_kv_cache": KVCacheMemoryConfig,  # Use same config as kv_cache
         "lora": LoRAMemoryConfig,
