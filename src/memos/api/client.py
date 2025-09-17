@@ -10,6 +10,8 @@ from memos.log import get_logger
 
 logger = get_logger(__name__)
 
+MAX_RETRY_COUNT = 3
+
 
 class MemOSClient:
     """MemOS API client"""
@@ -41,7 +43,7 @@ class MemOSClient:
         url = f"{self.base_url}/add/message"
         payload = {"messages": messages, "userId": user_id, "conversationId": conversation_id}
 
-        for retry in range(3):
+        for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
                     url, data=json.dumps(payload), headers=self.headers, timeout=30
@@ -50,7 +52,7 @@ class MemOSClient:
                 return response.text
             except Exception as e:
                 logger.error(f"Failed to add memory (retry {retry + 1}/3): {e}")
-                if retry == 2:
+                if retry == MAX_RETRY_COUNT - 1:
                     raise
 
     def search(
@@ -70,7 +72,7 @@ class MemOSClient:
             "memoryLimitNumber": memory_limit_number,
         }
 
-        for retry in range(3):
+        for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
                     url, data=json.dumps(payload), headers=self.headers, timeout=30
@@ -79,5 +81,5 @@ class MemOSClient:
                 return response.text
             except Exception as e:
                 logger.error(f"Failed to search memory (retry {retry + 1}/3): {e}")
-                if retry == 2:
+                if retry == MAX_RETRY_COUNT - 1:
                     raise
