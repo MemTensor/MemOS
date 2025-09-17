@@ -1,0 +1,83 @@
+import json
+import os
+
+from typing import Any
+
+import requests
+
+import memos.log
+
+
+logger = memos.log.get_logger(__name__)
+
+
+class MemOSClient:
+    """MemOS API client"""
+
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+        self.base_url = (
+            base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem"
+        )
+        api_key = api_key or os.getenv("MEMOS_API_KEY")
+
+        if not api_key:
+            raise ValueError("MemOS API key is required")
+
+        self.headers = {"Content-Type": "application/json", "Authorization": f"Token {api_key}"}
+
+    def _validate_required_params(self, **params):
+        """Validate required parameters - if passed, they must not be empty"""
+        for param_name, param_value in params.items():
+            if not param_value:
+                raise ValueError(f"{param_name} is required")
+
+    def add(self, messages: list[dict[str, Any]], user_id: str, conversation_id: str) -> str:
+        """Add memories"""
+        # Validate required parameters
+        self._validate_required_params(
+            messages=messages, user_id=user_id, conversation_id=conversation_id
+        )
+
+        url = f"{self.base_url}/add/message"
+        payload = {"messages": messages, "userId": user_id, "conversationId": conversation_id}
+
+        for retry in range(3):
+            try:
+                response = requests.post(
+                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                )
+                response.raise_for_status()
+                return response.text
+            except Exception as e:
+                logger.warning(f"Failed to add memory (retry {retry + 1}/3): {e}")
+                if retry == 2:
+                    raise
+
+    def search(
+        self, query: str, user_id: str, conversation_id: str, memory_limit_number: int = 6
+    ) -> list[dict[str, Any]]:
+        """Search memories"""
+        # Validate required parameters
+        self._validate_required_params(
+            query=query, user_id=user_id, conversation_id=conversation_id
+        )
+
+        url = f"{self.base_url}/search/memory"
+        payload = {
+            "query": query,
+            "userId": user_id,
+            "conversationId": conversation_id,
+            "memoryLimitNumber": memory_limit_number,
+        }
+
+        for retry in range(3):
+            try:
+                response = requests.post(
+                    url, data=json.dumps(payload), headers=self.headers, timeout=30
+                )
+                response.raise_for_status()
+                return response.text
+            except Exception as e:
+                logger.warning(f"Failed to search memory (retry {retry + 1}/3): {e}")
+                if retry == 2:
+                    raise
