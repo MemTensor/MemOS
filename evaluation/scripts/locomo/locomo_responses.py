@@ -24,7 +24,7 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
             context=context,
             question=question,
         )
-    elif frame == "memos":
+    elif frame == "memos" or frame == "memos-api":
         prompt = ANSWER_PROMPT_MEMOS.format(
             context=context,
             question=question,
@@ -130,12 +130,12 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
-        default='memobase'
+        default='memos-api'
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="0905",
+        default="0916-test",
         help="Version identifier for loading results (e.g., 1010)",
     )
     args = parser.parse_args()

@@ -142,7 +142,7 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
     answer = row["answer"]
     answer_session_ids = set(row["answer_session_ids"])
     haystack_session_ids = row["haystack_session_ids"]
-    user_id = f"lme_exper_user_{conv_idx!s}"
+    user_id = f"lme_exper_user_{version}_{conv_idx}"
     id_to_session = dict(zip(haystack_session_ids, sessions, strict=False))
     answer_sessions = [id_to_session[sid] for sid in answer_session_ids if sid in id_to_session]
     answer_evidences = []
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
-        default='memobase'
+        default='memos-api'
     )
     parser.add_argument(
         "--version", type=str, default="0905", help="Version of the evaluation framework."
@@ -312,7 +312,7 @@ if __name__ == "__main__":
         "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=50, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()

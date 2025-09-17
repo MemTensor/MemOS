@@ -504,13 +504,13 @@ def main(frame, version="default", num_workers=1, top_k=20):
     all_search_results = defaultdict(list)
 
     for idx in range(num_users):
-        try:
+        # try:
             print(f"Processing user {idx}...")
             user_results = process_user(idx, locomo_df, frame, version, top_k, num_workers)
             for conv_id, results in user_results.items():
                 all_search_results[conv_id].extend(results)
-        except Exception as e:
-            print(f"User {idx} generated an exception: {e}")
+        # except Exception as e:
+        #     print(f"User {idx} generated an exception: {e}")
 
     with open(f"results/locomo/{frame}-{version}/{frame}_locomo_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=2)
@@ -532,7 +532,7 @@ if __name__ == "__main__":
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=10, help="Number of parallel workers to process users"
+        "--workers", type=int, default=50, help="Number of parallel workers to process users"
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"

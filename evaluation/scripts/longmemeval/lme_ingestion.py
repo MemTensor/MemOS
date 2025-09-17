@@ -10,8 +10,7 @@ import pandas as pd
 
 from tqdm import tqdm
 from utils.client import mem0_client, memobase_client, memos_client, zep_client
-from utils.memobase_utils import memobase_add_memory, string_to_uuid
-from utils.mirix_utils import get_mirix_client
+from utils.memobase_utils import memobase_add_memory
 from utils.memos_api import MemOSAPI
 from zep_cloud.types import Message
 
@@ -69,7 +68,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                 {
                     "role": msg["role"],
                     "content": msg["content"][:8000],
-                    "chat_time": date.isoformat(),
+                    "chatTime": date.isoformat(),
                 }
             )
         if frame == "memos-local":
@@ -87,13 +86,13 @@ def ingest_session(session, date, user_id, session_id, frame, client):
         client.add(message, user_id=user.id)
 
 
-def ingest_conv(lme_df, version, conv_idx, frame, client):
+def ingest_conv(lme_df, version, conv_idx, frame):
     conversation = lme_df.iloc[conv_idx]
 
     sessions = conversation["haystack_sessions"]
     dates = conversation["haystack_dates"]
 
-    user_id = "lme_exper_user_" + str(conv_idx)
+    user_id = f"lme_exper_user_{version}_{conv_idx}"
 
     print("\n" + "=" * 80)
     print(f"🔄 [INGESTING CONVERSATION {conv_idx}".center(80))
@@ -148,10 +147,6 @@ def ingest_conv(lme_df, version, conv_idx, frame, client):
         memobase_user_id = client.add_user({"user_id": user_id})
         user_id = memobase_user_id
 
-    elif frame == "mirix":
-        client = client
-        client.create_user(user_name=user_id)
-
     for idx, session in enumerate(sessions):
         session_id = user_id + "_lme_exper_session_" + str(idx)
         if frame == "zep":
@@ -190,17 +185,10 @@ def main(frame, version, num_workers=2):
 
     start_time = datetime.now()
 
-    # mirix 只能初始化一个client
-    if frame == "mirix":
-        config_path = "configs/mirix_config.yaml"
-        client = get_mirix_client(config_path)
-    else:
-        client = None
-
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = []
         for session_idx in range(num_multi_sessions):
-            future = executor.submit(ingest_conv, lme_df, version, session_idx, frame, client)
+            future = executor.submit(ingest_conv, lme_df, version, session_idx, frame)
             futures.append(future)
 
         for future in tqdm(
@@ -233,13 +221,13 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase", "mirix"],
-        default="memobase"
+        default="memos-api"
     )
     parser.add_argument(
-        "--version", type=str, default="0905", help="Version of the evaluation framework."
+        "--version", type=str, default="0916-test2", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()
