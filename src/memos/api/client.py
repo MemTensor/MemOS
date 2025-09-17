@@ -16,7 +16,7 @@ MAX_RETRY_COUNT = 3
 class MemOSClient:
     """MemOS API client"""
 
-    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.base_url = (
             base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem"
         )
