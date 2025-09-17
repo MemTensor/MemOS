@@ -143,7 +143,7 @@ class NebulaGraphDB(BaseGraphDB):
 
                 sess_conf = SessionConfig(graph=getattr(cfg, "space", None))
                 pool_conf = SessionPoolConfig(
-                    size=int(getattr(cfg, "max_client", 1000)), wait_timeout=500
+                    size=int(getattr(cfg, "max_client", 1000)), wait_timeout=5000
                 )
 
                 client = NebulaClient(
@@ -262,7 +262,7 @@ class NebulaGraphDB(BaseGraphDB):
         logger.info("Connected to NebulaGraph successfully.")
 
     @timed
-    def execute_query(self, gql: str, timeout: float = 10.0, auto_set_db: bool = True):
+    def execute_query(self, gql: str, timeout: float = 60.0, auto_set_db: bool = True):
         try:
             if auto_set_db and self.db_name:
                 gql = f"""USE `{self.db_name}`
