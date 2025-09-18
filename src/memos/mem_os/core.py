@@ -483,7 +483,8 @@ class MOSCore:
                 self.mem_cubes[mem_cube_id] = mem_cube_name_or_path
                 logger.info(f"register new cube {mem_cube_id} for user {target_user_id}")
             elif os.path.exists(mem_cube_name_or_path):
-                self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_dir(mem_cube_name_or_path)
+                mem_cube_obj = GeneralMemCube.init_from_dir(mem_cube_name_or_path)
+                self.mem_cubes[mem_cube_id] = mem_cube_obj
             else:
                 logger.warning(
                     f"MemCube {mem_cube_name_or_path} does not exist, try to init from remote repo."
@@ -592,9 +593,11 @@ class MOSCore:
             install_cube_ids = user_cube_ids
         # create exist dict in mem_cubes and avoid  one search slow
         tmp_mem_cubes = {}
+        time_start_cube_get = time.time()
         for mem_cube_id in install_cube_ids:
             if mem_cube_id in self.mem_cubes:
                 tmp_mem_cubes[mem_cube_id] = self.mem_cubes.get(mem_cube_id)
+        logger.info(f"time search: transform cube time user_id: {target_user_id} time is: {time.time() - time_start_cube_get}")
 
         for mem_cube_id, mem_cube in tmp_mem_cubes.items():
             if (

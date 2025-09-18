@@ -775,10 +775,12 @@ class MOSProduct(MOSCore):
                 return
 
             # Create MemCube from path
+            time_start = time.time()
             if os.path.exists(mem_cube_name_or_path):
                 mem_cube = GeneralMemCube.init_from_dir(
                     mem_cube_name_or_path, memory_types, default_config
                 )
+                logger.info(f"time register_mem_cube: init_from_dir time is: {time.time() - time_start}")
             else:
                 logger.warning(
                     f"MemCube {mem_cube_name_or_path} does not exist, try to init from remote repo."
