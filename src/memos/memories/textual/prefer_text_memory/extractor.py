@@ -103,18 +103,14 @@ class NaiveExtractor(BaseExtractor):
         """Extract user-level preferences."""
         if not topic_preferences:
             return []
-        cluster_infos = [{
-            "topic_cluster_name": cluster["topic_cluster_name"], 
-            "topic_cluster_description": cluster["topic_cluster_description"], 
-            "topic_preferences": cluster["topic_preferences"]} 
-            for cluster in topic_preferences]
-        prompt = NAIVE_USER_PREFERENCE_EXTRACT_PROMPT.replace("{cluster_info}", json.dumps(cluster_infos, ensure_ascii=False, indent=2))
+
+        prompt = NAIVE_USER_PREFERENCE_EXTRACT_PROMPT.replace("{cluster_info}", json.dumps(topic_preferences, ensure_ascii=False, indent=2))
         
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             result = json.loads(response)
             
-            if result.get("user_preferences"):
+            if result.get("user_preference"):
                 return result
         except Exception as e:
             print(f"Error processing user preferences: {topic_preferences}\n{e}")

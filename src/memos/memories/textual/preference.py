@@ -111,7 +111,7 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         # For preference memory, we don't need to load from files
         # as the data is stored in the vector database
-        pass
+        raise NotImplementedError
 
     def dump(self, dir: str) -> None:
         """Dump memories to the specified directory.
@@ -120,7 +120,7 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         # For preference memory, we don't need to dump to files
         # as the data is stored in the vector database
-        pass
+        raise NotImplementedError
 
     def extract(self, messages: MessageList) -> list[TextualMemoryItem]:
         """Extract memories based on the messages.
@@ -129,7 +129,7 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of extracted memory items.
         """
-        pass
+        raise NotImplementedError
 
     def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
         """Add memories.
@@ -141,7 +141,7 @@ class PreferenceTextMemory(BaseTextMemory):
     
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         """Update a memory by memory_id."""
-        pass
+        raise NotImplementedError
     
     def get(self, memory_id: str) -> TextualMemoryItem:
         """Get a memory by its ID.
@@ -150,7 +150,7 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             TextualMemoryItem: The memory with the given ID.
         """
-        pass
+        raise NotImplementedError
     
     def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
@@ -159,28 +159,28 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of memories with the specified IDs.
         """
-        pass
+        raise NotImplementedError
     
     def get_all(self) -> list[TextualMemoryItem]:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        pass
+        raise NotImplementedError
     
     def delete(self, memory_ids: list[str]) -> None:
         """Delete memories.
         Args:
             memory_ids (list[str]): List of memory IDs to delete.
         """
-        pass
+        raise NotImplementedError
     
     def delete_all(self) -> None:
         """Delete all memories."""
-        pass
+        raise NotImplementedError
     
     def drop(
         self,
     ) -> None:
         """Drop all databases."""
-        pass
+        raise NotImplementedError

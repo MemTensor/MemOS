@@ -38,10 +38,14 @@ class NaiveRetriever(BaseRetriever):
         else:
             user_prefs = []
         
-        explicit_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("dialog_str", ""), metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in explicit_prefs]
-        implicit_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("center_dialog", ""), metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in implicit_prefs]
-        topic_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("center_dialog", ""), metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in topic_prefs]
-        user_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("user_preferences", ""), metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in user_prefs]
+        explicit_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("dialog_str", ""), 
+                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in explicit_prefs]
+        implicit_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("center_dialog", ""), 
+                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in implicit_prefs]
+        topic_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("center_dialog", ""), 
+                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in topic_prefs]
+        user_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("user_preferences", ""),
+                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in user_prefs]
             
         return explicit_prefs + implicit_prefs + topic_prefs + user_prefs
 

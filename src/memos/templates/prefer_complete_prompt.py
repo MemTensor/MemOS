@@ -127,7 +127,7 @@ You are an advanced information integration assistant. You will be given a user'
 
 - topic_cluster_name: The name of the topic cluster
 - topic_cluster_description: The description of the topic cluster
-- topic_preferences: Natural language description of preferences in that cluster
+- topic_preference: Natural language description of preferences in that cluster
 
 Your task is to extract the user's **highest-level common preferences** by focusing on these three key dimensions:
 

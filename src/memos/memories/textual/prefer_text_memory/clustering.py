@@ -7,6 +7,8 @@ import uuid
 from sklearn.cluster import HDBSCAN
 from sklearn.neighbors import NearestNeighbors
 
+from memos.types import MessageList
+
 
 class ClusterResult(BaseModel):
     cluster_id: str
@@ -16,6 +18,8 @@ class ClusterResult(BaseModel):
     size: int
     created_at: str
     items: List[Dict[str, Any]]
+    center_dialog_msgs: MessageList = None
+    center_dialog_str: str = None
 
 class BaseClusterer(ABC):
     """Abstract base class for clustering algorithms."""
