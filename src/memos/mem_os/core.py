@@ -489,9 +489,10 @@ class MOSCore:
                 logger.warning(
                     f"MemCube {mem_cube_name_or_path} does not exist, try to init from remote repo."
                 )
-                self.mem_cubes[mem_cube_id] = GeneralMemCube.init_from_remote_repo(
+                mem_cube_obj = GeneralMemCube.init_from_remote_repo(
                     mem_cube_name_or_path
                 )
+                self.mem_cubes[mem_cube_id] = mem_cube_obj
         # Check if cube already exists in database
         existing_cube = self.user_manager.get_cube(mem_cube_id)
 

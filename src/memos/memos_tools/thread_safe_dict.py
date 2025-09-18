@@ -3,13 +3,19 @@ Thread-safe dictionary wrapper for concurrent access with optimized read-write l
 """
 
 import threading
+import time
+import functools
 
 from collections.abc import ItemsView, Iterator, KeysView, ValuesView
-from typing import Generic, TypeVar
-
+from typing import Generic, TypeVar, Callable, Any
+from memos.log import get_logger
+from memos.utils import timed
 
 K = TypeVar("K")
 V = TypeVar("V")
+
+logger = get_logger(__name__)
+
 
 
 class ReadWriteLock:
@@ -19,6 +25,7 @@ class ReadWriteLock:
         self._read_ready = threading.Condition(threading.RLock())
         self._readers = 0
 
+    @timed
     def acquire_read(self):
         """Acquire a read lock. Multiple readers can hold the lock simultaneously."""
         self._read_ready.acquire()
@@ -37,6 +44,7 @@ class ReadWriteLock:
         finally:
             self._read_ready.release()
 
+    @timed
     def acquire_write(self):
         """Acquire a write lock. Only one writer can hold the lock."""
         self._read_ready.acquire()
@@ -67,6 +75,7 @@ class ThreadSafeDict(Generic[K, V]):
         self._dict: dict[K, V] = initial_dict.copy() if initial_dict else {}
         self._lock = ReadWriteLock()
 
+    @timed
     def __getitem__(self, key: K) -> V:
         """Get item by key."""
         self._lock.acquire_read()
@@ -75,6 +84,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def __setitem__(self, key: K, value: V) -> None:
         """Set item by key."""
         self._lock.acquire_write()
@@ -83,6 +93,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_write()
 
+    @timed
     def __delitem__(self, key: K) -> None:
         """Delete item by key."""
         self._lock.acquire_write()
@@ -91,6 +102,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_write()
 
+    @timed
     def __contains__(self, key: K) -> bool:
         """Check if key exists in dictionary."""
         self._lock.acquire_read()
@@ -99,6 +111,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def __len__(self) -> int:
         """Get length of dictionary."""
         self._lock.acquire_read()
@@ -115,6 +128,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def __iter__(self) -> Iterator[K]:
         """Iterate over keys. Returns a snapshot to avoid iteration issues."""
         self._lock.acquire_read()
@@ -124,6 +138,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def get(self, key: K, default: V | None = None) -> V:
         """Get item by key with optional default."""
         self._lock.acquire_read()
@@ -132,6 +147,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def pop(self, key: K, *args) -> V:
         """Pop item by key."""
         self._lock.acquire_write()
@@ -140,6 +156,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_write()
 
+    @timed
     def update(self, *args, **kwargs) -> None:
         """Update dictionary."""
         self._lock.acquire_write()
@@ -148,6 +165,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_write()
 
+    @timed
     def clear(self) -> None:
         """Clear all items."""
         self._lock.acquire_write()
@@ -156,6 +174,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_write()
 
+    @timed
     def keys(self) -> KeysView[K]:
         """Get dictionary keys view (snapshot)."""
         self._lock.acquire_read()
@@ -164,6 +183,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def values(self) -> ValuesView[V]:
         """Get dictionary values view (snapshot)."""
         self._lock.acquire_read()
@@ -172,6 +192,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def items(self) -> ItemsView[K, V]:
         """Get dictionary items view (snapshot)."""
         self._lock.acquire_read()
@@ -180,6 +201,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def copy(self) -> dict[K, V]:
         """Create a copy of the dictionary."""
         self._lock.acquire_read()
@@ -188,6 +210,7 @@ class ThreadSafeDict(Generic[K, V]):
         finally:
             self._lock.release_read()
 
+    @timed
     def setdefault(self, key: K, default: V | None = None) -> V:
         """Set default value for key if not exists."""
         self._lock.acquire_write()
