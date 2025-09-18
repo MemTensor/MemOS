@@ -13,6 +13,20 @@ logger = get_logger(__name__)
 MAX_RETRY_COUNT = 3
 
 
+class MemOSResponse:
+    """Response wrapper to support dot notation access"""
+
+    def __init__(self, data):
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    setattr(self, key, MemOSResponse(value))
+                else:
+                    setattr(self, key, value)
+        else:
+            self.data = data
+
+
 class MemOSClient:
     """MemOS API client"""
 
@@ -33,7 +47,9 @@ class MemOSClient:
             if not param_value:
                 raise ValueError(f"{param_name} is required")
 
-    def add(self, messages: list[dict[str, Any]], user_id: str, conversation_id: str) -> str:
+    def add(
+        self, messages: list[dict[str, Any]], user_id: str, conversation_id: str
+    ) -> MemOSResponse:
         """Add memories"""
         # Validate required parameters
         self._validate_required_params(
@@ -49,7 +65,8 @@ class MemOSClient:
                     url, data=json.dumps(payload), headers=self.headers, timeout=30
                 )
                 response.raise_for_status()
-                return response.text
+                response_data = json.loads(response.text)
+                return MemOSResponse(response_data)
             except Exception as e:
                 logger.error(f"Failed to add memory (retry {retry + 1}/3): {e}")
                 if retry == MAX_RETRY_COUNT - 1:
@@ -57,7 +74,7 @@ class MemOSClient:
 
     def search(
         self, query: str, user_id: str, conversation_id: str, memory_limit_number: int = 6
-    ) -> list[dict[str, Any]]:
+    ) -> MemOSResponse:
         """Search memories"""
         # Validate required parameters
         self._validate_required_params(query=query, user_id=user_id)
@@ -76,7 +93,8 @@ class MemOSClient:
                     url, data=json.dumps(payload), headers=self.headers, timeout=30
                 )
                 response.raise_for_status()
-                return response.text
+                response_data = json.loads(response.text)
+                return MemOSResponse(response_data)
             except Exception as e:
                 logger.error(f"Failed to search memory (retry {retry + 1}/3): {e}")
                 if retry == MAX_RETRY_COUNT - 1:
