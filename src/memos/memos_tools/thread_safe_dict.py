@@ -3,19 +3,18 @@ Thread-safe dictionary wrapper for concurrent access with optimized read-write l
 """
 
 import threading
-import time
-import functools
 
 from collections.abc import ItemsView, Iterator, KeysView, ValuesView
-from typing import Generic, TypeVar, Callable, Any
+from typing import Generic, TypeVar
+
 from memos.log import get_logger
 from memos.utils import timed
+
 
 K = TypeVar("K")
 V = TypeVar("V")
 
 logger = get_logger(__name__)
-
 
 
 class ReadWriteLock:

@@ -1,6 +1,8 @@
-from collections.abc import Generator
 import hashlib
 import json
+
+from collections.abc import Generator
+from typing import ClassVar
 
 import openai
 
@@ -16,26 +18,26 @@ logger = get_logger(__name__)
 
 class OpenAILLM(BaseLLM):
     """OpenAI LLM class with singleton pattern."""
-    
-    _instances = {}  # Class variable to store instances
-    
+
+    _instances: ClassVar[dict] = {}  # Class variable to store instances
+
     def __new__(cls, config: OpenAILLMConfig) -> "OpenAILLM":
         config_hash = cls._get_config_hash(config)
-        
+
         if config_hash not in cls._instances:
             logger.info(f"Creating new OpenAI LLM instance for config hash: {config_hash}")
             instance = super().__new__(cls)
             cls._instances[config_hash] = instance
         else:
             logger.info(f"Reusing existing OpenAI LLM instance for config hash: {config_hash}")
-            
+
         return cls._instances[config_hash]
 
     def __init__(self, config: OpenAILLMConfig):
         # Avoid duplicate initialization
-        if hasattr(self, '_initialized'):
+        if hasattr(self, "_initialized"):
             return
-            
+
         self.config = config
         self.client = openai.Client(api_key=config.api_key, base_url=config.api_base)
         self._initialized = True
@@ -107,27 +109,27 @@ class OpenAILLM(BaseLLM):
 
 class AzureLLM(BaseLLM):
     """Azure OpenAI LLM class with singleton pattern."""
-    
-    _instances = {}  # Class variable to store instances
+
+    _instances: ClassVar[dict] = {}  # Class variable to store instances
 
     def __new__(cls, config: AzureLLMConfig):
         # Generate hash value of config as cache key
         config_hash = cls._get_config_hash(config)
-        
+
         if config_hash not in cls._instances:
             logger.info(f"Creating new Azure LLM instance for config hash: {config_hash}")
             instance = super().__new__(cls)
             cls._instances[config_hash] = instance
         else:
             logger.info(f"Reusing existing Azure LLM instance for config hash: {config_hash}")
-            
+
         return cls._instances[config_hash]
 
     def __init__(self, config: AzureLLMConfig):
         # Avoid duplicate initialization
-        if hasattr(self, '_initialized'):
+        if hasattr(self, "_initialized"):
             return
-            
+
         self.config = config
         self.client = openai.AzureOpenAI(
             azure_endpoint=config.base_url,

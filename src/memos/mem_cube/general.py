@@ -1,5 +1,6 @@
 import os
 import time
+
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
