@@ -1,6 +1,5 @@
 import time
 
-from memos import settings
 from memos.log import get_logger
 
 
@@ -14,8 +13,7 @@ def timed(func):
         start = time.perf_counter()
         result = func(*args, **kwargs)
         elapsed = time.perf_counter() - start
-        if settings.DEBUG:
-            logger.info(f"[TIMER] {func.__name__} took {elapsed:.2f} s")
+        logger.info(f"[TIMER] {func.__name__} took {elapsed:.2f} s")
         return result
 
     return wrapper
