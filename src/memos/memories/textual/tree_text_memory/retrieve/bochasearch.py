@@ -2,15 +2,17 @@
 
 import json
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime
+from typing import Any
 
 import requests
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import SourceMessage, TextualMemoryItem
 
 
 logger = get_logger(__name__)
@@ -177,7 +179,7 @@ class BochaAISearchRetriever:
         if not info:
             info = {"user_id": "", "session_id": ""}
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
                 executor.submit(self._process_result, r, query, parsed_goal, info)
                 for r in search_results
@@ -193,7 +195,7 @@ class BochaAISearchRetriever:
         return list(unique_memory_items.values())
 
     def _process_result(
-        self, result: dict, query: str, parsed_goal: str, info: None
+        self, result: dict, query: str, parsed_goal: str, info: dict[str, Any]
     ) -> list[TextualMemoryItem]:
         """Process one Bocha search result into TextualMemoryItem."""
         title = result.get("name", "")
@@ -225,7 +227,7 @@ class BochaAISearchRetriever:
             )
             read_item_i.metadata.source = "web"
             read_item_i.metadata.memory_type = "OuterMemory"
-            read_item_i.metadata.sources = [url] if url else []
+            read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
             read_item_i.metadata.visibility = "public"
             memory_items.append(read_item_i)
         return memory_items

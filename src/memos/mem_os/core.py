@@ -182,13 +182,13 @@ class MOSCore:
                 logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
                 mem_cube.text_mem.memory_manager.wait_reorganizer()
 
-    def _register_chat_history(self, user_id: str | None = None) -> None:
+    def _register_chat_history(
+        self, user_id: str | None = None, session_id: str | None = None
+    ) -> None:
         """Initialize chat history with user ID."""
-        if user_id is None:
-            user_id = self.user_id
         self.chat_history_manager[user_id] = ChatHistory(
-            user_id=user_id,
-            session_id=self.session_id,
+            user_id=user_id if user_id is not None else self.user_id,
+            session_id=session_id if session_id is not None else self.session_id,
             created_at=datetime.utcnow(),
             total_messages=0,
             chat_history=[],
@@ -547,6 +547,7 @@ class MOSCore:
         mode: Literal["fast", "fine"] = "fast",
         internet_search: bool = False,
         moscube: bool = False,
+        session_id: str | None = None,
         **kwargs,
     ) -> MOSSearchResult:
         """
@@ -562,7 +563,9 @@ class MOSCore:
         Returns:
             MemoryResult: A dictionary containing the search results.
         """
+        target_session_id = session_id if session_id is not None else self.session_id
         target_user_id = user_id if user_id is not None else self.user_id
+
         self._validate_user_exists(target_user_id)
         # Get all cubes accessible by the target user
         accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
@@ -574,6 +577,11 @@ class MOSCore:
         if target_user_id not in self.chat_history_manager:
             self._register_chat_history(target_user_id)
         chat_history = self.chat_history_manager[target_user_id]
+
+        # Create search filter if session_id is provided
+        search_filter = None
+        if session_id is not None:
+            search_filter = {"session_id": session_id}
 
         result: MOSSearchResult = {
             "text_mem": [],
@@ -602,10 +610,11 @@ class MOSCore:
                     manual_close_internet=not internet_search,
                     info={
                         "user_id": target_user_id,
-                        "session_id": self.session_id,
+                        "session_id": target_session_id,
                         "chat_history": chat_history.chat_history,
                     },
                     moscube=moscube,
+                    search_filter=search_filter,
                 )
                 result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
@@ -624,6 +633,8 @@ class MOSCore:
         doc_path: str | None = None,
         mem_cube_id: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
     ) -> None:
         """
         Add textual memories to a MemCube.
@@ -636,11 +647,14 @@ class MOSCore:
                 If None, the default MemCube for the user is used.
             user_id (str, optional): The identifier of the user to add the memories to.
                 If None, the default user is used.
+            session_id (str, optional): session_id
         """
         # user input messages
         assert (messages is not None) or (memory_content is not None) or (doc_path is not None), (
             "messages_or_doc_path or memory_content or doc_path must be provided."
         )
+        # TODO: asure that session_id is a valid string
+        target_session_id = session_id if session_id else self.session_id
         target_user_id = user_id if user_id is not None else self.user_id
         if mem_cube_id is None:
             # Try to find a default cube for the user
@@ -663,7 +677,7 @@ class MOSCore:
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 add_memory = []
                 metadata = TextualMemoryMetadata(
-                    user_id=target_user_id, session_id=self.session_id, source="conversation"
+                    user_id=target_user_id, session_id=target_session_id, source="conversation"
                 )
                 for message in messages:
                     add_memory.append(
@@ -675,7 +689,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id},
+                    info={"user_id": target_user_id, "session_id": target_session_id},
                 )
 
                 mem_ids = []
@@ -707,7 +721,7 @@ class MOSCore:
         ):
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 metadata = TextualMemoryMetadata(
-                    user_id=self.user_id, session_id=self.session_id, source="conversation"
+                    user_id=target_user_id, session_id=target_session_id, source="conversation"
                 )
                 self.mem_cubes[mem_cube_id].text_mem.add(
                     [TextualMemoryItem(memory=memory_content, metadata=metadata)]
@@ -719,7 +733,7 @@ class MOSCore:
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id},
+                    info={"user_id": target_user_id, "session_id": target_session_id},
                 )
 
                 mem_ids = []
@@ -753,7 +767,7 @@ class MOSCore:
             doc_memories = self.mem_reader.get_memory(
                 documents,
                 type="doc",
-                info={"user_id": target_user_id, "session_id": self.session_id},
+                info={"user_id": target_user_id, "session_id": target_session_id},
             )
 
             mem_ids = []
@@ -986,7 +1000,7 @@ class MOSCore:
 
     def get_user_info(self) -> dict[str, Any]:
         """Get current user information including accessible cubes.
-
+        TODO: maybe input user_id
         Returns:
             dict: User information and accessible cubes.
         """

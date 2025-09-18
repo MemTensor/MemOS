@@ -1,26 +1,14 @@
 import uuid
 
-from typing import Generic, Literal, TypeAlias, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+
+# Import message types from core types module
+from memos.types import MessageDict
 
 
 T = TypeVar("T")
-
-
-# ─── Message Types ──────────────────────────────────────────────────────────────
-
-# Chat message roles
-MessageRole: TypeAlias = Literal["user", "assistant", "system"]
-
-
-# Message structure
-class MessageDict(TypedDict):
-    """Typed dictionary for chat message dictionaries."""
-
-    role: MessageRole
-    content: str
 
 
 class BaseRequest(BaseModel):
@@ -86,6 +74,7 @@ class ChatRequest(BaseRequest):
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(True, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
+    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
 class ChatCompleteRequest(BaseRequest):
@@ -100,6 +89,7 @@ class ChatCompleteRequest(BaseRequest):
     base_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
+    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
 class UserCreate(BaseRequest):
@@ -161,6 +151,7 @@ class MemoryCreateRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID")
     source: str | None = Field(None, description="Source of the memory")
     user_profile: bool = Field(False, description="User profile memory")
+    session_id: str | None = Field(None, description="Session id")
 
 
 class SearchRequest(BaseRequest):
@@ -170,6 +161,7 @@ class SearchRequest(BaseRequest):
     query: str = Field(..., description="Search query")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
     top_k: int = Field(10, description="Number of results to return")
+    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
 class SuggestionRequest(BaseRequest):
