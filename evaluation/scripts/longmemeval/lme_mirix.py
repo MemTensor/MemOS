@@ -84,18 +84,16 @@ if __name__ == '__main__':
                 traceback.print_exc()
                 print(f"❌ Error processing {exc}")
 
-import json
-
-res = {}
-for i in open(
-        '/Users/wuhao/PycharmProjects/MemOS/evaluation/results/lme/mirix-0905/mirix_lme_test_result1.json').readlines():
-    line = json.loads(i)
-    res[line['question_id']] = {'question': line['question'],
-                                'golden_answer': line['answer'],
-                                'context': '',
-                                'answer': line['response'],
-                                'category': line['question_type'],
-                                'response_duration_ms': 0,
-                                'search_duration_ms': 0
-                                }
-json.dump(res, open('/Users/wuhao/PycharmProjects/MemOS/evaluation/results/lme/mirix-0905/mirix_lme_responses.json', 'w'), indent=2)
+    # import json
+    # res = {}
+    # for i in open('./results/lme/mirix_lme_test_result.json').readlines():
+    #     line = json.loads(i)
+    #     res[line['question_id']] = {'question': line['question'],
+    #                                 'golden_answer': line['answer'],
+    #                                 'context': '',
+    #                                 'answer': line['response'],
+    #                                 'category': line['question_type'],
+    #                                 'response_duration_ms': 0,
+    #                                 'search_duration_ms': 0
+    #                                 }
+    # json.dump(res, open('./results/lme/mirix-0905/mirix_lme_responses.json', 'w'), indent=2)

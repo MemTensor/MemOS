@@ -357,7 +357,7 @@ if __name__ == "__main__":
         "--options",
         type=str,
         nargs="+",
-        default=[],
+        default=["lexical", "semantic"],
         choices=["lexical", "semantic"],
         help="NLP options to use for evaluation.",
     )

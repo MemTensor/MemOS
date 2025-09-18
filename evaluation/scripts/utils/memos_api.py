@@ -19,7 +19,7 @@ class MemOSAPI:
     def add(self, messages: list[dict], user_id: str | None = None, conv_id: str | None = None):
         """Create memories."""
         retry = 0
-        while retry < 6:
+        while retry < 10:
             try:
                 url = f"{self.base_url}/add/message"
                 payload = json.dumps({"messages": messages, "userId": user_id, "conversationId": conv_id})
@@ -31,12 +31,12 @@ class MemOSAPI:
                 print(f'call memos api add failed {e} retry time {retry}')
                 # traceback.print_exc()
                 retry += 1
-        assert retry != 6, "add memory failed"
+        assert retry != 10, "add memory failed"
 
     def search(self, query: str, user_id: str | None = None, conv_id: str | None = '', top_k: int = 10):
         """Search memories."""
         retry = 0
-        while retry < 6:
+        while retry < 10:
             try:
                 url = f"{self.base_url}/search/memory"
                 payload = json.dumps(
@@ -56,7 +56,7 @@ class MemOSAPI:
                 print(f'call memos api search failed {e} retry time {retry}')
                 # traceback.print_exc()
                 retry += 1
-        assert retry != 6, "search memory failed"
+        assert retry != 10, "search memory failed"
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 
@@ -75,18 +76,12 @@ def ingest_session(session, date, user_id, session_id, frame, client):
             client.add(messages=messages, user_id=user_id)
             client.mem_reorganizer_wait()
         elif frame == "memos-api":
-            client.add(messages=messages, user_id=user_id, conv_id=session_id)
+            if messages:
+                client.add(messages=messages, user_id=user_id, conv_id=session_id)
         print(f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}")
-    elif frame == "mirix":
-        user = client.get_user_by_name(user_name=user_id)
-        message = f"Conversation happened at {date.isoformat()}:\n\n"
-        for turn in session:
-            message += turn['role'] + ": " + turn['content']
-            message += "\n"
-        client.add(message, user_id=user.id)
 
 
-def ingest_conv(lme_df, version, conv_idx, frame):
+def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     conversation = lme_df.iloc[conv_idx]
 
     sessions = conversation["haystack_sessions"]
@@ -100,25 +95,12 @@ def ingest_conv(lme_df, version, conv_idx, frame):
 
     if frame == "zep":
         client = zep_client()
-        print("🔌 Using Zep client for ingestion...")
-        # Delete existing user and session if they exist
-        client.user.delete(user_id)
-        print(f"🗑️  Deleted existing user {user_id} from Zep memory...")
-        # Add user to Zep memory
         client.user.add(user_id=user_id)
         print(f"➕ Added user {user_id} to Zep memory...")
     elif frame == "mem0-local":
         client = mem0_client(mode="local")
-        print("🔌 Using Mem0 Local client for ingestion...")
-        # Delete existing memories for the user
-        client.delete_all(user_id=user_id)
-        print(f"🗑️  Deleted existing memories for user {user_id}...")
     elif frame == "mem0-api":
         client = mem0_client(mode="api")
-        print("🔌 Using Mem0 API client for ingestion...")
-        # Delete existing memories for the user
-        client.delete_all(user_id=user_id)
-        print(f"🗑️  Deleted existing memories for user {user_id}...")
     elif frame == "memos-local":
         client = memos_client(
             mode="local",
@@ -135,35 +117,24 @@ def ingest_conv(lme_df, version, conv_idx, frame):
         client = MemOSAPI()
     elif frame == "memobase":
         client = memobase_client()
-        print("🔌 Using Memobase client for ingestion...")
-        all_users = client.get_all_users(limit=5000)
-        for user in all_users:
-            try:
-                if user['additional_fields']['user_id'] == user_id:
-                    client.delete_user(user['id'])
-                    print(f"🗑️  Deleted existing user {user_id} from Memobase memory...")
-            except:
-                pass
         memobase_user_id = client.add_user({"user_id": user_id})
         user_id = memobase_user_id
 
     for idx, session in enumerate(sessions):
-        session_id = user_id + "_lme_exper_session_" + str(idx)
-        if frame == "zep":
-            client.memory.add_session(
-                user_id=user_id,
-                session_id=session_id,
-            )
-            print(f"➕ Added session {session_id} for user {user_id} to Zep memory...")
+        if f"{conv_idx}_{idx}" not in success_records:
+            session_id = user_id + "_lme_exper_session_" + str(idx)
+            if frame == "zep":
+                client.memory.add_session(user_id=user_id, session_id=session_id,)
+            date = dates[idx] + " UTC"
+            date_format = "%Y/%m/%d (%a) %H:%M UTC"
+            date_string = datetime.strptime(date, date_format).replace(tzinfo=timezone.utc)
 
-        date = dates[idx] + " UTC"
-        date_format = "%Y/%m/%d (%a) %H:%M UTC"
-        date_string = datetime.strptime(date, date_format).replace(tzinfo=timezone.utc)
-
-        try:
-            ingest_session(session, date_string, user_id, session_id, frame, client)
-        except Exception as e:
-            print(f"\033[91m❌ Error ingesting session: {e}\033[0m")
+            try:
+                ingest_session(session, date_string, user_id, session_id, frame, client)
+                f.write(f"{conv_idx}_{idx}\n")
+                f.flush()
+            except Exception as e:
+                print(f"❌ Error ingesting session: {e}")
 
     if frame == "memos-local":
         client.mem_reorganizer_off()
@@ -173,7 +144,7 @@ def ingest_conv(lme_df, version, conv_idx, frame):
 
 def main(frame, version, num_workers=2):
     print("\n" + "=" * 80)
-    print(f"🚀 [1;36mLONGMEMEVAL INGESTION - {frame.upper()} v{version}".center(80))
+    print(f"🚀 LONGMEMEVAL INGESTION - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
     lme_df = pd.read_json("data/longmemeval/longmemeval_s.json")
@@ -184,24 +155,27 @@ def main(frame, version, num_workers=2):
     print("-" * 80)
 
     start_time = datetime.now()
+    os.makedirs(f"results/lme/{frame}-{version}/", exist_ok=True)
+    success_records = []
+    record_file = f'results/lme/{frame}-{version}/success_records.txt'
+    if os.path.exists(record_file):
+        for i in open(record_file, 'r').readlines():
+            success_records.append(i.strip())
+
+    f = open(record_file, "a+")
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = []
         for session_idx in range(num_multi_sessions):
-            future = executor.submit(ingest_conv, lme_df, version, session_idx, frame)
+            future = executor.submit(ingest_conv, lme_df, version, session_idx, frame, success_records, f)
             futures.append(future)
 
-        for future in tqdm(
-                as_completed(futures), total=len(futures), desc="📊 Processing conversations"
-        ):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="📊 Processing conversations"):
             try:
                 future.result()
             except Exception as e:
-                print(f"\033[91m❌ Error processing conversation: {e}\033[0m")
+                print(f"❌ Error processing conversation: {e}")
 
-    if frame == "mirix":
-        res = client.save(f"results/lme/mirix_{version}")
-        print(f"mirix save status: {res}")
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
@@ -220,14 +194,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase", "mirix"],
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
         default="memos-api"
     )
     parser.add_argument(
         "--version", type=str, default="0916-test2", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=1, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()
