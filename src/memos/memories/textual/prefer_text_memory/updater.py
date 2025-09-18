@@ -247,7 +247,7 @@ class NaiveUpdater(BaseUpdater):
 
         if user_prefs:
             mem = VecDBItem(
-                id=str(uuid.uuid4()),
+                id=user_id,
                 vector=[0.0] * self.vector_db.config.vector_dimension,
                 payload={
                     "user_id": user_id,
