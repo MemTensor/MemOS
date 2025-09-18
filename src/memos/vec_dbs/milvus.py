@@ -198,6 +198,7 @@ class MilvusVecDB(BaseVecDB):
             collection_name=collection_name,
             filter=expr,
             batch_size=scroll_limit,
+            output_fields=["*"],  # Include all fields including payload
         )
         
         # Iterate through all batches

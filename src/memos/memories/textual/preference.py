@@ -86,12 +86,12 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         self.extractor.extract(messages, type, info)
 
-    def update_preferences(self, new_dialog: MessageList) -> None:
-        """Update a memory by new dialog.
-        Args:
-            new_dialog (MessageList): The new dialog to update.
+    def slow_update(self) -> str:
+        """Perform a slow update of preferences by reconstructing all preference collections.
+        Returns:
+            str: Summary of the memory build process.
         """
-        self.updater.update(new_dialog)
+        return self.updater.slow_update()
     
     def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -206,12 +206,16 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             TextualMemoryItem: The memory with the given ID and collection name.
         """
-        res = self.vector_db.get_by_id(collection_name, memory_id)
-        if res is None:
-            raise ValueError(f"Memory with ID {memory_id} not found in collection {collection_name}")
-        return TextualMemoryItem(id=res.id, 
-                                memory=res.payload.get("dialog_str", ""), 
-                                metadata=PreferenceTextualMemoryMetadata(**res.payload))
+        try:
+            res = self.vector_db.get_by_id(collection_name, memory_id)
+            if res is None:
+                raise ValueError(f"Memory with ID {memory_id} not found in collection {collection_name}")
+            return TextualMemoryItem(id=res.id, 
+                                    memory=res.payload.get("dialog_str", ""), 
+                                    metadata=PreferenceTextualMemoryMetadata(**res.payload))
+        except Exception as e:
+            # Convert any other exception to ValueError for consistent error handling
+            raise ValueError(f"Memory with ID {memory_id} not found in collection {collection_name}: {e}")
     
     def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
@@ -230,12 +234,16 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of memories with the specified IDs and collection name.
         """
-        res =  self.vector_db.get_by_ids(collection_name, memory_ids)
-        if res is None:
-            raise ValueError(f"Memory with IDs {memory_ids} not found in collection {collection_name}")
-        return [TextualMemoryItem(id=memo.id, 
-                                memory=memo.payload.get("dialog_str", ""), 
-                                metadata=PreferenceTextualMemoryMetadata(**memo.payload)) for memo in res]
+        try:
+            res = self.vector_db.get_by_ids(collection_name, memory_ids)
+            if not res:
+                raise ValueError(f"Memory with IDs {memory_ids} not found in collection {collection_name}")
+            return [TextualMemoryItem(id=memo.id, 
+                                    memory=memo.payload.get("dialog_str", ""), 
+                                    metadata=PreferenceTextualMemoryMetadata(**memo.payload)) for memo in res]
+        except Exception as e:
+            # Convert any other exception to ValueError for consistent error handling
+            raise ValueError(f"Memory with IDs {memory_ids} not found in collection {collection_name}: {e}")
     
     def get_all(self) -> list[TextualMemoryItem]:
         """Get all memories.

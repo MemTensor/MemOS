@@ -47,11 +47,12 @@ class NaiveExtractor(BaseExtractor):
 
     def extract_topic_info(self, qa_pair: MessageList | str) -> Dict[str, Any]:
         """Extract topic information from a QA pair."""
-        qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, MessageList) else qa_pair
+        qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, list) else qa_pair
         prompt = NAIVE_TOPIC_INFO_EXTRACT_PROMPT.replace("{qa_pair}", qa_pair_str)
         
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             return result
         except Exception:
@@ -59,11 +60,12 @@ class NaiveExtractor(BaseExtractor):
     
     def extract_explicit_preference(self, qa_pair: MessageList | str) -> Dict[str, Any]:
         """Extract explicit preference from a QA pair."""
-        qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, MessageList) else qa_pair
+        qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, list) else qa_pair
         prompt = NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pair}", qa_pair_str)
         
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             return result
         except Exception:
@@ -71,33 +73,39 @@ class NaiveExtractor(BaseExtractor):
 
     def extract_implicit_preferences(self, qa_pairs: list[MessageList] | list[str]) -> List[Dict[str, Any]]:
         """Extract implicit preferences from cluster qa pairs."""
-        qa_pairs_str = convert_messages_to_string(qa_pairs) if isinstance(qa_pairs, MessageList) else "\n\n".join(qa_pairs)
+        if not qa_pairs:
+            return None
+        qa_pairs_str = convert_messages_to_string(qa_pairs) if isinstance(qa_pairs[0], dict) else "\n\n".join(qa_pairs)
         prompt = NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pairs}", qa_pairs_str)
             
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             
             if result.get("implicit_preference"):
                 return result
         except Exception as e:
             print(f"Error processing cluster: {qa_pairs}\n{e}")
-            return ""
+            return None
     
     def extract_topic_preferences(self, qa_pairs: list[MessageList] | list[str]) -> List[Dict[str, Any]]:
         """Extract topic preferences from cluster qa pairs."""
-        qa_pairs_str = convert_messages_to_string(qa_pairs) if isinstance(qa_pairs, MessageList) else "\n\n".join(qa_pairs)
+        if not qa_pairs:
+            return None
+        qa_pairs_str = convert_messages_to_string(qa_pairs) if isinstance(qa_pairs[0], dict) else "\n\n".join(qa_pairs)
         prompt = NAIVE_TOPIC_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pairs}", qa_pairs_str)
         
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             
             if result.get("topic_cluster_name"):
                 return result
         except Exception as e:
             print(f"Error processing cluster: {qa_pairs}\n{e}")
-            return ""
+            return None
     
     def extract_user_preferences(self, topic_preferences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract user-level preferences."""
@@ -108,8 +116,8 @@ class NaiveExtractor(BaseExtractor):
         
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
-            
             if result.get("user_preference"):
                 return result
         except Exception as e:

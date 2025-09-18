@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, List, Dict
 from datetime import datetime
+import uuid
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from memos.types import MessageList
@@ -15,14 +16,6 @@ class BaseUpdater(ABC):
     def __init__(self, llm_provider=None, embedder=None, vector_db=None, extractor=None):
         """Initialize the updater."""
 
-    @abstractmethod
-    def update(self, new_dialog: MessageList, *args, **kwargs) -> None:
-        """Update the dialog.
-        Args:
-            new_dialog (MessageList): The new dialog to update.
-            *args: Additional positional arguments.
-            **kwargs: Additional keyword arguments.
-        """
 
 
 class NaiveUpdater(BaseUpdater):
@@ -126,26 +119,26 @@ class NaiveUpdater(BaseUpdater):
             print(f"Error processing implicit cluster {cluster_id}: {e}")
             return {"cluster_id": cluster_id, "implicit_exract_result": None}
 
-    def _extract_implicit_preferences(self, implicit_extract_inputs: Dict[str, List[str]], max_workers: int = 10) -> List[Dict[str, Any]]:
+    def _extract_implicit_preferences(self, implicit_extract_inputs: Dict[str, List[str]], max_workers: int = 10) -> Dict[str, Dict[str, Any]]:
         """Extract implicit preferences from implicit extract inputs using thread pool."""
         if not implicit_extract_inputs:
-            return []
+            return {}
         
-        results = []
+        results = {}
         with ThreadPoolExecutor(max_workers=min(max_workers, len(implicit_extract_inputs))) as executor:
-            future_to_cluster = {
-                executor.submit(self._process_single_implicit_cluster, cluster_id, cluster_dialogs): cluster_id
+            futures = [
+                executor.submit(self._process_single_implicit_cluster, cluster_id, cluster_dialogs)
                 for cluster_id, cluster_dialogs in implicit_extract_inputs.items()
-            }
+            ]
             
-            for future in as_completed(future_to_cluster):
+            for future in as_completed(futures):
                 try:
                     result = future.result()
                     if result["implicit_exract_result"] is not None:
-                        results.append(result)
+                        cluster_id = result["cluster_id"]
+                        results[cluster_id] = result["implicit_exract_result"]
                 except Exception as e:
-                    cluster_id = future_to_cluster[future]
-                    print(f"Error processing implicit cluster {cluster_id}: {e}")
+                    print(f"Error processing implicit cluster: {e}")
                     continue
         
         return results
@@ -159,33 +152,34 @@ class NaiveUpdater(BaseUpdater):
             print(f"Error processing topic cluster {cluster_id}: {e}")
             return {"cluster_id": cluster_id, "topic_exract_result": None}
 
-    def _extract_topic_preferences(self, topic_extract_inputs: Dict[str, List[str]], max_workers: int = 10) -> List[Dict[str, Any]]:
+    def _extract_topic_preferences(self, topic_extract_inputs: Dict[str, List[str]], max_workers: int = 10) -> Dict[str, Dict[str, Any]]:
         """Extract topic preferences from topic extract inputs using thread pool."""
         if not topic_extract_inputs:
-            return []
+            return {}
         
-        results = []
+        results = {}
         with ThreadPoolExecutor(max_workers=min(max_workers, len(topic_extract_inputs))) as executor:
-            future_to_cluster = {
-                executor.submit(self._process_single_topic_cluster, cluster_id, cluster_dialogs): cluster_id
+            futures = [
+                executor.submit(self._process_single_topic_cluster, cluster_id, cluster_dialogs)
                 for cluster_id, cluster_dialogs in topic_extract_inputs.items()
-            }
+            ]
             
-            for future in as_completed(future_to_cluster):
+            for future in as_completed(futures):
                 try:
                     result = future.result()
                     if result["topic_exract_result"] is not None:
-                        results.append(result)
+                        cluster_id = result["cluster_id"]
+                        results[cluster_id] = result["topic_exract_result"]
                 except Exception as e:
-                    cluster_id = future_to_cluster[future]
-                    print(f"Error processing topic cluster {cluster_id}: {e}")
+                    print(f"Error processing topic cluster: {e}")
                     continue
         
         return results
 
     def _extract_user_preferences(self, topic_cluster_pref_infos: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Extract user preferences from topic cluster info."""
-        topic_cluster_pref = [info["topic_exract_result"] for info in topic_cluster_pref_infos]
+        # topic_prefs is a dict, so we just pass the values as a list
+        topic_cluster_pref = list(topic_cluster_pref_infos.values())
         return self.extractor.extract_user_preferences(topic_cluster_pref)
 
     def _store_preferences(self, 
@@ -201,6 +195,9 @@ class NaiveUpdater(BaseUpdater):
 
         if implicit_clusters:
             for cluster in implicit_clusters:
+                if cluster.cluster_id not in implicit_cluster_prefs:
+                    print(f"Warning: No preference found for cluster {cluster.cluster_id}, skipping...")
+                    continue
                 pref = implicit_cluster_prefs[cluster.cluster_id]
                 mem = VecDBItem(
                     id=cluster.cluster_id,
@@ -223,6 +220,9 @@ class NaiveUpdater(BaseUpdater):
 
         if topic_clusters:
             for cluster in topic_clusters:
+                if cluster.cluster_id not in topic_cluster_prefs:
+                    print(f"Warning: No preference found for topic cluster {cluster.cluster_id}, skipping...")
+                    continue
                 pref = topic_cluster_prefs[cluster.cluster_id]
                 mem = VecDBItem(
                     id=cluster.cluster_id,
@@ -247,8 +247,8 @@ class NaiveUpdater(BaseUpdater):
 
         if user_prefs:
             mem = VecDBItem(
-                id=user_id,
-                vector=[0.0] * self.embedder.config.embedding_dims,
+                id=str(uuid.uuid4()),
+                vector=[0.0] * self.vector_db.config.vector_dimension,
                 payload={
                     "user_id": user_id,
                     "user_preference": user_prefs.get("user_preference", ""),

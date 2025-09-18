@@ -106,7 +106,7 @@ class HDBSCANClusterer(BaseClusterer):
             _, indices = nn.kneighbors([geometric_center_vector.tolist()])
             closest_idx = indices[0][0]
             center_index = items_in_cluster[closest_idx]["index"]
-            center_vector = cluster_vectors[closest_idx]["vector"]
+            center_vector = items_in_cluster[closest_idx]["vector"]
             
             cluster_info.append(ClusterResult(
                 cluster_id=str(uuid.uuid4()),

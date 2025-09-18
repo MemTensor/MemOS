@@ -35,36 +35,34 @@ class NaiveAdder(BaseAdder):
         self.embedder = embedder
         self.vector_db = vector_db
 
-    def _judge_update_or_add(self, old_msg: MessageList, new_msg: MessageList) -> bool:
+    def _judge_update_or_add(self, old_msg: str, new_msg: str) -> bool:
         """Judge if the new message expresses the same core content as the old message."""
-        # Convert messages to string format for comparison
-        old_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in old_msg])
-        new_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in new_msg])
-        
         # Use the template prompt with placeholders
-        prompt = NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT.replace("{old_information}", old_str).replace("{new_information}", new_str)
+        prompt = NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT.replace("{old_information}", old_msg).replace("{new_information}", new_msg)
         
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             response = result.get("is_same", False)
             return response if isinstance(response, bool) else response == "true"
         except Exception as e:
             print(f"Error in judge_update_or_add: {e}")
             # Fallback to simple string comparison
-            return old_str == new_str
+            return old_msg == new_msg
     
     def _process_single_memory(self, memory: TextualMemoryItem) -> str | None:
         """Process a single memory and return its ID if added successfully."""
         try:
-            payload = {**memory.metadata.model_dump()}
+            payload = memory.to_dict()["metadata"]
             vec_db_item = VecDBItem(
                 id=memory.id,
                 vector=memory.metadata.dialog_vector,
                 payload=payload
-            )
+            ) 
 
-            recall = self.vector_db.search(memory.metadata.dialog_vector, "explicit_preference", top_k=1)[0]
+            search_results = self.vector_db.search(memory.metadata.dialog_vector, "explicit_preference", top_k=1)
+            recall = search_results[0] if search_results else None
             if not recall or (recall.score is not None and recall.score < 0.5):
                 self.vector_db.update("explicit_preference", memory.id, vec_db_item)
                 return memory.id

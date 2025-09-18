@@ -17,15 +17,7 @@ Explicit preferences, extract only from the user's Q. Including but not limited 
 
 # Output Format
 {
-  "explicit_preference": {
-    "role": "",
-    "style": "",
-    "format": "",
-    "length": "",
-    "language": "",
-    "safety": "",
-    "quality": ""
-  }
+  "explicit_preference": "Write the explicit preferences here"
 }
 
 # Notes
@@ -66,15 +58,11 @@ Your task is to extract the user's **implicit preferences** from these QA pairs.
 
 # Output Format:
 {
-  "implicit_preference": [
-    "preference 1",
-    "preference 2",
-    "preference 3"
-  ]
+  "implicit_preference": "Write the implicit preferences here, 1. preference 1, 2. preference 2, 3. preference 3"
 }
 
 # Notes:
-- If no clear implicit preferences are found, return an empty array []
+- If no clear implicit preferences are found, return an empty string ""
 - Only output JSON, no explanations
 - Focus on meaningful patterns, not trivial observations
 

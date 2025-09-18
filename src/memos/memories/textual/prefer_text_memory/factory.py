@@ -68,13 +68,13 @@ class UpdaterFactory(BaseUpdater):
     }
     
     @classmethod
-    def from_config(cls, config_factory: UpdaterConfigFactory, llm_provider=None, embedder=None, vector_db=None) -> BaseUpdater:
+    def from_config(cls, config_factory: UpdaterConfigFactory, llm_provider=None, embedder=None, vector_db=None, extractor=None) -> BaseUpdater:
         """Create a Updater instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
             raise ValueError(f"Invalid backend: {backend}")
         updater_class = cls.backend_to_class[backend]
-        return updater_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db)
+        return updater_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db, extractor=extractor)
 
 class AssemblerFactory(BaseAssembler):
     """Factory class for creating Assembler instances."""

@@ -53,7 +53,7 @@ class Splitter:
         Returns:
             List of MessageList chunks or list of string chunks
         """
-        if isinstance(data, MessageList):
+        if isinstance(data, list):
             # Build QA pairs from chat history
             pairs = self.build_qa_pairs(data)
             chunks = []
