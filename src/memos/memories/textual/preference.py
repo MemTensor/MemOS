@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from memos.configs.memory import PreferenceTextMemoryConfig
-from memos.embedders.factory import EmbedderFactory, OllamaEmbedder, ArkEmbedder, SenTranEmbedder, UniversalAPIEmbedder
+from memos.embedders.factory import (EmbedderFactory, 
+                                    OllamaEmbedder, 
+                                    ArkEmbedder, 
+                                    SenTranEmbedder, 
+                                    UniversalAPIEmbedder)
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
@@ -17,7 +21,11 @@ from memos.types import ChatHistory, MessageList
 from memos.llms.base import BaseLLM
 from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory, MilvusVecDB
 from memos.vec_dbs.item import VecDBItem
-from memos.memories.textual.prefer_text_memory.factory import AdderFactory, ExtractorFactory, RetrieverFactory, UpdaterFactory, AssemblerFactory
+from memos.memories.textual.prefer_text_memory.factory import (AdderFactory, 
+                                                              ExtractorFactory, 
+                                                              RetrieverFactory, 
+                                                              UpdaterFactory, 
+                                                              AssemblerFactory)
 
 
 logger = get_logger(__name__)
