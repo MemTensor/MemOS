@@ -62,6 +62,7 @@ class MilvusVecDB(BaseVecDB):
             dimension=self.config.vector_dimension,
             metric_type=self._get_metric_type(),
             id_type="string",  # Use string ID type, align with VecDBItem id type
+            max_length=self.config.max_length,  # Use max_length from config
         )
 
     def list_collections(self) -> list[str]:
