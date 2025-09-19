@@ -1261,6 +1261,7 @@ class NebulaGraphDB(BaseGraphDB):
             where_clause += f' AND n.user_name = "{self.config.user_name}"'
 
         return_fields = self._build_return_fields(include_embedding)
+        return_fields += f", n.{self.dim_field} AS {self.dim_field}"
 
         query = f"""
             MATCH (n@Memory)
