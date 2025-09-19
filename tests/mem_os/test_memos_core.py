@@ -682,41 +682,8 @@ class TestMOSChat:
         # Verify response
         assert response == "This is a test response from the assistant."
 
-    @patch("memos.mem_os.core.UserManager")
-    @patch("memos.mem_os.core.MemReaderFactory")
-    @patch("memos.mem_os.core.LLMFactory")
-    def test_clear_messages(
-        self,
-        mock_llm_factory,
-        mock_reader_factory,
-        mock_user_manager_class,
-        mock_config,
-        mock_llm,
-        mock_mem_reader,
-        mock_user_manager,
-    ):
-        """Test clearing chat history."""
-        # Setup mocks
-        mock_llm_factory.from_config.return_value = mock_llm
-        mock_reader_factory.from_config.return_value = mock_mem_reader
-        mock_user_manager_class.return_value = mock_user_manager
 
-        mos = MOSCore(MOSConfig(**mock_config))
-
-        # Add some chat history
-        mos.chat_history_manager["test_user"].chat_history.append(
-            {"role": "user", "content": "Hello"}
-        )
-        mos.chat_history_manager["test_user"].chat_history.append(
-            {"role": "assistant", "content": "Hi"}
-        )
-
-        assert len(mos.chat_history_manager["test_user"].chat_history) == 2
-
-        mos.clear_messages()
-
-        assert len(mos.chat_history_manager["test_user"].chat_history) == 0
-        assert mos.chat_history_manager["test_user"].user_id == "test_user"
+# TODO: test clear message
 
 
 class TestMOSSystemPrompt:

@@ -103,6 +103,7 @@ class MemoryManager:
         """
         Return the cached memory type counts.
         """
+        self._refresh_memory_size()
         return self.current_memory_size
 
     def _refresh_memory_size(self) -> None:

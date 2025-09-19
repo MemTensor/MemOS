@@ -1036,7 +1036,7 @@ class MOSProduct(MOSCore):
         system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
         # Get chat history
         if user_id not in self.chat_history_manager:
-            self._register_chat_history(user_id)
+            self._register_chat_history(user_id, session_id)
 
         chat_history = self.chat_history_manager[user_id]
         if history:
