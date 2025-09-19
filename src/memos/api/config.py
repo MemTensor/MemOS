@@ -273,7 +273,7 @@ class APIConfig:
     def get_scheduler_config() -> dict[str, Any]:
         """Get scheduler configuration."""
         return {
-            "backend": "general_scheduler",
+            "backend": "optimized_scheduler",
             "config": {
                 "top_k": int(os.getenv("MOS_SCHEDULER_TOP_K", "10")),
                 "act_mem_update_interval": int(

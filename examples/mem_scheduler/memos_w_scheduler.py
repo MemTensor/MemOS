@@ -15,7 +15,7 @@ from memos.mem_scheduler.general_scheduler import GeneralScheduler
 
 
 if TYPE_CHECKING:
-    from memos.mem_scheduler.schemas import (
+    from memos.mem_scheduler.schemas.message_schemas import (
         ScheduleLogForWebItem,
     )
 
