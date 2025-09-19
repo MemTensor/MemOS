@@ -97,7 +97,7 @@ class GeneralMemCubeConfig(BaseMemCubeConfig):
     @classmethod
     def validate_pref_mem(cls, pref_mem: MemoryConfigFactory) -> MemoryConfigFactory:
         """Validate the pref_mem field."""
-        allowed_backends = ["naive_pref", "uninitialized"]
+        allowed_backends = ["pref_text", "uninitialized"]
         if pref_mem.backend not in allowed_backends:
             raise ConfigurationError(
                 f"GeneralMemCubeConfig requires pref_mem backend to be one of {allowed_backends}, got '{pref_mem.backend}'"

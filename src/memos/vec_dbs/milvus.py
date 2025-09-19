@@ -1,5 +1,5 @@
 from typing import Any
-
+from pymilvus import MilvusClient, DataType
 from memos.configs.vec_db import MilvusVecDBConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
@@ -20,13 +20,31 @@ class MilvusVecDB(BaseVecDB):
     )
     def __init__(self, config: MilvusVecDBConfig):
         """Initialize the Milvus vector database and the collection."""
-        from pymilvus import MilvusClient
 
         self.config = config
 
         # Create Milvus client
         self.client = MilvusClient(uri=self.config.uri)
+        self.schema = self.create_schema()
+        self.index_params = self.create_index()
         self.create_collection()
+
+    def create_schema(self):
+        """Create schema for the milvus collection."""
+        schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
+        schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
+        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension)
+        schema.add_field(field_name="payload", datatype=DataType.JSON)
+
+        return schema
+
+    def create_index(self):
+        """Create index for the milvus collection."""
+        index_params = self.client.prepare_index_params()
+        index_params.add_index(field_name="vector", index_type="FLAT", metric_type=self._get_metric_type())
+
+        return index_params
+
 
     def create_collection(self) -> None:
         """Create a new collection with specified parameters."""
@@ -41,8 +59,8 @@ class MilvusVecDB(BaseVecDB):
                 collection_name=collection_name,
                 dimension=self.config.vector_dimension,
                 metric_type=self._get_metric_type(),
-                id_type="string",  # Use string ID type, align with VecDBItem id type
-                max_length=self.config.max_length,  # Use max_length from config
+                schema=self.schema,
+                index_params=self.index_params,
             )
 
             logger.info(
@@ -61,8 +79,8 @@ class MilvusVecDB(BaseVecDB):
             collection_name=collection_name,
             dimension=self.config.vector_dimension,
             metric_type=self._get_metric_type(),
-            id_type="string",  # Use string ID type, align with VecDBItem id type
-            max_length=self.config.max_length,  # Use max_length from config
+            schema=self.schema,
+            index_params=self.index_params,
         )
 
     def list_collections(self) -> list[str]:
@@ -100,21 +118,18 @@ class MilvusVecDB(BaseVecDB):
             data=[query_vector],
             limit=top_k,
             filter=expr,
+            output_fields=["*"],  # Return all fields
         )
         
         items = []
         for hit in results[0]:
-            # Extract payload from hit
-            payload = {}
-            for key, value in hit.get("entity", {}).items():
-                if key not in ["id", "vector"]:
-                    payload[key] = value
+            entity = hit.get("entity", {})
             
             items.append(VecDBItem(
                 id=str(hit["id"]),
-                vector=hit.get("entity", {}).get("vector"),
-                payload=payload,
-                score=float(hit["distance"]),
+                vector=entity.get("vector"),
+                payload=entity.get("payload", {}),
+                score=1-float(hit["distance"]),
             ))
         
         logger.info(f"Milvus search completed with {len(items)} results.")
@@ -124,10 +139,16 @@ class MilvusVecDB(BaseVecDB):
         """Convert a dictionary filter to a Milvus expression string."""
         conditions = []
         for field, value in filter_dict.items():
+            # For JSON fields, we need to use payload["field"] syntax
             if isinstance(value, str):
-                conditions.append(f'{field} == "{value}"')
+                conditions.append(f"payload['{field}'] == '{value}'")
+            elif isinstance(value, list) and len(value) == 0:
+                # Skip empty lists as they cause Milvus query syntax errors
+                continue
+            elif isinstance(value, list) and len(value) > 0:
+                conditions.append(f"payload['{field}'] in {value}")
             else:
-                conditions.append(f"{field} == {value}")
+                conditions.append(f"payload['{field}'] == '{value}'")
         return " and ".join(conditions)
 
     def _get_metric_type(self) -> str:
@@ -202,23 +223,27 @@ class MilvusVecDB(BaseVecDB):
         )
         
         # Iterate through all batches
-        while True:
-            batch_results = iterator.next()
-            
-            if not batch_results:
-                break
+        try:
+            while True:
+                batch_results = iterator.next()
                 
-            # Convert batch results to VecDBItem objects
-            for entity in batch_results:
-                payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
-                all_items.append(VecDBItem(
-                    id=entity["id"],
-                    vector=entity.get("vector"),
-                    payload=payload,
-                ))
-        
-        # Close the iterator
-        iterator.close()
+                if not batch_results:
+                    break
+                    
+                # Convert batch results to VecDBItem objects
+                for entity in batch_results:
+                    payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
+                    all_items.append(VecDBItem(
+                        id=entity["id"],
+                        vector=entity.get("vector"),
+                        payload=payload,
+                    ))
+        except Exception as e:
+            logger.warning(f"Error during Milvus query iteration: {e}. Returning {len(all_items)} items found so far.")
+            # 返回已经找到的项目，而不是空列表
+        finally:
+            # Close the iterator
+            iterator.close()
 
         logger.info(f"Milvus retrieve by filter completed with {len(all_items)} results.")
         return all_items
@@ -264,10 +289,8 @@ class MilvusVecDB(BaseVecDB):
             entity = {
                 "id": item.id,
                 "vector": item.vector,
+                "payload": item.payload if item.payload else {}
             }
-            # Add payload fields
-            if item.payload:
-                entity.update(item.payload)
             
             entities.append(entity)
 

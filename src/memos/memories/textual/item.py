@@ -113,7 +113,7 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     dialog_id: str | None = Field(
         default=None, description="ID of the dialog."
     )
-    dialog_msgs: list[str] | None = Field(
+    dialog_msgs: list[dict[str, str]] | None = Field(
         default=None, description="Messages of the dialog."
     )
     dialog_str: str | None = Field(

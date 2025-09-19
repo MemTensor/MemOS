@@ -180,9 +180,12 @@ class NaiveExtractor(BaseExtractor):
         memory = TextualMemoryItem(id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata)
         return memory
 
-    def extract(self, messages: MessageList, msg_type: str, info: dict[str, Any], max_workers: int = 10) -> list[TextualMemoryItem]:
+    def extract(self, messages: list[MessageList], msg_type: str, info: dict[str, Any], max_workers: int = 10) -> list[TextualMemoryItem]:
         """Extract preference memories based on the messages using thread pool for acceleration."""
-        chunks = self.splitter.split_chunks(messages)
+        chunks: list[MessageList] = []
+        for message in messages:
+            chunk = self.splitter.split_chunks(message)
+            chunks.extend(chunk)
         if not chunks:
             return []
 

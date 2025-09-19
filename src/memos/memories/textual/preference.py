@@ -84,7 +84,7 @@ class PreferenceTextMemory(BaseTextMemory):
             type (str): The type of memory to get.
             info (dict[str, Any]): The info to get memory.
         """
-        self.extractor.extract(messages, type, info)
+        return self.extractor.extract(messages, type, info)
 
     def slow_update(self) -> str:
         """Perform a slow update of preferences by reconstructing all preference collections.
@@ -139,7 +139,10 @@ class PreferenceTextMemory(BaseTextMemory):
         except FileNotFoundError:
             logger.error(f"Memory file not found in directory: {dir}")
         except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON from memory file: {e}")
+            if e.pos == 0 and "Expecting value" in str(e):
+                logger.warning(f"Memory file is empty or contains only whitespace: {memory_file}")
+            else:
+                logger.error(f"Error decoding JSON from memory file: {e}")
         except Exception as e:
             logger.error(f"An error occurred while loading memories: {e}")
 

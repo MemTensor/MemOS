@@ -631,7 +631,6 @@ class MOSCore:
                         "session_id": self.session_id,
                         "chat_history": chat_history.chat_history,
                     },
-                    moscube=moscube,
                 )
                 result["pref_mem"].append({"cube_id": mem_cube_id, "memories": memories})
                 logger.info(
@@ -734,7 +733,7 @@ class MOSCore:
             messages_list = [messages]
             pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
                 messages_list, 
-                msg_type="chat", 
+                type="chat", 
                 info={"user_id": target_user_id, "session_id": self.session_id})
             preferences = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
             logger.info(

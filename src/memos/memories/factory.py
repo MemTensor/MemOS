@@ -21,7 +21,7 @@ class MemoryFactory(BaseMemory):
         "naive_text": NaiveTextMemory,
         "general_text": GeneralTextMemory,
         "tree_text": TreeTextMemory,
-        "preference_text": PreferenceTextMemory,
+        "pref_text": PreferenceTextMemory,
         "kv_cache": KVCacheMemory,
         "vllm_kv_cache": VLLMKVCacheMemory,
         "lora": LoRAMemory,

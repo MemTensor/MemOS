@@ -25,6 +25,11 @@ class NaiveRetriever(BaseRetriever):
 
     def retrieve(self, query: str, top_k: int, info: dict[str, Any]=None) -> list[TextualMemoryItem]:
         """Retrieve memories from the naive retriever."""
+        # TODO: un-support rewrite query and session filter now
+        if info:
+            info = info.copy()  # Create a copy to avoid modifying the original
+            info.pop("chat_history", None)
+            info.pop("session_id", None)
         query_embeddings = self.embedder.embed([query])  # Pass as list to get list of embeddings
         query_embedding = query_embeddings[0]  # Get the first (and only) embedding
         explicit_prefs = self.vector_db.search(query_embedding, "explicit_preference", top_k, info)
