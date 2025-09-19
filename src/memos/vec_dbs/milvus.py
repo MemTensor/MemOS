@@ -150,7 +150,7 @@ class MilvusVecDB(BaseVecDB):
             return None
 
         entity = results[0]
-        payload = {k: v for k, v in entity.items() if k not in ["id", "vector"]}
+        payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
         
         return VecDBItem(
             id=entity["id"],
@@ -170,7 +170,7 @@ class MilvusVecDB(BaseVecDB):
 
         items = []
         for entity in results:
-            payload = {k: v for k, v in entity.items() if k not in ["id", "vector"]}
+            payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
             items.append(VecDBItem(
                 id=entity["id"],
                 vector=entity.get("vector"),
@@ -210,7 +210,7 @@ class MilvusVecDB(BaseVecDB):
                 
             # Convert batch results to VecDBItem objects
             for entity in batch_results:
-                payload = {k: v for k, v in entity.items() if k not in ["id", "vector"]}
+                payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
                 all_items.append(VecDBItem(
                     id=entity["id"],
                     vector=entity.get("vector"),
