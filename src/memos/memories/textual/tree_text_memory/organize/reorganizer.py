@@ -372,8 +372,6 @@ class GraphStructureReorganizer:
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
-        if "duplicate" in response_text:
-            print("here")
         response_json = self._parse_json_result(response_text)
         assigned_ids = set()
         result_subclusters = []
