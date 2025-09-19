@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MemOS Product REST APIs",
     description="A REST API for managing multiple users with MemOS Product.",
-    version="1.0.0",
+    version="1.0.1",
 )
 
 # Add request context middleware (must be added first)

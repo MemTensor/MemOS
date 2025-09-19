@@ -129,6 +129,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        search_filter: dict | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -140,6 +141,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             scope (str, optional): Memory type filter (e.g., 'WorkingMemory', 'LongTermMemory').
             status (str, optional): Node status filter (e.g., 'activated', 'archived').
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
+            search_filter (dict, optional): Additional metadata filters to apply.
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
@@ -149,6 +151,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             - If 'scope' is provided, it restricts results to nodes with matching memory_type.
             - If 'status' is provided, it further filters nodes by status.
             - If 'threshold' is provided, only results with score >= threshold will be returned.
+            - If 'search_filter' is provided, it applies additional metadata-based filtering.
             - The returned IDs can be used to fetch full node data from Neo4j if needed.
         """
         # Build VecDB filter
@@ -162,6 +165,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             vec_filter["user_name"] = kwargs["cube_name"]
         else:
             vec_filter["user_name"] = self.config.user_name
+
+        # Add search_filter conditions
+        if search_filter:
+            vec_filter.update(search_filter)
 
         # Perform vector search
         results = self.vec_db.search(query_vector=vector, top_k=top_k, filter=vec_filter)

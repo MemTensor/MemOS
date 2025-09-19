@@ -7,7 +7,11 @@ from datetime import datetime
 import requests
 
 from memos.embedders.factory import OllamaEmbedder
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 
 
 class GoogleCustomSearchAPI:
@@ -172,7 +176,7 @@ class InternetGoogleRetriever:
                 visibility="public",
                 memory_type="LongTermMemory",  # Internet search results as working memory
                 key=title,
-                sources=[link] if link else [],
+                sources=[SourceMessage(type="web", url=link)] if link else [],
                 embedding=self.embedder.embed([memory_content])[0],  # Can add embedding later
                 created_at=datetime.now().isoformat(),
                 usage=[],

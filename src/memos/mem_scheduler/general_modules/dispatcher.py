@@ -2,8 +2,8 @@ import concurrent
 
 from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -33,7 +33,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         self.enable_parallel_dispatch = enable_parallel_dispatch
         self.thread_name_prefix = "dispatcher"
         if self.enable_parallel_dispatch:
-            self.dispatcher_executor = ThreadPoolExecutor(
+            self.dispatcher_executor = ContextThreadPoolExecutor(
                 max_workers=self.max_workers, thread_name_prefix=self.thread_name_prefix
             )
         else:

@@ -1,5 +1,4 @@
 import json
-from memos.log import get_logger
 import traceback
 
 from datetime import datetime
@@ -26,6 +25,7 @@ from memos.api.product_models import (
     UserRegisterResponse,
 )
 from memos.configs.mem_os import MOSConfig
+from memos.log import get_logger
 from memos.mem_os.product import MOSProduct
 from memos.memos_tools.notification_service import get_error_bot_function, get_online_bot_function
 
@@ -106,6 +106,7 @@ def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_o
             interests=user_req.interests,
             config=user_config,
             default_mem_cube=default_mem_cube,
+            mem_cube_id=user_req.mem_cube_id,
         )
 
         if result["status"] == "success":
@@ -203,6 +204,7 @@ def create_memory(memory_req: MemoryCreateRequest):
             mem_cube_id=memory_req.mem_cube_id,
             source=memory_req.source,
             user_profile=memory_req.user_profile,
+            session_id=memory_req.session_id,
         )
         return SimpleResponse(message="Memory created successfully")
 
@@ -223,6 +225,7 @@ def search_memories(search_req: SearchRequest):
             user_id=search_req.user_id,
             install_cube_ids=[search_req.mem_cube_id] if search_req.mem_cube_id else None,
             top_k=search_req.top_k,
+            session_id=search_req.session_id,
         )
         return SearchResponse(message="Search completed successfully", data=result)
 
@@ -250,6 +253,7 @@ def chat(chat_req: ChatRequest):
                     history=chat_req.history,
                     internet_search=chat_req.internet_search,
                     moscube=chat_req.moscube,
+                    session_id=chat_req.session_id,
                 )
 
             except Exception as e:
@@ -294,6 +298,7 @@ def chat_complete(chat_req: ChatCompleteRequest):
             base_prompt=chat_req.base_prompt,
             top_k=chat_req.top_k,
             threshold=chat_req.threshold,
+            session_id=chat_req.session_id,
         )
 
         # Return the complete response

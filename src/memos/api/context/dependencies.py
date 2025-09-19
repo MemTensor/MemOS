@@ -1,8 +1,6 @@
 import logging
 
-from fastapi import Depends, Header, Request
-
-from memos.api.context.context import RequestContext, set_request_context
+from memos.context.context import RequestContext, get_current_context
 
 
 logger = logging.getLogger(__name__)
@@ -11,56 +9,17 @@ logger = logging.getLogger(__name__)
 G = RequestContext
 
 
-def get_trace_id_from_header(
-    trace_id: str | None = Header(None, alias="trace-id"),
-    x_trace_id: str | None = Header(None, alias="x-trace-id"),
-    g_trace_id: str | None = Header(None, alias="g-trace-id"),
-) -> str | None:
-    """
-    Extract trace_id from various possible headers.
-
-    Priority: g-trace-id > x-trace-id > trace-id
-    """
-    return g_trace_id or x_trace_id or trace_id
-
-
-def get_request_context(
-    request: Request, trace_id: str | None = Depends(get_trace_id_from_header)
-) -> RequestContext:
-    """
-    Get request context object with trace_id and request metadata.
-
-    This function creates a RequestContext and automatically sets it
-    in the global context for use throughout the request lifecycle.
-    """
-    # Create context object
-    ctx = RequestContext(trace_id=trace_id)
-
-    # Set the context globally for this request
-    set_request_context(ctx)
-
-    # Log request start
-    logger.info(f"Request started with trace_id: {ctx.trace_id}")
-
-    # Add request metadata to context
-    ctx.set("method", request.method)
-    ctx.set("path", request.url.path)
-    ctx.set("client_ip", request.client.host if request.client else None)
-
-    return ctx
-
-
-def get_g_object(trace_id: str | None = Depends(get_trace_id_from_header)) -> G:
+def get_g_object() -> G:
     """
     Get Flask g-like object for the current request.
-
-    This creates a RequestContext and sets it globally for access
-    throughout the request lifecycle.
+    Returns the context created by middleware.
     """
-    g = RequestContext(trace_id=trace_id)
-    set_request_context(g)
-    logger.info(f"Request g object created with trace_id: {g.trace_id}")
-    return g
+    ctx = get_current_context()
+    if ctx is None:
+        raise RuntimeError(
+            "No request context available. Make sure RequestContextMiddleware is properly configured."
+        )
+    return ctx
 
 
 def get_current_g() -> G | None:
@@ -70,8 +29,6 @@ def get_current_g() -> G | None:
     Returns:
         The current request's g object if available, None otherwise.
     """
-    from memos.context import get_current_context
-
     return get_current_context()
 
 
@@ -85,6 +42,9 @@ def require_g() -> G:
     Raises:
         RuntimeError: If called outside of a request context.
     """
-    from memos.context import require_context
-
-    return require_context()
+    ctx = get_current_context()
+    if ctx is None:
+        raise RuntimeError(
+            "No request context available. This function must be called within a request handler."
+        )
+    return ctx

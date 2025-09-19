@@ -1,6 +1,6 @@
 user_id: "root"
 chat_model:
-  backend: "huggingface"
+  backend: "huggingface_singleton"
   config:
     model_name_or_path: "Qwen/Qwen3-1.7B"
     temperature: 0.1

@@ -2,12 +2,14 @@ import json
 import os
 import shutil
 import tempfile
+import time
 
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from memos.configs.memory import TreeTextMemoryConfig
+from memos.configs.reranker import RerankerConfigFactory
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
@@ -19,6 +21,7 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
     InternetRetrieverFactory,
 )
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
+from memos.reranker.factory import RerankerFactory
 from memos.types import MessageList
 
 
@@ -30,21 +33,59 @@ class TreeTextMemory(BaseTextMemory):
 
     def __init__(self, config: TreeTextMemoryConfig):
         """Initialize memory with the given configuration."""
+        time_start = time.time()
         self.config: TreeTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
         )
+        logger.info(f"time init: extractor_llm time is: {time.time() - time_start}")
+
+        time_start_ex = time.time()
         self.dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.dispatcher_llm
         )
+        logger.info(f"time init: dispatcher_llm time is: {time.time() - time_start_ex}")
+
+        time_start_em = time.time()
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
+        logger.info(f"time init: embedder time is: {time.time() - time_start_em}")
+
+        time_start_gs = time.time()
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
+        logger.info(f"time init: graph_store time is: {time.time() - time_start_gs}")
+
+        time_start_rr = time.time()
+        if config.reranker is None:
+            default_cfg = RerankerConfigFactory.model_validate(
+                {
+                    "backend": "cosine_local",
+                    "config": {
+                        "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
+                        "level_field": "background",
+                    },
+                }
+            )
+            self.reranker = RerankerFactory.from_config(default_cfg)
+        else:
+            self.reranker = RerankerFactory.from_config(config.reranker)
+        logger.info(f"time init: reranker time is: {time.time() - time_start_rr}")
         self.is_reorganize = config.reorganize
 
+        time_start_mm = time.time()
         self.memory_manager: MemoryManager = MemoryManager(
-            self.graph_store, self.embedder, self.extractor_llm, is_reorganize=self.is_reorganize
+            self.graph_store,
+            self.embedder,
+            self.extractor_llm,
+            memory_size=config.memory_size
+            or {
+                "WorkingMemory": 20,
+                "LongTermMemory": 1500,
+                "UserMemory": 480,
+            },
+            is_reorganize=self.is_reorganize,
         )
-
+        logger.info(f"time init: memory_manager time is: {time.time() - time_start_mm}")
+        time_start_ir = time.time()
         # Create internet retriever if configured
         self.internet_retriever = None
         if config.internet_retriever is not None:
@@ -56,6 +97,7 @@ class TreeTextMemory(BaseTextMemory):
             )
         else:
             logger.info("No internet retriever configured")
+        logger.info(f"time init: internet_retriever time is: {time.time() - time_start_ir}")
 
     def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
         """Add memories.
@@ -97,6 +139,7 @@ class TreeTextMemory(BaseTextMemory):
         memory_type: str = "All",
         manual_close_internet: bool = False,
         moscube: bool = False,
+        search_filter: dict | None = None,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -111,6 +154,12 @@ class TreeTextMemory(BaseTextMemory):
             memory_type (str): Type restriction for search.
             ['All', 'WorkingMemory', 'LongTermMemory', 'UserMemory']
             manual_close_internet (bool): If True, the internet retriever will be closed by this search, it high priority than config.
+            moscube (bool): whether you use moscube to answer questions
+            search_filter (dict, optional): Optional metadata filters for search results.
+                - Keys correspond to memory metadata fields (e.g., "user_id", "session_id").
+                - Values are exact-match conditions.
+                Example: {"user_id": "123", "session_id": "abc"}
+                If None, no additional filtering is applied.
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
@@ -122,6 +171,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.dispatcher_llm,
                 self.graph_store,
                 self.embedder,
+                self.reranker,
                 internet_retriever=None,
                 moscube=moscube,
             )
@@ -130,10 +180,11 @@ class TreeTextMemory(BaseTextMemory):
                 self.dispatcher_llm,
                 self.graph_store,
                 self.embedder,
+                self.reranker,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
             )
-        return searcher.search(query, top_k, info, mode, memory_type)
+        return searcher.search(query, top_k, info, mode, memory_type, search_filter)
 
     def get_relevant_subgraph(
         self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"
