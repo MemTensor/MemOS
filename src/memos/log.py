@@ -183,7 +183,7 @@ LOGGING_CONFIG = {
     },
     "root": {  # Root logger handles all logs
         "level": logging.DEBUG if settings.DEBUG else logging.INFO,
-        "handlers": ["console", "file", "custom_logger"],
+        "handlers": ["console", "file"],
     },
     "loggers": {
         "memos": {
