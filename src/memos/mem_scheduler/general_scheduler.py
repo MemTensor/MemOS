@@ -27,6 +27,8 @@ class GeneralScheduler(BaseScheduler):
         """Initialize the scheduler with the given configuration."""
         super().__init__(config)
 
+        self.query_key_words_limit = self.config.get("query_key_words_limit", 20)
+
         # register handlers
         handlers = {
             QUERY_LABEL: self._query_message_consumer,
@@ -34,78 +36,6 @@ class GeneralScheduler(BaseScheduler):
             ADD_LABEL: self._add_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
-
-    # for evaluation
-    def search_for_eval(
-        self, query: str, user_id: UserID | str, top_k: int, scheduler_flag: bool = True
-    ) -> (list[str], bool):
-        self.monitor.register_query_monitor_if_not_exists(
-            user_id=user_id, mem_cube_id=self.current_mem_cube_id
-        )
-
-        query_keywords = self.monitor.extract_query_keywords(query=query)
-        logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
-
-        item = QueryMonitorItem(
-            query_text=query,
-            keywords=query_keywords,
-            max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
-        )
-        query_monitor = self.monitor.query_monitors[user_id][self.current_mem_cube_id]
-        query_monitor.put(item=item)
-        logger.debug(f"Queries in monitor are {query_monitor.get_queries_with_timesort()}.")
-
-        queries = [query]
-
-        # recall
-        mem_cube = self.current_mem_cube
-        text_mem_base = mem_cube.text_mem
-
-        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
-        text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
-        intent_result = self.monitor.detect_intent(
-            q_list=queries, text_working_memory=text_working_memory
-        )
-
-        if not scheduler_flag:
-            return text_working_memory, intent_result["trigger_retrieval"]
-        else:
-            if intent_result["trigger_retrieval"]:
-                missing_evidences = intent_result["missing_evidences"]
-                num_evidence = len(missing_evidences)
-                k_per_evidence = max(1, top_k // max(1, num_evidence))
-                new_candidates = []
-                for item in missing_evidences:
-                    logger.info(f"missing_evidences: {item}")
-                    results: list[TextualMemoryItem] = self.retriever.search(
-                        query=item,
-                        mem_cube=mem_cube,
-                        top_k=k_per_evidence,
-                        method=self.search_method,
-                    )
-                    logger.info(
-                        f"search results for {missing_evidences}: {[one.memory for one in results]}"
-                    )
-                    new_candidates.extend(results)
-                print(
-                    f"missing_evidences: {missing_evidences} and get {len(new_candidates)} new candidate memories."
-                )
-            else:
-                new_candidates = []
-                print(f"intent_result: {intent_result}. not triggered")
-
-            # rerank
-            new_order_working_memory = self.replace_working_memory(
-                user_id=user_id,
-                mem_cube_id=self.current_mem_cube_id,
-                mem_cube=self.current_mem_cube,
-                original_memory=cur_working_memory,
-                new_memory=new_candidates,
-            )
-            new_order_working_memory = new_order_working_memory[:top_k]
-            logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
-
-            return [m.memory for m in new_order_working_memory], intent_result["trigger_retrieval"]
 
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
@@ -140,7 +70,9 @@ class GeneralScheduler(BaseScheduler):
 
                     query = msg.content
                     query_keywords = self.monitor.extract_query_keywords(query=query)
-                    logger.info(f'Extract keywords "{query_keywords}" from query "{query}"')
+                    logger.info(
+                        f'Extracted keywords "{query_keywords}" from query "{query}" for user_id={user_id}'
+                    )
 
                     if len(query_keywords) == 0:
                         stripped_query = query.strip()
@@ -155,21 +87,26 @@ class GeneralScheduler(BaseScheduler):
                             )
                             words = stripped_query  # Default to character count
 
-                        query_keywords = list(set(words[:20]))
+                        query_keywords = list(set(words[: self.query_key_words_limit]))
                         logger.error(
-                            f"Keyword extraction failed for query. Using fallback keywords: {query_keywords[:10]}... (truncated)"
+                            f"Keyword extraction failed for query '{query}' (user_id={user_id}). Using fallback keywords: {query_keywords[:10]}... (truncated)",
+                            exc_info=True,
                         )
 
                     item = QueryMonitorItem(
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
                         query_text=query,
                         keywords=query_keywords,
                         max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
                     )
 
-                    self.monitor.query_monitors[user_id][mem_cube_id].put(item=item)
+                    query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
+                    query_db_manager.obj.put(item=item)
+                    # Sync with database after adding new item
+                    query_db_manager.sync_with_orm()
                 logger.debug(
-                    f"Queries in monitor are "
-                    f"{self.monitor.query_monitors[user_id][mem_cube_id].get_queries_with_timesort()}."
+                    f"Queries in monitor for user_id={user_id}, mem_cube_id={mem_cube_id}: {query_db_manager.obj.get_queries_with_timesort()}"
                 )
 
                 queries = [msg.content for msg in messages]
@@ -183,7 +120,7 @@ class GeneralScheduler(BaseScheduler):
                     top_k=self.top_k,
                 )
                 logger.info(
-                    f"Processed {queries} and get {len(new_candidates)} new candidate memories."
+                    f"Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} new candidate memories for user_id={user_id}"
                 )
 
                 # rerank
@@ -194,7 +131,9 @@ class GeneralScheduler(BaseScheduler):
                     original_memory=cur_working_memory,
                     new_memory=new_candidates,
                 )
-                logger.info(f"size of new_order_working_memory: {len(new_order_working_memory)}")
+                logger.info(
+                    f"Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
+                )
 
                 # update activation memories
                 logger.info(
@@ -293,10 +232,17 @@ class GeneralScheduler(BaseScheduler):
 
         text_mem_base = mem_cube.text_mem
         if not isinstance(text_mem_base, TreeTextMemory):
-            logger.error("Not implemented!", exc_info=True)
+            logger.error(
+                f"Not implemented! Expected TreeTextMemory but got {type(text_mem_base).__name__} "
+                f"for mem_cube_id={mem_cube_id}, user_id={user_id}. "
+                f"text_mem_base value: {text_mem_base}",
+                exc_info=True,
+            )
             return
 
-        logger.info(f"Processing {len(queries)} queries.")
+        logger.info(
+            f"Processing {len(queries)} queries for user_id={user_id}, mem_cube_id={mem_cube_id}"
+        )
 
         cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
@@ -312,16 +258,20 @@ class GeneralScheduler(BaseScheduler):
             time_trigger_flag = True
 
         if (not intent_result["trigger_retrieval"]) and (not time_trigger_flag):
-            logger.info(f"Query schedule not triggered. Intent_result: {intent_result}")
+            logger.info(
+                f"Query schedule not triggered for user_id={user_id}, mem_cube_id={mem_cube_id}. Intent_result: {intent_result}"
+            )
             return
         elif (not intent_result["trigger_retrieval"]) and time_trigger_flag:
-            logger.info("Query schedule is forced to trigger due to time ticker")
+            logger.info(
+                f"Query schedule forced to trigger due to time ticker for user_id={user_id}, mem_cube_id={mem_cube_id}"
+            )
             intent_result["trigger_retrieval"] = True
             intent_result["missing_evidences"] = queries
         else:
             logger.info(
-                f'Query schedule triggered for user "{user_id}" and mem_cube "{mem_cube_id}".'
-                f" Missing evidences: {intent_result['missing_evidences']}"
+                f"Query schedule triggered for user_id={user_id}, mem_cube_id={mem_cube_id}. "
+                f"Missing evidences: {intent_result['missing_evidences']}"
             )
 
         missing_evidences = intent_result["missing_evidences"]
@@ -329,7 +279,9 @@ class GeneralScheduler(BaseScheduler):
         k_per_evidence = max(1, top_k // max(1, num_evidence))
         new_candidates = []
         for item in missing_evidences:
-            logger.info(f"missing_evidences: {item}")
+            logger.info(
+                f"Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
+            )
             info = {
                 "user_id": user_id,
                 "session_id": "",
@@ -343,7 +295,7 @@ class GeneralScheduler(BaseScheduler):
                 info=info,
             )
             logger.info(
-                f"search results for {missing_evidences}: {[one.memory for one in results]}"
+                f"Search results for missing evidence '{item}': {[one.memory for one in results]}"
             )
             new_candidates.extend(results)
         return cur_working_memory, new_candidates

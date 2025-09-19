@@ -1,3 +1,4 @@
+import json
 import time
 
 from datetime import datetime
@@ -174,6 +175,12 @@ class Neo4jGraphDB(BaseGraphDB):
                 n.updated_at = datetime($updated_at),
                 n += $metadata
         """
+
+        # serialization
+        if metadata["sources"]:
+            for idx in range(len(metadata["sources"])):
+                metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+
         with self.driver.session(database=self.db_name) as session:
             session.run(
                 query,
@@ -1128,4 +1135,14 @@ class Neo4jGraphDB(BaseGraphDB):
                 node[time_field] = node[time_field].isoformat()
         node.pop("user_name", None)
 
+        # serialization
+        if node["sources"]:
+            for idx in range(len(node["sources"])):
+                if not (
+                    isinstance(node["sources"][idx], str)
+                    and node["sources"][idx][0] == "{"
+                    and node["sources"][idx][0] == "}"
+                ):
+                    break
+                node["sources"][idx] = json.loads(node["sources"][idx])
         return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import sys
 import time
 
 from collections.abc import Generator
@@ -775,9 +776,13 @@ class MOSProduct(MOSCore):
                 return
 
             # Create MemCube from path
+            time_start = time.time()
             if os.path.exists(mem_cube_name_or_path):
                 mem_cube = GeneralMemCube.init_from_dir(
                     mem_cube_name_or_path, memory_types, default_config
+                )
+                logger.info(
+                    f"time register_mem_cube: init_from_dir time is: {time.time() - time_start}"
                 )
             else:
                 logger.warning(
@@ -1311,6 +1316,9 @@ class MOSProduct(MOSCore):
         # Load user cubes if not already loaded
         time_start = time.time()
         self._load_user_cubes(user_id, self.default_cube_config)
+        dict_size = sys.getsizeof(self.mem_cubes._dict)
+        size_mb = dict_size / (1024 * 1024)
+        logger.info(f"now search memcubes_size is : {len(self.mem_cubes)} {size_mb}MB")
         load_user_cubes_time_end = time.time()
         logger.info(
             f"time search: load_user_cubes time user_id: {user_id} time is: {load_user_cubes_time_end - time_start}"
@@ -1359,7 +1367,9 @@ class MOSProduct(MOSCore):
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-
+        dict_size = sys.getsizeof(self.mem_cubes._dict)
+        size_mb = dict_size / (1024 * 1024)
+        logger.info(f"now add memcubes_size is : {len(self.mem_cubes)} {size_mb}MB")
         result = super().add(
             messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id
         )

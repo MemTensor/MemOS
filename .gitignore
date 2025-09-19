@@ -48,6 +48,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.run
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -211,3 +212,5 @@ cython_debug/
 
 # Outputs and Evaluation Results
 outputs
+
+evaluation/data/temporal_locomo

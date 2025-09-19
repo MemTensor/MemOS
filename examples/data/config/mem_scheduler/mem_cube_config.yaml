@@ -34,7 +34,7 @@ act_mem:
   config:
     memory_filename: "activation_memory.pickle"
     extractor_llm:
-      backend: "huggingface"
+      backend: "huggingface_singleton"
       config:
         model_name_or_path: "Qwen/Qwen3-1.7B"
         temperature: 0.8
@@ -48,7 +48,7 @@ para_mem:
   config:
     memory_filename: "parametric_memory.adapter"
     extractor_llm:
-      backend: "huggingface"
+      backend: "huggingface_singleton"
       config:
         model_name_or_path: "Qwen/Qwen3-1.7B"
         temperature: 0.8

@@ -1,4 +1,5 @@
 import os
+import time
 
 from typing import Literal
 
@@ -23,11 +24,13 @@ class GeneralMemCube(BaseMemCube):
     def __init__(self, config: GeneralMemCubeConfig):
         """Initialize the MemCube with a configuration."""
         self.config = config
+        time_start = time.time()
         self._text_mem: BaseTextMemory | None = (
             MemoryFactory.from_config(config.text_mem)
             if config.text_mem.backend != "uninitialized"
             else None
         )
+        logger.info(f"init_text_mem in {time.time() - time_start} seconds")
         self._act_mem: BaseActMemory | None = (
             MemoryFactory.from_config(config.act_mem)
             if config.act_mem.backend != "uninitialized"
@@ -137,7 +140,6 @@ class GeneralMemCube(BaseMemCube):
         if default_config is not None:
             config = merge_config_with_default(config, default_config)
             logger.info(f"Applied default config to cube {config.cube_id}")
-
         mem_cube = GeneralMemCube(config)
         mem_cube.load(dir, memory_types)
         return mem_cube
