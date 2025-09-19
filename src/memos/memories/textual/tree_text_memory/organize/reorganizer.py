@@ -17,7 +17,7 @@ from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import SourceMessage, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.handler import NodeHandler
 from memos.memories.textual.tree_text_memory.organize.relation_reason_detector import (
     RelationAndReasoningDetector,
@@ -26,6 +26,22 @@ from memos.templates.tree_reorganize_prompts import LOCAL_SUBCLUSTER_PROMPT, REO
 
 
 logger = get_logger(__name__)
+
+
+def build_summary_parent_node(cluster_nodes):
+    normalized_sources = []
+    for n in cluster_nodes:
+        sm = SourceMessage(
+            type="chat",
+            role=None,
+            chat_time=None,
+            message_id=None,
+            content=n.memory,
+            # extra
+            node_id=n.id,
+        )
+        normalized_sources.append(sm)
+    return normalized_sources
 
 
 class QueueMessage:
@@ -356,6 +372,8 @@ class GraphStructureReorganizer:
 
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
+        if "duplicate" in response_text:
+            print("here")
         response_json = self._parse_json_result(response_text)
         assigned_ids = set()
         result_subclusters = []
@@ -500,17 +518,17 @@ class GraphStructureReorganizer:
         parent_node = GraphDBNode(
             memory=parent_value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id="",  # TODO: summarized node: no user_id
-                session_id="",  # TODO: summarized node: no session_id
+                user_id=None,
+                session_id=None,
                 memory_type=scope,
                 status="activated",
                 key=parent_key,
                 tags=parent_tags,
                 embedding=embedding,
                 usage=[],
-                sources=[n.id for n in cluster_nodes],
+                sources=build_summary_parent_node(cluster_nodes),
                 background=parent_background,
-                confidence=0.99,
+                confidence=0.66,
                 type="topic",
             ),
         )

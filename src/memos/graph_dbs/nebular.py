@@ -931,7 +931,7 @@ class NebulaGraphDB(BaseGraphDB):
                 id_val = values[0].as_string()
                 score_val = values[1].as_double()
                 score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
-                if threshold is None or score_val <= threshold:
+                if threshold is None or score_val >= threshold:
                     output.append({"id": id_val, "score": score_val})
             return output
         except Exception as e:
@@ -1273,11 +1273,16 @@ class NebulaGraphDB(BaseGraphDB):
         """
 
         candidates = []
+        node_ids = set()
         try:
             results = self.execute_query(query)
             for row in results:
                 props = {k: v.value for k, v in row.items()}
-                candidates.append(self._parse_node(props))
+                node = self._parse_node(props)
+                node_id = node["id"]
+                if node_id not in node_ids:
+                    candidates.append(node)
+                    node_ids.add(node_id)
         except Exception as e:
             logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
         return candidates
