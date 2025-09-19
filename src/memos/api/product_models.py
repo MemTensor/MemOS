@@ -178,20 +178,39 @@ class SuggestionRequest(BaseRequest):
 class MessageDetail(BaseModel):
     """Individual message detail model based on actual API response."""
 
-    model_config = {"extra": "allow"}
+    role: str = Field(..., description="Message role (user/assistant)")
+    content: str = Field(..., description="Message content")
+    create_time: int | None = Field(
+        None, alias="createTime", description="Message creation timestamp"
+    )
+    update_time: int | None = Field(
+        None, alias="updateTime", description="Message update timestamp"
+    )
 
 
 class MemoryDetail(BaseModel):
     """Individual memory detail model based on actual API response."""
 
-    model_config = {"extra": "allow"}
+    id: str = Field(..., description="Memory ID")
+    memory_key: str = Field(..., alias="memoryKey", description="Memory key/title")
+    memory_value: str = Field(..., alias="memoryValue", description="Memory content")
+    memory_type: str = Field(
+        ..., alias="memoryType", description="Memory type (e.g., WorkingMemory)"
+    )
+    memory_time: int | None = Field(None, alias="memoryTime", description="Memory timestamp")
+    conversation_id: str = Field(..., alias="conversationId", description="Conversation ID")
+    status: str = Field(..., description="Memory status (e.g., activated)")
+    confidence: float = Field(..., description="Memory confidence score")
+    tags: list[str] = Field(default_factory=list, description="Memory tags")
+    update_time: int = Field(..., alias="updateTime", description="Last update timestamp")
+    relativity: float = Field(..., description="Memory relativity/similarity score")
 
 
 class GetMessagesData(BaseModel):
     """Data model for get messages response based on actual API."""
 
     message_detail_list: list[MessageDetail] = Field(
-        default_factory=list, alias="memory_detail_list", description="List of message details"
+        default_factory=list, alias="messageDetailList", description="List of message details"
     )
 
 
@@ -199,10 +218,10 @@ class SearchMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
     memory_detail_list: list[MemoryDetail] = Field(
-        default_factory=list, alias="memory_detail_list", description="List of memory details"
+        default_factory=list, alias="memoryDetailList", description="List of memory details"
     )
     message_detail_list: list[MessageDetail] | None = Field(
-        None, alias="message_detail_list", description="List of message details (usually None)"
+        None, alias="messageDetailList", description="List of message details (usually None)"
     )
 
 
