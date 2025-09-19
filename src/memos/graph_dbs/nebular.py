@@ -24,6 +24,19 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+_TRANSIENT_ERR_KEYS = (
+    "Session not found",
+    "Connection not established",
+    "timeout",
+    "deadline exceeded",
+    "Broken pipe",
+    "EOFError",
+    "socket closed",
+    "connection reset",
+    "connection refused",
+)
+
+
 @timed
 def _normalize(vec: list[float]) -> list[float]:
     v = np.asarray(vec, dtype=np.float32)
@@ -99,6 +112,7 @@ class NebulaGraphDB(BaseGraphDB):
     _CLIENT_CACHE: ClassVar[dict[str, "NebulaClient"]] = {}
     _CLIENT_REFCOUNT: ClassVar[dict[str, int]] = {}
     _CLIENT_LOCK: ClassVar[Lock] = Lock()
+    _CLIENT_INIT_DONE: ClassVar[set[str]] = set()
 
     @staticmethod
     def _get_hosts_from_cfg(cfg: NebulaGraphDBConfig) -> list[str]:
@@ -115,13 +129,53 @@ class NebulaGraphDB(BaseGraphDB):
                 "nebula-sync",
                 ",".join(hosts),
                 str(getattr(cfg, "user", "")),
-                str(getattr(cfg, "password", "")),
                 str(getattr(cfg, "use_multi_db", False)),
+                str(getattr(cfg, "space", "")),
             ]
         )
 
     @classmethod
-    def _get_or_create_shared_client(cls, cfg: NebulaGraphDBConfig) -> (tuple)[str, "NebulaClient"]:
+    def _bootstrap_admin(cls, cfg: NebulaGraphDBConfig, client: "NebulaClient") -> "NebulaGraphDB":
+        tmp = object.__new__(NebulaGraphDB)
+        tmp.config = cfg
+        tmp.db_name = cfg.space
+        tmp.user_name = getattr(cfg, "user_name", None)
+        tmp.embedding_dimension = getattr(cfg, "embedding_dimension", 3072)
+        tmp.default_memory_dimension = 3072
+        tmp.common_fields = {
+            "id",
+            "memory",
+            "user_name",
+            "user_id",
+            "session_id",
+            "status",
+            "key",
+            "confidence",
+            "tags",
+            "created_at",
+            "updated_at",
+            "memory_type",
+            "sources",
+            "source",
+            "node_type",
+            "visibility",
+            "usage",
+            "background",
+        }
+        tmp.base_fields = set(tmp.common_fields) - {"usage"}
+        tmp.heavy_fields = {"usage"}
+        tmp.dim_field = (
+            f"embedding_{tmp.embedding_dimension}"
+            if str(tmp.embedding_dimension) != str(tmp.default_memory_dimension)
+            else "embedding"
+        )
+        tmp.system_db_name = "system" if getattr(cfg, "use_multi_db", False) else cfg.space
+        tmp._client = client
+        tmp._owns_client = False
+        return tmp
+
+    @classmethod
+    def _get_or_create_shared_client(cls, cfg: NebulaGraphDBConfig) -> tuple[str, "NebulaClient"]:
         from nebulagraph_python import (
             ConnectionConfig,
             NebulaClient,
@@ -159,7 +213,60 @@ class NebulaGraphDB(BaseGraphDB):
                 logger.info(f"[NebulaGraphDBSync] Created shared NebulaClient key={key}")
 
             cls._CLIENT_REFCOUNT[key] = cls._CLIENT_REFCOUNT.get(key, 0) + 1
-            return key, client
+
+            if getattr(cfg, "auto_create", False) and key not in cls._CLIENT_INIT_DONE:
+                try:
+                    pass
+                finally:
+                    pass
+
+        if getattr(cfg, "auto_create", False) and key not in cls._CLIENT_INIT_DONE:
+            with cls._CLIENT_LOCK:
+                if key not in cls._CLIENT_INIT_DONE:
+                    admin = cls._bootstrap_admin(cfg, client)
+                    try:
+                        admin._ensure_database_exists()
+                        admin._create_basic_property_indexes()
+                        admin._create_vector_index(
+                            label="Memory",
+                            vector_property=admin.dim_field,
+                            dimensions=int(
+                                admin.embedding_dimension or admin.default_memory_dimension
+                            ),
+                            index_name="memory_vector_index",
+                        )
+                        cls._CLIENT_INIT_DONE.add(key)
+                        logger.info("[NebulaGraphDBSync] One-time init done")
+                    except Exception:
+                        logger.exception("[NebulaGraphDBSync] One-time init failed")
+
+        return key, client
+
+    def _refresh_client(self):
+        """
+        refresh NebulaClient:
+        """
+        old_key = getattr(self, "_client_key", None)
+        if not old_key:
+            return
+
+        cls = self.__class__
+        with cls._CLIENT_LOCK:
+            try:
+                if old_key in cls._CLIENT_CACHE:
+                    try:
+                        cls._CLIENT_CACHE[old_key].close()
+                    except Exception as e:
+                        logger.warning(f"[refresh_client] close old client error: {e}")
+                    finally:
+                        cls._CLIENT_CACHE.pop(old_key, None)
+            finally:
+                cls._CLIENT_REFCOUNT[old_key] = 0
+
+            new_key, new_client = cls._get_or_create_shared_client(self.config)
+            self._client_key = new_key
+            self._client = new_client
+            logger.info(f"[NebulaGraphDBSync] client refreshed: {old_key} -> {new_key}")
 
     @classmethod
     def _release_shared_client(cls, key: str):
@@ -253,32 +360,27 @@ class NebulaGraphDB(BaseGraphDB):
         self._client_key, self._client = self._get_or_create_shared_client(config)
         self._owns_client = True
 
-        # auto-create graph type / graph / index if needed
-        if getattr(config, "auto_create", False):
-            self._ensure_database_exists()
-
-        # Create only if not exists
-        self.create_index(dimensions=config.embedding_dimension)
         logger.info("Connected to NebulaGraph successfully.")
 
     @timed
     def execute_query(self, gql: str, timeout: float = 60.0, auto_set_db: bool = True):
-        try:
+        def _wrap_use_db(q: str) -> str:
             if auto_set_db and self.db_name:
-                gql = f"""USE `{self.db_name}`
-                       {gql}"""
-            return self._client.execute(gql, timeout=timeout)
+                return f"USE `{self.db_name}`\n{q}"
+            return q
+
+        try:
+            return self._client.execute(_wrap_use_db(gql), timeout=timeout)
+
         except Exception as e:
             emsg = str(e)
-            if "Session not found" in emsg or "Connection not established" in emsg:
-                logger.warning(f"[execute_query] {e!s}, retry once...")
+            if any(k.lower() in emsg.lower() for k in _TRANSIENT_ERR_KEYS):
+                logger.warning(f"[execute_query] {e!s} → refreshing session pool and retry once...")
                 try:
-                    if auto_set_db and self.db_name:
-                        gql = f"""USE `{self.db_name}`
-                                  {gql}"""
-                    return self._client.execute(gql, timeout=timeout)
+                    self._refresh_client()
+                    return self._client.execute(_wrap_use_db(gql), timeout=timeout)
                 except Exception:
-                    logger.exception("[execute_query] retry failed")
+                    logger.exception("[execute_query] retry after refresh failed")
                     raise
             raise
 
