@@ -187,10 +187,7 @@ class OptimizedThreadSafeDict(Generic[K, V]):
 
     def update(self, other=None, **kwargs) -> None:
         """Batch update - optimized batch operation"""
-        if other is not None:
-            items = other.items() if hasattr(other, "items") else other
-        else:
-            items = []
+        items = (other.items() if hasattr(other, "items") else other) if other is not None else []
 
         # Group update items by segment
         segment_updates: dict[int, list[tuple[K, V]]] = {}
