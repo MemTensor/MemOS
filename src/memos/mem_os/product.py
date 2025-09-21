@@ -853,7 +853,7 @@ class MOSProduct(MOSCore):
             time_start = time.time()
             if default_mem_cube:
                 try:
-                    default_mem_cube.dump(mem_cube_name_or_path)
+                    default_mem_cube.dump(mem_cube_name_or_path, memory_types=[])
                 except Exception as e:
                     logger.error(f"Failed to dump default cube: {e}")
             time_end = time.time()
