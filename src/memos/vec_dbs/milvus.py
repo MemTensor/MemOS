@@ -232,7 +232,8 @@ class MilvusVecDB(BaseVecDB):
                     
                 # Convert batch results to VecDBItem objects
                 for entity in batch_results:
-                    payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
+                    # Extract the actual payload from Milvus entity
+                    payload = entity.get("payload", {})
                     all_items.append(VecDBItem(
                         id=entity["id"],
                         vector=entity.get("vector"),
