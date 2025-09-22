@@ -47,7 +47,7 @@ services:
       - memos_network
 
   qdrant:
-    image: qdrant/qdrant:v1.15.0
+    image: qdrant/qdrant:v1.15.3
     container_name: qdrant-docker
     ports:
       - "6333:6333"  # REST API
