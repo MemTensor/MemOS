@@ -98,7 +98,7 @@ class UserCreate(BaseRequest):
     user_name: str | None = Field(
         None, description="Name of the user", json_schema_extra={"example": "john_doe"}
     )
-    role: str = Field("user", description="Role of the user", json_schema_extra={"example": "user"})
+    role: str = Field("USER", description="Role of the user", json_schema_extra={"example": "USER"})
     user_id: str = Field(..., description="User ID", json_schema_extra={"example": "user123"})
 
 
