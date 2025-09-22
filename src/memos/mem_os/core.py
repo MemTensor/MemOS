@@ -24,7 +24,7 @@ from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
-from memos.memos_tools.thread_safe_dict import ThreadSafeDict
+from memos.memos_tools.thread_safe_dict_segment import OptimizedThreadSafeDict
 from memos.templates.mos_prompts import QUERY_REWRITING_PROMPT
 from memos.types import ChatHistory, MessageList, MOSSearchResult
 
@@ -47,8 +47,8 @@ class MOSCore:
         self.mem_reader = MemReaderFactory.from_config(config.mem_reader)
         self.chat_history_manager: dict[str, ChatHistory] = {}
         # use thread safe dict for multi-user product-server scenario
-        self.mem_cubes: ThreadSafeDict[str, GeneralMemCube] = (
-            ThreadSafeDict() if user_manager is not None else {}
+        self.mem_cubes: OptimizedThreadSafeDict[str, GeneralMemCube] = (
+            OptimizedThreadSafeDict() if user_manager is not None else {}
         )
         self._register_chat_history()
 
