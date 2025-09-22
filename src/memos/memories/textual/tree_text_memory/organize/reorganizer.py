@@ -68,6 +68,15 @@ class QueueMessage:
         return op_priority[self.op] < op_priority[other.op]
 
 
+def extract_first_to_last_brace(text: str):
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return "", None
+    json_str = text[start : end + 1]
+    return json_str, json.loads(json_str)
+
+
 class GraphStructureReorganizer:
     def __init__(
         self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder, is_reorganize: bool
@@ -104,6 +113,7 @@ class GraphStructureReorganizer:
         1) queue is empty
         2) any running structure optimization is done
         """
+        deadline = time.time() + 600
         if not self.is_reorganize:
             return
 
@@ -113,6 +123,9 @@ class GraphStructureReorganizer:
 
         while any(self._is_optimizing.values()):
             logger.debug(f"Waiting for structure optimizer to finish... {self._is_optimizing}")
+            if time.time() > deadline:
+                logger.error(f"Wait timed out; flags={self._is_optimizing}")
+                break
             time.sleep(1)
         logger.debug("Structure optimizer is now idle.")
 
@@ -146,6 +159,9 @@ class GraphStructureReorganizer:
 
         logger.info("Structure optimizer schedule started.")
         while not getattr(self, "_stop_scheduler", False):
+            if any(self._is_optimizing.values()):
+                time.sleep(1)
+                continue
             if self._reorganize_needed:
                 logger.info("[Reorganizer] Triggering optimize_structure due to new nodes.")
                 self.optimize_structure(scope="LongTermMemory")
@@ -193,6 +209,7 @@ class GraphStructureReorganizer:
         local_tree_threshold: int = 10,
         min_cluster_size: int = 4,
         min_group_size: int = 20,
+        max_duration_sec: int = 600,
     ):
         """
         Periodically reorganize the graph:
@@ -200,8 +217,20 @@ class GraphStructureReorganizer:
         2. Summarize each cluster.
         3. Create parent nodes and build local PARENT trees.
         """
+        # --- Total time watch dog: check functions ---
+        start_ts = time.time()
+
+        def _check_deadline(where: str):
+            if time.time() - start_ts > max_duration_sec:
+                logger.error(
+                    f"[GraphStructureReorganize] {scope} surpass {max_duration_sec}s，time "
+                    f"over at {where}"
+                )
+                return True
+            return False
+
         if self._is_optimizing[scope]:
-            logger.info(f"Already optimizing for {scope}. Skipping.")
+            logger.info(f"[GraphStructureReorganize] Already optimizing for {scope}. Skipping.")
             return
 
         if self.graph_store.node_not_exist(scope):
@@ -215,31 +244,34 @@ class GraphStructureReorganizer:
             )
 
             logger.debug(
-                f"Num of scope in self.graph_store is {self.graph_store.get_memory_count(scope)}"
+                f"[GraphStructureReorganize] Num of scope in self.graph_store is"
+                f" {self.graph_store.get_memory_count(scope)}"
             )
             # Load candidate nodes
+            if _check_deadline("[GraphStructureReorganize] Before loading candidates"):
+                return
             raw_nodes = self.graph_store.get_structure_optimization_candidates(scope)
             nodes = [GraphDBNode(**n) for n in raw_nodes]
 
             if not nodes:
                 logger.info("[GraphStructureReorganize] No nodes to optimize. Skipping.")
                 return
-
             if len(nodes) < min_group_size:
                 logger.info(
                     f"[GraphStructureReorganize] Only {len(nodes)} candidate nodes found. Not enough to reorganize. Skipping."
                 )
                 return
 
-            logger.info(f"[GraphStructureReorganize] Loaded {len(nodes)} nodes.")
-
             # Step 2: Partition nodes
+            if _check_deadline("[GraphStructureReorganize] Before partition"):
+                return
             partitioned_groups = self._partition(nodes)
-
             logger.info(
                 f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )
 
+            if _check_deadline("[GraphStructureReorganize] Before submit partition task"):
+                return
             with ContextThreadPoolExecutor(max_workers=4) as executor:
                 futures = []
                 for cluster_nodes in partitioned_groups:
@@ -254,14 +286,17 @@ class GraphStructureReorganizer:
                     )
 
                 for f in as_completed(futures):
+                    if _check_deadline("[GraphStructureReorganize] Waiting clusters..."):
+                        for x in futures:
+                            x.cancel()
+                        return
                     try:
                         f.result()
                     except Exception as e:
                         logger.warning(
-                            f"[Reorganize] Cluster processing "
-                            f"failed: {e}, cluster_nodes: {cluster_nodes}, trace: {traceback.format_exc()}"
+                            f"[GraphStructureReorganize] Cluster processing failed: {e}, trace: {traceback.format_exc()}"
                         )
-                logger.info("[GraphStructure Reorganize] Structure optimization finished.")
+            logger.info("[GraphStructure Reorganize] Structure optimization finished.")
 
         finally:
             self._is_optimizing[scope] = False
@@ -311,7 +346,7 @@ class GraphStructureReorganizer:
                     )
                 )
 
-            for f in as_completed(futures):
+            for f in as_completed(futures, timeout=300):
                 results = f.result()
 
                 # 1) Add pairwise relations
@@ -348,11 +383,11 @@ class GraphStructureReorganizer:
                     for child_id in agg_node.metadata.sources:
                         self.graph_store.add_edge(agg_node.id, child_id, "AGGREGATE_TO")
 
-            logger.info("[Reorganizer] Cluster relation/reasoning done.")
+        logger.info("[Reorganizer] Cluster relation/reasoning done.")
 
     def _local_subcluster(
-        self, cluster_nodes: list[GraphDBNode], max_length: int = 8000
-    ) -> (list)[list[GraphDBNode]]:
+        self, cluster_nodes: list[GraphDBNode], max_length: int = 15000
+    ) -> list[list[GraphDBNode]]:
         """
         Use LLM to split a large cluster into semantically coherent sub-clusters.
         """
@@ -367,7 +402,7 @@ class GraphStructureReorganizer:
 
         joined_scene = "\n".join(scene_lines)
         if len(joined_scene) > max_length:
-            logger.warning(f"Sub-cluster too long: {joined_scene}")
+            logger.warning("Sub-cluster too long")
         prompt = LOCAL_SUBCLUSTER_PROMPT.replace("{joined_scene}", joined_scene[:max_length])
 
         messages = [{"role": "user", "content": prompt}]
@@ -535,7 +570,7 @@ class GraphStructureReorganizer:
     def _parse_json_result(self, response_text):
         try:
             response_text = response_text.replace("```", "").replace("json", "")
-            response_json = json.loads(response_text)
+            response_json = extract_first_to_last_brace(response_text)[1]
             return response_json
         except json.JSONDecodeError as e:
             logger.warning(

@@ -58,7 +58,7 @@ class MemoryManager:
 
         with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self._process_memory, m): m for m in memories}
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=60):
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
@@ -88,7 +88,7 @@ class MemoryManager:
                 executor.submit(self._add_memory_to_db, memory, "WorkingMemory")
                 for memory in working_memory_top_k
             ]
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=60):
                 try:
                     future.result()
                 except Exception as e:
