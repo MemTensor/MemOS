@@ -622,6 +622,7 @@ class MOSCore:
                 and (mem_cube.pref_mem is not None)
                 and self.config.enable_preference_memory
             ):
+                time_start = time.time()
                 memories = mem_cube.pref_mem.search(
                     query,
                     top_k=top_k if top_k else self.config.top_k,
