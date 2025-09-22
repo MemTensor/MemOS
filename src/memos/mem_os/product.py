@@ -796,7 +796,10 @@ class MOSProduct(MOSCore):
         logger.info(
             f"Registering MemCube {mem_cube_id} with cube config {mem_cube.config.model_dump(mode='json')}"
         )
+        time_start = time.time()
         self.mem_cubes[mem_cube_id] = mem_cube
+        time_end = time.time()
+        logger.info(f"time register_mem_cube: add mem_cube time is: {time_end - time_start}")
 
     def user_register(
         self,
@@ -847,13 +850,14 @@ class MOSProduct(MOSCore):
                 cube_path=mem_cube_name_or_path,
                 cube_id=mem_cube_id,
             )
-
+            time_start = time.time()
             if default_mem_cube:
                 try:
-                    default_mem_cube.dump(mem_cube_name_or_path)
+                    default_mem_cube.dump(mem_cube_name_or_path, memory_types=[])
                 except Exception as e:
                     logger.error(f"Failed to dump default cube: {e}")
-
+            time_end = time.time()
+            logger.info(f"time user_register: dump default cube time is: {time_end - time_start}")
             # Register the default cube with MOS
             self.register_mem_cube(
                 mem_cube_name_or_path_or_object=default_mem_cube,
@@ -1316,9 +1320,14 @@ class MOSProduct(MOSCore):
         # Load user cubes if not already loaded
         time_start = time.time()
         self._load_user_cubes(user_id, self.default_cube_config)
-        dict_size = sys.getsizeof(self.mem_cubes._dict)
-        size_mb = dict_size / (1024 * 1024)
-        logger.info(f"now search memcubes_size is : {len(self.mem_cubes)} {size_mb}MB")
+        try:
+            dict_size = sys.getsizeof(self.mem_cubes)
+            size_mb = dict_size / (1024 * 1024)
+            logger.info(
+                f"now search memcubes_size is : len is {len(self.mem_cubes)} and {size_mb}MB"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to get memcubes size: {e}, ignore it")
         load_user_cubes_time_end = time.time()
         logger.info(
             f"time search: load_user_cubes time user_id: {user_id} time is: {load_user_cubes_time_end - time_start}"
@@ -1367,9 +1376,12 @@ class MOSProduct(MOSCore):
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-        dict_size = sys.getsizeof(self.mem_cubes._dict)
-        size_mb = dict_size / (1024 * 1024)
-        logger.info(f"now add memcubes_size is : {len(self.mem_cubes)} {size_mb}MB")
+        try:
+            dict_size = sys.getsizeof(self.mem_cubes)
+            size_mb = dict_size / (1024 * 1024)
+            logger.info(f"now add memcubes_size is : {len is len(self.mem_cubes)} and {size_mb}MB")
+        except Exception as e:
+            logger.warning(f"Failed to get memcubes size: {e}, ignore it")
         result = super().add(
             messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id
         )

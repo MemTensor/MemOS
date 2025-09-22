@@ -10,6 +10,7 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever import 
     InternetGoogleRetriever,
 )
 from memos.memories.textual.tree_text_memory.retrieve.xinyusearch import XinyuSearchRetriever
+from memos.memos_tools.singleton import singleton_factory
 
 
 class InternetRetrieverFactory:
@@ -23,6 +24,7 @@ class InternetRetrieverFactory:
     }
 
     @classmethod
+    @singleton_factory()
     def from_config(
         cls, config_factory: InternetRetrieverConfigFactory, embedder: BaseEmbedder
     ) -> InternetGoogleRetriever | None:
