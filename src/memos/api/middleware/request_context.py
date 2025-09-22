@@ -3,7 +3,6 @@ Request context middleware for automatic trace_id injection.
 """
 
 import logging
-import os
 
 from collections.abc import Callable
 
@@ -11,15 +10,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from memos.api.context.context import RequestContext, set_request_context
+from memos.api.context.context import RequestContext, generate_trace_id, set_request_context
 
 
 logger = logging.getLogger(__name__)
-
-
-def generate_trace_id() -> str:
-    """Generate a random trace_id."""
-    return os.urandom(16).hex()
 
 
 def extract_trace_id_from_headers(request: Request) -> str | None:

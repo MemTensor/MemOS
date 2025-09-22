@@ -21,7 +21,7 @@ class APIConfig:
     def get_openai_config() -> dict[str, Any]:
         """Get OpenAI configuration."""
         return {
-            "model_name_or_path": os.getenv("MOS_OPENAI_MODEL", "gpt-4o-mini"),
+            "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "gpt-4o-mini"),
             "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
             "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "1024")),
             "top_p": float(os.getenv("MOS_TOP_P", "0.9")),
