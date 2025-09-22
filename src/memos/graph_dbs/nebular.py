@@ -228,12 +228,9 @@ class NebulaGraphDB(BaseGraphDB):
                         admin._ensure_database_exists()
                         admin._create_basic_property_indexes()
                         admin._create_vector_index(
-                            label="Memory",
-                            vector_property=admin.dim_field,
                             dimensions=int(
                                 admin.embedding_dimension or admin.default_memory_dimension
                             ),
-                            index_name="memory_vector_index",
                         )
                         cls._CLIENT_INIT_DONE.add(key)
                         logger.info("[NebulaGraphDBSync] One-time init done")
@@ -1546,7 +1543,11 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def _create_vector_index(
-        self, label: str, vector_property: str, dimensions: int, index_name: str
+        self,
+        label: str = "Memory",
+        vector_property: str = "embedding",
+        dimensions: int = 3072,
+        index_name: str = "memory_vector_index",
     ) -> None:
         """
         Create a vector index for the specified property in the label.
