@@ -80,11 +80,15 @@ def register_user(user_req: UserRegisterRequest):
     """Register a new user with configuration and default cube."""
     try:
         # Get configuration for the user
+        time_start_register = time.time()
         user_config, default_mem_cube = APIConfig.create_user_config(
             user_name=user_req.user_id, user_id=user_req.user_id
         )
         logger.info(f"user_config: {user_config.model_dump(mode='json')}")
         logger.info(f"default_mem_cube: {default_mem_cube.config.model_dump(mode='json')}")
+        logger.info(
+            f"time register api : create user config time user_id: {user_req.user_id} time is: {time.time() - time_start_register}"
+        )
         mos_product = get_mos_product_instance()
 
         # Register user with default config and mem cube
@@ -96,7 +100,9 @@ def register_user(user_req: UserRegisterRequest):
             default_mem_cube=default_mem_cube,
             mem_cube_id=user_req.mem_cube_id,
         )
-
+        logger.info(
+            f"time register api : register time user_id: {user_req.user_id} time is: {time.time() - time_start_register}"
+        )
         if result["status"] == "success":
             return UserRegisterResponse(
                 message="User registered successfully",
