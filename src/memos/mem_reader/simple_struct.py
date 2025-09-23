@@ -29,6 +29,7 @@ from memos.templates.mem_reader_prompts import (
 )
 from memos.utils import timed
 
+
 logger = log.get_logger(__name__)
 PROMPT_DICT = {
     "chat": {
@@ -125,7 +126,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.llm = LLMFactory.from_config(config.llm)
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
-        
+
     @timed
     def _process_chat_data(self, scene_data_info, info):
         mem_list = []
