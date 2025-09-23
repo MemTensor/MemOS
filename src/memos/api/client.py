@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 MAX_RETRY_COUNT = 3
 
 
-class MemOSClient:
+class MemOSAPIClient:
     """MemOS API client"""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
