@@ -30,7 +30,7 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         super().__init__(args=args)
         self.pre_context_cache = {}
 
-    def analyze_context_answerability(self, context, query, oai_client):
+    def analyze_context_answerability(self, context, query, gold_answer, oai_client):
         """
         Analyze whether the given context can answer the query.
 
@@ -43,7 +43,9 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
             bool: True if context can answer the query, False otherwise
         """
         try:
-            prompt = CONTEXT_ANSWERABILITY_PROMPT.format(context=context, question=query)
+            prompt = CONTEXT_ANSWERABILITY_PROMPT.format(
+                context=context, question=query, gold_answer=str(gold_answer)
+            )
 
             response = oai_client.chat.completions.create(
                 model="gpt-4o-mini",

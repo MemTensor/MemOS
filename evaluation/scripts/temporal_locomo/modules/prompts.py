@@ -193,17 +193,17 @@ ANSWER_PROMPT_MEMOS = """
    """
 
 CONTEXT_ANSWERABILITY_PROMPT = """
-You are an AI assistant that analyzes whether given context can answer a specific question.
+You are an AI assistant that analyzes whether given context can answer a specific question, considering the ground-truth answer.
 
 # TASK:
-Analyze the provided context and determine if it contains sufficient information to answer the given question.
+Analyze the provided context and determine if it contains sufficient information to answer the given question. Use the provided ground-truth answer to guide your judgment: if the context contains the necessary evidence to derive that answer (explicitly or via direct inference), respond YES; otherwise respond NO.
 
 # INSTRUCTIONS:
 1. Carefully examine the context provided
 2. Identify if the context contains information directly related to the question
-3. Determine if the information is sufficient to provide a complete answer
-4. Consider both explicit mentions and implicit information that could be inferred
-5. Return only "YES" if the context can answer the question, "NO" if it cannot
+3. Determine if the information is sufficient to provide a complete answer that matches the ground-truth
+4. Consider both explicit mentions and straightforward implications present in the context
+5. Return only "YES" if the context can yield the ground-truth answer, "NO" if it cannot
 
 # CONTEXT:
 {context}
@@ -211,6 +211,9 @@ Analyze the provided context and determine if it contains sufficient information
 # QUESTION:
 {question}
 
+# GROUND_TRUTH_ANSWER:
+{gold_answer}
+
 # ANALYSIS:
-Can this context answer the question? (YES/NO):
+Can this context answer the question and support the ground-truth answer? (YES/NO):
 """

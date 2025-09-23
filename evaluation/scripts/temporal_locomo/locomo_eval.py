@@ -1,17 +1,15 @@
 import argparse
 import asyncio
 import json
-import logging
 import os
 import time
 
 import nltk
 import numpy as np
-import transformers
 
 from bert_score import score as bert_score
 from dotenv import load_dotenv
-from locomo_processor import BASE_DIR
+from modules.locomo_eval_module import LocomoEvalModelModules
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from nltk.translate.meteor_score import meteor_score
 from openai import AsyncOpenAI
@@ -21,9 +19,11 @@ from scipy.spatial.distance import cosine
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
+from memos.log import get_logger
 
-logging.basicConfig(level=logging.CRITICAL)
-transformers.logging.set_verbosity_error()
+
+logger = get_logger(__name__)
+
 
 # Download necessary NLTK resources
 try:
@@ -209,7 +209,9 @@ def convert_numpy_types(obj):
         return obj
 
 
-async def process_group_responses(group_id, group_responses, oai_client, options, num_runs: int):
+async def process_group_responses(
+    group_id, group_responses, oai_client, evaluation_options, num_runs: int
+):
     graded_responses = []
 
     # Process responses with asyncio for concurrent API calls
@@ -232,7 +234,7 @@ async def process_group_responses(group_id, group_responses, oai_client, options
         judgments = await asyncio.gather(*grading_tasks)
         judgments_dict = {f"judgment_{i + 1}": j for i, j in enumerate(judgments)}
 
-        nlp_metrics = calculate_nlp_metrics(ground_truth, answer, context, options)
+        nlp_metrics = calculate_nlp_metrics(ground_truth, answer, context, evaluation_options)
 
         graded_response = {
             "question": question,
@@ -250,113 +252,126 @@ async def process_group_responses(group_id, group_responses, oai_client, options
     return group_id, graded_responses
 
 
-async def process_single_group(group_id, group_responses, oai_client, options, num_runs):
+async def process_single_group(group_id, group_responses, oai_client, evaluation_options, num_runs):
     try:
         start_time = time.time()
         result = await process_group_responses(
-            group_id, group_responses, oai_client, options, num_runs
+            group_id, group_responses, oai_client, evaluation_options, num_runs
         )
         end_time = time.time()
         elapsed_time = round(end_time - start_time, 2)
         print(f"Group {group_id} processed in {elapsed_time} seconds")
         return result
     except Exception as e:
-        print(f"Error processing group {group_id}: {e}")
+        logger.error(f"Error processing group {group_id}: {e}", exc_info=True)
         return group_id, []
 
 
-async def main(frame, version="default", options=None, num_runs=1, max_workers=4):
-    print(
-        f"\n=== Starting LoCoMo evaluation for {frame} (version: {version}) with {num_runs} run(s) per question ==="
-    )
-    print(f"Using {max_workers} concurrent workers for processing groups")
+class LocomoEvaluator(LocomoEvalModelModules):
+    def __init__(self, args):
+        # Initialize base class to populate self.frame, self.version, etc.
+        super().__init__(args=args)
 
-    results_dir = f"{BASE_DIR}/results/locomo/{frame}-{version}"
-    response_path = f"{results_dir}/{frame}_locomo_responses.json"
-    judged_path = f"{results_dir}/{frame}_locomo_judged.json"
+        self.evaluation_options = getattr(args, "evaluation_options", ["lexical", "semantic"])
+        self.num_runs = getattr(args, "num_runs", 1)
+        self.max_workers = getattr(args, "workers", 4)
 
-    os.makedirs(results_dir, exist_ok=True)
+        load_dotenv()
+        self.oai_client = AsyncOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL")
+        )
 
-    load_dotenv()
-    oai_client = AsyncOpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL")
-    )
+    async def run(self):
+        print(
+            f"\n=== Starting LoCoMo evaluation for {self.frame} (version: {self.version}) with {self.num_runs} run(s) per question ==="
+        )
+        print(f"Using {self.max_workers} concurrent workers for processing groups")
 
-    with open(response_path) as file:
-        locomo_responses = json.load(file)
+        with open(self.response_path) as file:
+            locomo_responses = json.load(file)
 
-    num_users = 10
-    all_grades = {}
+        num_users = 10
+        all_grades = {}
 
-    total_responses_count = sum(
-        len(locomo_responses.get(f"locomo_exp_user_{i}", [])) for i in range(num_users)
-    )
-    print(f"Found {total_responses_count} total responses across {num_users} users to evaluate")
+        total_responses_count = sum(
+            len(locomo_responses.get(f"locomo_exp_user_{i}", [])) for i in range(num_users)
+        )
+        print(f"Found {total_responses_count} total responses across {num_users} users to evaluate")
 
-    # Create tasks for processing each group
-    tasks = []
-    active_users = 0
-    for group_idx in range(num_users):
-        group_id = f"locomo_exp_user_{group_idx}"
-        group_responses = locomo_responses.get(group_id, [])
-        if not group_responses:
-            print(f"No responses found for group {group_id}")
-            continue
+        # Create tasks for processing each group
+        tasks = []
+        active_users = 0
+        for group_idx in range(num_users):
+            group_id = f"locomo_exp_user_{group_idx}"
+            group_responses = locomo_responses.get(group_id, [])
+            if not group_responses:
+                print(f"No responses found for group {group_id}")
+                continue
 
-        active_users += 1
-        tasks.append(process_single_group(group_id, group_responses, oai_client, options, num_runs))
+            active_users += 1
+            tasks.append(
+                process_single_group(
+                    group_id=group_id,
+                    group_responses=group_responses,
+                    oai_client=self.oai_client,
+                    evaluation_options=self.evaluation_options,
+                    num_runs=self.num_runs,
+                )
+            )
 
-    print(f"Starting evaluation of {active_users} user groups with responses")
+        print(f"Starting evaluation of {active_users} user groups with responses")
 
-    semaphore = asyncio.Semaphore(max_workers)
+        semaphore = asyncio.Semaphore(self.max_workers)
 
-    async def limited_task(task):
-        async with semaphore:
-            return await task
+        async def limited_task(task):
+            async with semaphore:
+                return await task
 
-    limited_tasks = [limited_task(task) for task in tasks]
-    group_results = await asyncio.gather(*limited_tasks)
+        limited_tasks = [limited_task(task) for task in tasks]
+        group_results = await asyncio.gather(*limited_tasks)
 
-    for group_id, graded_responses in group_results:
-        all_grades[group_id] = graded_responses
+        for group_id, graded_responses in group_results:
+            all_grades[group_id] = graded_responses
 
-    print("\n=== Evaluation Complete: Calculating final scores ===")
+        print("\n=== Evaluation Complete: Calculating final scores ===")
 
-    run_scores = []
-    evaluated_count = 0
-    if num_runs > 0:
-        for i in range(1, num_runs + 1):
-            judgment_key = f"judgment_{i}"
-            current_run_correct_count = 0
-            current_run_total_count = 0
-            for group in all_grades.values():
-                for response in group:
-                    if judgment_key in response["llm_judgments"]:
-                        if response["llm_judgments"][judgment_key]:
-                            current_run_correct_count += 1
-                        current_run_total_count += 1
+        run_scores = []
+        evaluated_count = 0
+        if self.num_runs > 0:
+            for i in range(1, self.num_runs + 1):
+                judgment_key = f"judgment_{i}"
+                current_run_correct_count = 0
+                current_run_total_count = 0
+                for group in all_grades.values():
+                    for response in group:
+                        if judgment_key in response["llm_judgments"]:
+                            if response["llm_judgments"][judgment_key]:
+                                current_run_correct_count += 1
+                            current_run_total_count += 1
 
-            if current_run_total_count > 0:
-                run_accuracy = current_run_correct_count / current_run_total_count
-                run_scores.append(run_accuracy)
+                if current_run_total_count > 0:
+                    run_accuracy = current_run_correct_count / current_run_total_count
+                    run_scores.append(run_accuracy)
 
-        evaluated_count = current_run_total_count
+            evaluated_count = current_run_total_count
 
-    if evaluated_count > 0:
-        mean_of_scores = np.mean(run_scores)
-        std_of_scores = np.std(run_scores)
-        print(f"LLM-as-a-Judge Mean Score: {mean_of_scores:.4f}")
-        print(f"LLM-as-a-Judge Standard Deviation: {std_of_scores:.4f}")
-        print(f"(Calculated from {num_runs} separate runs over {evaluated_count} questions)")
-        print(f"Individual run scores: {[round(s, 4) for s in run_scores]}")
-    else:
-        print("No responses were evaluated")
-        print("LLM-as-a-Judge score: N/A (0/0)")
+        if evaluated_count > 0:
+            mean_of_scores = np.mean(run_scores)
+            std_of_scores = np.std(run_scores)
+            print(f"LLM-as-a-Judge Mean Score: {mean_of_scores:.4f}")
+            print(f"LLM-as-a-Judge Standard Deviation: {std_of_scores:.4f}")
+            print(
+                f"(Calculated from {self.num_runs} separate runs over {evaluated_count} questions)"
+            )
+            print(f"Individual run scores: {[round(s, 4) for s in run_scores]}")
+        else:
+            print("No responses were evaluated")
+            print("LLM-as-a-Judge score: N/A (0/0)")
 
-    all_grades = convert_numpy_types(all_grades)
-    with open(judged_path, "w") as f:
-        json.dump(all_grades, f, indent=2)
-        print(f"Saved detailed evaluation results to {judged_path}")
+        all_grades = convert_numpy_types(all_grades)
+        with open(self.judged_path, "w") as f:
+            json.dump(all_grades, f, indent=2)
+            print(f"Saved detailed evaluation results to {self.judged_path}")
 
 
 if __name__ == "__main__":
@@ -380,10 +395,23 @@ if __name__ == "__main__":
         default=3,
         help="Number of times to run the LLM grader for each question",
     )
-    parser.add_argument("--options", nargs="+", default=["lexical", "semantic"])
+    parser.add_argument("--evaluation_options", nargs="+", default=["lexical", "semantic"])
     parser.add_argument(
         "--workers", type=int, default=10, help="Number of concurrent workers for processing groups"
     )
-    args = parser.parse_args()
+    cli_args = parser.parse_args()
 
-    asyncio.run(main(args.lib, args.version, args.options, args.num_runs, args.workers))
+    # Build args for evaluator
+    class Args:
+        def __init__(self, cli_args):
+            self.frame = cli_args.lib
+            self.version = cli_args.version
+            self.workers = cli_args.workers
+            self.num_runs = cli_args.num_runs
+            self.evaluation_options = cli_args.evaluation_options
+            self.top_k = 20
+            self.scheduler_flag = True
+
+    args = Args(cli_args)
+    evaluator = LocomoEvaluator(args=args)
+    asyncio.run(evaluator.run())

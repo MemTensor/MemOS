@@ -4,34 +4,8 @@ import json
 import numpy as np
 import pandas as pd
 
-from locomo_processor import BASE_DIR
+from modules.locomo_eval_module import LocomoEvalModelModules
 
-
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--lib",
-    type=str,
-    default="memos_scheduler",
-    choices=["zep", "memos", "memos_scheduler", "mem0", "mem0_graph", "langmem", "openai"],
-    help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
-)
-parser.add_argument(
-    "--version",
-    type=str,
-    default="v1.0.1",
-    help="Version identifier for loading results (e.g., 1010)",
-)
-
-args = parser.parse_args()
-lib = args.lib
-version = args.version
-
-judged_path = f"{BASE_DIR}/results/locomo/{lib}-{version}/{lib}_locomo_judged.json"
-grade_path = f"{BASE_DIR}/results/locomo/{lib}-{version}/{lib}_locomo_grades.json"
-
-# Load the input data from the file
-with open(judged_path) as file:
-    data = json.load(file)
 
 # Category mapping as per your request
 category_mapping = {
@@ -354,31 +328,63 @@ def save_to_excel(results, output_path):
     print(f"Excel file saved to: {output_path}")
 
 
-# Calculate scores
-results = calculate_scores(data)
+class LocomoMetric(LocomoEvalModelModules):
+    def __init__(self, args):
+        super().__init__(args=args)
 
-# Output the result to a file
-with open(grade_path, "w") as outfile:
-    json.dump(results, outfile, indent=4)
+    def run(self):
+        with open(self.judged_path) as file:
+            data = json.load(file)
 
-# Save results to Excel
-excel_path = f"{BASE_DIR}/results/locomo/{lib}-{version}/{lib}_locomo_results.xlsx"
-save_to_excel(results, excel_path)
+        results = calculate_scores(data)
 
-# Print the LLM-as-a-Judge score to match the formatting in locomo_eval.py
-print("\n=== Metric Calculation Complete ===")
-total = sum(results["category_scores"][cat]["total"] for cat in results["category_scores"])
-print(
-    f"LLM-as-a-Judge score: {results['metrics']['llm_judge_score']:.4f} ± {results['metrics']['llm_judge_std']:.4f}"
-)
-print(f"Total questions evaluated: {total}")
+        with open(self.grade_path, "w") as outfile:
+            json.dump(results, outfile, indent=4)
 
-# Print duration percentiles for overall metrics
-print("\n=== Duration Metrics ===")
-for metric in ["response_duration_ms", "search_duration_ms", "total_duration_ms"]:
-    print(f"{metric} (avg): {results['metrics']['duration'][metric]:.2f} ms")
-    print(f"{metric} (P50): {results['metrics']['duration'][f'{metric}_p50']:.2f} ms")
-    print(f"{metric} (P95): {results['metrics']['duration'][f'{metric}_p95']:.2f} ms")
+        save_to_excel(results, self.excel_path)
 
-print(f"\nResults have been written to {grade_path}")
-print(f"Excel report has been saved to {excel_path}")
+        print("\n=== Metric Calculation Complete ===")
+        total = sum(results["category_scores"][cat]["total"] for cat in results["category_scores"])
+        print(
+            f"LLM-as-a-Judge score: {results['metrics']['llm_judge_score']:.4f} ± {results['metrics']['llm_judge_std']:.4f}"
+        )
+        print(f"Total questions evaluated: {total}")
+
+        print("\n=== Duration Metrics ===")
+        for metric in ["response_duration_ms", "search_duration_ms", "total_duration_ms"]:
+            print(f"{metric} (avg): {results['metrics']['duration'][metric]:.2f} ms")
+            print(f"{metric} (P50): {results['metrics']['duration'][f'{metric}_p50']:.2f} ms")
+            print(f"{metric} (P95): {results['metrics']['duration'][f'{metric}_p95']:.2f} ms")
+
+        print(f"\nResults have been written to {self.grade_path}")
+        print(f"Excel report has been saved to {self.excel_path}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--lib",
+        type=str,
+        default="memos_scheduler",
+        choices=["zep", "memos", "memos_scheduler", "mem0", "mem0_graph", "langmem", "openai"],
+        help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
+    )
+    parser.add_argument(
+        "--version",
+        type=str,
+        default="v1.0.1",
+        help="Version identifier for loading results (e.g., 1010)",
+    )
+    cli_args = parser.parse_args()
+
+    # Build a minimal args namespace compatible with LocomoEvalModelModules
+    class _Args:
+        def __init__(self, frame, version):
+            self.frame = frame
+            self.version = version
+            self.workers = 1
+            self.top_k = 20
+            self.scheduler_flag = True
+
+    args = _Args(frame=cli_args.lib, version=cli_args.version)
+    LocomoMetric(args=args).run()
