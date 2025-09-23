@@ -22,7 +22,7 @@ class MemOSAPI:
         while retry < 10:
             try:
                 url = f"{self.base_url}/add/message"
-                payload = json.dumps({"messages": messages, "userId": user_id, "conversationId": conv_id})
+                payload = json.dumps({"messages": messages, "user_id": user_id, "conversation_id": conv_id})
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
                 assert json.loads(response.text)['code'] == 0, response.text
@@ -42,9 +42,9 @@ class MemOSAPI:
                 payload = json.dumps(
                     {
                         "query": query,
-                        "userId": user_id,
-                        "conversationId": conv_id,
-                        "memoryLimitNumber": top_k
+                        "user_id": user_id,
+                        "conversation_id": conv_id,
+                        "memory_limit_number": top_k
                     }, ensure_ascii=False
                 )
 

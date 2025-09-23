@@ -69,7 +69,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                 {
                     "role": msg["role"],
                     "content": msg["content"][:8000],
-                    "chatTime": date.isoformat(),
+                    "chat_time": date.isoformat(),
                 }
             )
         if frame == "memos-local":
@@ -135,6 +135,8 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
                 f.flush()
             except Exception as e:
                 print(f"❌ Error ingesting session: {e}")
+        else:
+            print(f"✅ Session {conv_idx}_{idx} already ingested")
 
     if frame == "memos-local":
         client.mem_reorganizer_off()
@@ -198,10 +200,10 @@ if __name__ == "__main__":
         default="memos-api"
     )
     parser.add_argument(
-        "--version", type=str, default="0916-test2", help="Version of the evaluation framework."
+        "--version", type=str, default="0918-test4", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=10, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()

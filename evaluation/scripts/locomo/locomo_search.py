@@ -528,11 +528,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="0916-test",
+        default="0917-test",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=50, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"

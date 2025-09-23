@@ -117,7 +117,7 @@ async def main(frame, version="default"):
 
     os.makedirs("data", exist_ok=True)
 
-    print(all_responses)
+    # print(all_responses)
 
     with open(response_path, "w") as f:
         json.dump(all_responses, f, indent=2)
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="0916-test",
+        default="0917-test",
         help="Version identifier for loading results (e.g., 1010)",
     )
     args = parser.parse_args()

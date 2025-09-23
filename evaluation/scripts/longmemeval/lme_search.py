@@ -4,6 +4,7 @@ import os
 import sys
 
 
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,6 +17,7 @@ from tqdm import tqdm
 from utils.client import mem0_client, memobase_client, memos_client, zep_client
 from utils.memobase_utils import memobase_search_memory
 from utils.memos_filters import filter_memory_data
+from utils.memos_api import MemOSAPI
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
@@ -126,7 +128,7 @@ def memos_search(client, user_id, query, top_k, frame="memos-local"):
 
     elif frame == "memos-api":
         results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join([f"  - {item}" for item in results])
+        search_memories = "\n".join([f"  - {item['memoryValue']}" for item in results['memoryDetailList']])
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000
@@ -198,9 +200,7 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         context, duration_ms = memobase_search_memory(client, user_id, question, max_memory_context_size=3000)
 
     elif frame == "memos-api":
-        client = memos_client(
-            mode="api",
-        )
+        client = MemOSAPI()
         print("🔌 Using Memos API client for search...")
         context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
     search_results[user_id].append(
@@ -268,12 +268,12 @@ def main(frame, version, top_k=20, num_workers=2):
             as_completed(future_to_idx), total=num_multi_sessions, desc="📊 Processing users"
         ):
             idx = future_to_idx[future]
-            try:
-                search_results = future.result()
-                for user_id, results in search_results.items():
-                    all_search_results[user_id].extend(results)
-            except Exception as e:
-                print(f"❌ Error processing user {idx}: {e}")
+            # try:
+            search_results = future.result()
+            for user_id, results in search_results.items():
+                all_search_results[user_id].extend(results)
+            # except Exception as e:
+            #     print(f"❌ Error processing user {idx}: {e}")
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
@@ -306,13 +306,13 @@ if __name__ == "__main__":
         default='memos-api'
     )
     parser.add_argument(
-        "--version", type=str, default="0905", help="Version of the evaluation framework."
+        "--version", type=str, default="0918-test4", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."
     )
     parser.add_argument(
-        "--workers", type=int, default=50, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=5, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()

@@ -364,21 +364,21 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
-        default='zep'
+        default='memos-api'
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="0905",
+        default="0917-test",
         help="Version identifier for loading results (e.g., 1010)",
     )
     parser.add_argument(
         "--num_runs",
         type=int,
-        default=1,
+        default=3,
         help="Number of times to run the LLM grader for each question",
     )
-    parser.add_argument("--options", nargs="+", default=["lexical"])
+    parser.add_argument("--options", nargs="+", default=[])
     parser.add_argument(
         "--workers", type=int, default=80, help="Number of concurrent workers for processing groups"
     )
