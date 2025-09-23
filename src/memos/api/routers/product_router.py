@@ -2,14 +2,10 @@ import json
 import time
 import traceback
 
-from datetime import datetime
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from memos.api.config import APIConfig
-from memos.api.context.dependencies import G, get_g_object
 from memos.api.product_models import (
     BaseResponse,
     ChatCompleteRequest,
@@ -83,7 +79,6 @@ def set_config(config):
 def register_user(user_req: UserRegisterRequest):
     """Register a new user with configuration and default cube."""
     try:
-
         # Get configuration for the user
         user_config, default_mem_cube = APIConfig.create_user_config(
             user_name=user_req.user_id, user_id=user_req.user_id
