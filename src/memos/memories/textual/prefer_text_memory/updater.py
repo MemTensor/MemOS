@@ -247,7 +247,7 @@ class NaiveUpdater(BaseUpdater):
 
         if user_prefs:
             mem = VecDBItem(
-                id=user_id,
+                id=str(uuid.uuid4()),
                 vector=[0.0] * self.vector_db.config.vector_dimension,
                 payload={
                     "user_id": user_id,
@@ -275,20 +275,19 @@ class NaiveUpdater(BaseUpdater):
         
         return json.dumps(summary, ensure_ascii=False, indent=2)
     
-    def slow_update(self):
+    def slow_update(self, user_id: str):
         """Retrieve all dialog info from the expicit preference collection, 
         and reconstruct the implicit preference collection, topic collection and user preference collection.
         """
 
         # refresh the implicit preference collection, topic collection and user preference collection
-        self.vector_db.delete_collection("implicit_preference")
-        self.vector_db.delete_collection("topic_preference")
-        self.vector_db.delete_collection("user_preference")
+        impl_ids = [item.id for item in self.vector_db.get_by_filter(collection_name="implicit_preference", filter={"user_id": user_id})]
+        topic_ids = [item.id for item in self.vector_db.get_by_filter(collection_name="topic_preference", filter={"user_id": user_id})]
+        user_ids = [item.id for item in self.vector_db.get_by_filter(collection_name="user_preference", filter={"user_id": user_id})]
 
-        self.vector_db.create_collection_by_name("implicit_preference")
-        self.vector_db.create_collection_by_name("topic_preference")
-        self.vector_db.create_collection_by_name("user_preference")
-
+        self.vector_db.delete("implicit_preference", impl_ids)
+        self.vector_db.delete("topic_preference", topic_ids)
+        self.vector_db.delete("user_preference", user_ids)
 
         all_data = self.vector_db.get_all("explicit_preference")
         user_id = all_data[0].payload.get("user_id", "")

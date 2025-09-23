@@ -86,12 +86,14 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.extractor.extract(messages, type, info)
 
-    def slow_update(self) -> str:
+    def slow_update(self, user_id: str) -> str:
         """Perform a slow update of preferences by reconstructing all preference collections.
+        Args:
+            user_id (str): The user ID to update preferences for.
         Returns:
             str: Summary of the memory build process.
         """
-        return self.updater.slow_update()
+        return self.updater.slow_update(user_id)
     
     def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.

@@ -379,7 +379,7 @@ memory.add(
 
 user_cube_id = memory.user_manager.get_user_cubes(user_id)[0].cube_id
 print(f"user_cube_id: {user_cube_id}")
-memory.mem_cubes[user_cube_id].pref_mem.slow_update()
+memory.mem_cubes[user_cube_id].pref_mem.slow_update(user_id)
 
 
 retrieved_memories = memory.search(query="What do you like?", user_id=user_id)
