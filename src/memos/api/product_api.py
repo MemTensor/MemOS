@@ -35,4 +35,4 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--workers", type=int, default=32)
     args = parser.parse_args()
-    uvicorn.run(app, host="0.0.0.0", port=args.port, workers=args.workers)
+    uvicorn.run("memos.api.product_api:app", host="0.0.0.0", port=args.port, workers=args.workers)
