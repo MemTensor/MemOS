@@ -3,7 +3,6 @@ import logging
 from fastapi import FastAPI
 
 from memos.api.exceptions import APIExceptionHandler
-from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.product_router import router as product_router
 
 
@@ -17,8 +16,6 @@ app = FastAPI(
     version="1.0.1",
 )
 
-# Add request context middleware (must be added first)
-app.add_middleware(RequestContextMiddleware)
 
 # Include routers
 app.include_router(product_router)
