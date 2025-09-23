@@ -80,17 +80,9 @@ def set_config(config):
 
 
 @router.post("/users/register", summary="Register a new user", response_model=UserRegisterResponse)
-def register_user(user_req: UserRegisterRequest, g: Annotated[G, Depends(get_g_object)]):
+def register_user(user_req: UserRegisterRequest):
     """Register a new user with configuration and default cube."""
     try:
-        # Set request-related information in g object
-        g.user_id = user_req.user_id
-        g.action = "user_register"
-        g.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        logger.info(f"Starting user registration for user_id: {user_req.user_id}")
-        logger.info(f"Request trace_id: {g.trace_id}")
-        logger.info(f"Request timestamp: {g.timestamp}")
 
         # Get configuration for the user
         user_config, default_mem_cube = APIConfig.create_user_config(
