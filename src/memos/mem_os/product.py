@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import random
-import sys
 import time
 
 from collections.abc import Generator
@@ -47,6 +46,7 @@ from memos.templates.mos_prompts import (
     get_memos_prompt,
 )
 from memos.types import MessageList
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -258,6 +258,7 @@ class MOSProduct(MOSCore):
         except Exception as e:
             logger.error(f"Error pre-loading cubes for user {user_id}: {e}", exc_info=True)
 
+    @timed
     def _load_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
     ) -> None:
@@ -289,6 +290,7 @@ class MOSProduct(MOSCore):
                         )
                 except Exception as e:
                     logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
+        logger.info(f"load user {user_id} cubes successfully")
 
     def _ensure_user_instance(self, user_id: str, max_instances: int | None = None) -> None:
         """
@@ -1320,14 +1322,6 @@ class MOSProduct(MOSCore):
         # Load user cubes if not already loaded
         time_start = time.time()
         self._load_user_cubes(user_id, self.default_cube_config)
-        try:
-            dict_size = sys.getsizeof(self.mem_cubes)
-            size_mb = dict_size / (1024 * 1024)
-            logger.info(
-                f"now search memcubes_size is : len is {len(self.mem_cubes)} and {size_mb}MB"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to get memcubes size: {e}, ignore it")
         load_user_cubes_time_end = time.time()
         logger.info(
             f"time search: load_user_cubes time user_id: {user_id} time is: {load_user_cubes_time_end - time_start}"
@@ -1376,12 +1370,6 @@ class MOSProduct(MOSCore):
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-        try:
-            dict_size = sys.getsizeof(self.mem_cubes)
-            size_mb = dict_size / (1024 * 1024)
-            logger.info(f"now add memcubes_size is : {len is len(self.mem_cubes)} and {size_mb}MB")
-        except Exception as e:
-            logger.warning(f"Failed to get memcubes size: {e}, ignore it")
         result = super().add(
             messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id
         )

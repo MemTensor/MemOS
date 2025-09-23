@@ -1,4 +1,5 @@
 import json
+import time
 import traceback
 
 from datetime import datetime
@@ -195,6 +196,7 @@ def get_all_memories(memory_req: GetMemoryRequest):
 def create_memory(memory_req: MemoryCreateRequest):
     """Create a new memory for a specific user."""
     try:
+        time_start_add = time.time()
         mos_product = get_mos_product_instance()
         mos_product.add(
             user_id=memory_req.user_id,
@@ -205,6 +207,9 @@ def create_memory(memory_req: MemoryCreateRequest):
             source=memory_req.source,
             user_profile=memory_req.user_profile,
             session_id=memory_req.session_id,
+        )
+        logger.info(
+            f"time add api : add time user_id: {memory_req.user_id} time is: {time.time() - time_start_add}"
         )
         return SimpleResponse(message="Memory created successfully")
 
@@ -219,6 +224,7 @@ def create_memory(memory_req: MemoryCreateRequest):
 def search_memories(search_req: SearchRequest):
     """Search memories for a specific user."""
     try:
+        time_start_search = time.time()
         mos_product = get_mos_product_instance()
         result = mos_product.search(
             query=search_req.query,
@@ -226,6 +232,9 @@ def search_memories(search_req: SearchRequest):
             install_cube_ids=[search_req.mem_cube_id] if search_req.mem_cube_id else None,
             top_k=search_req.top_k,
             session_id=search_req.session_id,
+        )
+        logger.info(
+            f"time search api : add time user_id: {search_req.user_id} time is: {time.time() - time_start_search}"
         )
         return SearchResponse(message="Search completed successfully", data=result)
 

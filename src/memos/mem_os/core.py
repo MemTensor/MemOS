@@ -662,6 +662,8 @@ class MOSCore:
             "messages_or_doc_path or memory_content or doc_path must be provided."
         )
         # TODO: asure that session_id is a valid string
+        time_start = time.time()
+
         target_session_id = session_id if session_id else self.session_id
         target_user_id = user_id if user_id is not None else self.user_id
         if mem_cube_id is None:
@@ -674,14 +676,25 @@ class MOSCore:
             mem_cube_id = accessible_cubes[0].cube_id  # TODO not only first
         else:
             self._validate_cube_access(target_user_id, mem_cube_id)
+        logger.info(
+            f"time add: get mem_cube_id time user_id: {target_user_id} time is: {time.time() - time_start}"
+        )
 
+        time_start_0 = time.time()
         if mem_cube_id not in self.mem_cubes:
             raise ValueError(f"MemCube '{mem_cube_id}' is not loaded. Please register.")
+        logger.info(
+            f"time add: get mem_cube_id check in mem_cubes time user_id: {target_user_id} time is: {time.time() - time_start_0}"
+        )
+        time_start_1 = time.time()
         if (
             (messages is not None)
             and self.config.enable_textual_memory
             and self.mem_cubes[mem_cube_id].text_mem
         ):
+            logger.info(
+                f"time add: messages is not None and enable_textual_memory and text_mem is not None time user_id: {target_user_id} time is: {time.time() - time_start_1}"
+            )
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 add_memory = []
                 metadata = TextualMemoryMetadata(
@@ -694,12 +707,15 @@ class MOSCore:
                 self.mem_cubes[mem_cube_id].text_mem.add(add_memory)
             else:
                 messages_list = [messages]
+                time_start_2 = time.time()
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
                     info={"user_id": target_user_id, "session_id": target_session_id},
                 )
-
+                logger.info(
+                    f"time add: get mem_reader time user_id: {target_user_id} time is: {time.time() - time_start_2}"
+                )
                 mem_ids = []
                 for mem in memories:
                     mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
