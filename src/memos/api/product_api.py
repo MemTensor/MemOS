@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI
 
 from memos.api.exceptions import APIExceptionHandler
+from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.product_router import router as product_router
 
 
@@ -16,7 +17,7 @@ app = FastAPI(
     version="1.0.1",
 )
 
-
+app.add_middleware(RequestContextMiddleware)
 # Include routers
 app.include_router(product_router)
 
@@ -32,5 +33,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    uvicorn.run(app, host="0.0.0.0", port=args.port, workers=args.workers)
