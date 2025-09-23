@@ -16,8 +16,6 @@ app = FastAPI(
     version="1.0.1",
 )
 
-# # Add request context middleware (must be added first)
-# app.add_middleware(RequestContextMiddleware)
 
 # Include routers
 app.include_router(product_router)
