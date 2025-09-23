@@ -19,7 +19,7 @@ class MemOSClient:
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.base_url = (
-            base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem"
+            base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem/v1"
         )
         api_key = api_key or os.getenv("MEMOS_API_KEY")
 
@@ -34,7 +34,7 @@ class MemOSClient:
             if not param_value:
                 raise ValueError(f"{param_name} is required")
 
-    def get_messages(
+    def get_message(
         self, user_id: str, conversation_id: str | None = None
     ) -> MemOSGetMessagesResponse:
         """Get messages"""
@@ -42,7 +42,7 @@ class MemOSClient:
         self._validate_required_params(user_id=user_id)
 
         url = f"{self.base_url}/get/message"
-        payload = {"userId": user_id, "conversationId": conversation_id}
+        payload = {"user_id": user_id, "conversation_id": conversation_id}
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
@@ -56,7 +56,7 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def add(
+    def add_message(
         self, messages: list[dict[str, Any]], user_id: str, conversation_id: str
     ) -> MemOSAddResponse:
         """Add memories"""
@@ -66,7 +66,7 @@ class MemOSClient:
         )
 
         url = f"{self.base_url}/add/message"
-        payload = {"messages": messages, "userId": user_id, "conversationId": conversation_id}
+        payload = {"messages": messages, "user_id": user_id, "conversation_id": conversation_id}
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
@@ -80,7 +80,7 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def search(
+    def search_memory(
         self, query: str, user_id: str, conversation_id: str, memory_limit_number: int = 6
     ) -> MemOSSearchResponse:
         """Search memories"""
@@ -90,9 +90,9 @@ class MemOSClient:
         url = f"{self.base_url}/search/memory"
         payload = {
             "query": query,
-            "userId": user_id,
-            "conversationId": conversation_id,
-            "memoryLimitNumber": memory_limit_number,
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "memory_limit_number": memory_limit_number,
         }
 
         for retry in range(MAX_RETRY_COUNT):
