@@ -199,7 +199,7 @@ mos_config = MOSConfig(**mos_config)
 memory = MOSProduct(default_config=mos_config)
 
 # register user and mem cube
-mem_cube_config = GeneralMemCubeConfig(**cube_config)
+mem_cube_config = GeneralMemCubeConfig.model_validate(cube_config)
 mem_cube = GeneralMemCube(mem_cube_config)
 user_id = "6dab9067-173a-4034-b5d9-735fc01999e3"
 register_result = memory.user_register(user_id=user_id, user_name="root", default_mem_cube=mem_cube)
