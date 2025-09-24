@@ -23,13 +23,7 @@ from memos.mem_os.main import MOS
 
 
 def get_client(frame: str, user_id: str | None = None, version: str = "default"):
-    if frame == "mem0" or frame == "mem0_graph":
-        from mem0 import MemoryClient
-        mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
-        mem0.update_project(custom_instructions=custom_instructions)
-        return mem0
-
-    elif frame == "memos":
+    if frame == "memos":
         mos_config_path = "configs/mos_memos_config.json"
         with open(mos_config_path) as f:
             mos_config_data = json.load(f)
@@ -222,7 +216,9 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     revised_client = None
     if frame == "mem0" or frame == "mem0_graph":
-        client = get_client(frame)
+        from mem0 import MemoryClient
+        mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
+        mem0.update_project(custom_instructions=custom_instructions)
         client.delete_all(user_id=f"locomo_exp_user_{conv_idx}")
         client.delete_all(user_id=f"{conversation.get('speaker_a')}_{conv_idx}")
         client.delete_all(user_id=f"{conversation.get('speaker_b')}_{conv_idx}")

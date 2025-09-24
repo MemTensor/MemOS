@@ -1,5 +1,4 @@
 import argparse
-import json
 import os
 import sys
 
@@ -10,10 +9,6 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from tqdm import tqdm
-from utils.client import mem0_client, memobase_client, memos_client, zep_client
-from utils.memobase_utils import memobase_add_memory
-from utils.memos_api import MemOSAPI
-from zep_cloud.types import Message
 
 
 def ingest_session(session, date, user_id, session_id, frame, client):
@@ -94,14 +89,18 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     print("=" * 80)
 
     if frame == "zep":
+        from utils.client import zep_client
         client = zep_client()
         client.user.add(user_id=user_id)
         print(f"➕ Added user {user_id} to Zep memory...")
     elif frame == "mem0-local":
+        from utils.client import mem0_client
         client = mem0_client(mode="local")
     elif frame == "mem0-api":
+        from utils.client import mem0_client
         client = mem0_client(mode="api")
     elif frame == "memos-local":
+        from utils.client import memos_client
         client = memos_client(
             mode="local",
             db_name=f"lme_{frame}-{version}",
@@ -114,8 +113,10 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
         )
         print("🔌 Using Memos Local client for ingestion...")
     elif frame == "memos-api":
+        from utils.memos_api import MemOSAPI
         client = MemOSAPI()
     elif frame == "memobase":
+        from utils.client import memobase_client
         client = memobase_client()
         memobase_user_id = client.add_user({"user_id": user_id})
         user_id = memobase_user_id
