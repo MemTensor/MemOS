@@ -188,7 +188,7 @@ class MySQLPersistentUserManager(MySQLUserManager):
         finally:
             session.close()
 
-    def list_user_configs(self,limit: int = 1) -> dict[str, MOSConfig]:
+    def list_user_configs(self, limit: int = 1) -> dict[str, MOSConfig]:
         """List all user configurations.
 
         Returns:
