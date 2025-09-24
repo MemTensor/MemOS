@@ -34,7 +34,9 @@ class MemOSClient:
             if not param_value:
                 raise ValueError(f"{param_name} is required")
 
-    def get(self, user_id: str, conversation_id: str | None = None) -> MemOSGetMessagesResponse:
+    def get_message(
+        self, user_id: str, conversation_id: str | None = None
+    ) -> MemOSGetMessagesResponse:
         """Get messages"""
         # Validate required parameters
         self._validate_required_params(user_id=user_id)
@@ -54,7 +56,7 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def add(
+    def add_message(
         self, messages: list[dict[str, Any]], user_id: str, conversation_id: str
     ) -> MemOSAddResponse:
         """Add memories"""
@@ -78,7 +80,7 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def search(
+    def search_memory(
         self, query: str, user_id: str, conversation_id: str, memory_limit_number: int = 6
     ) -> MemOSSearchResponse:
         """Search memories"""
