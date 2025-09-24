@@ -269,24 +269,38 @@ class Searcher:
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
-        if memory_type in ["All", "LongTermMemory"]:
-            results += self.graph_retriever.retrieve(
-                query=query,
-                parsed_goal=parsed_goal,
-                query_embedding=query_embedding,
-                top_k=top_k * 2,
-                memory_scope="LongTermMemory",
-                search_filter=search_filter,
-            )
-        if memory_type in ["All", "UserMemory"]:
-            results += self.graph_retriever.retrieve(
-                query=query,
-                parsed_goal=parsed_goal,
-                query_embedding=query_embedding,
-                top_k=top_k * 2,
-                memory_scope="UserMemory",
-                search_filter=search_filter,
-            )
+        tasks = []
+
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
+            if memory_type in ["All", "LongTermMemory"]:
+                tasks.append(
+                    executor.submit(
+                        self.graph_retriever.retrieve,
+                        query=query,
+                        parsed_goal=parsed_goal,
+                        query_embedding=query_embedding,
+                        top_k=top_k * 2,
+                        memory_scope="LongTermMemory",
+                        search_filter=search_filter,
+                    )
+                )
+            if memory_type in ["All", "UserMemory"]:
+                tasks.append(
+                    executor.submit(
+                        self.graph_retriever.retrieve,
+                        query=query,
+                        parsed_goal=parsed_goal,
+                        query_embedding=query_embedding,
+                        top_k=top_k * 2,
+                        memory_scope="UserMemory",
+                        search_filter=search_filter,
+                    )
+                )
+
+            # Collect results from all tasks
+            for task in tasks:
+                results.extend(task.result())
+
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embedding[0],

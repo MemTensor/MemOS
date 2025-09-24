@@ -214,24 +214,39 @@ class GraphMemoryRetriever:
                 or []
             )
 
-        all_hits = []
-        # Path A: without filter
-        with ContextThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(search_single, vec, None) for vec in query_embedding[:max_num]
-            ]
-            for f in concurrent.futures.as_completed(futures):
-                all_hits.extend(f.result() or [])
+        def search_path_a():
+            """Path A: search without filter"""
+            path_a_hits = []
+            with ContextThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(search_single, vec, None) for vec in query_embedding[:max_num]
+                ]
+                for f in concurrent.futures.as_completed(futures):
+                    path_a_hits.extend(f.result() or [])
+            return path_a_hits
 
-        # Path B: with filter
-        if search_filter:
+        def search_path_b():
+            """Path B: search with filter"""
+            if not search_filter:
+                return []
+            path_b_hits = []
             with ContextThreadPoolExecutor() as executor:
                 futures = [
                     executor.submit(search_single, vec, search_filter)
                     for vec in query_embedding[:max_num]
                 ]
                 for f in concurrent.futures.as_completed(futures):
-                    all_hits.extend(f.result() or [])
+                    path_b_hits.extend(f.result() or [])
+            return path_b_hits
+
+        # Execute both paths concurrently
+        all_hits = []
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
+            path_a_future = executor.submit(search_path_a)
+            path_b_future = executor.submit(search_path_b)
+
+            all_hits.extend(path_a_future.result())
+            all_hits.extend(path_b_future.result())
 
         if not all_hits:
             return []
