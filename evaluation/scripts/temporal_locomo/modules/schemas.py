@@ -1,6 +1,14 @@
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+class ContextUpdateMethod(Enum):
+    """Enumeration for context update methods"""
+
+    DIRECT = "direct"  # Directly update with current context
+    TEMPLATE = "chat_history"  # Update using template with history queries and answers
 
 
 class RecordingCase(BaseModel):

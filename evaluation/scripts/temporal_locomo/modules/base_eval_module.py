@@ -16,10 +16,13 @@ from memos.log import get_logger
 
 from .constants import (
     BASE_DIR,
+    MEMOS_MODEL,
+    MEMOS_SCHEDULER_MODEL,
 )
 from .prompts import (
     CUSTOM_INSTRUCTIONS,
 )
+from .schemas import ContextUpdateMethod
 
 
 if TYPE_CHECKING:
@@ -39,6 +42,10 @@ class BaseEvalModule:
         self.top_k = self.args.top_k
 
         # attributes
+        if self.frame in [MEMOS_MODEL, MEMOS_SCHEDULER_MODEL]:
+            self.context_update_method = ContextUpdateMethod.DIRECT
+        else:
+            self.context_update_method = ContextUpdateMethod.TEMPLATE
         self.custom_instructions = CUSTOM_INSTRUCTIONS
         self.data_dir = Path(f"{BASE_DIR}/data")
         self.locomo_df = pd.read_json(f"{self.data_dir}/locomo/locomo10.json")
@@ -250,7 +257,7 @@ class BaseEvalModule:
                 ],
             }
 
-    def group_and_sort_qa_by_day(self, qa_set):
+    def group_and_sort_qa_by_day(self, qa_set, sort_by_evidence):
         """
         Groups QA pairs by day and sorts them chronologically within each day group.
 
@@ -277,30 +284,31 @@ class BaseEvalModule:
             for day in days:
                 day_groups[day].append(qa)
 
-        # Sort QA pairs within each day group by their earliest evidence position
-        for day in day_groups:
-            # Create list of (qa, position) pairs for proper sorting
-            qa_position_pairs = []
+        if sort_by_evidence:
+            # Sort QA pairs within each day group by their earliest evidence position
+            for day in day_groups:
+                # Create list of (qa, position) pairs for proper sorting
+                qa_position_pairs = []
 
-            for qa in day_groups[day]:
-                # Find the earliest evidence position for this day
-                earliest_position = None
-                for evidence in qa["evidence"]:
-                    if evidence.startswith(day + ":"):
-                        try:
-                            position = int(evidence.split(":")[1])
-                            if earliest_position is None or position < earliest_position:
-                                earliest_position = position
-                        except (IndexError, ValueError):
-                            # Skip invalid evidence format
-                            continue
+                for qa in day_groups[day]:
+                    # Find the earliest evidence position for this day
+                    earliest_position = None
+                    for evidence in qa["evidence"]:
+                        if evidence.startswith(day + ":"):
+                            try:
+                                position = int(evidence.split(":")[1])
+                                if earliest_position is None or position < earliest_position:
+                                    earliest_position = position
+                            except (IndexError, ValueError):
+                                # Skip invalid evidence format
+                                continue
 
-                if earliest_position is not None:
-                    qa_position_pairs.append((qa, earliest_position))
+                    if earliest_position is not None:
+                        qa_position_pairs.append((qa, earliest_position))
 
-            # Sort by evidence position (earliest first)
-            qa_position_pairs = sorted(qa_position_pairs, key=lambda x: x[1])
-            day_groups[day] = [qa for qa, _ in qa_position_pairs]
+                # Sort by evidence position (earliest first)
+                qa_position_pairs = sorted(qa_position_pairs, key=lambda x: x[1])
+                day_groups[day] = [qa for qa, _ in qa_position_pairs]
 
         return dict(day_groups)
 
@@ -337,7 +345,7 @@ class BaseEvalModule:
             qa_set = conversation.get("qa", [])
 
             # Group and sort QA pairs by day
-            day_groups = self.group_and_sort_qa_by_day(qa_set)
+            day_groups = self.group_and_sort_qa_by_day(qa_set, sort_by_evidence=False)
 
             # Create temporal structure for this conversation
             temporal_conversation = {"conversation_id": f"locomo_exp_user_{conv_id}", "days": {}}
