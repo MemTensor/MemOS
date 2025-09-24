@@ -2,73 +2,89 @@
 
 
 NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT = """
-You are an information extraction assistant. You will be given a QA pair (user question Q and assistant answer A).
-Please extract the user's explicit preferences from the Q and implicit preferences from the A, and output JSON strictly according to the requirements.
+You are a preference extraction assistant.  
+Please extract the user's explicitly mentioned preferences from the following conversation.  
 
-# Extraction Rules
-Explicit preferences, extract only from the user's Q. Including but not limited to:
-- Role descriptions (e.g., "You are a history teacher")
-- Style constraints (e.g., "humorous style", "academic style")
-- Format requirements (e.g., "table", "Markdown")
-- Length limitations (e.g., "within 100 words")
-- Language requirements (e.g., "write in English")
-- Safety compliance requirements (e.g., "don't involve sensitive content")
-- Quality standards (e.g., "be concise and clear")
+Notes:  
+- A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".  
+- Any clearly expressed inclination, desire, rejection, or priority counts as an explicit preference.  
 
-# Output Format
-{
-  "explicit_preference": "Write the explicit preferences here"
-}
+Requirements:  
+1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.  
+2. Output should be a concise natural language summary, not a list or categories.  
+3. If there are no explicit preferences in the conversation, output an empty string "".  
+4. Output only the preference statements themselves, without any additional explanation.  
 
-# Notes
-If there is no information for a certain item, please leave an empty string "".
-Only output JSON, no explanations.
-
-# Conversation Content
+Conversation: 
 {qa_pair}
+
+Output format:
+```json
+{
+  "explicit_preference": "A short natural language summary of the preferences, or an empty string"
+}
+```
+Don't output anything except the JSON.
 """
 
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
-You are a preference extraction expert. You will be given multiple user QA pairs (questions and answers).
-Your task is to extract the user's **implicit preferences** from these QA pairs.
+You are a preference inference assistant. Please extract **implicit preferences** from the following conversation 
+(preferences that the user did not explicitly state but can be reasonably inferred from context, behavior, frequency, comparisons, exclusions, or scenario choices).
 
-# Definitions:
-1. **Explicit Preferences**: Constraints explicitly stated by the user in their questions, such as:
-   - Role requirements (e.g., "act as a teacher")
-   - Style preferences (e.g., "be humorous", "be formal")
-   - Format requirements (e.g., "use bullet points", "create a table")
-   - Length constraints (e.g., "keep it short", "be detailed")
-   - Language requirements (e.g., "write in English")
-   - Safety guidelines (e.g., "avoid sensitive topics")
+Notes:
+- Implicit preferences refer to user inclinations or choices that are not directly expressed, but can be reasonably inferred from factual cues in the conversation.
+- Do not treat explicitly stated preferences as implicit preferences; this prompt is only for inferring preferences that are not directly mentioned.
 
-2. **Implicit Preferences**: Patterns that are NOT explicitly stated but consistently appear across multiple QA pairs:
-   - Recurring themes or topics the user frequently asks about
-   - Consistent communication style preferences
-   - Repeated information depth requirements
-   - Common response format expectations
-   - Underlying values or priorities
+Requirements:
+1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.  
+2. Output a concise natural language statement; do not use lists, categories, or include the reasoning process.  
+3. Only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information.  
+4. If no implicit preference can be reasonably inferred, directly return an empty string "" (do not output anything else).
 
-# Extraction Rules:
-- Focus on patterns that appear across MULTIPLE QA pairs, not single occurrences
-- Look for consistent behaviors, not one-time requests
-- Extract only implicit preferences, do not repeat explicit ones
-- Use concise language, avoid redundant words
-- Each preference should be distinct and non-overlapping
-
-# Output Format:
-{
-  "implicit_preference": "Write the implicit preferences here, 1. preference 1, 2. preference 2, 3. preference 3"
-}
-
-# Notes:
-- If no clear implicit preferences are found, return an empty string ""
-- Only output JSON, no explanations
-- Focus on meaningful patterns, not trivial observations
-
-# QA Pairs:
+Conversation:
 {qa_pair}
+
+Output format:  
+```json
+{
+  "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string"
+}
+```
+Don't output anything except the JSON.
 """
+
+
+NAIVE_EXPLICIT_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
+You are a preference extraction and inference assistant. Please extract the user's preferences from the following conversation, including:
+
+1. **Explicit preferences**: Preferences that the user directly expresses, such as likes, dislikes, wants, does not want, or prioritized choices.  
+2. **Implicit preferences**: Preferences that are not explicitly stated but can be reasonably inferred from context, behavior, frequency, comparisons, exclusions, or scenario choices.
+
+Notes:
+- For explicit preferences, only extract what the user directly states, do not infer.  
+- For implicit preferences, only infer when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.  
+- Do not duplicate: do not treat explicit preferences as implicit preferences.
+
+Requirements:
+1. Output in JSON format with two fields: "explicit_preferences" and "implicit_preferences".  
+2. Each field should be an array, with each element being a concise natural language preference statement.  
+3. Output only the preference statements themselves; do not include any extra explanation, reasoning, or confidence information.  
+4. If a type of preference does not exist, its array should be empty.
+
+Conversation:
+{qa_pair}
+
+Output Format:
+```json
+{
+  "explicit_preferences": ["The user clearly likes coffee", "The user does not want to sit by the window"],
+  "implicit_preferences": ["The user prefers a quiet environment"]
+}
+```
+Don't output anything except the JSON.
+"""
+
 
 
 NAIVE_TOPIC_PREFERENCE_EXTRACT_PROMPT = """

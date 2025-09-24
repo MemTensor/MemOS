@@ -284,13 +284,13 @@ class NaiveUpdater(BaseUpdater):
         impl_ids = [item.id for item in self.vector_db.get_by_filter(collection_name="implicit_preference", filter={"user_id": user_id})]
         topic_ids = [item.id for item in self.vector_db.get_by_filter(collection_name="topic_preference", filter={"user_id": user_id})]
         user_ids = [item.id for item in self.vector_db.get_by_filter(collection_name="user_preference", filter={"user_id": user_id})]
-
+        
         self.vector_db.delete("implicit_preference", impl_ids)
         self.vector_db.delete("topic_preference", topic_ids)
         self.vector_db.delete("user_preference", user_ids)
 
-        all_data = self.vector_db.get_all("explicit_preference")
-        user_id = all_data[0].payload.get("user_id", "")
+        # get all data from explicit preference collection
+        all_data = self.vector_db.get_by_filter("explicit_preference", filter={"user_id": user_id})
         informations = [item.payload for item in all_data]
         
         # Perform clustering

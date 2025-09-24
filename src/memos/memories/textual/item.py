@@ -152,10 +152,10 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     topic_cluster_description: str | None = Field(
         default=None, description="Description of the topic cluster."
     )
-    topic_preferences: str | None = Field(
+    topic_preference: str | None = Field(
         default=None, description="Preferences of the topic."
     )
-    user_preferences: str | None = Field(
+    user_preference: str | None = Field(
         default=None, description="Preferences of the user."
     )
 

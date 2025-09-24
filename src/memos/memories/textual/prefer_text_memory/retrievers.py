@@ -48,9 +48,9 @@ class NaiveRetriever(BaseRetriever):
         implicit_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("center_dialog", ""), 
                         metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in implicit_prefs if pref.payload["implicit_preference"]]
         topic_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("center_dialog", ""), 
-                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in topic_prefs if pref.payload["topic_preferences"]]
-        user_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("user_preferences", ""),
-                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in user_prefs if pref.payload["user_preferences"]]
+                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in topic_prefs if pref.payload["topic_preference"]]
+        user_prefs = [TextualMemoryItem(id=pref.id, memory=pref.payload.get("user_preference", ""),
+                        metadata=PreferenceTextualMemoryMetadata(**pref.payload)) for pref in user_prefs if pref.payload["user_preference"]]
             
         return explicit_prefs + implicit_prefs + topic_prefs + user_prefs
 

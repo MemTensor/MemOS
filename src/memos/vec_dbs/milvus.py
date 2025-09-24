@@ -111,7 +111,7 @@ class MilvusVecDB(BaseVecDB):
             List of search results with distance scores and payloads.
         """
         # Convert filter to Milvus expression
-        expr = self._dict_to_expr(filter) if filter else None
+        expr = self._dict_to_expr(filter) if filter else ""
         
         results = self.client.search(
             collection_name=collection_name,
@@ -137,10 +137,16 @@ class MilvusVecDB(BaseVecDB):
 
     def _dict_to_expr(self, filter_dict: dict[str, Any]) -> str:
         """Convert a dictionary filter to a Milvus expression string."""
+        if not filter_dict:
+            return ""
+        
         conditions = []
         for field, value in filter_dict.items():
+            # Skip None values as they cause Milvus query syntax errors
+            if value is None:
+                continue
             # For JSON fields, we need to use payload["field"] syntax
-            if isinstance(value, str):
+            elif isinstance(value, str):
                 conditions.append(f"payload['{field}'] == '{value}'")
             elif isinstance(value, list) and len(value) == 0:
                 # Skip empty lists as they cause Milvus query syntax errors
@@ -211,7 +217,7 @@ class MilvusVecDB(BaseVecDB):
         Returns:
             List of items including vectors and payload that match the filter
         """
-        expr = self._dict_to_expr(filter) if filter else None
+        expr = self._dict_to_expr(filter) if filter else ""
         all_items = []
         
         # Use query_iterator for efficient pagination
@@ -257,7 +263,7 @@ class MilvusVecDB(BaseVecDB):
         """Count items in the database, optionally with filter."""
         if filter:
             # If there's a filter, use query method
-            expr = self._dict_to_expr(filter)
+            expr = self._dict_to_expr(filter) if filter else ""
             results = self.client.query(
                 collection_name=collection_name,
                 filter=expr,
@@ -334,6 +340,8 @@ class MilvusVecDB(BaseVecDB):
 
     def delete(self, collection_name: str, ids: list[str]) -> None:
         """Delete items from the vector database."""
+        if not ids:
+            return
         self.client.delete(
             collection_name=collection_name,
             ids=ids,
