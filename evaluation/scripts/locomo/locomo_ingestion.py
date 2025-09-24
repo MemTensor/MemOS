@@ -2,20 +2,11 @@ import asyncio
 import os
 import sys
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-)
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ),
-        "evaluation",
-        "scripts",
-    ),
-)
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 import argparse
 import concurrent.futures
@@ -24,41 +15,11 @@ import time
 from datetime import datetime, timezone
 import pandas as pd
 from dotenv import load_dotenv
-from utils.client import memobase_client
-from utils.memos_api import MemOSAPI
-from utils.memobase_utils import memobase_add_memory
+from prompts import custom_instructions
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-
-custom_instructions = """
-Generate personal memories that follow these guidelines:
-
-1. Each memory should be self-contained with complete context, including:
-   - The person's name, do not use "user" while creating memories
-   - Personal details (career aspirations, hobbies, life circumstances)
-   - Emotional states and reactions
-   - Ongoing journeys or future plans
-   - Specific dates when events occurred
-
-2. Include meaningful personal narratives focusing on:
-   - Identity and self-acceptance journeys
-   - Family planning and parenting
-   - Creative outlets and hobbies
-   - Mental health and self-care activities
-   - Career aspirations and education goals
-   - Important life events and milestones
-
-3. Make each memory rich with specific details rather than general statements
-   - Include timeframes (exact dates when possible)
-   - Name specific activities (e.g., "charity race for mental health" rather than just "exercise")
-   - Include emotional context and personal growth elements
-
-4. Extract memories only from user messages, not incorporating assistant responses
-
-5. Format each memory as a paragraph with a clear narrative structure that captures the person's experience, challenges, and aspirations
-"""
 
 
 def get_client(frame: str, user_id: str | None = None, version: str = "default"):
@@ -131,11 +92,13 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
         if frame == "memos-api":
-            client.add(messages=messages, user_id=f"{speaker_a_user_id}_{version}", conv_id=f"{conv_id}_{metadata['session_key']}")
-            client.add(messages=messages_reverse, user_id=f"{speaker_b_user_id}_{version}", conv_id=f"{conv_id}_{metadata['session_key']}")
+            client.add(messages=messages, user_id=f"{speaker_a_user_id}_{version}",
+                       conv_id=f"{conv_id}_{metadata['session_key']}")
+            client.add(messages=messages_reverse, user_id=f"{speaker_b_user_id}_{version}",
+                       conv_id=f"{conv_id}_{metadata['session_key']}")
         elif frame == "memos":
-            client.add(messages=messages,user_id=speaker_a_user_id,)
-            revised_client.add(messages=messages_reverse,user_id=speaker_b_user_id,)
+            client.add(messages=messages, user_id=speaker_a_user_id, )
+            revised_client.add(messages=messages_reverse, user_id=speaker_b_user_id, )
         print(f"Added messages for {speaker_a_user_id} and {speaker_b_user_id} successfully.")
 
     elif frame == "mem0" or frame == "mem0_graph":
@@ -188,6 +151,7 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                     enable_graph=True,
                 )
     elif frame == "memobase":
+        from utils.memobase_utils import memobase_add_memory
         messages = []
         messages_reverse = []
 
@@ -269,8 +233,11 @@ def process_user(conv_idx, frame, locomo_df, version):
         client = get_client("memos", speaker_a_user_id, version)
         revised_client = get_client("memos", speaker_b_user_id, version)
     elif frame == "memos-api":
+        from utils.memos_api import MemOSAPI
         client = MemOSAPI()
     elif frame == "memobase":
+        from utils.client import memobase_client
+
         client = memobase_client()
         conv_id = "locomo_exp_user_" + str(conv_idx)
         speaker_a_user_id = conv_id + "_speaker_a"

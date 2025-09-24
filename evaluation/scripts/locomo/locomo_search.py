@@ -1,49 +1,34 @@
 import os
 import sys
-import uuid
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
-
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-)
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ),
-        "evaluation",
-        "scripts",
-    ),
-)
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 import argparse
 import json
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from time import time, sleep
-from utils.memos_api import MemOSAPI
+from time import time
 import pandas as pd
-
 from dotenv import load_dotenv
-from mem0 import MemoryClient
 from tqdm import tqdm
-from utils.client import memobase_client, memos_client
 from utils.memos_filters import filter_memory_data
-from zep_cloud.client import Zep
-
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.main import MOS
 
 
 def get_client(frame: str, user_id: str | None = None, version: str = "default", top_k: int = 20):
     if frame == "zep":
+        from zep_cloud.client import Zep
         zep = Zep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
         return zep
 
     elif frame == "mem0" or frame == "mem0_graph":
+        from mem0 import MemoryClient
         mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         return mem0
 
@@ -373,10 +358,6 @@ def memobase_search(
     return context, duration_ms
 
 
-def string_to_uuid(s: str, salt="memobase_client") -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
-
-
 def search_query(client, query, metadata, frame, version, reversed_client=None, top_k=20):
     conv_id = metadata.get("conv_id")
     speaker_a = metadata.get("speaker_a")
@@ -454,8 +435,10 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         client = get_client(frame, speaker_a_user_id, version, top_k=top_k)
         reversed_client = get_client(frame, speaker_b_user_id, version, top_k=top_k)
     elif frame == "memos-api":
+        from utils.memos_api import MemOSAPI
         client = MemOSAPI()
     elif frame == "memobase":
+        from utils.client import memobase_client
         client = memobase_client()
     else:
         client = get_client(frame, conv_id, version)

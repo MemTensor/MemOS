@@ -110,3 +110,31 @@ ANSWER_PROMPT_MEMOS = """
 
    Answer:
    """
+
+custom_instructions = """
+Generate personal memories that follow these guidelines:
+
+1. Each memory should be self-contained with complete context, including:
+   - The person's name, do not use "user" while creating memories
+   - Personal details (career aspirations, hobbies, life circumstances)
+   - Emotional states and reactions
+   - Ongoing journeys or future plans
+   - Specific dates when events occurred
+
+2. Include meaningful personal narratives focusing on:
+   - Identity and self-acceptance journeys
+   - Family planning and parenting
+   - Creative outlets and hobbies
+   - Mental health and self-care activities
+   - Career aspirations and education goals
+   - Important life events and milestones
+
+3. Make each memory rich with specific details rather than general statements
+   - Include timeframes (exact dates when possible)
+   - Name specific activities (e.g., "charity race for mental health" rather than just "exercise")
+   - Include emotional context and personal growth elements
+
+4. Extract memories only from user messages, not incorporating assistant responses
+
+5. Format each memory as a paragraph with a clear narrative structure that captures the person's experience, challenges, and aspirations
+"""

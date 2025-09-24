@@ -380,7 +380,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--options", nargs="+", default=[])
     parser.add_argument(
-        "--workers", type=int, default=80, help="Number of concurrent workers for processing groups"
+        "--workers", type=int, default=10, help="Number of concurrent workers for processing groups"
     )
     args = parser.parse_args()
 
