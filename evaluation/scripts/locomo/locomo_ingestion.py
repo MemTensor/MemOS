@@ -2,7 +2,9 @@ import asyncio
 import os
 import sys
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
@@ -76,23 +78,39 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
             data = chat.get("speaker") + ": " + chat.get("text")
             if chat.get("speaker") == metadata["speaker_a"]:
                 messages.append({"role": "user", "content": data, "chat_time": iso_date})
-                messages_reverse.append({"role": "assistant", "content": data, "chat_time": iso_date})
+                messages_reverse.append(
+                    {"role": "assistant", "content": data, "chat_time": iso_date}
+                )
             elif chat.get("speaker") == metadata["speaker_b"]:
                 messages.append({"role": "assistant", "content": data, "chat_time": iso_date})
                 messages_reverse.append({"role": "user", "content": data, "chat_time": iso_date})
             else:
-                raise ValueError(f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}")
+                raise ValueError(
+                    f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
+                )
 
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
         if frame == "memos-api":
-            client.add(messages=messages, user_id=f"{speaker_a_user_id}_{version}",
-                       conv_id=f"{conv_id}_{metadata['session_key']}")
-            client.add(messages=messages_reverse, user_id=f"{speaker_b_user_id}_{version}",
-                       conv_id=f"{conv_id}_{metadata['session_key']}")
+            client.add(
+                messages=messages,
+                user_id=f"{speaker_a_user_id}_{version}",
+                conv_id=f"{conv_id}_{metadata['session_key']}",
+            )
+            client.add(
+                messages=messages_reverse,
+                user_id=f"{speaker_b_user_id}_{version}",
+                conv_id=f"{conv_id}_{metadata['session_key']}",
+            )
         elif frame == "memos":
-            client.add(messages=messages, user_id=speaker_a_user_id, )
-            revised_client.add(messages=messages_reverse, user_id=speaker_b_user_id, )
+            client.add(
+                messages=messages,
+                user_id=speaker_a_user_id,
+            )
+            revised_client.add(
+                messages=messages_reverse,
+                user_id=speaker_b_user_id,
+            )
         print(f"Added messages for {speaker_a_user_id} and {speaker_b_user_id} successfully.")
 
     elif frame == "mem0" or frame == "mem0_graph":
@@ -107,11 +125,13 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                 messages.append({"role": "assistant", "content": data})
                 messages_reverse.append({"role": "user", "content": data})
             else:
-                raise ValueError(f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}")
+                raise ValueError(
+                    f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
+                )
 
         for i in range(0, len(messages), 2):
-            batch_messages = messages[i: i + 2]
-            batch_messages_reverse = messages_reverse[i: i + 2]
+            batch_messages = messages[i : i + 2]
+            batch_messages_reverse = messages_reverse[i : i + 2]
 
             if frame == "mem0":
                 client.add(
@@ -146,6 +166,7 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                 )
     elif frame == "memobase":
         from utils.memobase_utils import memobase_add_memory
+
         messages = []
         messages_reverse = []
 
@@ -192,10 +213,10 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         users = client.get_all_users(limit=5000)
         for u in users:
             try:
-                if u['additional_fields']['user_id'] == conv_id + "_speaker_a":
-                    user_a = client.get_user(u['id'], no_get=True)
-                if u['additional_fields']['user_id'] == conv_id + "_speaker_b":
-                    user_b = client.get_user(u['id'], no_get=True)
+                if u["additional_fields"]["user_id"] == conv_id + "_speaker_a":
+                    user_a = client.get_user(u["id"], no_get=True)
+                if u["additional_fields"]["user_id"] == conv_id + "_speaker_b":
+                    user_b = client.get_user(u["id"], no_get=True)
             except:
                 pass
         memobase_add_memory(user_a, messages)
@@ -217,6 +238,7 @@ def process_user(conv_idx, frame, locomo_df, version):
     revised_client = None
     if frame == "mem0" or frame == "mem0_graph":
         from mem0 import MemoryClient
+
         mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         mem0.update_project(custom_instructions=custom_instructions)
         client.delete_all(user_id=f"locomo_exp_user_{conv_idx}")
@@ -230,6 +252,7 @@ def process_user(conv_idx, frame, locomo_df, version):
         revised_client = get_client("memos", speaker_b_user_id, version)
     elif frame == "memos-api":
         from utils.memos_api import MemOSAPI
+
         client = MemOSAPI()
     elif frame == "memobase":
         from utils.client import memobase_client
@@ -241,8 +264,8 @@ def process_user(conv_idx, frame, locomo_df, version):
         all_users = client.get_all_users(limit=5000)
         for user in all_users:
             try:
-                if user['additional_fields']['user_id'] in [speaker_a_user_id, speaker_b_user_id]:
-                    client.delete_user(user['id'])
+                if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
+                    client.delete_user(user["id"])
                     print(f"🗑️  Deleted existing user from Memobase memory...")
             except:
                 pass
@@ -298,11 +321,12 @@ async def main(frame, version="default", num_workers=4):
 
     if frame == "zep":
         from zep_cloud.client import AsyncZep
+
         zep = AsyncZep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
         num_users = 10
         max_session_count = 35
         for group_idx in range(num_users):
-            conversation = locomo_df['conversation'].iloc[group_idx]
+            conversation = locomo_df["conversation"].iloc[group_idx]
             group_id = f"locomo_exp_user_{group_idx}"
             print(group_id)
             try:
@@ -311,29 +335,37 @@ async def main(frame, version="default", num_workers=4):
                 pass
 
             for session_idx in range(max_session_count):
-                session_key = f'session_{session_idx}'
+                session_key = f"session_{session_idx}"
                 print(session_key)
                 session = conversation.get(session_key)
                 if session is None:
                     continue
                 for msg in session:
-                    session_date = conversation.get(f'session_{session_idx}_date_time') + ' UTC'
-                    date_format = '%I:%M %p on %d %B, %Y UTC'
-                    date_string = datetime.strptime(session_date, date_format).replace(tzinfo=timezone.utc)
+                    session_date = conversation.get(f"session_{session_idx}_date_time") + " UTC"
+                    date_format = "%I:%M %p on %d %B, %Y UTC"
+                    date_string = datetime.strptime(session_date, date_format).replace(
+                        tzinfo=timezone.utc
+                    )
                     iso_date = date_string.isoformat()
-                    blip_caption = msg.get('blip_captions')
-                    img_description = f'(description of attached image: {blip_caption})' if blip_caption is not None else ''
+                    blip_caption = msg.get("blip_captions")
+                    img_description = (
+                        f"(description of attached image: {blip_caption})"
+                        if blip_caption is not None
+                        else ""
+                    )
                     await zep.graph.add(
-                        data=msg.get('speaker') + ': ' + msg.get('text') + img_description,
-                        type='message',
+                        data=msg.get("speaker") + ": " + msg.get("text") + img_description,
+                        type="message",
                         created_at=iso_date,
                         group_id=group_id,
                     )
 
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = [executor.submit(process_user, user_id, frame, locomo_df, version)
-                       for user_id in range(num_users)]
+            futures = [
+                executor.submit(process_user, user_id, frame, locomo_df, version)
+                for user_id in range(num_users)
+            ]
 
             for future in concurrent.futures.as_completed(futures):
                 session_time = future.result()
@@ -362,12 +394,12 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
-        default='memos-api'
+        default="memos-api",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default='0917-test',
+        default="0917-test",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(

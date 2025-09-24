@@ -18,6 +18,7 @@ load_dotenv()
 
 def zep_client():
     from zep_cloud.client import Zep
+
     """Initialize and return a Zep client instance."""
     api_key = os.getenv("ZEP_API_KEY")
     zep = Zep(api_key=api_key)
@@ -29,6 +30,7 @@ def mem0_client(mode="local"):
     """Initialize and return a Mem0 client instance."""
     if mode == "api":
         from mem0 import MemoryClient
+
         mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
     else:
         raise ValueError("Invalid mode. Choose 'local' or 'cloud'.")
@@ -83,6 +85,7 @@ def memos_client(
 
 def memobase_client():
     from memobase import MemoBaseClient
+
     client = MemoBaseClient(
         project_url=os.getenv("MEMOBASE_PROJECT_URL"),
         api_key=os.getenv("MEMOBASE_API_KEY"),
@@ -104,6 +107,7 @@ if __name__ == "__main__":
         user_id=user_id,
     )
     from zep_cloud.types import Message
+
     messages = [
         Message(
             role="Jane",

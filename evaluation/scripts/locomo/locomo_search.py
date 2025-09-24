@@ -1,7 +1,9 @@
 import os
 import sys
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
@@ -24,11 +26,13 @@ from memos.mem_os.main import MOS
 def get_client(frame: str, user_id: str | None = None, version: str = "default", top_k: int = 20):
     if frame == "zep":
         from zep_cloud.client import Zep
+
         zep = Zep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
         return zep
 
     elif frame == "mem0" or frame == "mem0_graph":
         from mem0 import MemoryClient
+
         mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         return mem0
 
@@ -203,22 +207,20 @@ def memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client=N
     return context, duration_ms
 
 
-def memos_api_search(
-    client, query, conv_id, speaker_a, speaker_b, top_k, version
-):
+def memos_api_search(client, query, conv_id, speaker_a, speaker_b, top_k, version):
     start = time()
     search_a_results = client.search(
         query=query, user_id=f"{conv_id}_speaker_a_{version}", top_k=top_k
     )
     speaker_a_context = ""
-    for item in search_a_results['memory_detail_list']:
+    for item in search_a_results["memory_detail_list"]:
         speaker_a_context += f"{item['memory_value']}\n"
 
     search_b_results = client.search(
         query=query, user_id=f"{conv_id}_speaker_b_{version}", top_k=top_k
     )
     speaker_b_context = ""
-    for item in search_b_results['memory_detail_list']:
+    for item in search_b_results["memory_detail_list"]:
         speaker_b_context += f"{item['memory_value']}\n"
 
     context = TEMPLATE_MEMOS.format(
@@ -341,6 +343,7 @@ def memobase_search(
     client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k=20
 ):
     from utils.memobase_utils import memobase_search_memory
+
     speaker_a_memories, t1 = memobase_search_memory(
         client, speaker_a_user_id, query, max_memory_context_size=top_k * 100
     )
@@ -387,7 +390,9 @@ def search_query(client, query, metadata, frame, version, reversed_client=None, 
     elif frame == "memobase":
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
-        context, duration_ms = memobase_search(client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k)
+        context, duration_ms = memobase_search(
+            client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k
+        )
     return context, duration_ms
 
 
@@ -436,9 +441,11 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         reversed_client = get_client(frame, speaker_b_user_id, version, top_k=top_k)
     elif frame == "memos-api":
         from utils.memos_api import MemOSAPI
+
         client = MemOSAPI()
     elif frame == "memobase":
         from utils.client import memobase_client
+
         client = memobase_client()
     else:
         client = get_client(frame, conv_id, version)
@@ -488,12 +495,12 @@ def main(frame, version="default", num_workers=1, top_k=20):
 
     for idx in range(num_users):
         # try:
-            print(f"Processing user {idx}...")
-            user_results = process_user(idx, locomo_df, frame, version, top_k, num_workers)
-            for conv_id, results in user_results.items():
-                all_search_results[conv_id].extend(results)
-        # except Exception as e:
-        #     print(f"User {idx} generated an exception: {e}")
+        print(f"Processing user {idx}...")
+        user_results = process_user(idx, locomo_df, frame, version, top_k, num_workers)
+        for conv_id, results in user_results.items():
+            all_search_results[conv_id].extend(results)
+    # except Exception as e:
+    #     print(f"User {idx} generated an exception: {e}")
 
     with open(f"results/locomo/{frame}-{version}/{frame}_locomo_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=2)
@@ -506,7 +513,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
-        default='memos-api'
+        default="memos-api",
     )
     parser.add_argument(
         "--version",

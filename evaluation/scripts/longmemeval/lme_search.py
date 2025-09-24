@@ -4,7 +4,6 @@ import os
 import sys
 
 
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -128,7 +127,9 @@ def memos_search(client, user_id, query, top_k, frame="memos-local"):
 
     elif frame == "memos-api":
         results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join([f"  - {item['memory_value']}" for item in results['memory_detail_list']])
+        search_memories = "\n".join(
+            [f"  - {item['memory_value']}" for item in results["memory_detail_list"]]
+        )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000
@@ -197,7 +198,9 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
     elif frame == "memobase":
         client = memobase_client()
         print("🔌 Using Memobase client for search...")
-        context, duration_ms = memobase_search_memory(client, user_id, question, max_memory_context_size=3000)
+        context, duration_ms = memobase_search_memory(
+            client, user_id, question, max_memory_context_size=3000
+        )
 
     elif frame == "memos-api":
         client = MemOSAPI()
@@ -227,9 +230,7 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
 
 
 def load_existing_results(frame, version, group_idx):
-    result_path = (
-        f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{group_idx}.json"
-    )
+    result_path = f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{group_idx}.json"
     if os.path.exists(result_path):
         try:
             with open(result_path) as f:
@@ -245,14 +246,10 @@ def main(frame, version, top_k=20, num_workers=2):
     print("=" * 80)
 
     lme_df = pd.read_json("data/longmemeval/longmemeval_s.json")
-    print(
-        "📚 Loaded LongMemeval dataset from data/longmemeval/longmemeval_s.json"
-    )
+    print("📚 Loaded LongMemeval dataset from data/longmemeval/longmemeval_s.json")
     num_multi_sessions = len(lme_df)
     print(f"👥 Number of users: {num_multi_sessions}")
-    print(
-        f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}"
-    )
+    print(f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}")
     print("-" * 80)
 
     all_search_results = defaultdict(list)
@@ -282,18 +279,12 @@ def main(frame, version, top_k=20, num_workers=2):
     print("\n" + "=" * 80)
     print("✅ SEARCH COMPLETE".center(80))
     print("=" * 80)
-    print(
-        f"⏱️  Total time taken to search {num_multi_sessions} users: {elapsed_time_str}"
-    )
-    print(
-        f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}"
-    )
+    print(f"⏱️  Total time taken to search {num_multi_sessions} users: {elapsed_time_str}")
+    print(f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}")
 
     with open(f"results/lme/{frame}-{version}/{frame}_lme_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
-    print(
-        f"📁 Results saved to: results/lme/{frame}-{version}/{frame}_lme_search_results.json"
-    )
+    print(f"📁 Results saved to: results/lme/{frame}-{version}/{frame}_lme_search_results.json")
     print("=" * 80 + "\n")
 
 
@@ -303,7 +294,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
-        default='memos-api'
+        default="memos-api",
     )
     parser.add_argument(
         "--version", type=str, default="0923", help="Version of the evaluation framework."

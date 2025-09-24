@@ -22,18 +22,22 @@ class MemOSAPI:
         while retry < 10:
             try:
                 url = f"{self.base_url}/add/message"
-                payload = json.dumps({"messages": messages, "user_id": user_id, "conversation_id": conv_id})
+                payload = json.dumps(
+                    {"messages": messages, "user_id": user_id, "conversation_id": conv_id}
+                )
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
-                assert json.loads(response.text)['code'] == 0, response.text
+                assert json.loads(response.text)["code"] == 0, response.text
                 return response.text
             except Exception as e:
-                print(f'call memos api add failed {e} retry time {retry}')
+                print(f"call memos api add failed {e} retry time {retry}")
                 # traceback.print_exc()
                 retry += 1
         assert retry != 10, "add memory failed"
 
-    def search(self, query: str, user_id: str | None = None, conv_id: str | None = '', top_k: int = 10):
+    def search(
+        self, query: str, user_id: str | None = None, conv_id: str | None = "", top_k: int = 10
+    ):
         """Search memories."""
         retry = 0
         while retry < 10:
@@ -44,16 +48,17 @@ class MemOSAPI:
                         "query": query,
                         "user_id": user_id,
                         "conversation_id": conv_id,
-                        "memory_limit_number": top_k
-                    }, ensure_ascii=False
+                        "memory_limit_number": top_k,
+                    },
+                    ensure_ascii=False,
                 )
 
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
-                assert json.loads(response.text)['code'] == 0, response.text
+                assert json.loads(response.text)["code"] == 0, response.text
                 return json.loads(response.text)["data"]
             except Exception as e:
-                print(f'call memos api search failed {e} retry time {retry}')
+                print(f"call memos api search failed {e} retry time {retry}")
                 # traceback.print_exc()
                 retry += 1
         assert retry != 10, "search memory failed"
@@ -61,11 +66,11 @@ class MemOSAPI:
 
 if __name__ == "__main__":
     client = MemOSAPI()
-    user_id = 'eval_test'
-    conv_id = 'eval_test_benchmark1_conv1'
+    user_id = "eval_test"
+    conv_id = "eval_test_benchmark1_conv1"
     messages = [
         {"role": "user", "content": "杭州西湖有什么好玩的"},
-        {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"}
+        {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"},
     ]
 
     memories = client.search("我最近有什么记忆", user_id=user_id, top_k=6)

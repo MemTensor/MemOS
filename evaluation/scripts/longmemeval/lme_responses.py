@@ -48,11 +48,7 @@ def process_qa(user_id, search_result, llm_client):
     print(f"🤖 Processed User: {user_id}")
     print(f"⏱️  Duration: {response_duration_ms:.2f} ms")
     print(f"❓ Question: {question}")
-    print(
-        f"💬 Answer: {anwer[:150]}..."
-        if len(anwer) > 150
-        else f"💬 Answer: {anwer}"
-    )
+    print(f"💬 Answer: {anwer[:150]}..." if len(anwer) > 150 else f"💬 Answer: {anwer}")
     print("-" * 80)
 
     return {
@@ -71,11 +67,7 @@ def process_qa(user_id, search_result, llm_client):
 
 def main(frame, version, num_workers=4):
     print("\n" + "=" * 80)
-    print(
-        f"🚀 LONGMEMEVAL RESPONSE GENERATION - {frame.upper()} v{version}".center(
-            80
-        )
-    )
+    print(f"🚀 LONGMEMEVAL RESPONSE GENERATION - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
     load_dotenv()
@@ -84,9 +76,7 @@ def main(frame, version, num_workers=4):
         api_key=os.getenv("CHAT_MODEL_API_KEY"), base_url=os.getenv("CHAT_MODEL_BASE_URL")
     )
 
-    print(
-        f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}"
-    )
+    print(f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}")
 
     search_path = f"results/lme/{frame}-{version}/{frame}_lme_search_results.json"
     response_path = f"results/lme/{frame}-{version}/{frame}_lme_responses.json"
@@ -129,9 +119,7 @@ def main(frame, version, num_workers=4):
     print("=" * 80)
     print(f"⏱️ Total time: {elapsed_sec // 60}m {elapsed_sec % 60}s")
     print(f"📊 Processed: {len(lme_responses)} users")
-    print(
-        f"🔄 Framework: {frame} | Version: {version}"
-    )
+    print(f"🔄 Framework: {frame} | Version: {version}")
 
     with open(response_path, "w") as f:
         json.dump(lme_responses, f, indent=4)
@@ -146,7 +134,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
-        default='memos-api'
+        default="memos-api",
     )
     parser.add_argument(
         "--version", type=str, default="0923", help="Version of the evaluation framework."

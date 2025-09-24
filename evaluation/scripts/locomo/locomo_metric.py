@@ -10,7 +10,7 @@ parser.add_argument(
     "--lib",
     type=str,
     choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
-    default='memos-api'
+    default="memos-api",
 )
 parser.add_argument(
     "--version",

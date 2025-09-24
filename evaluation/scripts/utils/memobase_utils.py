@@ -21,8 +21,8 @@ def memobase_search_memory(
     users = client.get_all_users(limit=5000)
     for u in users:
         try:
-            if u['additional_fields']['user_id'] == user_id:
-                user = client.get_user(u['id'], no_get=True)
+            if u["additional_fields"]["user_id"] == user_id:
+                user = client.get_user(u["id"], no_get=True)
         except:
             pass
 
@@ -37,7 +37,7 @@ def memobase_search_memory(
                 event_similarity_threshold=0.2,
                 fill_window_with_events=True,
             )
-            return memories, (time.time()-t) * 1000
+            return memories, (time.time() - t) * 1000
         except Exception as e:
             print(f"Error during memory search: {e}")
             print("Retrying...")
@@ -45,4 +45,3 @@ def memobase_search_memory(
             if retries >= max_retries:
                 raise e
             time.sleep(retry_delay)
-
