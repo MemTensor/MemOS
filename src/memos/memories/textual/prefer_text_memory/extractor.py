@@ -71,7 +71,7 @@ class NaiveExtractor(BaseExtractor):
         except Exception:
             return response
 
-    def extract_implicit_preferences(self, qa_pairs: list[MessageList] | list[str]) -> List[Dict[str, Any]]:
+    def extract_implicit_preferences(self, qa_pairs: MessageList | list[str]) -> List[Dict[str, Any]]:
         """Extract implicit preferences from cluster qa pairs."""
         if not qa_pairs:
             return None
