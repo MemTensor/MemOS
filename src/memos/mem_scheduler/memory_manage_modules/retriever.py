@@ -82,10 +82,7 @@ class SchedulerRetriever(BaseSchedulerModule):
         return results
 
     def rerank_memories(
-        self,
-        queries: list[str],
-        original_memories: list[str],
-        top_k: int,
+        self, queries: list[str], original_memories: list[str], top_k: int
     ) -> (list[str], bool):
         """
         Rerank memories based on relevance to given queries using LLM.
@@ -101,7 +98,6 @@ class SchedulerRetriever(BaseSchedulerModule):
         Note:
             If LLM reranking fails, falls back to original order (truncated to top_k)
         """
-        success_flag = False
 
         logger.info(f"Starting memory reranking for {len(original_memories)} memories")
 
