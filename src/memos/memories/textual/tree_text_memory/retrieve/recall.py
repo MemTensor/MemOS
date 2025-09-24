@@ -53,7 +53,7 @@ class GraphMemoryRetriever:
         if memory_scope == "WorkingMemory":
             # For working memory, retrieve all entries (no filtering)
             working_memories = self.graph_store.get_all_memory_items(
-                scope="WorkingMemory", include_embedding=True
+                scope="WorkingMemory", include_embedding=False
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
@@ -165,7 +165,7 @@ class GraphMemoryRetriever:
             return []
 
         # Load nodes and post-filter
-        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=True)
+        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False)
 
         final_nodes = []
         for node in node_dicts:
@@ -240,7 +240,7 @@ class GraphMemoryRetriever:
         unique_ids = {r["id"] for r in all_hits if r.get("id")}
         node_dicts = (
             self.graph_store.get_nodes(
-                list(unique_ids), include_embedding=True, cube_name=cube_name
+                list(unique_ids), include_embedding=False, cube_name=cube_name
             )
             or []
         )

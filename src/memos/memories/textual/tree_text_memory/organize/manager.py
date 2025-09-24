@@ -1,3 +1,4 @@
+import traceback
 import uuid
 
 from concurrent.futures import as_completed
@@ -58,22 +59,33 @@ class MemoryManager:
 
         with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self._process_memory, m): m for m in memories}
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=60):
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
 
-        self.graph_store.remove_oldest_memory(
-            memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
-        )
-        self.graph_store.remove_oldest_memory(
-            memory_type="LongTermMemory", keep_latest=self.memory_size["LongTermMemory"]
-        )
-        self.graph_store.remove_oldest_memory(
-            memory_type="UserMemory", keep_latest=self.memory_size["UserMemory"]
-        )
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
+            )
+        except Exception:
+            logger.warning(f"Remove WorkingMemory error: {traceback.format_exc()}")
+
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="LongTermMemory", keep_latest=self.memory_size["LongTermMemory"]
+            )
+        except Exception:
+            logger.warning(f"Remove LongTermMemory error: {traceback.format_exc()}")
+
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="UserMemory", keep_latest=self.memory_size["UserMemory"]
+            )
+        except Exception:
+            logger.warning(f"Remove UserMemory error: {traceback.format_exc()}")
 
         self._refresh_memory_size()
         return added_ids
@@ -88,7 +100,7 @@ class MemoryManager:
                 executor.submit(self._add_memory_to_db, memory, "WorkingMemory")
                 for memory in working_memory_top_k
             ]
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=60):
                 try:
                     future.result()
                 except Exception as e:

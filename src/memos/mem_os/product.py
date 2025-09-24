@@ -46,6 +46,7 @@ from memos.templates.mos_prompts import (
     get_memos_prompt,
 )
 from memos.types import MessageList
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -257,6 +258,7 @@ class MOSProduct(MOSCore):
         except Exception as e:
             logger.error(f"Error pre-loading cubes for user {user_id}: {e}", exc_info=True)
 
+    @timed
     def _load_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
     ) -> None:
@@ -288,6 +290,7 @@ class MOSProduct(MOSCore):
                         )
                 except Exception as e:
                     logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
+        logger.info(f"load user {user_id} cubes successfully")
 
     def _ensure_user_instance(self, user_id: str, max_instances: int | None = None) -> None:
         """
@@ -795,7 +798,10 @@ class MOSProduct(MOSCore):
         logger.info(
             f"Registering MemCube {mem_cube_id} with cube config {mem_cube.config.model_dump(mode='json')}"
         )
+        time_start = time.time()
         self.mem_cubes[mem_cube_id] = mem_cube
+        time_end = time.time()
+        logger.info(f"time register_mem_cube: add mem_cube time is: {time_end - time_start}")
 
     def user_register(
         self,
@@ -846,13 +852,14 @@ class MOSProduct(MOSCore):
                 cube_path=mem_cube_name_or_path,
                 cube_id=mem_cube_id,
             )
-
+            time_start = time.time()
             if default_mem_cube:
                 try:
-                    default_mem_cube.dump(mem_cube_name_or_path)
+                    default_mem_cube.dump(mem_cube_name_or_path, memory_types=[])
                 except Exception as e:
                     logger.error(f"Failed to dump default cube: {e}")
-
+            time_end = time.time()
+            logger.info(f"time user_register: dump default cube time is: {time_end - time_start}")
             # Register the default cube with MOS
             self.register_mem_cube(
                 mem_cube_name_or_path_or_object=default_mem_cube,
@@ -1363,7 +1370,6 @@ class MOSProduct(MOSCore):
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-
         result = super().add(
             messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id
         )
