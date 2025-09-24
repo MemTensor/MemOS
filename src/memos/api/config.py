@@ -186,22 +186,22 @@ class APIConfig:
         return {
             "uri": os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             "user": os.getenv("NEO4J_USER", "neo4j"),
-            "db_name": os.getenv("NEO4J_DB_NAME", "shared-tree-textual-memory"),
+            "db_name": os.getenv("NEO4J_DB_NAME", "neo4j"),
             "password": os.getenv("NEO4J_PASSWORD", "12345678"),
             "user_name": f"memos{user_id.replace('-', '')}",
-            "auto_create": True,
+            "auto_create": False,
             "use_multi_db": False,
-            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
             "vec_config": {
                 # Pass nested config to initialize external vector DB
                 # If you use qdrant, please use Server instead of local mode.
                 "backend": "qdrant",
                 "config": {
                     "collection_name": "neo4j_vec_db",
-                    "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+                    "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
                     "distance_metric": "cosine",
-                    "host": "localhost",
-                    "port": 6333,
+                    "host": os.getenv("QDRANT_HOST", "localhost"),
+                    "port": int(os.getenv("QDRANT_PORT", "6333")),
                 },
             },
         }
