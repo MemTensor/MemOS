@@ -48,7 +48,8 @@ class Splitter:
 
     def _split_with_lookback(self, data: MessageList) -> list[MessageList]:
         """Split the messages or files into chunks by looking back fixed number of turns. 
-        adjacent chunk with high duplicate rate"""
+        adjacent chunk with high duplicate rate,
+        default lookback turns is 1, only current turn in chunk"""
         # Build QA pairs from chat history
         pairs = self.build_qa_pairs(data)
         chunks = []
@@ -81,8 +82,8 @@ class Splitter:
             else:
                 mem = item["role"] + ":" + item["content"]
                 chunk.append(mem)
-            # 3 turns (Q + A = 6) each chunk
-            if len(chunk) >= 6:
+            # 5 turns (Q + A = 10) each chunk
+            if len(chunk) >= 10:
                 chunks.append(chunk)
                 # overlap 1 turns (Q + A = 2)
                 context = copy.deepcopy(chunk[-2:])
@@ -93,7 +94,7 @@ class Splitter:
         return chunks
 
 
-    def split_chunks(self, data: MessageList | str) -> list[MessageList] | list[str]:
+    def split_chunks(self, data: MessageList | str, **kwargs) -> list[MessageList] | list[str]:
         """Split the messages or files into chunks.
         
         Args:
@@ -103,7 +104,11 @@ class Splitter:
             List of MessageList chunks or list of string chunks
         """
         if isinstance(data, list):
-            return self._split_with_lookback(data)
+            if kwargs.get("split_type") == "lookback":
+                chunks = self._split_with_lookback(data)
+            elif kwargs.get("split_type") == "overlap":
+                chunks = self._split_with_overlap(data)
+            return chunks
         else:
             # Parse and chunk the string data using pre-initialized components
             text = self.parser.parse(data)

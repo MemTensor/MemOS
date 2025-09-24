@@ -89,7 +89,7 @@ class NaiveExtractor(BaseExtractor):
             print(f"Error processing cluster: {qa_pairs}\n{e}")
             return None
     
-    def extract_topic_preferences(self, qa_pairs: list[MessageList] | list[str]) -> List[Dict[str, Any]]:
+    def extract_topic_preferences(self, qa_pairs: MessageList | list[str]) -> List[Dict[str, Any]]:
         """Extract topic preferences from cluster qa pairs."""
         if not qa_pairs:
             return None
@@ -184,7 +184,7 @@ class NaiveExtractor(BaseExtractor):
         """Extract preference memories based on the messages using thread pool for acceleration."""
         chunks: list[MessageList] = []
         for message in messages:
-            chunk = self.splitter.split_chunks(message)
+            chunk = self.splitter.split_chunks(message, split_type="lookback")
             chunks.extend(chunk)
         if not chunks:
             return []
