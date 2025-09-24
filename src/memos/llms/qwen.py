@@ -5,6 +5,7 @@ from memos.llms.openai import OpenAILLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
 from memos.types import MessageList
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -16,6 +17,7 @@ class QwenLLM(OpenAILLM):
     def __init__(self, config: QwenLLMConfig):
         super().__init__(config)
 
+    @timed
     def generate(self, messages: MessageList) -> str:
         """Generate a response from Qwen LLM."""
         response = self.client.chat.completions.create(
@@ -33,6 +35,7 @@ class QwenLLM(OpenAILLM):
         else:
             return response_content
 
+    @timed
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from Qwen LLM."""
         response = self.client.chat.completions.create(
