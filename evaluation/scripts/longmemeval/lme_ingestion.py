@@ -200,10 +200,10 @@ if __name__ == "__main__":
         default="memos-api"
     )
     parser.add_argument(
-        "--version", type=str, default="0918-test4", help="Version of the evaluation framework."
+        "--version", type=str, default="0923", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--workers", type=int, default=10, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()

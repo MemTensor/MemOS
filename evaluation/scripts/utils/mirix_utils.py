@@ -44,8 +44,8 @@ def get_mirix_client(config_path, load_from=None):
 
 
 if __name__ == '__main__':
-    config_path = '/Users/wuhao/PycharmProjects/MemOS/evaluation/configs/mirix_config.yaml'
-    out_dir = '/Users/wuhao/PycharmProjects/MemOS/evaluation/results/mirix-test'
+    config_path = 'configs-example/mirix_config.yaml'
+    out_dir = 'results/mirix-test'
 
     assistant = get_mirix_client(config_path)
 
@@ -73,6 +73,5 @@ if __name__ == '__main__':
     response1 = assistant.chat("What drink do I prefer?", user_id=user1.id)
     response2 = assistant.chat("What drink do I prefer?", user_id=user2.id)
     print(response1, response2)
-
 
 

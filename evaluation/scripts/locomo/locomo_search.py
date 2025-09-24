@@ -226,15 +226,15 @@ def memos_api_search(
         query=query, user_id=f"{conv_id}_speaker_a_{version}", top_k=top_k
     )
     speaker_a_context = ""
-    for item in search_a_results['memoryDetailList']:
-        speaker_a_context += f"{item['memoryValue']}\n"
+    for item in search_a_results['openmem_search_memory_detail']:
+        speaker_a_context += f"{item['memory_value']}\n"
 
     search_b_results = client.search(
         query=query, user_id=f"{conv_id}_speaker_b_{version}", top_k=top_k
     )
     speaker_b_context = ""
-    for item in search_b_results['memoryDetailList']:
-        speaker_b_context += f"{item['memoryValue']}\n"
+    for item in search_b_results['openmem_search_memory_detail']:
+        speaker_b_context += f"{item['memory_value']}\n"
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,

@@ -259,10 +259,10 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
-        default='mirix'
+        default='memos-api'
     )
     parser.add_argument(
-        "--version", type=str, default="0905", help="Version of the evaluation framework."
+        "--version", type=str, default="0923", help="Version of the evaluation framework."
     )
     args = parser.parse_args()
     lib, version = args.lib, args.version

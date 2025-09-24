@@ -348,16 +348,16 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0-local", "mem0-api", "memos-local", "zep", "memos-api", "zep", "memobase"],
-        default="mirix"
+        default="memos-api"
     )
     parser.add_argument(
-        "--version", type=str, default="0905", help="Version of the evaluation framework."
+        "--version", type=str, default="0923", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--options",
         type=str,
         nargs="+",
-        default=["lexical", "semantic"],
+        default=["lexical"],
         choices=["lexical", "semantic"],
         help="NLP options to use for evaluation.",
     )
@@ -365,7 +365,7 @@ if __name__ == "__main__":
         "--num_runs", type=int, default=1, help="Number of runs for LLM-as-a-Judge evaluation."
     )
     parser.add_argument(
-        "--workers", type=int, default=10, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()
