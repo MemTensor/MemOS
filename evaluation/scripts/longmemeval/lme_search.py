@@ -128,7 +128,7 @@ def memos_search(client, user_id, query, top_k, frame="memos-local"):
 
     elif frame == "memos-api":
         results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join([f"  - {item['memory_value']}" for item in results['openmem_search_memory_detail']])
+        search_memories = "\n".join([f"  - {item['memory_value']}" for item in results['memory_detail_list']])
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000
@@ -228,7 +228,7 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
 
 def load_existing_results(frame, version, group_idx):
     result_path = (
-        f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{group_idx}.json"
+        f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{group_idx}.json"
     )
     if os.path.exists(result_path):
         try:
@@ -309,7 +309,7 @@ if __name__ == "__main__":
         "--version", type=str, default="0923", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."
+        "--top_k", type=int, default=30, help="Number of top results to retrieve from the search."
     )
     parser.add_argument(
         "--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation."

@@ -36,6 +36,8 @@ This repository provides tools and scripts for evaluating the LoCoMo dataset usi
 ✍️ For evaluating OpenAI's native memory feature with the LoCoMo dataset, please refer to the detailed guide: [OpenAI Memory on LoCoMo - Evaluation Guide](./scripts/locomo/openai_memory_locomo_eval_guide.md).
 
 ### LongMemEval Evaluation
+First prepare the dataset `longmemeval_s` from https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned
+, and save it as `data/longmemeval/longmemeval_s.json`
 
 ```bash
 # Edit the configuration in ./scripts/run_lme_eval.sh
