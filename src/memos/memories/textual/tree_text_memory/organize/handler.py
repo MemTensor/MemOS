@@ -1,5 +1,6 @@
 import json
 import re
+
 from datetime import datetime
 
 from dateutil import parser
@@ -13,6 +14,7 @@ from memos.templates.tree_reorganize_prompts import (
     MEMORY_RELATION_DETECTOR_PROMPT,
     MEMORY_RELATION_RESOLVER_PROMPT,
 )
+
 
 logger = get_logger(__name__)
 
