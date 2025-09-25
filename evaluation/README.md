@@ -48,3 +48,7 @@ First prepare the dataset `longmemeval_s` from https://huggingface.co/datasets/x
 ### prefEval Evaluation
 
 ### personaMem Evaluation
+get `questions_32k.csv` and `shared_contexts_32k.jsonl` from https://huggingface.co/datasets/bowen-upenn/PersonaMem and save them at `data/personamem/`
+```bash
+./scripts/run_pm_eval.sh
+```
