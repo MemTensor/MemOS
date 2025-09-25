@@ -513,7 +513,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
-        default="memos-api",
+        default="mem0",
     )
     parser.add_argument(
         "--version",

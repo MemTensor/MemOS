@@ -58,8 +58,8 @@ def process_line(line_data: tuple, mem_client: MemOSAPI, openai_client: OpenAI) 
         search_memories_duration = time.monotonic() - start_time_search
 
         memories_str = "\n".join(
-            f"- {entry.get('memoryValue', '')}"
-            for entry in relevant_memories.get("memoryDetailList", [])
+            f"- {entry.get('memory_value', '')}"
+            for entry in relevant_memories.get("memory_detail_list", [])
         )
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
