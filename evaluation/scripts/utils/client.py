@@ -1,13 +1,7 @@
 import json
 import os
 import sys
-
 from dotenv import load_dotenv
-from mem0 import MemoryClient
-from memobase import MemoBaseClient
-from zep_cloud.client import Zep
-from zep_cloud.types import Message
-
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from memobase import ChatBlob
@@ -16,8 +10,6 @@ from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.product import MOSProduct
-from utils.mem0_local import Mem0Client
-from utils.memos_api import MemOSAPI
 from utils.memos_filters import filter_memory_data
 
 
@@ -25,6 +17,8 @@ load_dotenv()
 
 
 def zep_client():
+    from zep_cloud.client import Zep
+
     """Initialize and return a Zep client instance."""
     api_key = os.getenv("ZEP_API_KEY")
     zep = Zep(api_key=api_key)
@@ -32,16 +26,10 @@ def zep_client():
     return zep
 
 
-def mem0_client(mode="local"):
-    """Initialize and return a Mem0 client instance."""
-    if mode == "local":
-        base_url = "http://localhost:9999"
-        mem0 = Mem0Client(base_url=base_url)
-    elif mode == "api":
-        mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
-    else:
-        raise ValueError("Invalid mode. Choose 'local' or 'cloud'.")
+def mem0_client(mode="api"):
+    from mem0 import MemoryClient
 
+    mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
     return mem0
 
 
@@ -87,13 +75,12 @@ def memos_client(
             default_mem_cube=mem_cube,
         )
 
-    elif mode == "api":
-        memos = MemOSAPI(base_url=os.getenv("MEMOS_BASE_URL"))
-
     return memos
 
 
 def memobase_client():
+    from memobase import MemoBaseClient
+
     client = MemoBaseClient(
         project_url=os.getenv("MEMOBASE_PROJECT_URL"),
         api_key=os.getenv("MEMOBASE_API_KEY"),
@@ -114,6 +101,7 @@ if __name__ == "__main__":
         session_id=session_id,
         user_id=user_id,
     )
+    from zep_cloud.types import Message
 
     messages = [
         Message(

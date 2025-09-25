@@ -3,24 +3,21 @@ import json
 import os
 import sys
 
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from time import time
 
-import pandas as pd
+import csv
 
 from tqdm import tqdm
-from utils.client import mem0_client, memobase_client, memos_client, zep_client
-from utils.memobase_utils import memobase_search_memory
-from utils.memos_filters import filter_memory_data
+from utils.client import mem0_client, memos_client, zep_client
 from utils.memos_api import MemOSAPI
+from utils.memos_filters import filter_memory_data
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
-    MEMOBASE_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
     ZEP_CONTEXT_TEMPLATE,
 )
@@ -127,40 +124,94 @@ def memos_search(client, user_id, query, top_k, frame="memos-local"):
 
     elif frame == "memos-api":
         results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join(
-            [f"  - {item['memory_value']}" for item in results["memory_detail_list"]]
-        )
+        search_memories = "\n".join(f"- {entry.get('memory_value', '')}"
+                                    for entry in results.get("memory_detail_list", []))
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
 
-def process_user(lme_df, conv_idx, frame, version, top_k=20):
-    row = lme_df.iloc[conv_idx]
-    question = row["question"]
-    sessions = row["haystack_sessions"]
-    question_type = row["question_type"]
-    question_date = row["question_date"]
-    answer = row["answer"]
-    answer_session_ids = set(row["answer_session_ids"])
-    haystack_session_ids = row["haystack_session_ids"]
-    user_id = f"lme_exper_user_{version}_{conv_idx}"
-    id_to_session = dict(zip(haystack_session_ids, sessions, strict=False))
-    answer_sessions = [id_to_session[sid] for sid in answer_session_ids if sid in id_to_session]
-    answer_evidences = []
+def build_jsonl_index(jsonl_path):
+    """
+    Scan the JSONL file once to build a mapping: {key: file_offset}.
+    Assumes each line is a JSON object with a single key-value pair.
+    """
+    index = {}
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        while True:
+            offset = f.tell()
+            line = f.readline()
+            if not line:
+                break
+            key = next(iter(json.loads(line).keys()))
+            index[key] = offset
+    return index
 
-    for session in answer_sessions:
-        for turn in session:
-            if turn.get("has_answer"):
-                data = turn.get("role") + " : " + turn.get("content")
-                answer_evidences.append(data)
+
+def load_context_by_id(jsonl_path, offset):
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        f.seek(offset)
+        item = json.loads(f.readline())
+        return next(iter(item.values()))
+
+
+def load_rows(csv_path):
+    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for _, row in enumerate(reader, start=1):
+            row_data = {}
+            for column_name, value in row.items():
+                row_data[column_name] = value
+            yield row_data
+
+
+def load_rows_with_context(csv_path, jsonl_path):
+    jsonl_index = build_jsonl_index(jsonl_path)
+
+    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        prev_sid = None
+        prev_context = None
+
+        for _, row in enumerate(reader, start=1):
+            row_data = {}
+            for column_name, value in row.items():
+                row_data[column_name] = value
+
+            sid = row_data["shared_context_id"]
+            if sid != prev_sid:
+                current_context = load_context_by_id(jsonl_path, jsonl_index[sid])
+
+                prev_sid = sid
+                prev_context = current_context
+            else:
+                current_context = prev_context
+
+            yield row_data, current_context
+
+
+def count_csv_rows(csv_path):
+    with open(csv_path, mode='r', newline='', encoding='utf-8') as f:
+        return sum(1 for _ in f) - 1
+
+
+def process_user(row_data, conv_idx, frame, version, top_k=20):
+    persona_id = row_data["persona_id"]
+    question_id = row_data["question_id"]
+    question_type = row_data["question_type"]
+    topic = row_data["topic"]
+    question = row_data["user_question_or_message"]
+    correct_answer = row_data["correct_answer"]
+    all_options = row_data["all_options"]
+    user_id = f"pm_exper_user_{conv_idx}_{version}"
+    print(f"\n🔍 Processing conversation {conv_idx} for user {user_id}...")
 
     search_results = defaultdict(list)
     print("\n" + "-" * 80)
-    print(f"🔎 [{conv_idx + 1}/{len(lme_df)}] Processing conversation {conv_idx}")
+    print(f"🔎 [{conv_idx + 1}/589] Processing conversation {conv_idx}")
     print(f"❓ Question: {question}")
-    print(f"📅 Date: {question_date}")
+    print(f"🗂️  Options: {all_options}")
     print(f"🏷️  Type: {question_type}")
     print("-" * 80)
 
@@ -185,126 +236,131 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
     elif frame == "memos-local":
         client = memos_client(
             mode="local",
-            db_name=f"lme_{frame}-{version}",
+            db_name=f"pm_{frame}-{version}",
             user_id=user_id,
             top_k=top_k,
-            mem_cube_path=f"results/lme/{frame}-{version}/storages/{user_id}",
+            mem_cube_path=f"results/pm/{frame}-{version}/storages/{user_id}",
             mem_cube_config_path="configs/mu_mem_cube_config.json",
             mem_os_config_path="configs/mos_memos_config.json",
             addorsearch="search",
         )
         print("🔌 Using Memos Local client for search...")
         context, duration_ms = memos_search(client, user_id, question, frame=frame)
-    elif frame == "memobase":
-        client = memobase_client()
-        print("🔌 Using Memobase client for search...")
-        context, duration_ms = memobase_search_memory(
-            client, user_id, question, max_memory_context_size=3000
-        )
-
     elif frame == "memos-api":
         client = MemOSAPI()
         print("🔌 Using Memos API client for search...")
         context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
+
     search_results[user_id].append(
         {
+            "user_id": user_id,
             "question": question,
             "category": question_type,
-            "date": question_date,
-            "golden_answer": answer,
-            "answer_evidences": answer_evidences,
+            "persona_id": persona_id,
+            "question_id": question_id,
+            "all_options": all_options,
+            "topic": topic,
+            "golden_answer": correct_answer,
             "search_context": context,
             "search_duration_ms": duration_ms,
         }
     )
 
-    os.makedirs(f"results/lme/{frame}-{version}/tmp", exist_ok=True)
+    os.makedirs(f"results/pm/{frame}-{version}/tmp", exist_ok=True)
     with open(
-        f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{conv_idx}.json", "w"
+            f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{conv_idx}.json", "w"
     ) as f:
         json.dump(search_results, f, indent=4)
-    print(f"💾 Search results for conversation {conv_idx} saved...")
+    print(f"💾 \033[92mSearch results for conversation {conv_idx} saved...")
     print("-" * 80)
 
     return search_results
 
 
 def load_existing_results(frame, version, group_idx):
-    result_path = f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{group_idx}.json"
+    result_path = (
+        f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{group_idx}.json"
+    )
     if os.path.exists(result_path):
         try:
             with open(result_path) as f:
                 return json.load(f), True
         except Exception as e:
-            print(f"❌ Error loading existing results for group {group_idx}: {e}")
+            print(f"\033[91m❌ Error loading existing results for group {group_idx}: {e}")
     return {}, False
 
 
 def main(frame, version, top_k=20, num_workers=2):
     print("\n" + "=" * 80)
-    print(f"🔍 LONGMEMEVAL SEARCH - {frame.upper()} v{version}".center(80))
+    print(f"🔍 PERSONAMEM SEARCH - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
-    lme_df = pd.read_json("data/longmemeval/longmemeval_s.json")
-    print("📚 Loaded LongMemeval dataset from data/longmemeval/longmemeval_s.json")
-    num_multi_sessions = len(lme_df)
-    print(f"👥 Number of users: {num_multi_sessions}")
-    print(f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}")
+    question_csv_path = "data/personamem/questions_32k.csv"
+    context_jsonl_path = "data/personamem/shared_contexts_32k.jsonl"
+    total_rows = count_csv_rows(question_csv_path)
+
+    print(f"📚 Loaded PersonaMem dataset from {question_csv_path} and {context_jsonl_path}")
+    print(f"📊 Total conversations: {total_rows}")
+    print(
+        f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}"
+    )
     print("-" * 80)
 
     all_search_results = defaultdict(list)
     start_time = datetime.now()
 
+    all_data = list(load_rows_with_context(question_csv_path, context_jsonl_path))
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_idx = {
-            executor.submit(process_user, lme_df, idx, frame, version, top_k): idx
-            for idx in range(num_multi_sessions)
+            executor.submit(
+                process_user,
+                row_data=row_data,
+                version=version,
+                conv_idx=idx,
+                frame=frame,
+            ): idx
+            for idx, (row_data, _) in enumerate(all_data)
         }
 
-        for future in tqdm(
-            as_completed(future_to_idx), total=num_multi_sessions, desc="📊 Processing users"
-        ):
+        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"):
             idx = future_to_idx[future]
-            # try:
-            search_results = future.result()
-            for user_id, results in search_results.items():
-                all_search_results[user_id].extend(results)
-            # except Exception as e:
-            #     print(f"❌ Error processing user {idx}: {e}")
+            try:
+                search_results = future.result()
+                for user_id, results in search_results.items():
+                    all_search_results[user_id].extend(results)
+                print(f"✅ Conversation {idx} processed successfully.")
+            except Exception as exc:
+                print(f'\n❌ Conversation {idx} generated an exception: {exc}')
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
     elapsed_time_str = str(elapsed_time).split(".")[0]
 
     print("\n" + "=" * 80)
-    print("✅ SEARCH COMPLETE".center(80))
+    print("✅ \033[1;32mSEARCH COMPLETE".center(80))
     print("=" * 80)
-    print(f"⏱️  Total time taken to search {num_multi_sessions} users: {elapsed_time_str}")
-    print(f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}")
+    print(
+        f"⏱️  Total time taken to search {total_rows} users: \033[92m{elapsed_time_str}"
+    )
+    print(
+        f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}"
+    )
 
-    with open(f"results/lme/{frame}-{version}/{frame}_lme_search_results.json", "w") as f:
+    with open(f"results/pm/{frame}-{version}/{frame}_pm_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
-    print(f"📁 Results saved to: results/lme/{frame}-{version}/{frame}_lme_search_results.json")
+    print(
+        f"📁 Results saved to: \033[1;94mresults/pm/{frame}-{version}/{frame}_pm_search_results.json"
+    )
     print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="LongMemeval Search Script")
-    parser.add_argument(
-        "--lib",
-        type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
-        default="memos-api",
-    )
-    parser.add_argument(
-        "--version", type=str, default="0923", help="Version of the evaluation framework."
-    )
-    parser.add_argument(
-        "--top_k", type=int, default=30, help="Number of top results to retrieve from the search."
-    )
-    parser.add_argument(
-        "--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation."
-    )
+    parser = argparse.ArgumentParser(description="PersonaMem Search Script")
+    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
+                        default='memos-api')
+    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
+    parser.add_argument("--top_k", type=int, default=20, help="Number of top results to retrieve from the search.")
+    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
 
     args = parser.parse_args()
 
