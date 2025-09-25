@@ -12,11 +12,13 @@ on:
       - "main"
       - "dev"
       - "feat/*"
+      - "test"
   pull_request:
     branches:
       - "main"
       - "dev"
       - "feat/*"
+      - "test"
 
 jobs:
   build:

@@ -46,7 +46,7 @@ class RelationAndReasoningDetector:
                     "sequence_links": [],
                     "aggregate_nodes": [],
                 }
-
+            """
             nearest = self.graph_store.get_neighbors_by_tag(
                 tags=node.metadata.tags,
                 exclude_ids=exclude_ids,
@@ -55,7 +55,6 @@ class RelationAndReasoningDetector:
             )
             nearest = [GraphDBNode(**cand_data) for cand_data in nearest]
 
-            """
             # 1) Pairwise relations (including CAUSE/CONDITION/CONFLICT)
             pairwise = self._detect_pairwise_causal_condition_relations(node, nearest)
             results["relations"].extend(pairwise["relations"])

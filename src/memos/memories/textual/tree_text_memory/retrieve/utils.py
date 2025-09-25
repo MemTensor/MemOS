@@ -8,18 +8,20 @@ You are a task parsing expert. Given a user task instruction, optional former co
 5. Need for internet search: If the user's task instruction only involves objective facts or can be completed without introducing external knowledge, set "internet_search" to False. Otherwise, set it to True.
 6. Memories: Provide 2–5 short semantic expansions or rephrasings of the rephrased/original user task instruction. These are used for improved embedding search coverage. Each should be clear, concise, and meaningful for retrieval.
 
-Task description:
-\"\"\"$task\"\"\"
-
 Former conversation (if any):
 \"\"\"
 $conversation
 \"\"\"
 
+Task description(User Question):
+\"\"\"$task\"\"\"
+
 Context (if any):
 \"\"\"$context\"\"\"
 
-Return strictly in this JSON format:
+Return strictly in this JSON format, note that the
+keys/tags/rephrased_instruction/memories should use the same language as the
+input query:
 {
   "keys": [...],
   "tags": [...],

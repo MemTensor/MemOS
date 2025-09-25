@@ -6,6 +6,7 @@ from memos.embedders.base import BaseEmbedder
 from memos.embedders.ollama import OllamaEmbedder
 from memos.embedders.sentence_transformer import SenTranEmbedder
 from memos.embedders.universal_api import UniversalAPIEmbedder
+from memos.memos_tools.singleton import singleton_factory
 
 
 class EmbedderFactory(BaseEmbedder):
@@ -19,6 +20,7 @@ class EmbedderFactory(BaseEmbedder):
     }
 
     @classmethod
+    @singleton_factory()
     def from_config(cls, config_factory: EmbedderConfigFactory) -> BaseEmbedder:
         backend = config_factory.backend
         if backend not in cls.backend_to_class:

@@ -60,7 +60,7 @@ def is_all_chinese(input_string: str) -> bool:
     install_command="pip install scikit-learn",
     install_link="https://scikit-learn.org/stable/install.html",
 )
-def filter_similar_memories(
+def filter_vector_based_similar_memories(
     text_memories: list[str], similarity_threshold: float = 0.75
 ) -> list[str]:
     """

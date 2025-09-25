@@ -8,14 +8,16 @@ from memos.mem_scheduler.schemas.general_schemas import (
     TreeTextMemory_SEARCH_METHOD,
 )
 from memos.mem_scheduler.utils.filter_utils import (
-    filter_similar_memories,
     filter_too_short_memories,
+    filter_vector_based_similar_memories,
     transform_name_to_key,
 )
 from memos.mem_scheduler.utils.misc_utils import (
     extract_json_dict,
 )
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+
+from .memory_filter import MemoryFilter
 
 
 logger = get_logger(__name__)
@@ -31,6 +33,9 @@ class SchedulerRetriever(BaseSchedulerModule):
 
         self.config: BaseSchedulerConfig = config
         self.process_llm = process_llm
+
+        # Initialize memory filter
+        self.memory_filter = MemoryFilter(process_llm=process_llm, config=config)
 
     def search(
         self,
@@ -77,10 +82,7 @@ class SchedulerRetriever(BaseSchedulerModule):
         return results
 
     def rerank_memories(
-        self,
-        queries: list[str],
-        original_memories: list[str],
-        top_k: int,
+        self, queries: list[str], original_memories: list[str], top_k: int
     ) -> (list[str], bool):
         """
         Rerank memories based on relevance to given queries using LLM.
@@ -96,7 +98,6 @@ class SchedulerRetriever(BaseSchedulerModule):
         Note:
             If LLM reranking fails, falls back to original order (truncated to top_k)
         """
-        success_flag = False
 
         logger.info(f"Starting memory reranking for {len(original_memories)} memories")
 
@@ -163,7 +164,7 @@ class SchedulerRetriever(BaseSchedulerModule):
         combined_text_memory = [m.memory for m in combined_memory]
 
         # Apply similarity filter to remove overly similar memories
-        filtered_combined_text_memory = filter_similar_memories(
+        filtered_combined_text_memory = filter_vector_based_similar_memories(
             text_memories=combined_text_memory,
             similarity_threshold=self.filter_similarity_threshold,
         )
@@ -197,3 +198,29 @@ class SchedulerRetriever(BaseSchedulerModule):
                 )
 
         return memories_with_new_order, success_flag
+
+    def filter_unrelated_memories(
+        self,
+        query_history: list[str],
+        memories: list[TextualMemoryItem],
+    ) -> (list[TextualMemoryItem], bool):
+        return self.memory_filter.filter_unrelated_memories(query_history, memories)
+
+    def filter_redundant_memories(
+        self,
+        query_history: list[str],
+        memories: list[TextualMemoryItem],
+    ) -> (list[TextualMemoryItem], bool):
+        return self.memory_filter.filter_redundant_memories(query_history, memories)
+
+    def filter_unrelated_and_redundant_memories(
+        self,
+        query_history: list[str],
+        memories: list[TextualMemoryItem],
+    ) -> (list[TextualMemoryItem], bool):
+        """
+        Filter out both unrelated and redundant memories using LLM analysis.
+
+        This method delegates to the MemoryFilter class.
+        """
+        return self.memory_filter.filter_unrelated_and_redundant_memories(query_history, memories)

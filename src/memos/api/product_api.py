@@ -14,12 +14,10 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="MemOS Product REST APIs",
     description="A REST API for managing multiple users with MemOS Product.",
-    version="1.0.0",
+    version="1.0.1",
 )
 
-# Add request context middleware (must be added first)
 app.add_middleware(RequestContextMiddleware)
-
 # Include routers
 app.include_router(product_router)
 
@@ -35,5 +33,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--workers", type=int, default=32)
     args = parser.parse_args()
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    uvicorn.run("memos.api.product_api:app", host="0.0.0.0", port=args.port, workers=args.workers)
