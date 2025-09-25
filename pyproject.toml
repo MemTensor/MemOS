@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "1.0.1"
+version = "1.1.1"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"

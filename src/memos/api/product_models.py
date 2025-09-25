@@ -170,3 +170,85 @@ class SuggestionRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
     message: list[MessageDict] | None = Field(None, description="List of messages to store.")
+
+
+# ─── MemOS Client Response Models ──────────────────────────────────────────────
+
+
+class MessageDetail(BaseModel):
+    """Individual message detail model based on actual API response."""
+
+    model_config = {"extra": "allow"}
+
+
+class MemoryDetail(BaseModel):
+    """Individual memory detail model based on actual API response."""
+
+    model_config = {"extra": "allow"}
+
+
+class GetMessagesData(BaseModel):
+    """Data model for get messages response based on actual API."""
+
+    message_detail_list: list[MessageDetail] = Field(
+        default_factory=list, alias="memory_detail_list", description="List of message details"
+    )
+
+
+class SearchMemoryData(BaseModel):
+    """Data model for search memory response based on actual API."""
+
+    memory_detail_list: list[MemoryDetail] = Field(
+        default_factory=list, alias="memory_detail_list", description="List of memory details"
+    )
+    message_detail_list: list[MessageDetail] | None = Field(
+        None, alias="message_detail_list", description="List of message details (usually None)"
+    )
+
+
+class AddMessageData(BaseModel):
+    """Data model for add message response based on actual API."""
+
+    success: bool = Field(..., description="Operation success status")
+
+
+# ─── MemOS Response Models (Similar to OpenAI ChatCompletion) ──────────────────
+
+
+class MemOSGetMessagesResponse(BaseModel):
+    """Response model for get messages operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: GetMessagesData = Field(..., description="Messages data")
+
+    @property
+    def messages(self) -> list[MessageDetail]:
+        """Convenient access to message list."""
+        return self.data.message_detail_list
+
+
+class MemOSSearchResponse(BaseModel):
+    """Response model for search memory operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: SearchMemoryData = Field(..., description="Search results data")
+
+    @property
+    def memories(self) -> list[MemoryDetail]:
+        """Convenient access to memory list."""
+        return self.data.memory_detail_list
+
+
+class MemOSAddResponse(BaseModel):
+    """Response model for add message operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: AddMessageData = Field(..., description="Add operation data")
+
+    @property
+    def success(self) -> bool:
+        """Convenient access to success status."""
+        return self.data.success
