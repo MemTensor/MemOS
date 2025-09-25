@@ -575,6 +575,11 @@ class APIConfig:
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
                             "internet_retriever": internet_config,
+                            "memory_size": {
+                                "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
+                                "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
+                                "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                            },
                         },
                     },
                     "act_mem": {}
