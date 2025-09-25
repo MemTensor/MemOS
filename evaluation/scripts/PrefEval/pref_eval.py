@@ -2,7 +2,7 @@ import asyncio
 import aiohttp
 import json
 import re
-import argparse  # 导入 argparse
+import argparse
 from typing import Dict, Any
 from collections import Counter
 from tqdm.asyncio import tqdm
@@ -16,17 +16,14 @@ OUTPUT_FILE = "./data/prefeval/eval_pref_memos.jsonl"
 
 
 async def call_gpt4o_mini_async(session: aiohttp.ClientSession, prompt: str) -> str:
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {API_KEY}"
-    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
     payload = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
-        "max_tokens": 500
+        "max_tokens": 500,
     }
-    
+
     try:
         async with session.post(API_URL, headers=headers, json=payload, timeout=30) as response:
             response.raise_for_status()
@@ -36,11 +33,15 @@ async def call_gpt4o_mini_async(session: aiohttp.ClientSession, prompt: str) -> 
         print(f"API call failed: {str(e)}")
         return ""
 
+
 def parse_xml_response(response: str, tag: str) -> str:
     match = re.search(f"<{tag}>(.*?)</{tag}>", response, re.DOTALL)
     return match.group(1).strip() if match else ""
 
-async def evaluate_violate_preference_async(session: aiohttp.ClientSession, preference: str, question: str, response: str) -> Dict[str, str]:
+
+async def evaluate_violate_preference_async(
+    session: aiohttp.ClientSession, preference: str, question: str, response: str
+) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's response violates the user's stated preference.
 Evaluate the response based on these criteria:
 
@@ -62,14 +63,17 @@ Assistant response: {response}
 Examine the response meticulously and answer. Answer in this exact XML format:
 <explanation>[1 very short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
-    
+
     api_response = await call_gpt4o_mini_async(session, prompt)
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
-        "answer": parse_xml_response(api_response, "answer")
+        "answer": parse_xml_response(api_response, "answer"),
     }
 
-async def evaluate_acknowledge_preference_async(session: aiohttp.ClientSession, question: str, response: str) -> Dict[str, str]:
+
+async def evaluate_acknowledge_preference_async(
+    session: aiohttp.ClientSession, question: str, response: str
+) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query. 
 
 Evaluate the response based on these stringent criteria:
@@ -90,20 +94,20 @@ Assistant response: {response}
 Examine the response meticulously and answer. Please answer in this exact XML format without any additional text:
 <preference>[quote of the sentence that acknowledges/mentions what the preference is; leave it blank if there is none]</preference>
 <answer>[Yes/No]</answer>"""
-    
+
     api_response = await call_gpt4o_mini_async(session, prompt)
     return {
         "preference_mention": parse_xml_response(api_response, "preference"),
-        "answer": parse_xml_response(api_response, "answer")
+        "answer": parse_xml_response(api_response, "answer"),
     }
 
-async def evaluate_hallucinate_preference_async(session: aiohttp.ClientSession, preference: str, restatement: str) -> Dict[str, str]:
+
+async def evaluate_hallucinate_preference_async(
+    session: aiohttp.ClientSession, preference: str, restatement: str
+) -> Dict[str, str]:
     if not restatement.strip():
-        return {
-            "explanation": "No restatement provided by assistant",
-            "answer": "No"
-        }
-    
+        return {"explanation": "No restatement provided by assistant", "answer": "No"}
+
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's restatement of the user's stated preference is the same preference. Evaluate the response based on these stringent criteria to answer if the assistant has hallucinated the preference or not:
 
 Answer "Yes" if:
@@ -124,14 +128,17 @@ Assistant's restatement: "{restatement}"
 Examine the original preference and the assistant's restatement meticulously and answer. Please answer in this exact XML format without any other additional text: 
 <explanation>[1 short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
-    
+
     api_response = await call_gpt4o_mini_async(session, prompt)
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
-        "answer": parse_xml_response(api_response, "answer")
+        "answer": parse_xml_response(api_response, "answer"),
     }
 
-async def evaluate_helpful_response_async(session: aiohttp.ClientSession, question: str, response: str) -> Dict[str, str]:
+
+async def evaluate_helpful_response_async(
+    session: aiohttp.ClientSession, question: str, response: str
+) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant provides any substantive response to the user's query.
 Evaluate the response based on these stringent criteria:
 
@@ -161,19 +168,20 @@ Assistant response: {response}
 Examine the response meticulously and answer. Answer in this exact XML format:
 <explanation>[1 very short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
-    
+
     api_response = await call_gpt4o_mini_async(session, prompt)
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
-        "answer": parse_xml_response(api_response, "answer")
+        "answer": parse_xml_response(api_response, "answer"),
     }
+
 
 def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
     violate = evaluation_results["violate_preference"]["answer"]
     acknowledge = evaluation_results["acknowledge_preference"]["answer"]
     hallucinate = evaluation_results["hallucinate_preference"]["answer"]
     helpful = evaluation_results["helpful_response"]["answer"]
-    
+
     if violate == "Yes" and acknowledge == "No" and helpful == "Yes":
         return "Preference-Unaware Violation"
     elif violate == "Yes" and acknowledge == "Yes" and hallucinate == "Yes" and helpful == "Yes":
@@ -185,19 +193,21 @@ def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
     else:
         return "Unknown/No Error"
 
-async def process_line(line: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+
+async def process_line(
+    line: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore
+) -> Dict[str, Any]:
     async with semaphore:
         data = json.loads(line.strip())
         preference = data["preference"]
         response = data["response"]
         question = data["question"]
-        
         eval2 = await evaluate_acknowledge_preference_async(session, question, response)
-        
+
         tasks = [
             evaluate_violate_preference_async(session, preference, question, response),
             evaluate_hallucinate_preference_async(session, preference, eval2["preference_mention"]),
-            evaluate_helpful_response_async(session, question, response)
+            evaluate_helpful_response_async(session, question, response),
         ]
         eval1, eval3, eval4 = await asyncio.gather(*tasks)
 
@@ -205,43 +215,39 @@ async def process_line(line: str, session: aiohttp.ClientSession, semaphore: asy
             "violate_preference": eval1,
             "acknowledge_preference": eval2,
             "hallucinate_preference": eval3,
-            "helpful_response": eval4
+            "helpful_response": eval4,
         }
-        
+
         result = {
             "original_data": data,
             "evaluations": evaluations,
-            "error_type": classify_error_type(evaluations)
+            "error_type": classify_error_type(evaluations),
         }
         return result
+
 
 def log_summary(error_counter: Counter, total_samples: int) -> Dict[str, Dict[str, float]]:
     summary_data = {}
     print("\n--- Error Type Summary ---")
-    
+
     if total_samples == 0:
         print("No samples were processed.")
         print("--------------------------")
-        return summary_data 
+        return summary_data
 
     print(f"Total samples processed: {total_samples}")
-    
     sorted_errors = sorted(error_counter.items(), key=lambda item: item[1], reverse=True)
 
     for error_type, count in sorted_errors:
         percentage = (count / total_samples) * 100
-        
-        summary_data[error_type] = {
-            "count": count,
-            "percentage": percentage
-        }
-        
+        summary_data[error_type] = {"count": count, "percentage": percentage}
         print(f"- {error_type}: {count} ({percentage:.2f}%)")
-    
+
     print("--------------------------")
     print("\nProcessing complete.")
-    
+
     return summary_data
+
 
 async def main(concurrency_limit: int):
     semaphore = asyncio.Semaphore(concurrency_limit)
@@ -251,20 +257,25 @@ async def main(concurrency_limit: int):
 
     async with aiohttp.ClientSession() as session:
         try:
-            with open(INPUT_FILE, 'r', encoding='utf-8') as f:
+            with open(INPUT_FILE, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except FileNotFoundError:
             print(f"Error: Input file not found at '{INPUT_FILE}'")
             return
-        
+
         tasks = [process_line(line, session, semaphore) for line in lines]
-        
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as outfile:
-            pbar = tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Processing samples concurrently", unit="sample")
+
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as outfile:
+            pbar = tqdm(
+                asyncio.as_completed(tasks),
+                total=len(tasks),
+                desc="Processing samples concurrently",
+                unit="sample",
+            )
             for future in pbar:
                 try:
                     result = await future
-                    outfile.write(json.dumps(result, ensure_ascii=False) + '\n')
+                    outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
 
                     error_type = result["error_type"]
                     error_counter[error_type] += 1
@@ -272,17 +283,17 @@ async def main(concurrency_limit: int):
 
                 except Exception as e:
                     print(f"An error occurred while processing a line: {e}")
-    
+
     summary_results = log_summary(error_counter, len(lines))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate assistant responses from a JSONL file.")
     parser.add_argument(
-        '--concurrency-limit',
+        "--concurrency-limit",
         type=int,
         default=10,
-        help='The maximum number of concurrent API calls.'
+        help="The maximum number of concurrent API calls.",
     )
     args = parser.parse_args()
 
