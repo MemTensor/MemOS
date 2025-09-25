@@ -1,85 +1,31 @@
+import asyncio
 import os
 import sys
-import uuid
 
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-)
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ),
-        "evaluation",
-        "scripts",
-    ),
-)
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 import argparse
 import concurrent.futures
 import json
-import threading
 import time
-
 from datetime import datetime, timezone
-
 import pandas as pd
-
 from dotenv import load_dotenv
-from mem0 import MemoryClient
-from memobase import ChatBlob
-from tqdm import tqdm
-from utils.client import memobase_client, memos_client
-from zep_cloud.client import Zep
-
+from prompts import custom_instructions
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
 
 
-custom_instructions = """
-Generate personal memories that follow these guidelines:
-
-1. Each memory should be self-contained with complete context, including:
-   - The person's name, do not use "user" while creating memories
-   - Personal details (career aspirations, hobbies, life circumstances)
-   - Emotional states and reactions
-   - Ongoing journeys or future plans
-   - Specific dates when events occurred
-
-2. Include meaningful personal narratives focusing on:
-   - Identity and self-acceptance journeys
-   - Family planning and parenting
-   - Creative outlets and hobbies
-   - Mental health and self-care activities
-   - Career aspirations and education goals
-   - Important life events and milestones
-
-3. Make each memory rich with specific details rather than general statements
-   - Include timeframes (exact dates when possible)
-   - Name specific activities (e.g., "charity race for mental health" rather than just "exercise")
-   - Include emotional context and personal growth elements
-
-4. Extract memories only from user messages, not incorporating assistant responses
-
-5. Format each memory as a paragraph with a clear narrative structure that captures the person's experience, challenges, and aspirations
-"""
-
-
 def get_client(frame: str, user_id: str | None = None, version: str = "default"):
-    if frame == "zep":
-        zep = Zep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
-        return zep
-
-    elif frame == "mem0" or frame == "mem0_graph":
-        mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
-        mem0.update_project(custom_instructions=custom_instructions)
-        return mem0
-
-    elif frame == "memos":
+    if frame == "memos":
         mos_config_path = "configs/mos_memos_config.json"
         with open(mos_config_path) as f:
             mos_config_data = json.load(f)
@@ -110,35 +56,7 @@ def get_client(frame: str, user_id: str | None = None, version: str = "default")
             mem_cube_id=user_id,
             user_id=user_id,
         )
-
         return mos
-
-
-def string_to_uuid(s: str, salt="memobase_client") -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
-
-
-def memobase_add_memory(user, message, retries=3):
-    for attempt in range(retries):
-        try:
-            _ = user.insert(ChatBlob(messages=message), sync=True)
-            return
-        except Exception as e:
-            if attempt < retries - 1:
-                time.sleep(1)
-                continue
-            else:
-                raise e
-
-
-def memobase_add_memories_for_speaker(client, speaker, messages):
-    real_uid = string_to_uuid(speaker)
-    u = client.get_or_create_user(real_uid)
-    for i in range(0, len(messages), 2):
-        batch_messages = messages[i : i + 2]
-        memobase_add_memory(u, batch_messages)
-        print(f"[{i + 1}/{len(messages)}] Added messages for {speaker} successfully.")
-    u.flush(sync=True)
 
 
 def ingest_session(client, session, frame, version, metadata, revised_client=None):
@@ -153,33 +71,11 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
     print(f"Processing conv {conv_id}, session {metadata['session_key']}")
     start_time = time.time()
 
-    if frame == "zep":
-        for chat in tqdm(session, desc=f"{metadata['session_key']}"):
-            data = chat.get("speaker") + ": " + chat.get("text")
-            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
-
-            # Check if the group exists, if not create it
-            groups = client.group.get_all_groups()
-            groups = dict(groups)["groups"]
-            exist_ids = [gp.group_id for gp in groups]
-            if conv_id not in exist_ids:
-                client.group.add(group_id=conv_id)
-
-            # Add the message to the group
-            client.graph.add(
-                data=data,
-                type="message",
-                created_at=iso_date,
-                group_id=conv_id,
-            )
-
-    elif frame == "memos" or frame == "memos-api":
+    if frame == "memos" or frame == "memos-api":
         messages = []
         messages_reverse = []
-
-        for chat in tqdm(session, desc=f"{metadata['session_key']}"):
+        for chat in session:
             data = chat.get("speaker") + ": " + chat.get("text")
-
             if chat.get("speaker") == metadata["speaker_a"]:
                 messages.append({"role": "user", "content": data, "chat_time": iso_date})
                 messages_reverse.append(
@@ -193,22 +89,24 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                     f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
                 )
 
-            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
-
         speaker_a_user_id = conv_id + "_speaker_a"
         speaker_b_user_id = conv_id + "_speaker_b"
         if frame == "memos-api":
-            client.add(messages=messages, user_id=f"{speaker_a_user_id.replace('_', '')}{version}")
-
-            revised_client.add(
-                messages=messages_reverse, user_id=f"{speaker_b_user_id.replace('_', '')}{version}"
+            client.add(
+                messages=messages,
+                user_id=f"{speaker_a_user_id}_{version}",
+                conv_id=f"{conv_id}_{metadata['session_key']}",
+            )
+            client.add(
+                messages=messages_reverse,
+                user_id=f"{speaker_b_user_id}_{version}",
+                conv_id=f"{conv_id}_{metadata['session_key']}",
             )
         elif frame == "memos":
             client.add(
                 messages=messages,
                 user_id=speaker_a_user_id,
             )
-
             revised_client.add(
                 messages=messages_reverse,
                 user_id=speaker_b_user_id,
@@ -216,13 +114,10 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
         print(f"Added messages for {speaker_a_user_id} and {speaker_b_user_id} successfully.")
 
     elif frame == "mem0" or frame == "mem0_graph":
-        print(f"Processing abc for {metadata['session_key']}")
         messages = []
         messages_reverse = []
-
-        for chat in tqdm(session, desc=f"{metadata['session_key']}"):
+        for chat in session:
             data = chat.get("speaker") + ": " + chat.get("text")
-
             if chat.get("speaker") == metadata["speaker_a"]:
                 messages.append({"role": "user", "content": data})
                 messages_reverse.append({"role": "assistant", "content": data})
@@ -233,8 +128,6 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                 raise ValueError(
                     f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
                 )
-
-            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
 
         for i in range(0, len(messages), 2):
             batch_messages = messages[i : i + 2]
@@ -272,13 +165,12 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                     enable_graph=True,
                 )
     elif frame == "memobase":
-        print(f"Processing abc for {metadata['session_key']}")
+        from utils.memobase_utils import memobase_add_memory
+
         messages = []
         messages_reverse = []
 
-        for chat in tqdm(session, desc=f"{metadata['session_key']}"):
-            data = chat.get("speaker") + ": " + chat.get("text")
-
+        for chat in session:
             if chat.get("speaker") == metadata["speaker_a"]:
                 messages.append(
                     {
@@ -318,30 +210,17 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
                     f"Unknown speaker {chat.get('speaker')} in session {metadata['session_key']}"
                 )
 
-            print({"context": data, "conv_id": conv_id, "created_at": iso_date})
-
-        thread_a = threading.Thread(
-            target=memobase_add_memories_for_speaker,
-            args=(
-                client,
-                metadata["speaker_a_user_id"],
-                messages,
-            ),
-        )
-
-        thread_b = threading.Thread(
-            target=memobase_add_memories_for_speaker,
-            args=(
-                client,
-                metadata["speaker_b_user_id"],
-                messages_reverse,
-            ),
-        )
-
-        thread_a.start()
-        thread_b.start()
-        thread_a.join()
-        thread_b.join()
+        users = client.get_all_users(limit=5000)
+        for u in users:
+            try:
+                if u["additional_fields"]["user_id"] == conv_id + "_speaker_a":
+                    user_a = client.get_user(u["id"], no_get=True)
+                if u["additional_fields"]["user_id"] == conv_id + "_speaker_b":
+                    user_b = client.get_user(u["id"], no_get=True)
+            except:
+                pass
+        memobase_add_memory(user_a, messages)
+        memobase_add_memory(user_b, messages_reverse)
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -349,91 +228,86 @@ def ingest_session(client, session, frame, version, metadata, revised_client=Non
     return elapsed_time
 
 
-def process_user(conv_idx, frame, locomo_df, version, num_workers=1):
-    try:
-        conversation = locomo_df["conversation"].iloc[conv_idx]
-        max_session_count = 35
-        start_time = time.time()
-        total_session_time = 0
-        valid_sessions = 0
+def process_user(conv_idx, frame, locomo_df, version):
+    conversation = locomo_df["conversation"].iloc[conv_idx]
+    max_session_count = 35
+    start_time = time.time()
+    total_session_time = 0
+    valid_sessions = 0
 
-        revised_client = None
-        if frame == "zep":
-            client = get_client("zep")
-        elif frame == "mem0" or frame == "mem0_graph":
-            client = get_client(frame)
-            client.delete_all(user_id=f"locomo_exp_user_{conv_idx}")
-            client.delete_all(user_id=f"{conversation.get('speaker_a')}_{conv_idx}")
-            client.delete_all(user_id=f"{conversation.get('speaker_b')}_{conv_idx}")
-        elif frame == "memos":
-            conv_id = "locomo_exp_user_" + str(conv_idx)
-            speaker_a_user_id = conv_id + "_speaker_a"
-            speaker_b_user_id = conv_id + "_speaker_b"
-            client = get_client("memos", speaker_a_user_id, version)
-            revised_client = get_client("memos", speaker_b_user_id, version)
-        elif frame == "memos-api":
-            conv_id = "locomo_exp_user_" + str(conv_idx)
-            speaker_a_user_id = conv_id + "_speaker_a"
-            speaker_b_user_id = conv_id + "_speaker_b"
-            client = memos_client(mode="api")
-            revised_client = memos_client(mode="api")
-        elif frame == "memobase":
-            client = memobase_client()
-            conv_id = "locomo_exp_user_" + str(conv_idx)
-            speaker_a_user_id = conv_id + "_speaker_a"
-            speaker_b_user_id = conv_id + "_speaker_b"
-            client.delete_user(string_to_uuid(speaker_a_user_id))
-            client.delete_user(string_to_uuid(speaker_b_user_id))
-        sessions_to_process = []
-        for session_idx in range(max_session_count):
-            session_key = f"session_{session_idx}"
-            session = conversation.get(session_key)
-            if session is None:
-                continue
+    revised_client = None
+    if frame == "mem0" or frame == "mem0_graph":
+        from mem0 import MemoryClient
 
-            metadata = {
-                "session_date": conversation.get(f"session_{session_idx}_date_time") + " UTC",
-                "speaker_a": conversation.get("speaker_a"),
-                "speaker_b": conversation.get("speaker_b"),
-                "speaker_a_user_id": f"{conversation.get('speaker_a')}_{conv_idx}",
-                "speaker_b_user_id": f"{conversation.get('speaker_b')}_{conv_idx}",
-                "conv_idx": conv_idx,
-                "session_key": session_key,
-            }
-            sessions_to_process.append((session, metadata))
-            valid_sessions += 1
+        mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
+        mem0.update_project(custom_instructions=custom_instructions)
+        client.delete_all(user_id=f"locomo_exp_user_{conv_idx}")
+        client.delete_all(user_id=f"{conversation.get('speaker_a')}_{conv_idx}")
+        client.delete_all(user_id=f"{conversation.get('speaker_b')}_{conv_idx}")
+    elif frame == "memos":
+        conv_id = "locomo_exp_user_" + str(conv_idx)
+        speaker_a_user_id = conv_id + "_speaker_a"
+        speaker_b_user_id = conv_id + "_speaker_b"
+        client = get_client("memos", speaker_a_user_id, version)
+        revised_client = get_client("memos", speaker_b_user_id, version)
+    elif frame == "memos-api":
+        from utils.memos_api import MemOSAPI
 
-        print(
-            f"Processing {valid_sessions} sessions for user {conv_idx} with {num_workers} workers"
-        )
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-            futures = {
-                executor.submit(
-                    ingest_session, client, session, frame, version, metadata, revised_client
-                ): metadata["session_key"]
-                for session, metadata in sessions_to_process
-            }
+        client = MemOSAPI()
+    elif frame == "memobase":
+        from utils.client import memobase_client
 
-            for future in concurrent.futures.as_completed(futures):
-                session_key = futures[future]
-                try:
-                    session_time = future.result()
-                    total_session_time += session_time
-                    print(f"User {conv_idx}, {session_key} processed in {session_time} seconds")
-                except Exception as e:
-                    print(f"Error processing user {conv_idx}, session {session_key}: {e!s}")
+        client = memobase_client()
+        conv_id = "locomo_exp_user_" + str(conv_idx)
+        speaker_a_user_id = conv_id + "_speaker_a"
+        speaker_b_user_id = conv_id + "_speaker_b"
+        all_users = client.get_all_users(limit=5000)
+        for user in all_users:
+            try:
+                if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
+                    client.delete_user(user["id"])
+                    print(f"🗑️  Deleted existing user from Memobase memory...")
+            except:
+                pass
+        memobase_user_id_a = client.add_user({"user_id": speaker_a_user_id})
+        memobase_user_id_b = client.add_user({"user_id": speaker_b_user_id})
+        user_id_a = memobase_user_id_a
+        user_id_b = memobase_user_id_b
 
-        end_time = time.time()
-        elapsed_time = round(end_time - start_time, 2)
-        print(f"User {conv_idx} processed successfully in {elapsed_time} seconds")
+    sessions_to_process = []
+    for session_idx in range(max_session_count):
+        session_key = f"session_{session_idx}"
+        session = conversation.get(session_key)
+        if session is None:
+            continue
 
-        return elapsed_time
+        metadata = {
+            "session_date": conversation.get(f"session_{session_idx}_date_time") + " UTC",
+            "speaker_a": conversation.get("speaker_a"),
+            "speaker_b": conversation.get("speaker_b"),
+            "speaker_a_user_id": f"{conversation.get('speaker_a')}_{conv_idx}",
+            "speaker_b_user_id": f"{conversation.get('speaker_b')}_{conv_idx}",
+            "conv_idx": conv_idx,
+            "session_key": session_key,
+        }
+        sessions_to_process.append((session, metadata))
+        valid_sessions += 1
 
-    except Exception as e:
-        return f"Error processing user {conv_idx}: {e!s}"
+    print(f"Processing {valid_sessions} sessions for user {conv_idx}")
+
+    for session, metadata in sessions_to_process:
+        session_time = ingest_session(client, session, frame, version, metadata, revised_client)
+        total_session_time += session_time
+        print(f"User {conv_idx}, {metadata['session_key']} processed in {session_time} seconds")
+
+    end_time = time.time()
+    elapsed_time = round(end_time - start_time, 2)
+    print(f"User {conv_idx} processed successfully in {elapsed_time} seconds")
+
+    return elapsed_time
 
 
-def main(frame, version="default", num_workers=4):
+async def main(frame, version="default", num_workers=4):
     load_dotenv()
     locomo_df = pd.read_json("data/locomo/locomo10.json")
 
@@ -445,24 +319,66 @@ def main(frame, version="default", num_workers=4):
         f"Starting processing for {num_users} users in serial mode, each user using {num_workers} workers for sessions..."
     )
 
-    for user_id in range(num_users):
-        try:
-            result = process_user(user_id, frame, locomo_df, version, num_workers)
-            if isinstance(result, float):
-                total_time += result
-            else:
-                print(result)
-        except Exception as e:
-            print(f"Error processing user {user_id}: {e!s}")
+    if frame == "zep":
+        from zep_cloud.client import AsyncZep
 
-    if num_users > 0:
-        average_time = total_time / num_users
-        minutes = int(average_time // 60)
-        seconds = int(average_time % 60)
-        average_time_formatted = f"{minutes} minutes and {seconds} seconds"
-        print(
-            f"The frame {frame} processed {num_users} users in average of {average_time_formatted} per user."
-        )
+        zep = AsyncZep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
+        num_users = 10
+        max_session_count = 35
+        for group_idx in range(num_users):
+            conversation = locomo_df["conversation"].iloc[group_idx]
+            group_id = f"locomo_exp_user_{group_idx}"
+            print(group_id)
+            try:
+                await zep.group.add(group_id=group_id)
+            except Exception:
+                pass
+
+            for session_idx in range(max_session_count):
+                session_key = f"session_{session_idx}"
+                print(session_key)
+                session = conversation.get(session_key)
+                if session is None:
+                    continue
+                for msg in session:
+                    session_date = conversation.get(f"session_{session_idx}_date_time") + " UTC"
+                    date_format = "%I:%M %p on %d %B, %Y UTC"
+                    date_string = datetime.strptime(session_date, date_format).replace(
+                        tzinfo=timezone.utc
+                    )
+                    iso_date = date_string.isoformat()
+                    blip_caption = msg.get("blip_captions")
+                    img_description = (
+                        f"(description of attached image: {blip_caption})"
+                        if blip_caption is not None
+                        else ""
+                    )
+                    await zep.graph.add(
+                        data=msg.get("speaker") + ": " + msg.get("text") + img_description,
+                        type="message",
+                        created_at=iso_date,
+                        group_id=group_id,
+                    )
+
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [
+                executor.submit(process_user, user_id, frame, locomo_df, version)
+                for user_id in range(num_users)
+            ]
+
+            for future in concurrent.futures.as_completed(futures):
+                session_time = future.result()
+                total_time += session_time
+
+        if num_users > 0:
+            average_time = total_time / num_users
+            minutes = int(average_time // 60)
+            seconds = int(average_time % 60)
+            average_time_formatted = f"{minutes} minutes and {seconds} seconds"
+            print(
+                f"The frame {frame} processed {num_users} users in average of {average_time_formatted} per user."
+            )
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -478,19 +394,20 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
+        default="memos-api",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="default",
+        default="0917-test",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     args = parser.parse_args()
     lib = args.lib
     version = args.version
     workers = args.workers
 
-    main(lib, version, workers)
+    asyncio.run(main(lib, version, workers))

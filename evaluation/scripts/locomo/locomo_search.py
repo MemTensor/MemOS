@@ -1,21 +1,13 @@
 import os
 import sys
-import uuid
 
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
-sys.path.insert(
-    0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-)
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        ),
-        "evaluation",
-        "scripts",
-    ),
-)
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 import argparse
 import json
@@ -23,26 +15,24 @@ import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time
-
 import pandas as pd
-
 from dotenv import load_dotenv
-from mem0 import MemoryClient
 from tqdm import tqdm
-from utils.client import memobase_client, memos_client
 from utils.memos_filters import filter_memory_data
-from zep_cloud.client import Zep
-
 from memos.configs.mem_os import MOSConfig
 from memos.mem_os.main import MOS
 
 
 def get_client(frame: str, user_id: str | None = None, version: str = "default", top_k: int = 20):
     if frame == "zep":
+        from zep_cloud.client import Zep
+
         zep = Zep(api_key=os.getenv("ZEP_API_KEY"), base_url="https://api.getzep.com/api/v2")
         return zep
 
     elif frame == "mem0" or frame == "mem0_graph":
+        from mem0 import MemoryClient
+
         mem0 = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         return mem0
 
@@ -182,7 +172,6 @@ def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k=20):
         speaker_2_memories=json.dumps(search_speaker_b_memory, indent=4),
     )
 
-    print(query, context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -214,30 +203,25 @@ def memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client=N
         speaker_2_memories=speaker_b_context,
     )
 
-    print(query, context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
 
-def memos_api_search(
-    client, query, conv_id, speaker_a, speaker_b, top_k, version, reversed_client=None
-):
+def memos_api_search(client, query, conv_id, speaker_a, speaker_b, top_k, version):
     start = time()
-    speaker_a_user_id = conv_id + "_speaker_a"
     search_a_results = client.search(
-        query=query, user_id=f"{speaker_a_user_id.replace('_', '')}{version}", top_k=top_k
+        query=query, user_id=f"{conv_id}_speaker_a_{version}", top_k=top_k
     )
     speaker_a_context = ""
-    for item in search_a_results:
-        speaker_a_context += f"{item}\n"
+    for item in search_a_results["memory_detail_list"]:
+        speaker_a_context += f"{item['memory_value']}\n"
 
-    speaker_b_user_id = conv_id + "_speaker_b"
-    search_b_results = reversed_client.search(
-        query=query, user_id=f"{speaker_b_user_id.replace('_', '')}{version}", top_k=top_k
+    search_b_results = client.search(
+        query=query, user_id=f"{conv_id}_speaker_b_{version}", top_k=top_k
     )
     speaker_b_context = ""
-    for item in search_b_results:
-        speaker_b_context += f"{item}\n"
+    for item in search_b_results["memory_detail_list"]:
+        speaker_b_context += f"{item['memory_value']}\n"
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,
@@ -246,7 +230,6 @@ def memos_api_search(
         speaker_2_memories=speaker_b_context,
     )
 
-    print(query, context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -323,7 +306,6 @@ def mem0_graph_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k
         speaker_2_memories=json.dumps(search_speaker_b_memory, indent=4),
         speaker_2_graph_memories=json.dumps(search_speaker_b_graph, indent=4),
     )
-    print(query, context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -360,11 +342,12 @@ def zep_search(client, query, group_id, top_k=20):
 def memobase_search(
     client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k=20
 ):
-    start = time()
-    speaker_a_memories = memobase_search_memory(
+    from utils.memobase_utils import memobase_search_memory
+
+    speaker_a_memories, t1 = memobase_search_memory(
         client, speaker_a_user_id, query, max_memory_context_size=top_k * 100
     )
-    speaker_b_memories = memobase_search_memory(
+    speaker_b_memories, t2 = memobase_search_memory(
         client, speaker_b_user_id, query, max_memory_context_size=top_k * 100
     )
     context = TEMPLATE_MEMOBASE.format(
@@ -374,38 +357,8 @@ def memobase_search(
         speaker_2_user_id=speaker_b,
         speaker_2_memories=speaker_b_memories,
     )
-    print(query, context)
-    duration_ms = (time() - start) * 1000
-    return (context, duration_ms)
-
-
-def string_to_uuid(s: str, salt="memobase_client") -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
-
-
-def memobase_search_memory(
-    client, user_id, query, max_memory_context_size, max_retries=3, retry_delay=1
-):
-    retries = 0
-    real_uid = string_to_uuid(user_id)
-    u = client.get_user(real_uid, no_get=True)
-
-    while retries < max_retries:
-        try:
-            memories = u.context(
-                max_token_size=max_memory_context_size,
-                chats=[{"role": "user", "content": query}],
-                event_similarity_threshold=0.2,
-                fill_window_with_events=True,
-            )
-            return memories
-        except Exception as e:
-            print(f"Error during memory search: {e}")
-            print("Retrying...")
-            retries += 1
-            if retries >= max_retries:
-                raise e
-            time.sleep(retry_delay)
+    duration_ms = t1 + t2
+    return context, duration_ms
 
 
 def search_query(client, query, metadata, frame, version, reversed_client=None, top_k=20):
@@ -417,6 +370,7 @@ def search_query(client, query, metadata, frame, version, reversed_client=None, 
 
     if frame == "zep":
         context, duration_ms = zep_search(client, query, conv_id, top_k)
+        # sleep(0.1)
     elif frame == "mem0":
         context, duration_ms = mem0_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k
@@ -431,9 +385,11 @@ def search_query(client, query, metadata, frame, version, reversed_client=None, 
         )
     elif frame == "memos-api":
         context, duration_ms = memos_api_search(
-            client, query, conv_id, speaker_a, speaker_b, top_k, version, reversed_client
+            client, query, conv_id, speaker_a, speaker_b, top_k, version
         )
     elif frame == "memobase":
+        speaker_a_user_id = conv_id + "_speaker_a"
+        speaker_b_user_id = conv_id + "_speaker_b"
         context, duration_ms = memobase_search(
             client, query, speaker_a, speaker_b, speaker_a_user_id, speaker_b_user_id, top_k
         )
@@ -484,13 +440,12 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         client = get_client(frame, speaker_a_user_id, version, top_k=top_k)
         reversed_client = get_client(frame, speaker_b_user_id, version, top_k=top_k)
     elif frame == "memos-api":
-        speaker_a_user_id = conv_id + "_speaker_a"
-        speaker_b_user_id = conv_id + "_speaker_b"
-        client = memos_client(mode="api")
-        reversed_client = memos_client(mode="api")
-        client.user_register(user_id=f"{speaker_a_user_id.replace('_', '')}{version}")
-        reversed_client.user_register(user_id=f"{speaker_b_user_id.replace('_', '')}{version}")
+        from utils.memos_api import MemOSAPI
+
+        client = MemOSAPI()
     elif frame == "memobase":
+        from utils.client import memobase_client
+
         client = memobase_client()
     else:
         client = get_client(frame, conv_id, version)
@@ -518,16 +473,6 @@ def process_user(group_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         ):
             result = future.result()
             if result:
-                context_preview = (
-                    result["context"][:20] + "..." if result["context"] else "No context"
-                )
-                print(
-                    {
-                        "query": result["query"],
-                        "context": context_preview,
-                        "duration_ms": result["duration_ms"],
-                    }
-                )
                 search_results[conv_id].append(result)
 
     os.makedirs(f"results/locomo/{frame}-{version}/tmp/", exist_ok=True)
@@ -549,13 +494,13 @@ def main(frame, version="default", num_workers=1, top_k=20):
     all_search_results = defaultdict(list)
 
     for idx in range(num_users):
-        try:
-            print(f"Processing user {idx}...")
-            user_results = process_user(idx, locomo_df, frame, version, top_k, num_workers)
-            for conv_id, results in user_results.items():
-                all_search_results[conv_id].extend(results)
-        except Exception as e:
-            print(f"User {idx} generated an exception: {e}")
+        # try:
+        print(f"Processing user {idx}...")
+        user_results = process_user(idx, locomo_df, frame, version, top_k, num_workers)
+        for conv_id, results in user_results.items():
+            all_search_results[conv_id].extend(results)
+    # except Exception as e:
+    #     print(f"User {idx} generated an exception: {e}")
 
     with open(f"results/locomo/{frame}-{version}/{frame}_locomo_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=2)
@@ -568,15 +513,16 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["zep", "memos", "mem0", "mem0_graph", "memos-api", "memobase"],
+        default="memos-api",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="default",
+        default="0917-test",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=1, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"
