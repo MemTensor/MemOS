@@ -20,8 +20,7 @@ def ingest_session(session, user_id, session_id, frame, client):
         pass
         for idx, msg in enumerate(session):
             print(
-                f"[{frame}] 💬 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}..."
-            )
+                f"[{frame}] 💬 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}...")
             client.memory.add(messages=[Message(role=msg["role"], role_type=msg["role"], content=msg["content"], )], )
     elif frame == "mem0-local" or frame == "mem0-api":
         for idx, msg in enumerate(session):
@@ -31,23 +30,16 @@ def ingest_session(session, user_id, session_id, frame, client):
         if frame == "mem0-local":
             client.add(messages=messages, user_id=user_id)
         elif frame == "mem0-api":
-            client.add(
-                messages=messages,
-                user_id=user_id,
-                session_id=session_id,
-                version="v2",
-            )
-        print(
-            f"[{frame}] ✅ Session [{session_id}: Ingested {len(messages)} messages"
-        )
+            client.add(messages=messages,
+                       user_id=user_id,
+                       session_id=session_id,
+                       version="v2", )
+        print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
     elif frame == "memos-local" or frame == "memos-api":
-        for idx, msg in enumerate(session):
-            messages.append({"role": msg["role"], "content": msg["content"], })
-            print(f"[{frame}] 📝 Session [{session_id}: [{idx + 1}/{len(session)}] Reading message: {msg['role']} - {msg['content'][:50]}...")
-        client.add(messages=messages, user_id=user_id, conv_id=session_id)
-        print(
-            f"[{frame}] ✅ Session [{session_id}: Ingested {len(messages)} messages"
-        )
+        for i in range(0, len(session), 10):
+            messages = session[i: i + 10]
+            client.add(messages=messages, user_id=user_id, conv_id=session_id)
+        print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
 
 
 def build_jsonl_index(jsonl_path):
@@ -188,7 +180,8 @@ def main(frame, version, num_workers=2):
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_idx = {
-            executor.submit(ingest_conv, row_data=row_data, context=context, version=version, conv_idx=idx, frame=frame, ): idx
+            executor.submit(ingest_conv, row_data=row_data, context=context, version=version, conv_idx=idx,
+                            frame=frame, ): idx
             for idx, (row_data, context) in enumerate(all_data)}
 
         for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"):
@@ -214,7 +207,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Ingestion Script")
     parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
                         default='memos-api')
-    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
+    parser.add_argument("--version", type=str, default="0925-1", help="Version of the evaluation framework.")
     parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
     args = parser.parse_args()
 
