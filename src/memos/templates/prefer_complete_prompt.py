@@ -38,9 +38,10 @@ Notes:
 
 Requirements:
 1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.  
-2. Output a concise natural language statement; do not use lists, categories, or include the reasoning process.  
-3. Only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information.  
-4. If no implicit preference can be reasonably inferred, directly return an empty string "" (do not output anything else).
+2. Output a concise natural language statement; do not use lists, categories, or include the reasoning process.
+3. Inferred implicit preferences must not conflict with explicit preferences.
+4. For implicit_preference: only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information. Put all reasoning and explanation in the reasoning field.  
+5. If no implicit preference can be reasonably inferred, leave the implicit_preference field empty (do not output anything else).
 
 Conversation:
 {qa_pair}
@@ -48,7 +49,8 @@ Conversation:
 Output format:  
 ```json
 {
-  "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string"
+  "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string",
+  "reasoning": "Briefly explain the reasoning process for the implicit preference"
 }
 ```
 Don't output anything except the JSON.
@@ -228,43 +230,33 @@ Please output JSON format:
 
 
 NAIVE_PREFERENCE_INTEGRATION_PROMPT = """
-You are a preference integration expert. Your task is to integrate preference constraints from different sources and generate a final prompt that can be directly input to an LLM. Please note the following information sources and their priority levels (from high to low):
+You are a memory integration expert. Your task is to integrate various memories from the user and generate a final prompt that can be directly input into a large language model (LLM). The generated prompt should include all relevant memories, but you must filter them based on the current query.
 
-Sources:
-1. Current query preferences: Constraints explicitly stated in the current user question
-2. Related dialogue preferences: Preference references from Q&A pairs related to the current query
-3. Related topic preferences: Preference references from topics related to the current query
-4. User preference: Common preference references from the user's historical conversations
+1. Requirements and Rules:
+- Filter Relevant Memories: Only retain memories that are related to the current query, and discard irrelevant ones.
 
-Priority: Current query preferences > Related dialogue preferences > Related topic preferences > User preferences > Implicit preferences
+2. Handle Preference Conflicts:
+- Explicit preference memories take precedence over implicit preference memories.
+- If conflicts arise, delete lower-priority memories according to the hierarchy to ensure consistency.
 
-Requirements:
-- If conflicts exist between preferences, strictly follow the priority order, with higher priority preferences overriding lower priority ones.
-- Generate a comprehensive prompt that includes all integrated preferences and constraints.
-- The final prompt should be ready to be input directly to an LLM for answering the user's query.
-- Keep the integrated preferences specific and actionable.
-- Ensure the prompt is clear, structured, and contains all necessary context and constraints.
+3. Generate Final Integrated Prompt:
+- The prompt should include all filtered, conflict-free memories.
+- Provide structured, clear, specific, and actionable context.
+- The prompt must be directly usable by the LLM to answer the user's query.
 
-Please generate the final integrated prompt based on the input, strictly resolve conflicts by priority, and output in JSON format as follows:
-{{
-  "final_prompt": "Complete prompt ready for LLM input, including query, context, and all integrated preferences",
-  "conflict_handling": ["Conflict resolution explanation 1", "Conflict resolution explanation 2", "..."],
-  "preference_summary": "Summary of all integrated preferences and constraints"
-}}
+4. Priority Rules:
+Explicit memories > Implicit memories
 
-# Current query
-{query_preference}
+Please output in the following JSON formatm, don't output anything else:
 
-# Related dialogue preferences
-{explicit_preference}
+{
+  "final_prompt": "The complete prompt containing filtered, integrated, and conflict-free memories, ready for LLM input",
+  "explanation": "Briefly explain the reasoning process for the final prompt and process of filtering and integrating memories"
+}
 
-# Implicit preferences
-{implicit_preference}
+Query:
+{query}
 
-# Related topic preferences
-{topic_preference}
-
-# User preferences
-{user_preference}
-
+Memories:
+{memories}
 """

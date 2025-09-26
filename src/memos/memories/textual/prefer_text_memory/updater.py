@@ -176,7 +176,7 @@ class NaiveUpdater(BaseUpdater):
         
         return results
 
-    def _extract_user_preferences(self, topic_cluster_pref_infos: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_user_preferences(self, topic_cluster_pref_infos: Dict[str, Any]) -> Dict[str, Any] | None:
         """Extract user preferences from topic cluster info."""
         # topic_prefs is a dict, so we just pass the values as a list
         topic_cluster_pref = list(topic_cluster_pref_infos.values())
@@ -261,14 +261,14 @@ class NaiveUpdater(BaseUpdater):
     def _generate_memory_summary(self, explicit_infos: List[Dict[str, Any]],
                                  implicit_infos: List[Dict[str, Any]],
                                  topic_infos: List[Dict[str, Any]],
-                                 user_infos: List[Dict[str, Any]]) -> str:
+                                 user_infos: Dict[str, Any]) -> str:
         """Generate a summary of the built memory."""
         summary = {
             "memory_build_summary": {
                 "explicit_preferences_count": len(explicit_infos),
                 "implicit_preferences_count": len(implicit_infos),
                 "topic_preferences_count": len(topic_infos),
-                "user_preferences_count": len(user_infos),
+                "user_preferences_count": 1 if user_infos else 0,
                 "build_timestamp": datetime.now().isoformat()
             }
         }

@@ -75,13 +75,7 @@ class Splitter:
         chunks = []
         chunk = []
         for item in data:
-            # Convert dictionary to string
-            if "chat_time" in item:
-                mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
-                chunk.append(mem)
-            else:
-                mem = item["role"] + ":" + item["content"]
-                chunk.append(mem)
+            chunk.append(item)
             # 5 turns (Q + A = 10) each chunk
             if len(chunk) >= 10:
                 chunks.append(chunk)
