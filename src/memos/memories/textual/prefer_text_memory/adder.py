@@ -59,36 +59,30 @@ class NaiveAdder(BaseAdder):
                 id=memory.id,
                 vector=memory.metadata.dialog_vector,
                 payload=payload
-            ) 
-            if memory.metadata.preference_type == "explicit_preference":
-                search_results = self.vector_db.search(memory.metadata.dialog_vector, "explicit_preference", top_k=1)
-                recall = search_results[0] if search_results else None
-                if not recall or (recall.score is not None and recall.score < 0.5):
-                    self.vector_db.update("explicit_preference", memory.id, vec_db_item)
-                    return memory.id
-            
-                old_msg_str = recall.payload.get("dialog_str", "")
-                new_msg_str = memory.metadata.dialog_str
-                is_same = self._judge_update_or_add(old_msg_str, new_msg_str)
-                if is_same:
-                    self.vector_db.delete("explicit_preference", [recall.id])
-                self.vector_db.update("explicit_preference", memory.id, vec_db_item)
-                return memory.id
+            )
+            pref_type_collection_map = {
+                "explicit_preference": "explicit_preference",
+                "implicit_preference": "implicit_preference",
+                "topic_preference": "topic_preference",
+                "user_preference": "user_preference"
+            }
+            preference_type = memory.metadata.preference_type
+            collection_name = pref_type_collection_map[preference_type]
 
-            if memory.metadata.preference_type == "implicit_preference":
-                search_results = self.vector_db.search(memory.metadata.dialog_vector, "implicit_preference", top_k=1)
-                recall = search_results[0] if search_results else None
-                if not recall or (recall.score is not None and recall.score < 0.5):
-                    self.vector_db.update("implicit_preference", memory.id, vec_db_item)
-                    return memory.id
-                
-                old_msg_str = recall.payload.get("dialog_str", "")
-                new_msg_str = memory.metadata.dialog_str
-                is_same = self._judge_update_or_add(old_msg_str, new_msg_str)
-                if is_same:
-                    self.vector_db.delete("implicit_preference", [recall.id])
-                self.vector_db.update("implicit_preference", memory.id, vec_db_item)
+            search_results = self.vector_db.search(memory.metadata.dialog_vector, collection_name, top_k=1)
+            recall = search_results[0] if search_results else None
+            if not recall or (recall.score is not None and recall.score < 0.5):
+                self.vector_db.update(collection_name, memory.id, vec_db_item)
                 return memory.id
+        
+            old_msg_str = recall.payload.get("dialog_str", "")
+            new_msg_str = memory.metadata.dialog_str
+            is_same = self._judge_update_or_add(old_msg_str, new_msg_str)
+            if is_same:
+                self.vector_db.delete(collection_name, [recall.id])
+            self.vector_db.update(collection_name, memory.id, vec_db_item)
+            return memory.id
+
         except Exception as e:
             print(f"Error processing memory {memory.id}: {e}")
             return None
