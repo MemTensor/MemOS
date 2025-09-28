@@ -223,23 +223,23 @@ from memos.graph_dbs.nebular import NebulaGraphDB
 from memos.llms.openai import OpenAILLM
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.cosine_local import CosineLocalReranker
-
+import os
 llm = OpenAILLM(
     OpenAILLMConfig(model_schema='memos.configs.llm.OpenAILLMConfig', model_name_or_path='gpt-4o',
                     temperature=0.8, max_tokens=1024, top_p=0.9, top_k=50, remove_think_prefix=True,
-                    api_key='sk-ZOPtsVgzxqnc8vGAmlTQTmnrpxK8me44fsEoX9bRTXFseh5Y',
-                    api_base='http://123.129.219.111:3000/v1', extra_body=None))
+                    api_key=os.getenv('OPENAI_API_KEY'),
+                    api_base=os.getenv('OPENAI_API_BASE'), extra_body=None))
 embedder = UniversalAPIEmbedder(
     UniversalAPIEmbedderConfig(model_schema='memos.configs.embedder.UniversalAPIEmbedderConfig',
                                model_name_or_path='bge-m3', embedding_dims=None, provider='openai',
-                               api_key='EMPTY', base_url='http://106.75.235.231:8081/v1'))
+                               api_key='EMPTY', base_url=os.getenv('MOS_EMBEDDER_API_BASE')))
 
 reranker = CosineLocalReranker(level_weights={"topic": 1.0, "concept": 1.0, "fact": 1.0}, level_field='background')
 
 graph_store = NebulaGraphDB(
     NebulaGraphDBConfig(model_schema='memos.configs.graph_db.NebulaGraphDBConfig',
-                        uri=['106.14.142.60:9669', '120.55.160.164:9669', '106.15.38.5:9669'],
-                        user='root', password='NebulaMemOS0724', space='shared-tree-textual-memory-product-preandtest',
+                        uri=json.loads(os.getenv('NEBULAR_HOSTS')),
+                        user=os.getenv('NEBULAR_USER'), password=os.getenv('NEBULAR_PASSWORD'), space=os.getenv('NEBULAR_SPACE'),
                         auto_create=True, max_client=1000, embedding_dimension=1024))
 
 s = Searcher(llm, graph_store, embedder, reranker, internet_retriever=None, moscube=False)
@@ -249,12 +249,13 @@ s = Searcher(llm, graph_store, embedder, reranker, internet_retriever=None, mosc
 def search_memories(search_req: SearchRequest):
     """Search memories for a specific user."""
     # try:
-    user_id = f"memos{search_req.user_id.replace('-', '')}"
+    # user_id = f"memos{search_req.user_id.replace('-', '')}"
+    user_id = search_req.user_id
     res = s.search(query=search_req.query, user_id=user_id, top_k=search_req.top_k
                    , mode="fast", search_filter=None,
                    info={'user_id': user_id, 'session_id': 'root_session', 'chat_history': []})
     res = {"d": res}
-    print(res)
+    # print(res)
     return SearchResponse(message="Search completed successfully", data=res)
 
     # except ValueError as err:
