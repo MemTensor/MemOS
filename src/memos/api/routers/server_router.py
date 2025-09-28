@@ -110,17 +110,15 @@ def add_memories(add_req: MemoryCreateRequest):
     memories = mem_reader.get_memory(
         [add_req.messages],
         type="chat",
-        info={"user_id": add_req.user_id, "session_id": add_req.session_id},
-    )
+        info={"user_id": add_req.user_id, "session_id": add_req.session_id},)[0]
     logger.info(
         f"time add: get mem_reader time user_id: {add_req.user_id} time is: {time.time() - time_start:.2f}s"
     )
-    mem_ids = []
-    for mem in memories:
-        mem_id_list: list[str] = memory_add_obj.add(mem, user_name=add_req.user_id)
-        mem_ids.extend(mem_id_list)
-        logger.info(
-            f"Added memory for user {add_req.user_id} in session {add_req.session_id}: {mem_id_list}"
-        )
-    data = {"mem_ids": mem_ids}
+    data = []
+
+    mem_id_list: list[str] = memory_add_obj.add(memories, user_name=add_req.user_id)
+    logger.info(f"Added memory for user {add_req.user_id} in session {add_req.session_id}: {mem_id_list}")
+
+    for m_id, m in zip(mem_id_list, memories):
+        data.append({'memory': m.memory, 'mem_ids': m_id, 'memory_type': m.metadata.memory_type})
     return SearchResponse(message="Memory added successfully", data=data)
