@@ -219,7 +219,41 @@ class GeneralScheduler(BaseScheduler):
             logger.error(f"Error: {e}", exc_info=True)
 
     def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
+
+        for message in messages:
+            try:
+                user_id = message.user_id
+                mem_cube_id = message.mem_cube_id
+                mem_cube = message.mem_cube
+                content = message.content
+
+                # Parse the memory IDs from content
+                mem_ids = json.loads(content) if isinstance(content, str) else content
+
+                logger.info(
+                    f"Processing mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
+                )
+
+                # Get the text memory from the mem_cube
+                text_mem = mem_cube.text_mem
+                if not isinstance(text_mem, TreeTextMemory):
+                    logger.error(f"Expected TreeTextMemory but got {type(text_mem).__name__}")
+                    continue
+
+                # Process the memory reading/retrieval logic here
+                # This could include:
+                # 1. Triggering memory reorganization
+                # 2. Updating memory relationships
+                # 3. Performing additional memory processing
+
+                # For now, just log the successful processing
+                logger.info(
+                    f"Successfully processed mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing mem_read message: {e}", exc_info=True)
 
     def process_session_turn(
         self,

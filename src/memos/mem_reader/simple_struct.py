@@ -128,7 +128,10 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
     @timed
-    def _process_chat_data(self, scene_data_info, info):
+    def _process_chat_data(self, scene_data_info, info, **kwargs):
+        mode = kwargs.get("mode", "fine")
+        if mode == "fast":
+            raise NotImplementedError
         mem_list = []
         for item in scene_data_info:
             if "chat_time" in item:
@@ -255,7 +258,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(processing_func, scene_data_info, info)
+                executor.submit(processing_func, scene_data_info, info, mode)
                 for scene_data_info in list_scene_data_info
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -319,6 +322,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return results
 
     def _process_doc_data(self, scene_data_info, info, **kwargs):
+        mode = kwargs.get("mode", "fine")
+        if mode == "fast":
+            raise NotImplementedError
         chunks = self.chunker.chunk(scene_data_info["text"])
         messages = []
         for chunk in chunks:
