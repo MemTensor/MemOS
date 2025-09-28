@@ -88,24 +88,6 @@ class NaiveExtractor(BaseExtractor):
         except Exception as e:
             print(f"Error extracting implicit preferences: {e}, return None")
             return None
-
-    # def extract_implicit_preferences(self, qa_pairs: MessageList | list[str]) -> Dict[str, Any] | None:
-    #     """Extract implicit preferences from cluster qa pairs."""
-    #     if not qa_pairs:
-    #         return None
-    #     qa_pairs_str = convert_messages_to_string(qa_pairs) if isinstance(qa_pairs[0], dict) else "\n\n".join(qa_pairs)
-    #     prompt = NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pairs}", qa_pairs_str)
-            
-    #     try:
-    #         response = self.llm_provider.generate([{"role": "user", "content": prompt}])
-    #         response = response.strip().replace("```json", "").replace("```", "").strip()
-    #         result = json.loads(response)
-            
-    #         if result.get("implicit_preference"):
-    #             return result
-    #     except Exception as e:
-    #         print(f"Error processing cluster: {qa_pairs}\n{e}")
-    #         return None
     
     def extract_topic_preferences(self, qa_pairs: MessageList | list[str]) -> Dict[str, Any] | None:
         """Extract topic preferences from cluster qa pairs."""

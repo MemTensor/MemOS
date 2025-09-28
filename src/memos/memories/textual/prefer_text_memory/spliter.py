@@ -127,7 +127,3 @@ class Splitter:
                 current_qa_pair = []  # reset
 
         return qa_pairs
-
-    def recursive_split_merge():
-        pass
-    
