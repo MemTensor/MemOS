@@ -127,16 +127,17 @@ class NaiveExtractor(BaseExtractor):
     def _process_single_chunk_explicit(self, chunk: MessageList, msg_type: str, info: dict[str, Any]) -> TextualMemoryItem | None:
         """Process a single chunk and return a TextualMemoryItem."""
         basic_info = self.extract_basic_info(chunk)
-        topic_info = self.extract_topic_info(chunk)
-        explicit_pref = self.extract_explicit_preference(chunk)
+        if not basic_info["dialog_str"]:
+            return None
+
+        explicit_pref = self.extract_explicit_preference(basic_info["dialog_str"])
         if not explicit_pref:
             return None
 
         vector_info = {
             "dialog_vector": self.embedder.embed([basic_info["dialog_str"]])[0],
-            "topic_vector": self.embedder.embed([topic_info["topic_name"] + topic_info["topic_description"]])[0]
         }
-        extract_info = {**basic_info, **topic_info, **explicit_pref, **vector_info, **info}
+        extract_info = {**basic_info, **explicit_pref, **vector_info, **info}
 
         metadata = PreferenceTextualMemoryMetadata(type=msg_type, preference_type="explicit_preference", **extract_info)
         memory = TextualMemoryItem(id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata)
@@ -144,7 +145,9 @@ class NaiveExtractor(BaseExtractor):
 
     def _process_single_chunk_implicit(self, chunk: MessageList, msg_type: str, info: dict[str, Any]) -> TextualMemoryItem | None:
         basic_info = self.extract_basic_info(chunk)
-        implicit_pref = self.extract_implicit_preferences(chunk)
+        if not basic_info["dialog_str"]:
+            return None
+        implicit_pref = self.extract_implicit_preferences(basic_info["dialog_str"])
         if not implicit_pref:
             return None
         

@@ -87,7 +87,7 @@ class NaiveAdder(BaseAdder):
             print(f"Error processing memory {memory.id}: {e}")
             return None
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], max_workers: int = 10, *args, **kwargs) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], max_workers: int = 8, *args, **kwargs) -> list[str]:
         """Add the instruct preference memories using thread pool for acceleration."""
         if not memories:
             return []
