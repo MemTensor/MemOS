@@ -17,6 +17,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    MEM_READ_LABEL,
     QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -695,6 +696,7 @@ class MOSCore:
             logger.info(
                 f"time add: messages is not None and enable_textual_memory and text_mem is not None time user_id: {target_user_id} time is: {time.time() - time_start_1}"
             )
+            sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 add_memory = []
                 metadata = TextualMemoryMetadata(
@@ -712,6 +714,7 @@ class MOSCore:
                     messages_list,
                     type="chat",
                     info={"user_id": target_user_id, "session_id": target_session_id},
+                    mode="fast" if sync_mode == "async" else "fine",
                 )
                 logger.info(
                     f"time add: get mem_reader time user_id: {target_user_id} time is: {time.time() - time_start_2}"
@@ -723,6 +726,17 @@ class MOSCore:
                     logger.info(
                         f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
                     )
+
+                if sync_mode == "async" and self.mem_scheduler is not None:
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=self.mem_cubes[mem_cube_id],
+                        label=MEM_READ_LABEL,
+                        content={json.dumps(mem_ids)},
+                        timestamp=datetime.utcnow(),
+                    )
+                    self.mem_scheduler.submit_messages(messages=[message_item])
 
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:

@@ -202,7 +202,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any]
+        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast"
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
@@ -219,6 +219,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 - topic_chunk_overlap: Overlap for large topic chunks (default: 100)
                 - chunk_size: Size for small chunks (default: 256)
                 - chunk_overlap: Overlap for small chunks (default: 50)
+            mode: mem-reader mode, fast for quick process while fine for
+            better understanding via calling llm
         Returns:
             list[list[TextualMemoryItem]] containing memory content with summaries as keys and original text as values
         Raises:

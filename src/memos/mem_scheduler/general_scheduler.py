@@ -8,6 +8,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
+    MEM_READ_LABEL,
     QUERY_LABEL,
     WORKING_MEMORY_TYPE,
     MemCubeID,
@@ -34,6 +35,7 @@ class GeneralScheduler(BaseScheduler):
             QUERY_LABEL: self._query_message_consumer,
             ANSWER_LABEL: self._answer_message_consumer,
             ADD_LABEL: self._add_message_consumer,
+            MEM_READ_LABEL: self._mem_read_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
 
@@ -215,6 +217,9 @@ class GeneralScheduler(BaseScheduler):
 
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
+
+    def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
 
     def process_session_turn(
         self,

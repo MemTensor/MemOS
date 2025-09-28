@@ -1,3 +1,4 @@
+import asyncio
 import traceback
 import uuid
 
@@ -54,7 +55,7 @@ class MemoryManager:
 
     def add(self, memories: list[TextualMemoryItem]) -> list[str]:
         """
-        Add new memories in parallel to different memory types (WorkingMemory, LongTermMemory, UserMemory).
+        Add new memories in parallel to different memory types.
         """
         added_ids: list[str] = []
 
@@ -66,29 +67,6 @@ class MemoryManager:
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
-
-        try:
-            self.graph_store.remove_oldest_memory(
-                memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
-            )
-        except Exception:
-            logger.warning(f"Remove WorkingMemory error: {traceback.format_exc()}")
-
-        try:
-            self.graph_store.remove_oldest_memory(
-                memory_type="LongTermMemory", keep_latest=self.memory_size["LongTermMemory"]
-            )
-        except Exception:
-            logger.warning(f"Remove LongTermMemory error: {traceback.format_exc()}")
-
-        try:
-            self.graph_store.remove_oldest_memory(
-                memory_type="UserMemory", keep_latest=self.memory_size["UserMemory"]
-            )
-        except Exception:
-            logger.warning(f"Remove UserMemory error: {traceback.format_exc()}")
-
-        self._refresh_memory_size()
         return added_ids
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
@@ -265,6 +243,22 @@ class MemoryManager:
 
         # Step 3: Return this structure node ID as the parent_id
         return node_id
+
+    async def _remove_and_refresh_memory(self):
+        remove_tasks = [
+            self._remove_oldest_memory_async("WorkingMemory", self.memory_size["WorkingMemory"]),
+            self._remove_oldest_memory_async("LongTermMemory", self.memory_size["LongTermMemory"]),
+            self._remove_oldest_memory_async("UserMemory", self.memory_size["UserMemory"]),
+        ]
+        await asyncio.gather(*remove_tasks)
+        await asyncio.to_thread(self._refresh_memory_size)
+        print("finished remove and refresh memory")
+
+    async def _remove_oldest_memory_async(self, memory_type: str, memory_size: int):
+        try:
+            await asyncio.to_thread(self.graph_store.remove_oldest_memory, memory_type, memory_size)
+        except Exception:
+            logger.warning(f"Remove {memory_type} error: {traceback.format_exc()}")
 
     def wait_reorganizer(self):
         """
