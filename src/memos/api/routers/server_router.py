@@ -122,7 +122,8 @@ def add_memories(add_req: MemoryCreateRequest):
         [add_req.messages],
         type="chat",
         info={"user_id": add_req.user_id, "session_id": add_req.session_id},
-    )[0]
+    )
+    memories = [mm for m in memories for mm in m]
     logger.info(
         f"time add: get mem_reader time user_id: {add_req.user_id} time is: {time.time() - time_start:.2f}s"
     )
