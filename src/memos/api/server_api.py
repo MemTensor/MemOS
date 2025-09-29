@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
-from memos.api.routers.product_router import router as product_router
+from memos.api.routers.server_router import router as server_router
 
 
 # Configure logging
@@ -19,7 +19,7 @@ app = FastAPI(
 
 app.add_middleware(RequestContextMiddleware)
 # Include routers
-app.include_router(product_router)
+app.include_router(server_router)
 
 # Exception handlers
 app.exception_handler(ValueError)(APIExceptionHandler.value_error_handler)
@@ -35,4 +35,4 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
-    uvicorn.run("memos.api.product_api:app", host="0.0.0.0", port=args.port, workers=args.workers)
+    uvicorn.run("memos.api.server_api:app", host="0.0.0.0", port=args.port, workers=args.workers)

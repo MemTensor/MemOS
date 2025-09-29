@@ -179,14 +179,14 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get all user configurations from persistent storage
-            user_configs = self.user_manager.list_user_configs()
+            user_configs = self.user_manager.list_user_configs(self.max_user_instances)
 
             # Get the raw database records for sorting by updated_at
             session = self.user_manager._get_session()
             try:
                 from memos.mem_user.persistent_user_manager import UserConfig
 
-                db_configs = session.query(UserConfig).all()
+                db_configs = session.query(UserConfig).limit(self.max_user_instances).all()
                 # Create a mapping of user_id to updated_at timestamp
                 updated_at_map = {config.user_id: config.updated_at for config in db_configs}
 
@@ -216,6 +216,26 @@ class MOSProduct(MOSCore):
 
         except Exception as e:
             logger.error(f"Error during user instance restoration: {e}")
+
+    def _initialize_cube_from_default_config(
+        self, cube_id: str, user_id: str, default_config: GeneralMemCubeConfig
+    ) -> GeneralMemCube | None:
+        """
+        Initialize a cube from default configuration when cube path doesn't exist.
+
+        Args:
+            cube_id (str): The cube ID to initialize.
+            user_id (str): The user ID for the cube.
+            default_config (GeneralMemCubeConfig): The default configuration to use.
+        """
+        cube_config = default_config.model_copy(deep=True)
+        # Safely modify the graph_db user_name if it exists
+        if cube_config.text_mem.config.graph_db.config:
+            cube_config.text_mem.config.graph_db.config.user_name = (
+                f"memos{user_id.replace('-', '')}"
+            )
+        mem_cube = GeneralMemCube(config=cube_config)
+        return mem_cube
 
     def _preload_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
@@ -286,8 +306,24 @@ class MOSProduct(MOSCore):
                         )
                     else:
                         logger.warning(
-                            f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}"
+                            f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}, now init by default config"
                         )
+                        cube_obj = self._initialize_cube_from_default_config(
+                            cube_id=cube.cube_id,
+                            user_id=user_id,
+                            default_config=default_cube_config,
+                        )
+                        if cube_obj:
+                            self.register_mem_cube(
+                                cube_obj,
+                                cube.cube_id,
+                                user_id,
+                                memory_types=[],
+                            )
+                        else:
+                            raise ValueError(
+                                f"Failed to initialize default cube {cube.cube_id} for user {user_id}"
+                            )
                 except Exception as e:
                     logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
         logger.info(f"load user {user_id} cubes successfully")

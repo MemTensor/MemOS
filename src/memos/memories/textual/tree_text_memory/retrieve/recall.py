@@ -25,6 +25,7 @@ class GraphMemoryRetriever:
     def retrieve(
         self,
         query: str,
+        user_id: str,
         parsed_goal: ParsedTaskGoal,
         top_k: int,
         memory_scope: str,
@@ -53,13 +54,13 @@ class GraphMemoryRetriever:
         if memory_scope == "WorkingMemory":
             # For working memory, retrieve all entries (no filtering)
             working_memories = self.graph_store.get_all_memory_items(
-                scope="WorkingMemory", include_embedding=False
+                scope="WorkingMemory", include_embedding=False, user_name=user_id
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             # Structured graph-based retrieval
-            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope)
+            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope, user_id)
             # Vector similarity search
             future_vector = executor.submit(
                 self._vector_recall,
@@ -67,6 +68,7 @@ class GraphMemoryRetriever:
                 memory_scope,
                 top_k,
                 search_filter=search_filter,
+                user_id=user_id,
             )
 
             graph_results = future_graph.result()
@@ -132,7 +134,7 @@ class GraphMemoryRetriever:
         return list(combined.values())
 
     def _graph_recall(
-        self, parsed_goal: ParsedTaskGoal, memory_scope: str
+        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_id: str
     ) -> list[TextualMemoryItem]:
         """
         Perform structured node-based retrieval from Neo4j.
@@ -148,7 +150,7 @@ class GraphMemoryRetriever:
                 {"field": "key", "op": "in", "value": parsed_goal.keys},
                 {"field": "memory_type", "op": "=", "value": memory_scope},
             ]
-            key_ids = self.graph_store.get_by_metadata(key_filters)
+            key_ids = self.graph_store.get_by_metadata(key_filters, user_name=user_id)
             candidate_ids.update(key_ids)
 
         # 2) tag-based OR branch
@@ -157,7 +159,7 @@ class GraphMemoryRetriever:
                 {"field": "tags", "op": "contains", "value": parsed_goal.tags},
                 {"field": "memory_type", "op": "=", "value": memory_scope},
             ]
-            tag_ids = self.graph_store.get_by_metadata(tag_filters)
+            tag_ids = self.graph_store.get_by_metadata(tag_filters, user_name=user_id)
             candidate_ids.update(tag_ids)
 
         # No matches → return empty
@@ -165,7 +167,9 @@ class GraphMemoryRetriever:
             return []
 
         # Load nodes and post-filter
-        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False)
+        node_dicts = self.graph_store.get_nodes(
+            list(candidate_ids), include_embedding=False, user_name=user_id
+        )
 
         final_nodes = []
         for node in node_dicts:
@@ -194,6 +198,7 @@ class GraphMemoryRetriever:
         max_num: int = 3,
         cube_name: str | None = None,
         search_filter: dict | None = None,
+        user_id: str | None = None,
     ) -> list[TextualMemoryItem]:
         """
         Perform vector-based similarity retrieval using query embedding.
@@ -210,6 +215,7 @@ class GraphMemoryRetriever:
                     scope=memory_scope,
                     cube_name=cube_name,
                     search_filter=filt,
+                    user_name=user_id,
                 )
                 or []
             )
@@ -255,7 +261,7 @@ class GraphMemoryRetriever:
         unique_ids = {r["id"] for r in all_hits if r.get("id")}
         node_dicts = (
             self.graph_store.get_nodes(
-                list(unique_ids), include_embedding=False, cube_name=cube_name
+                list(unique_ids), include_embedding=False, cube_name=cube_name, user_name=user_id
             )
             or []
         )
