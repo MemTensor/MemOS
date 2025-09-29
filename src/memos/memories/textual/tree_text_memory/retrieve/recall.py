@@ -167,7 +167,9 @@ class GraphMemoryRetriever:
             return []
 
         # Load nodes and post-filter
-        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False, user_name=user_id)
+        node_dicts = self.graph_store.get_nodes(
+            list(candidate_ids), include_embedding=False, user_name=user_id
+        )
 
         final_nodes = []
         for node in node_dicts:

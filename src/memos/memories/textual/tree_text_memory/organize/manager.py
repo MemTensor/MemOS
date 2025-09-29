@@ -140,15 +140,15 @@ class MemoryManager:
         # Add to LongTermMemory and UserMemory
         if memory.metadata.memory_type in ["LongTermMemory", "UserMemory"]:
             added_id = self._add_to_graph_memory(
-                memory=memory,
-                memory_type=memory.metadata.memory_type,
-                user_name=user_name
+                memory=memory, memory_type=memory.metadata.memory_type, user_name=user_name
             )
             ids.append(added_id)
 
         return ids
 
-    def _add_memory_to_db(self, memory: TextualMemoryItem, memory_type: str, user_name: str = None) -> str:
+    def _add_memory_to_db(
+        self, memory: TextualMemoryItem, memory_type: str, user_name: str = None
+    ) -> str:
         """
         Add a single memory item to the graph store, with FIFO logic for WorkingMemory.
         """
@@ -162,7 +162,9 @@ class MemoryManager:
         self.graph_store.add_node(working_memory.id, working_memory.memory, metadata, user_name)
         return working_memory.id
 
-    def _add_to_graph_memory(self, memory: TextualMemoryItem, memory_type: str, user_name: str = None):
+    def _add_to_graph_memory(
+        self, memory: TextualMemoryItem, memory_type: str, user_name: str = None
+    ):
         """
         Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
 
@@ -176,7 +178,10 @@ class MemoryManager:
         node_id = str(uuid.uuid4())
         # Step 2: Add new node to graph
         self.graph_store.add_node(
-            node_id, memory.memory, memory.metadata.model_dump(exclude_none=True), user_name=user_name
+            node_id,
+            memory.memory,
+            memory.metadata.model_dump(exclude_none=True),
+            user_name=user_name,
         )
         self.reorganizer.add_message(
             QueueMessage(

@@ -213,56 +213,29 @@ def create_memory(memory_req: MemoryCreateRequest):
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
 
-
-
-from memos.configs.embedder import UniversalAPIEmbedderConfig
-from memos.configs.graph_db import NebulaGraphDBConfig
-from memos.configs.llm import OpenAILLMConfig
-from memos.embedders.universal_api import UniversalAPIEmbedder
-from memos.graph_dbs.nebular import NebulaGraphDB
-from memos.llms.openai import OpenAILLM
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.reranker.cosine_local import CosineLocalReranker
-import os
-llm = OpenAILLM(
-    OpenAILLMConfig(model_schema='memos.configs.llm.OpenAILLMConfig', model_name_or_path='gpt-4o',
-                    temperature=0.8, max_tokens=1024, top_p=0.9, top_k=50, remove_think_prefix=True,
-                    api_key=os.getenv('OPENAI_API_KEY'),
-                    api_base=os.getenv('OPENAI_API_BASE'), extra_body=None))
-embedder = UniversalAPIEmbedder(
-    UniversalAPIEmbedderConfig(model_schema='memos.configs.embedder.UniversalAPIEmbedderConfig',
-                               model_name_or_path='bge-m3', embedding_dims=None, provider='openai',
-                               api_key='EMPTY', base_url=os.getenv('MOS_EMBEDDER_API_BASE')))
-
-reranker = CosineLocalReranker(level_weights={"topic": 1.0, "concept": 1.0, "fact": 1.0}, level_field='background')
-
-graph_store = NebulaGraphDB(
-    NebulaGraphDBConfig(model_schema='memos.configs.graph_db.NebulaGraphDBConfig',
-                        uri=json.loads(os.getenv('NEBULAR_HOSTS')),
-                        user=os.getenv('NEBULAR_USER'), password=os.getenv('NEBULAR_PASSWORD'), space=os.getenv('NEBULAR_SPACE'),
-                        auto_create=True, max_client=1000, embedding_dimension=1024))
-
-s = Searcher(llm, graph_store, embedder, reranker, internet_retriever=None, moscube=False)
-
-
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
 def search_memories(search_req: SearchRequest):
     """Search memories for a specific user."""
-    # try:
-    # user_id = f"memos{search_req.user_id.replace('-', '')}"
-    user_id = search_req.user_id
-    res = s.search(query=search_req.query, user_id=user_id, top_k=search_req.top_k
-                   , mode="fast", search_filter=None,
-                   info={'user_id': user_id, 'session_id': 'root_session', 'chat_history': []})
-    res = {"d": res}
-    # print(res)
-    return SearchResponse(message="Search completed successfully", data=res)
+    try:
+        time_start_search = time.time()
+        mos_product = get_mos_product_instance()
+        result = mos_product.search(
+            query=search_req.query,
+            user_id=search_req.user_id,
+            install_cube_ids=[search_req.mem_cube_id] if search_req.mem_cube_id else None,
+            top_k=search_req.top_k,
+            session_id=search_req.session_id,
+        )
+        logger.info(
+            f"time search api : add time user_id: {search_req.user_id} time is: {time.time() - time_start_search}"
+        )
+        return SearchResponse(message="Search completed successfully", data=result)
 
-    # except ValueError as err:
-    #     raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
-    # except Exception as err:
-    #     logger.error(f"Failed to search memories: {traceback.format_exc()}")
-    #     raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+    except Exception as err:
+        logger.error(f"Failed to search memories: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
 
 @router.post("/chat", summary="Chat with MemOS")

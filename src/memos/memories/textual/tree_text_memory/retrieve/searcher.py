@@ -74,7 +74,9 @@ class Searcher:
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        logger.info(f"[SEARCH] Start query='{query}', user_id='{user_id}', top_k={top_k}, mode={mode}, memory_type={memory_type}")
+        logger.info(
+            f"[SEARCH] Start query='{query}', user_id='{user_id}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
+        )
         if not info:
             logger.warning(
                 "Please input 'info' when use tree.search so that "
@@ -180,14 +182,28 @@ class Searcher:
                 tasks.append(
                     executor.submit(
                         self._retrieve_memory,
-                        query, info, parsed_goal,
-                        query_embedding, top_k,
-                        m_type, search_filter, ))
+                        query,
+                        info,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        m_type,
+                        search_filter,
+                    )
+                )
             if self.internet_retriever and mode == "fine":
                 tasks.append(
                     executor.submit(
                         self._retrieve_from_internet,
-                        query, parsed_goal, query_embedding, top_k, info, mode, memory_type, ))
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        info,
+                        mode,
+                        memory_type,
+                    )
+                )
             if self.moscube:
                 tasks.append(
                     executor.submit(
@@ -207,22 +223,22 @@ class Searcher:
         logger.info(f"[SEARCH] Total raw results: {len(results)}")
         return results
 
-
     @timed
     def _retrieve_memory(
-            self,
-            query,
-            info,
-            parsed_goal,
-            query_embedding,
-            top_k,
-            memory_type,
-            search_filter: dict | None = None):
+        self,
+        query,
+        info,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        memory_type,
+        search_filter: dict | None = None,
+    ):
         if memory_type in ["LongTermMemory", "UserMemory"]:
             top_k = 2 * top_k
         items = self.graph_retriever.retrieve(
             query=query,
-            user_id=info['user_id'],
+            user_id=info["user_id"],
             parsed_goal=parsed_goal,
             top_k=top_k,
             memory_scope=memory_type,
@@ -329,6 +345,10 @@ class Searcher:
     def _update_usage_history_worker(self, payload, usage_record: str):
         try:
             for item_id, usage_list in payload:
-                self.graph_store.update_node(item_id, {"usage": usage_list}, user_name=json.loads(usage_list[0])['info']['user_id'])
+                self.graph_store.update_node(
+                    item_id,
+                    {"usage": usage_list},
+                    user_name=json.loads(usage_list[0])["info"]["user_id"],
+                )
         except Exception:
             logger.exception("[USAGE] update usage failed")

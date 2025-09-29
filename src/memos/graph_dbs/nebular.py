@@ -415,7 +415,9 @@ class NebulaGraphDB(BaseGraphDB):
         self._create_basic_property_indexes()
 
     @timed
-    def remove_oldest_memory(self, memory_type: str, keep_latest: int, user_name: str = None) -> None:
+    def remove_oldest_memory(
+        self, memory_type: str, keep_latest: int, user_name: str = None
+    ) -> None:
         """
         Remove all WorkingMemory nodes except the latest `keep_latest` entries.
         """
@@ -432,7 +434,9 @@ class NebulaGraphDB(BaseGraphDB):
         self.execute_query(query)
 
     @timed
-    def add_node(self, id: str, memory: str, metadata: dict[str, Any], user_name: str = None) -> None:
+    def add_node(
+        self, id: str, memory: str, metadata: dict[str, Any], user_name: str = None
+    ) -> None:
         """
         Insert or update a Memory node in NebulaGraph.
         """
@@ -589,7 +593,12 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def edge_exists(
-        self, source_id: str, target_id: str, type: str = "ANY", direction: str = "OUTGOING", user_name: str = None
+        self,
+        source_id: str,
+        target_id: str,
+        type: str = "ANY",
+        direction: str = "OUTGOING",
+        user_name: str = None,
     ) -> bool:
         """
         Check if an edge exists between two nodes.
@@ -630,7 +639,9 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     # Graph Query & Reasoning
-    def get_node(self, id: str, include_embedding: bool = False, user_name: str = None) -> dict[str, Any] | None:
+    def get_node(
+        self, id: str, include_embedding: bool = False, user_name: str = None
+    ) -> dict[str, Any] | None:
         """
         Retrieve a Memory node by its unique ID.
 
@@ -706,7 +717,9 @@ class NebulaGraphDB(BaseGraphDB):
         return nodes
 
     @timed
-    def get_edges(self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str = None) -> list[dict[str, str]]:
+    def get_edges(
+        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str = None
+    ) -> list[dict[str, str]]:
         """
         Get edges connected to a node, with optional type and direction filter.
 
@@ -849,7 +862,11 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def get_subgraph(
-        self, center_id: str, depth: int = 2, center_status: str = "activated", user_name: str = None
+        self,
+        center_id: str,
+        depth: int = 2,
+        center_status: str = "activated",
+        user_name: str = None,
     ) -> dict[str, Any]:
         """
         Retrieve a local subgraph centered at a given node.
@@ -1153,7 +1170,9 @@ class NebulaGraphDB(BaseGraphDB):
             logger.error(f"[ERROR] Failed to clear database: {e}")
 
     @timed
-    def export_graph(self, include_embedding: bool = False, user_name: str = None) -> dict[str, Any]:
+    def export_graph(
+        self, include_embedding: bool = False, user_name: str = None
+    ) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
         Args:
@@ -1265,7 +1284,9 @@ class NebulaGraphDB(BaseGraphDB):
                 logger.error(f"Fail to load edge: {edge}, error: {e}")
 
     @timed
-    def get_all_memory_items(self, scope: str, include_embedding: bool = False, user_name: str = None) -> (list)[dict]:
+    def get_all_memory_items(
+        self, scope: str, include_embedding: bool = False, user_name: str = None
+    ) -> (list)[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
@@ -1343,7 +1364,6 @@ class NebulaGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
         return candidates
-
 
     @timed
     def detect_conflicts(self) -> list[tuple[str, str]]:

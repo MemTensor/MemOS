@@ -122,10 +122,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         Args:
             config: Configuration object for the reader
         """
-        # self.config = config
-        # self.llm = LLMFactory.from_config(config.llm)
-        # self.embedder = EmbedderFactory.from_config(config.embedder)
-        # self.chunker = ChunkerFactory.from_config(config.chunker)
         self.llm = llm
         self.embedder = embedder
         self.chunker = chunker
