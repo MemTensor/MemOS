@@ -236,14 +236,19 @@ class Searcher:
     ):
         if memory_type in ["LongTermMemory", "UserMemory"]:
             top_k = 2 * top_k
+        if memory_type == "WorkingMemory":
+            query_embedding = None
         items = self.graph_retriever.retrieve(
             query=query,
             user_id=info["user_id"],
             parsed_goal=parsed_goal,
             top_k=top_k,
             memory_scope=memory_type,
+            query_embedding=query_embedding,
             search_filter=search_filter,
         )
+        if memory_type == "WorkingMemory":
+            query_embedding = [None]
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embedding[0],
