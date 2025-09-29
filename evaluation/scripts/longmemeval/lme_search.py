@@ -128,7 +128,7 @@ def memos_search(client, user_id, query, top_k, frame="memos-local"):
     elif frame == "memos-api":
         results = client.search(query=query, user_id=user_id, top_k=top_k)
         search_memories = "\n".join(
-            [f"  - {item['memory_value']}" for item in results["memory_detail_list"]]
+            [f"  - {item['memory']}" for item in results["d"]]
         )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
@@ -297,7 +297,7 @@ if __name__ == "__main__":
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="0923", help="Version of the evaluation framework."
+        "--version", type=str, default="0929-1", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--top_k", type=int, default=30, help="Number of top results to retrieve from the search."

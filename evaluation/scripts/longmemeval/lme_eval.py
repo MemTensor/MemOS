@@ -347,7 +347,7 @@ if __name__ == "__main__":
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="0923", help="Version of the evaluation framework."
+        "--version", type=str, default="0929-1", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--options",

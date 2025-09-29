@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 memos_key = os.getenv("MEMOS_KEY")
-memos_url = os.getenv("MEMOS_URL")
+memos_url = 'http://127.0.0.1:8001'
 
 
 class MemOSAPI:
@@ -21,13 +21,13 @@ class MemOSAPI:
         retry = 0
         while retry < 10:
             try:
-                url = f"{self.base_url}/add/message"
+                url = f"{self.base_url}/add"
                 payload = json.dumps(
                     {"messages": messages, "user_id": user_id, "conversation_id": conv_id}
                 )
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
-                assert json.loads(response.text)["code"] == 0, response.text
+                assert json.loads(response.text)["message"] == 'Memory added successfully', response.text
                 return response.text
             except Exception as e:
                 print(f"call memos api add failed {e} retry time {retry}")
@@ -42,20 +42,20 @@ class MemOSAPI:
         retry = 0
         while retry < 10:
             try:
-                url = f"{self.base_url}/search/memory"
+                url = f"{self.base_url}/search"
                 payload = json.dumps(
                     {
                         "query": query,
                         "user_id": user_id,
                         "conversation_id": conv_id,
-                        "memory_limit_number": top_k,
+                        "top_k": top_k,
                     },
                     ensure_ascii=False,
                 )
 
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
-                assert json.loads(response.text)["code"] == 0, response.text
+                assert json.loads(response.text)["message"] == "Search completed successfully", response.text
                 return json.loads(response.text)["data"]
             except Exception as e:
                 print(f"call memos api search failed {e} retry time {retry}")
