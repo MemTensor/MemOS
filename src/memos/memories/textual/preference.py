@@ -157,9 +157,8 @@ class PreferenceTextMemory(BaseTextMemory):
         # For preference memory, we don't need to dump to files
         # as the data is stored in the vector database
         try:
-            all_collections = self.vector_db.list_collections()
             json_memories = {}
-            for collection_name in all_collections:
+            for collection_name in self.vector_db.config.collection_name:
                 items = self.vector_db.get_all(collection_name)
                 json_memories[collection_name] = [memory.to_dict() for memory in items]
 
