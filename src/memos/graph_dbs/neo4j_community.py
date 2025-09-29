@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
@@ -49,6 +50,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
 
+        # serialization
+        if metadata["sources"]:
+            for idx in range(len(metadata["sources"])):
+                metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
         # Extract required fields
         embedding = metadata.pop("embedding", None)
         if embedding is None:
@@ -298,7 +303,16 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             if time_field in node and hasattr(node[time_field], "isoformat"):
                 node[time_field] = node[time_field].isoformat()
         node.pop("user_name", None)
-
+        # serialization
+        if node["sources"]:
+            for idx in range(len(node["sources"])):
+                if not (
+                    isinstance(node["sources"][idx], str)
+                    and node["sources"][idx][0] == "{"
+                    and node["sources"][idx][0] == "}"
+                ):
+                    break
+                node["sources"][idx] = json.loads(node["sources"][idx])
         new_node = {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
         try:
             vec_item = self.vec_db.get_by_id(new_node["id"])
