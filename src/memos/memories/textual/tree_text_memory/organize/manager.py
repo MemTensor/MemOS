@@ -66,28 +66,15 @@ class MemoryManager:
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
 
-        try:
-            self.graph_store.remove_oldest_memory(
-                memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
-            )
-        except Exception:
-            logger.warning(f"Remove WorkingMemory error: {traceback.format_exc()}")
+        for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+            try:
+                self.graph_store.remove_oldest_memory(
+                    memory_type="WorkingMemory", keep_latest=self.memory_size[mem_type], user_name=user_name
+                )
+            except Exception:
+                logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
 
-        try:
-            self.graph_store.remove_oldest_memory(
-                memory_type="LongTermMemory", keep_latest=self.memory_size["LongTermMemory"]
-            )
-        except Exception:
-            logger.warning(f"Remove LongTermMemory error: {traceback.format_exc()}")
-
-        try:
-            self.graph_store.remove_oldest_memory(
-                memory_type="UserMemory", keep_latest=self.memory_size["UserMemory"]
-            )
-        except Exception:
-            logger.warning(f"Remove UserMemory error: {traceback.format_exc()}")
-
-        self._refresh_memory_size()
+        self._refresh_memory_size(user_name=user_name)
         return added_ids
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
@@ -118,11 +105,11 @@ class MemoryManager:
         self._refresh_memory_size()
         return self.current_memory_size
 
-    def _refresh_memory_size(self) -> None:
+    def _refresh_memory_size(self, user_name: str = None) -> None:
         """
         Query the latest counts from the graph store and update internal state.
         """
-        results = self.graph_store.get_grouped_counts(group_fields=["memory_type"])
+        results = self.graph_store.get_grouped_counts(group_fields=["memory_type"], user_name=user_name)
         self.current_memory_size = {record["memory_type"]: record["count"] for record in results}
         logger.info(f"[MemoryManager] Refreshed memory sizes: {self.current_memory_size}")
 
