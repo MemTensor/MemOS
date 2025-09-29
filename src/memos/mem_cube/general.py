@@ -45,7 +45,9 @@ class GeneralMemCube(BaseMemCube):
         )
 
     def load(
-        self, dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None
+        self,
+        dir: str,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Load memories.
         Args:
@@ -85,7 +87,9 @@ class GeneralMemCube(BaseMemCube):
         logger.info(f"MemCube loaded successfully from {dir} (types: {memory_types})")
 
     def dump(
-        self, dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None
+        self,
+        dir: str,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Dump memories.
         Args:

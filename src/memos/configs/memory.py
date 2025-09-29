@@ -11,11 +11,12 @@ from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
 from memos.memories.textual.prefer_text_memory.config import (
-    AdderConfigFactory, 
+    AdderConfigFactory,
+    AssemblerConfigFactory,
     ExtractorConfigFactory,
-    RetrieverConfigFactory, 
-    UpdaterConfigFactory, 
-    AssemblerConfigFactory)
+    RetrieverConfigFactory,
+    UpdaterConfigFactory,
+)
 
 
 # ─── 1. Global Base Memory Config ─────────────────────────────────────────────
@@ -229,6 +230,7 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
         default_factory=AssemblerConfigFactory,
         description="Assembler configuration for the memory assembling",
     )
+
 
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 

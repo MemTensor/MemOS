@@ -1,31 +1,30 @@
 import json
 import os
-import shutil
-import tempfile
 
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from memos.configs.memory import PreferenceTextMemoryConfig
-from memos.embedders.factory import (EmbedderFactory, 
-                                    OllamaEmbedder, 
-                                    ArkEmbedder, 
-                                    SenTranEmbedder, 
-                                    UniversalAPIEmbedder)
+from memos.embedders.factory import (
+    ArkEmbedder,
+    EmbedderFactory,
+    OllamaEmbedder,
+    SenTranEmbedder,
+    UniversalAPIEmbedder,
+)
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
-from memos.memories.textual.item import TextualMemoryItem, PreferenceTextualMemoryMetadata
-from memos.types import ChatHistory, MessageList
-from memos.llms.base import BaseLLM
-from memos.vec_dbs.factory import QdrantVecDB, VecDBFactory, MilvusVecDB
+from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
+from memos.memories.textual.prefer_text_memory.factory import (
+    AdderFactory,
+    AssemblerFactory,
+    ExtractorFactory,
+    RetrieverFactory,
+    UpdaterFactory,
+)
+from memos.types import MessageList
+from memos.vec_dbs.factory import MilvusVecDB, QdrantVecDB, VecDBFactory
 from memos.vec_dbs.item import VecDBItem
-from memos.memories.textual.prefer_text_memory.factory import (AdderFactory, 
-                                                              ExtractorFactory, 
-                                                              RetrieverFactory, 
-                                                              UpdaterFactory, 
-                                                              AssemblerFactory)
 
 
 logger = get_logger(__name__)
@@ -41,43 +40,46 @@ class PreferenceTextMemory(BaseTextMemory):
             config.extractor_llm
         )
         self.vector_db: MilvusVecDB | QdrantVecDB = VecDBFactory.from_config(config.vector_db)
-        self.embedder: OllamaEmbedder | ArkEmbedder | SenTranEmbedder | UniversalAPIEmbedder = \
+        self.embedder: OllamaEmbedder | ArkEmbedder | SenTranEmbedder | UniversalAPIEmbedder = (
             EmbedderFactory.from_config(config.embedder)
+        )
 
         self.extractor = ExtractorFactory.from_config(
             config.extractor,
             llm_provider=self.extractor_llm,
             embedder=self.embedder,
-            vector_db=self.vector_db
+            vector_db=self.vector_db,
         )
 
         self.adder = AdderFactory.from_config(
-            config.adder, 
+            config.adder,
             llm_provider=self.extractor_llm,
             embedder=self.embedder,
-            vector_db=self.vector_db
+            vector_db=self.vector_db,
         )
         self.retriever = RetrieverFactory.from_config(
             config.retriever,
             llm_provider=self.extractor_llm,
             embedder=self.embedder,
-            vector_db=self.vector_db
+            vector_db=self.vector_db,
         )
         self.updater = UpdaterFactory.from_config(
             config.updater,
             llm_provider=self.extractor_llm,
             embedder=self.embedder,
             vector_db=self.vector_db,
-            extractor=self.extractor
+            extractor=self.extractor,
         )
         self.assembler = AssemblerFactory.from_config(
             config.assembler,
             llm_provider=self.extractor_llm,
             embedder=self.embedder,
-            vector_db=self.vector_db
+            vector_db=self.vector_db,
         )
 
-    def get_memory(self, messages: MessageList, type: str, info: dict[str, Any]) -> list[TextualMemoryItem]:
+    def get_memory(
+        self, messages: MessageList, type: str, info: dict[str, Any]
+    ) -> list[TextualMemoryItem]:
         """Get memory based on the messages.
         Args:
             messages (MessageList): The messages to get memory from.
@@ -94,7 +96,7 @@ class PreferenceTextMemory(BaseTextMemory):
             str: Summary of the memory build process.
         """
         return self.updater.slow_update(user_id)
-    
+
     def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
@@ -106,7 +108,6 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.retriever.retrieve(query, top_k, info)
 
-            
     def get_prompt(self, query: str, memories: list[TextualMemoryItem]) -> str:
         """Construct the prompt for the query with memories.
         Args:
@@ -167,7 +168,9 @@ class PreferenceTextMemory(BaseTextMemory):
             with open(memory_file, "w", encoding="utf-8") as f:
                 json.dump(json_memories, f, indent=4, ensure_ascii=False)
 
-            logger.info(f"Dumped {len(json_memories)} collections, {sum(len(items) for items in json_memories.values())} memories to {memory_file}")
+            logger.info(
+                f"Dumped {len(json_memories)} collections, {sum(len(items) for items in json_memories.values())} memories to {memory_file}"
+            )
 
         except Exception as e:
             logger.error(f"An error occurred while dumping memories: {e}")
@@ -189,11 +192,11 @@ class PreferenceTextMemory(BaseTextMemory):
             memories: List of TextualMemoryItem objects or dictionaries to add.
         """
         return self.adder.add(memories)
-    
+
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         """Update a memory by memory_id."""
         raise NotImplementedError
-    
+
     def get(self, memory_id: str) -> TextualMemoryItem:
         """Get a memory by its ID.
         Args:
@@ -203,7 +206,9 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         raise NotImplementedError
 
-    def get_with_collection_name(self, collection_name: str, memory_id: str) -> TextualMemoryItem:
+    def get_with_collection_name(
+        self, collection_name: str, memory_id: str
+    ) -> TextualMemoryItem | None:
         """Get a memory by its ID and collection name.
         Args:
             memory_id (str): The ID of the memory to retrieve.
@@ -214,14 +219,18 @@ class PreferenceTextMemory(BaseTextMemory):
         try:
             res = self.vector_db.get_by_id(collection_name, memory_id)
             if res is None:
-                raise ValueError(f"Memory with ID {memory_id} not found in collection {collection_name}")
-            return TextualMemoryItem(id=res.id, 
-                                    memory=res.payload.get("dialog_str", ""), 
-                                    metadata=PreferenceTextualMemoryMetadata(**res.payload))
+                return None
+            return TextualMemoryItem(
+                id=res.id,
+                memory=res.payload.get("dialog_str", ""),
+                metadata=PreferenceTextualMemoryMetadata(**res.payload),
+            )
         except Exception as e:
             # Convert any other exception to ValueError for consistent error handling
-            raise ValueError(f"Memory with ID {memory_id} not found in collection {collection_name}: {e}")
-    
+            raise ValueError(
+                f"Memory with ID {memory_id} not found in collection {collection_name}: {e}"
+            ) from e
+
     def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
         Args:
@@ -231,7 +240,9 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         raise NotImplementedError
 
-    def get_by_ids_with_collection_name(self, collection_name: str, memory_ids: list[str]) -> list[TextualMemoryItem]:
+    def get_by_ids_with_collection_name(
+        self, collection_name: str, memory_ids: list[str]
+    ) -> list[TextualMemoryItem]:
         """Get memories by their IDs and collection name.
         Args:
             collection_name (str): The name of the collection to retrieve the memory from.
@@ -242,14 +253,21 @@ class PreferenceTextMemory(BaseTextMemory):
         try:
             res = self.vector_db.get_by_ids(collection_name, memory_ids)
             if not res:
-                raise ValueError(f"Memory with IDs {memory_ids} not found in collection {collection_name}")
-            return [TextualMemoryItem(id=memo.id, 
-                                    memory=memo.payload.get("dialog_str", ""), 
-                                    metadata=PreferenceTextualMemoryMetadata(**memo.payload)) for memo in res]
+                return []
+            return [
+                TextualMemoryItem(
+                    id=memo.id,
+                    memory=memo.payload.get("dialog_str", ""),
+                    metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+                )
+                for memo in res
+            ]
         except Exception as e:
             # Convert any other exception to ValueError for consistent error handling
-            raise ValueError(f"Memory with IDs {memory_ids} not found in collection {collection_name}: {e}")
-    
+            raise ValueError(
+                f"Memory with IDs {memory_ids} not found in collection {collection_name}: {e}"
+            ) from e
+
     def get_all(self) -> list[TextualMemoryItem]:
         """Get all memories.
         Returns:
@@ -259,11 +277,16 @@ class PreferenceTextMemory(BaseTextMemory):
         all_memories = {}
         for collection_name in all_collections:
             items = self.vector_db.get_all(collection_name)
-            all_memories[collection_name] = [TextualMemoryItem(id=memo.id, 
-                                memory=memo.payload.get("dialog_str", ""), 
-                                metadata=PreferenceTextualMemoryMetadata(**memo.payload)) for memo in items]
+            all_memories[collection_name] = [
+                TextualMemoryItem(
+                    id=memo.id,
+                    memory=memo.payload.get("dialog_str", ""),
+                    metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+                )
+                for memo in items
+            ]
         return all_memories
-    
+
     def delete(self, memory_ids: list[str]) -> None:
         """Delete memories.
         Args:
@@ -278,13 +301,13 @@ class PreferenceTextMemory(BaseTextMemory):
             memory_ids (list[str]): List of memory IDs to delete.
         """
         self.vector_db.delete(collection_name, memory_ids)
-    
+
     def delete_all(self) -> None:
         """Delete all memories."""
         for collection_name in self.vector_db.config.collection_name:
             self.vector_db.delete_collection(collection_name)
         self.vector_db.create_collection()
-    
+
     def drop(
         self,
     ) -> None:

@@ -1341,7 +1341,9 @@ class MOSProduct(MOSCore):
                 memories["metadata"]["id"] = memories["id"]
                 memories["metadata"]["memory"] = memories["memory"]
                 memories_list.append(memories)
-            reformat_pref_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
+            reformat_pref_memory_list.append(
+                {"cube_id": memory["cube_id"], "memories": memories_list}
+            )
         search_result["pref_mem"] = reformat_pref_memory_list
         time_end = time.time()
         logger.info(

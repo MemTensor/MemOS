@@ -1,21 +1,18 @@
-
-
-
 NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT = """
-You are a preference extraction assistant.  
-Please extract the user's explicitly mentioned preferences from the following conversation.  
+You are a preference extraction assistant.
+Please extract the user's explicitly mentioned preferences from the following conversation.
 
-Notes:  
-- A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".  
-- Any clearly expressed inclination, desire, rejection, or priority counts as an explicit preference.  
+Notes:
+- A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".
+- Any clearly expressed inclination, desire, rejection, or priority counts as an explicit preference.
 
-Requirements:  
-1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.  
-2. Output should be a concise natural language summary, not a list or categories.  
-3. If there are no explicit preferences in the conversation, output an empty string "".  
-4. Output only the preference statements themselves, without any additional explanation.  
+Requirements:
+1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.
+2. Output should be a concise natural language summary, not a list or categories.
+3. If there are no explicit preferences in the conversation, output an empty string "".
+4. Output only the preference statements themselves, without any additional explanation.
 
-Conversation: 
+Conversation:
 {qa_pair}
 
 Output format:
@@ -29,7 +26,7 @@ Don't output anything except the JSON.
 
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
-You are a preference inference assistant. Please extract **implicit preferences** from the following conversation 
+You are a preference inference assistant. Please extract **implicit preferences** from the following conversation
 (preferences that the user did not explicitly state but can be reasonably inferred from context, behavior, frequency, comparisons, exclusions, or scenario choices).
 
 Notes:
@@ -37,16 +34,16 @@ Notes:
 - Do not treat explicitly stated preferences as implicit preferences; this prompt is only for inferring preferences that are not directly mentioned.
 
 Requirements:
-1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.  
+1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
 2. Output a concise natural language statement; do not use lists, categories, or include the reasoning process.
 3. Inferred implicit preferences must not conflict with explicit preferences.
-4. For implicit_preference: only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information. Put all reasoning and explanation in the reasoning field.  
+4. For implicit_preference: only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information. Put all reasoning and explanation in the reasoning field.
 5. If no implicit preference can be reasonably inferred, leave the implicit_preference field empty (do not output anything else).
 
 Conversation:
 {qa_pair}
 
-Output format:  
+Output format:
 ```json
 {
   "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string",
@@ -60,18 +57,18 @@ Don't output anything except the JSON.
 NAIVE_EXPLICIT_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
 You are a preference extraction and inference assistant. Please extract the user's preferences from the following conversation, including:
 
-1. **Explicit preferences**: Preferences that the user directly expresses, such as likes, dislikes, wants, does not want, or prioritized choices.  
+1. **Explicit preferences**: Preferences that the user directly expresses, such as likes, dislikes, wants, does not want, or prioritized choices.
 2. **Implicit preferences**: Preferences that are not explicitly stated but can be reasonably inferred from context, behavior, frequency, comparisons, exclusions, or scenario choices.
 
 Notes:
-- For explicit preferences, only extract what the user directly states, do not infer.  
-- For implicit preferences, only infer when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.  
+- For explicit preferences, only extract what the user directly states, do not infer.
+- For implicit preferences, only infer when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
 - Do not duplicate: do not treat explicit preferences as implicit preferences.
 
 Requirements:
-1. Output in JSON format with two fields: "explicit_preferences" and "implicit_preferences".  
-2. Each field should be an array, with each element being a concise natural language preference statement.  
-3. Output only the preference statements themselves; do not include any extra explanation, reasoning, or confidence information.  
+1. Output in JSON format with two fields: "explicit_preferences" and "implicit_preferences".
+2. Each field should be an array, with each element being a concise natural language preference statement.
+3. Output only the preference statements themselves; do not include any extra explanation, reasoning, or confidence information.
 4. If a type of preference does not exist, its array should be empty.
 
 Conversation:
@@ -86,7 +83,6 @@ Output Format:
 ```
 Don't output anything except the JSON.
 """
-
 
 
 NAIVE_TOPIC_PREFERENCE_EXTRACT_PROMPT = """

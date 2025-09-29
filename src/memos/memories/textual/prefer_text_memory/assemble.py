@@ -1,17 +1,19 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
-import json
-from memos.templates.prefer_complete_prompt import NAIVE_PREFERENCE_INTEGRATION_PROMPT
+
 from memos.memories.textual.item import TextualMemoryItem
+
 
 class BaseAssembler(ABC):
     """Abstract base class for assemblers."""
+
     @abstractmethod
     def __init__(self, llm_provider=None, embedder=None, vector_db=None):
         """Initialize the assembler."""
 
     @abstractmethod
-    def get_instruction(self, query: str, memories: list[TextualMemoryItem], assemble_strategy: str="semi") -> str:
+    def get_instruction(
+        self, query: str, memories: list[TextualMemoryItem], assemble_strategy: str = "semi"
+    ) -> str:
         """Assemble query and memories into a single memory.
         Args:
             query: The query to assemble.
@@ -24,6 +26,7 @@ class BaseAssembler(ABC):
 
 class NaiveAssembler(BaseAssembler):
     """Naive assembler."""
+
     def __init__(self, llm_provider=None, embedder=None, vector_db=None):
         """Initialize the naive assembler."""
         super().__init__(llm_provider, embedder, vector_db)
@@ -31,7 +34,9 @@ class NaiveAssembler(BaseAssembler):
         self.embedder = embedder
         self.vector_db = vector_db
 
-    def get_instruction(self, query: str, memories: list[TextualMemoryItem], assemble_strategy: str="semi") -> str:
+    def get_instruction(
+        self, query: str, memories: list[TextualMemoryItem], assemble_strategy: str = "semi"
+    ) -> str:
         """Assemble query and memories into a single memory."""
 
         # Initialize all preference lists
@@ -40,28 +45,32 @@ class NaiveAssembler(BaseAssembler):
         implicit_prefs = []
         topic_prefs = []
         user_prefs = []
-        
+
         # Single loop to categorize all memories by preference type
         for memory in memories:
             if memory.metadata.preference_type == "explicit_preference":
-                explicit_prefs.append({
-                    "dialog_str": memory.metadata.dialog_str, 
-                    "explicit_preference": memory.metadata.explicit_preference
-                })
+                explicit_prefs.append(
+                    {
+                        "dialog_str": memory.metadata.dialog_str,
+                        "explicit_preference": memory.metadata.explicit_preference,
+                    }
+                )
             elif memory.metadata.preference_type == "implicit_preference":
-                implicit_prefs.append({
-                    "dialog_str": memory.metadata.center_dialog, 
-                    "implicit_preference": memory.metadata.implicit_preference
-                })
+                implicit_prefs.append(
+                    {
+                        "dialog_str": memory.metadata.center_dialog,
+                        "implicit_preference": memory.metadata.implicit_preference,
+                    }
+                )
             elif memory.metadata.preference_type == "topic_preference":
-                topic_prefs.append({
-                    "center_dialog_str": memory.metadata.center_dialog, 
-                    "topic_preferences": memory.metadata.topic_preferences
-                })
+                topic_prefs.append(
+                    {
+                        "center_dialog_str": memory.metadata.center_dialog,
+                        "topic_preferences": memory.metadata.topic_preferences,
+                    }
+                )
             elif memory.metadata.preference_type == "user_preference":
-                user_prefs.append({
-                    "user_preferences": memory.metadata.user_preferences
-                })
+                user_prefs.append({"user_preferences": memory.metadata.user_preferences})
             else:
                 textual_mems.append(memory.memory)
 
@@ -75,24 +84,24 @@ class NaiveAssembler(BaseAssembler):
             memories_parts.append("## Explicit Preferences:")
             for i, pref in enumerate(explicit_prefs, 1):
                 memories_parts.append(f"{i}. {pref['dialog_str']}")
-        
+
         if implicit_prefs:
             memories_parts.append("\n## Implicit Preferences:")
             for i, pref in enumerate(implicit_prefs, 1):
                 memories_parts.append(f"{i}. {pref['dialog_str']}")
-        
+
         if topic_prefs:
             memories_parts.append("\n## Topic Preferences:")
             for i, pref in enumerate(topic_prefs, 1):
                 memories_parts.append(f"{i}. {pref['center_dialog_str']}")
-        
+
         if user_prefs:
             memories_parts.append("\n## User Preferences:")
             for i, pref in enumerate(user_prefs, 1):
                 memories_parts.append(f"{i}. {pref['user_preferences']}")
-        
+
         memories_str = "\n".join(memories_parts)
-        
+
         system_prompt = (
             "You are a knowledgeable and helpful AI assistant. "
             "You have access to conversation memories that help you provide more personalized responses. "
@@ -100,16 +109,17 @@ class NaiveAssembler(BaseAssembler):
             "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
             f"\n\n## Memories:\n{memories_str}"
         )
-        
+
         if assemble_strategy == "raw":
             return system_prompt.replace("{memories}", memories_str)
         elif assemble_strategy == "semi":
             return (
-                system_prompt + 
-                ("Note: Textual memories are summaries of facts, while preference memories are summaries of user preferences. " + \
-                "Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts." + \
-                "When encountering preference conflicts, the priority is: explicit preferences > implicit preferences > textual memories.")
+                system_prompt
+                + (
+                    "Note: Textual memories are summaries of facts, while preference memories are summaries of user preferences. "
+                    + "Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts."
+                    + "When encountering preference conflicts, the priority is: explicit preferences > implicit preferences > textual memories."
+                )
             ).replace("{memories}", memories_str)
         else:
             raise ValueError(f"Invalid assemble strategy: {assemble_strategy}")
-

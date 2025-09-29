@@ -1,11 +1,8 @@
-from memos.configs.base import BaseConfig
 from typing import Any, ClassVar
-from pydantic import Field
-from pydantic import field_validator, model_validator
-from memos.configs.vec_db import VectorDBConfigFactory
-from memos.configs.embedder import EmbedderConfigFactory
-from memos.configs.llm import LLMConfigFactory
 
+from pydantic import Field, field_validator, model_validator
+
+from memos.configs.base import BaseConfig
 
 
 class BaseAdderConfig(BaseConfig):
@@ -14,8 +11,8 @@ class BaseAdderConfig(BaseConfig):
 
 class NaiveAdderConfig(BaseAdderConfig):
     """Configuration for Naive Adder."""
-    # No additional config needed since components are passed from parent
 
+    # No additional config needed since components are passed from parent
 
 
 class AdderConfigFactory(BaseConfig):
@@ -50,6 +47,7 @@ class BaseExtractorConfig(BaseConfig):
 class NaiveExtractorConfig(BaseExtractorConfig):
     """Configuration for Naive Extractor."""
 
+
 class ExtractorConfigFactory(BaseConfig):
     """Factory class for creating Extractor configurations."""
 
@@ -73,6 +71,7 @@ class ExtractorConfigFactory(BaseConfig):
         config_class = self.backend_to_class[self.backend]
         self.config = config_class(**self.config)
         return self
+
 
 class BaseRetrieverConfig(BaseConfig):
     """Base configuration class for Retrievers."""
@@ -124,7 +123,7 @@ class UpdaterConfigFactory(BaseConfig):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveUpdaterConfig,
     }
-    
+
     @field_validator("backend")
     @classmethod
     def validate_backend(cls, backend: str) -> str:
@@ -157,7 +156,7 @@ class AssemblerConfigFactory(BaseConfig):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveAssemblerConfig,
     }
-    
+
     @field_validator("backend")
     @classmethod
     def validate_backend(cls, backend: str) -> str:
@@ -171,4 +170,3 @@ class AssemblerConfigFactory(BaseConfig):
         config_class = self.backend_to_class[self.backend]
         self.config = config_class(**self.config)
         return self
-

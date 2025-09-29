@@ -1,5 +1,7 @@
 from typing import Any
-from pymilvus import MilvusClient, DataType
+
+from pymilvus import DataType, MilvusClient
+
 from memos.configs.vec_db import MilvusVecDBConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
@@ -24,7 +26,9 @@ class MilvusVecDB(BaseVecDB):
         self.config = config
 
         # Create Milvus client
-        self.client = MilvusClient(uri=self.config.uri, user=self.config.user_name, password=self.config.password)
+        self.client = MilvusClient(
+            uri=self.config.uri, user=self.config.user_name, password=self.config.password
+        )
         self.schema = self.create_schema()
         self.index_params = self.create_index()
         self.create_collection()
@@ -32,8 +36,12 @@ class MilvusVecDB(BaseVecDB):
     def create_schema(self):
         """Create schema for the milvus collection."""
         schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
-        schema.add_field(field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True)
-        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension)
+        schema.add_field(
+            field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
+        )
+        schema.add_field(
+            field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
+        )
         schema.add_field(field_name="payload", datatype=DataType.JSON)
 
         return schema
@@ -41,18 +49,17 @@ class MilvusVecDB(BaseVecDB):
     def create_index(self):
         """Create index for the milvus collection."""
         index_params = self.client.prepare_index_params()
-        index_params.add_index(field_name="vector", index_type="FLAT", metric_type=self._get_metric_type())
+        index_params.add_index(
+            field_name="vector", index_type="FLAT", metric_type=self._get_metric_type()
+        )
 
         return index_params
-
 
     def create_collection(self) -> None:
         """Create a new collection with specified parameters."""
         for collection_name in self.config.collection_name:
             if self.collection_exists(collection_name):
-                logger.warning(
-                    f"Collection '{collection_name}' already exists. Skipping creation."
-                )
+                logger.warning(f"Collection '{collection_name}' already exists. Skipping creation.")
                 continue
 
             self.client.create_collection(
@@ -70,11 +77,9 @@ class MilvusVecDB(BaseVecDB):
     def create_collection_by_name(self, collection_name: str) -> None:
         """Create a new collection with specified parameters."""
         if self.collection_exists(collection_name):
-            logger.warning(
-                f"Collection '{collection_name}' already exists. Skipping creation."
-            )
+            logger.warning(f"Collection '{collection_name}' already exists. Skipping creation.")
             return
-        
+
         self.client.create_collection(
             collection_name=collection_name,
             dimension=self.config.vector_dimension,
@@ -96,7 +101,11 @@ class MilvusVecDB(BaseVecDB):
         return self.client.has_collection(collection_name=name)
 
     def search(
-        self, query_vector: list[float], collection_name: str, top_k: int, filter: dict[str, Any] | None = None
+        self,
+        query_vector: list[float],
+        collection_name: str,
+        top_k: int,
+        filter: dict[str, Any] | None = None,
     ) -> list[VecDBItem]:
         """
         Search for similar items in the database.
@@ -112,7 +121,7 @@ class MilvusVecDB(BaseVecDB):
         """
         # Convert filter to Milvus expression
         expr = self._dict_to_expr(filter) if filter else ""
-        
+
         results = self.client.search(
             collection_name=collection_name,
             data=[query_vector],
@@ -120,18 +129,20 @@ class MilvusVecDB(BaseVecDB):
             filter=expr,
             output_fields=["*"],  # Return all fields
         )
-        
+
         items = []
         for hit in results[0]:
             entity = hit.get("entity", {})
-            
-            items.append(VecDBItem(
-                id=str(hit["id"]),
-                vector=entity.get("vector"),
-                payload=entity.get("payload", {}),
-                score=1-float(hit["distance"]),
-            ))
-        
+
+            items.append(
+                VecDBItem(
+                    id=str(hit["id"]),
+                    vector=entity.get("vector"),
+                    payload=entity.get("payload", {}),
+                    score=1 - float(hit["distance"]),
+                )
+            )
+
         logger.info(f"Milvus search completed with {len(items)} results.")
         return items
 
@@ -139,7 +150,7 @@ class MilvusVecDB(BaseVecDB):
         """Convert a dictionary filter to a Milvus expression string."""
         if not filter_dict:
             return ""
-        
+
         conditions = []
         for field, value in filter_dict.items():
             # Skip None values as they cause Milvus query syntax errors
@@ -178,7 +189,7 @@ class MilvusVecDB(BaseVecDB):
 
         entity = results[0]
         payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
-        
+
         return VecDBItem(
             id=entity["id"],
             vector=entity.get("vector"),
@@ -198,15 +209,19 @@ class MilvusVecDB(BaseVecDB):
         items = []
         for entity in results:
             payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
-            items.append(VecDBItem(
-                id=entity["id"],
-                vector=entity.get("vector"),
-                payload=payload,
-            ))
-        
+            items.append(
+                VecDBItem(
+                    id=entity["id"],
+                    vector=entity.get("vector"),
+                    payload=payload,
+                )
+            )
+
         return items
 
-    def get_by_filter(self, collection_name: str, filter: dict[str, Any], scroll_limit: int = 100) -> list[VecDBItem]:
+    def get_by_filter(
+        self, collection_name: str, filter: dict[str, Any], scroll_limit: int = 100
+    ) -> list[VecDBItem]:
         """
         Retrieve all items that match the given filter criteria using query_iterator.
 
@@ -219,7 +234,7 @@ class MilvusVecDB(BaseVecDB):
         """
         expr = self._dict_to_expr(filter) if filter else ""
         all_items = []
-        
+
         # Use query_iterator for efficient pagination
         iterator = self.client.query_iterator(
             collection_name=collection_name,
@@ -227,27 +242,30 @@ class MilvusVecDB(BaseVecDB):
             batch_size=scroll_limit,
             output_fields=["*"],  # Include all fields including payload
         )
-        
+
         # Iterate through all batches
         try:
             while True:
                 batch_results = iterator.next()
-                
+
                 if not batch_results:
                     break
-                    
+
                 # Convert batch results to VecDBItem objects
                 for entity in batch_results:
                     # Extract the actual payload from Milvus entity
                     payload = entity.get("payload", {})
-                    all_items.append(VecDBItem(
-                        id=entity["id"],
-                        vector=entity.get("vector"),
-                        payload=payload,
-                    ))
+                    all_items.append(
+                        VecDBItem(
+                            id=entity["id"],
+                            vector=entity.get("vector"),
+                            payload=payload,
+                        )
+                    )
         except Exception as e:
-            logger.warning(f"Error during Milvus query iteration: {e}. Returning {len(all_items)} items found so far.")
-            # 返回已经找到的项目，而不是空列表
+            logger.warning(
+                f"Error during Milvus query iteration: {e}. Returning {len(all_items)} items found so far."
+            )
         finally:
             # Close the iterator
             iterator.close()
@@ -291,14 +309,14 @@ class MilvusVecDB(BaseVecDB):
             if isinstance(item, dict):
                 item = item.copy()
                 item = VecDBItem.from_dict(item)
-            
+
             # Prepare entity data
             entity = {
                 "id": item.id,
                 "vector": item.vector,
-                "payload": item.payload if item.payload else {}
+                "payload": item.payload if item.payload else {},
             }
-            
+
             entities.append(entity)
 
         # Use upsert to be safe (insert or update)

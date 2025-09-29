@@ -884,7 +884,7 @@
             "type": "string",
             "title": "Session Id",
             "description": "Session ID for the MOS. This is used to distinguish between different dialogue",
-            "default": "0ce84b9c-0615-4b9d-83dd-fba50537d5d3"
+            "default": "41bb5e18-252d-4948-918c-07d82aa47086"
           },
           "chat_model": {
             "$ref": "#/components/schemas/LLMConfigFactory",
@@ -937,6 +937,12 @@
             "type": "boolean",
             "title": "Enable Parametric Memory",
             "description": "Enable parametric memory for the MemChat",
+            "default": false
+          },
+          "enable_preference_memory": {
+            "type": "boolean",
+            "title": "Enable Preference Memory",
+            "description": "Enable preference memory for the MemChat",
             "default": false
           },
           "enable_mem_scheduler": {

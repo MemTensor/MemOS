@@ -1,26 +1,30 @@
 from typing import Any, ClassVar
 
 from memos.memories.textual.prefer_text_memory.adder import BaseAdder, NaiveAdder
+from memos.memories.textual.prefer_text_memory.assemble import BaseAssembler, NaiveAssembler
+from memos.memories.textual.prefer_text_memory.config import (
+    AdderConfigFactory,
+    AssemblerConfigFactory,
+    ExtractorConfigFactory,
+    RetrieverConfigFactory,
+    UpdaterConfigFactory,
+)
 from memos.memories.textual.prefer_text_memory.extractor import BaseExtractor, NaiveExtractor
 from memos.memories.textual.prefer_text_memory.retrievers import BaseRetriever, NaiveRetriever
 from memos.memories.textual.prefer_text_memory.updater import BaseUpdater, NaiveUpdater
-from memos.memories.textual.prefer_text_memory.assemble import BaseAssembler, NaiveAssembler
-from memos.memories.textual.prefer_text_memory.config import (AdderConfigFactory, 
-                                                              ExtractorConfigFactory, 
-                                                              RetrieverConfigFactory, 
-                                                              UpdaterConfigFactory, 
-                                                              AssemblerConfigFactory)
 
 
 class AdderFactory(BaseAdder):
     """Factory class for creating Adder instances."""
-    
+
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveAdder,
     }
-    
+
     @classmethod
-    def from_config(cls, config_factory: AdderConfigFactory, llm_provider=None, embedder=None, vector_db=None) -> BaseAdder:
+    def from_config(
+        cls, config_factory: AdderConfigFactory, llm_provider=None, embedder=None, vector_db=None
+    ) -> BaseAdder:
         """Create a Adder instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
@@ -28,15 +32,22 @@ class AdderFactory(BaseAdder):
         adder_class = cls.backend_to_class[backend]
         return adder_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db)
 
+
 class ExtractorFactory(BaseExtractor):
     """Factory class for creating Extractor instances."""
-    
+
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveExtractor,
     }
-    
+
     @classmethod
-    def from_config(cls, config_factory: ExtractorConfigFactory, llm_provider=None, embedder=None, vector_db=None) -> BaseExtractor:
+    def from_config(
+        cls,
+        config_factory: ExtractorConfigFactory,
+        llm_provider=None,
+        embedder=None,
+        vector_db=None,
+    ) -> BaseExtractor:
         """Create a Extractor instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
@@ -44,15 +55,22 @@ class ExtractorFactory(BaseExtractor):
         extractor_class = cls.backend_to_class[backend]
         return extractor_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db)
 
+
 class RetrieverFactory(BaseRetriever):
     """Factory class for creating Retriever instances."""
-    
+
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveRetriever,
     }
-    
+
     @classmethod
-    def from_config(cls, config_factory: RetrieverConfigFactory, llm_provider=None, embedder=None, vector_db=None) -> BaseRetriever:
+    def from_config(
+        cls,
+        config_factory: RetrieverConfigFactory,
+        llm_provider=None,
+        embedder=None,
+        vector_db=None,
+    ) -> BaseRetriever:
         """Create a Retriever instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
@@ -60,35 +78,51 @@ class RetrieverFactory(BaseRetriever):
         retriever_class = cls.backend_to_class[backend]
         return retriever_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db)
 
+
 class UpdaterFactory(BaseUpdater):
     """Factory class for creating Updater instances."""
-    
+
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveUpdater,
     }
-    
+
     @classmethod
-    def from_config(cls, config_factory: UpdaterConfigFactory, llm_provider=None, embedder=None, vector_db=None, extractor=None) -> BaseUpdater:
+    def from_config(
+        cls,
+        config_factory: UpdaterConfigFactory,
+        llm_provider=None,
+        embedder=None,
+        vector_db=None,
+        extractor=None,
+    ) -> BaseUpdater:
         """Create a Updater instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
             raise ValueError(f"Invalid backend: {backend}")
         updater_class = cls.backend_to_class[backend]
-        return updater_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db, extractor=extractor)
+        return updater_class(
+            llm_provider=llm_provider, embedder=embedder, vector_db=vector_db, extractor=extractor
+        )
+
 
 class AssemblerFactory(BaseAssembler):
     """Factory class for creating Assembler instances."""
-    
+
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive": NaiveAssembler,
     }
-    
+
     @classmethod
-    def from_config(cls, config_factory: AssemblerConfigFactory, llm_provider=None, embedder=None, vector_db=None) -> BaseAssembler:
+    def from_config(
+        cls,
+        config_factory: AssemblerConfigFactory,
+        llm_provider=None,
+        embedder=None,
+        vector_db=None,
+    ) -> BaseAssembler:
         """Create a Assembler instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
             raise ValueError(f"Invalid backend: {backend}")
         assembler_class = cls.backend_to_class[backend]
         return assembler_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db)
-        

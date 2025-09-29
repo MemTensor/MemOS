@@ -616,7 +616,7 @@ class MOSCore:
                 logger.info(
                     f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
                 )
-            
+
             if (
                 (mem_cube_id in install_cube_ids)
                 and (mem_cube.pref_mem is not None)
@@ -733,9 +733,10 @@ class MOSCore:
         ):
             messages_list = [messages]
             pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
-                messages_list, 
-                type="chat", 
-                info={"user_id": target_user_id, "session_id": self.session_id})
+                messages_list,
+                type="chat",
+                info={"user_id": target_user_id, "session_id": self.session_id},
+            )
             preferences = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
             logger.info(
                 f"Added preferences user {target_user_id} to memcube {mem_cube_id}: {preferences}"

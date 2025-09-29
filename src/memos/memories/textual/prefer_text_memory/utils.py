@@ -1,7 +1,6 @@
 from memos.types import MessageList
 
 
-
 def convert_messages_to_string(messages: MessageList) -> str:
     """Convert a list of messages to a string."""
     message_text = ""
