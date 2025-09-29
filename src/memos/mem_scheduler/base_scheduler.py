@@ -67,6 +67,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.db_engine: Engine | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
+        self.mem_reader = None  # Will be set by MOSCore
         self.dispatcher = SchedulerDispatcher(
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,

@@ -71,6 +71,7 @@ class MOSCore:
         if self.enable_mem_scheduler:
             self._mem_scheduler = self._initialize_mem_scheduler()
             self._mem_scheduler.mem_cubes = self.mem_cubes
+            self._mem_scheduler.mem_reader = self.mem_reader
         else:
             self._mem_scheduler: GeneralScheduler = None
 
@@ -733,7 +734,7 @@ class MOSCore:
                         mem_cube_id=mem_cube_id,
                         mem_cube=self.mem_cubes[mem_cube_id],
                         label=MEM_READ_LABEL,
-                        content={json.dumps(mem_ids)},
+                        content=json.dumps(mem_ids),
                         timestamp=datetime.utcnow(),
                     )
                     self.mem_scheduler.submit_messages(messages=[message_item])
