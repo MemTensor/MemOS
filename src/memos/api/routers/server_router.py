@@ -32,7 +32,7 @@ def init_model():
             model_schema="memos.configs.llm.OpenAILLMConfig",
             model_name_or_path="gpt-4o-mini",
             temperature=0.8,
-            max_tokens=1024,
+            max_tokens=4096,
             top_p=0.9,
             top_k=50,
             remove_think_prefix=True,
