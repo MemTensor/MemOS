@@ -39,6 +39,18 @@ class QdrantVecDBConfig(BaseVecDBConfig):
         return self
 
 
+class MilvusVecDBConfig(BaseVecDBConfig):
+    """Configuration for Milvus vector database."""
+
+    uri: str = Field(..., description="URI for Milvus connection")
+    collection_name: list[str] = Field(..., description="Name(s) of the collection(s)")
+    max_length: int = Field(
+        default=65535, description="Maximum length for string fields (varChar type)"
+    )
+    user_name: str = Field(default="", description="User name for Milvus connection")
+    password: str = Field(default="", description="Password for Milvus connection")
+
+
 class VectorDBConfigFactory(BaseConfig):
     """Factory class for creating vector database configurations."""
 
@@ -47,6 +59,7 @@ class VectorDBConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "qdrant": QdrantVecDBConfig,
+        "milvus": MilvusVecDBConfig,
     }
 
     @field_validator("backend")
