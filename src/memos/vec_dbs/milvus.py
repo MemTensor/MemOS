@@ -21,6 +21,7 @@ class MilvusVecDB(BaseVecDB):
     def __init__(self, config: MilvusVecDBConfig):
         """Initialize the Milvus vector database and the collection."""
         from pymilvus import MilvusClient
+
         self.config = config
 
         # Create Milvus client
@@ -34,6 +35,7 @@ class MilvusVecDB(BaseVecDB):
     def create_schema(self):
         """Create schema for the milvus collection."""
         from pymilvus import DataType
+
         schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
         schema.add_field(
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
