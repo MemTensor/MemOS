@@ -39,66 +39,52 @@ class NaiveAssembler(BaseAssembler):
     ) -> str:
         """Assemble query and memories into a single memory."""
 
-        # Initialize all preference lists
-        textual_mems = []
-        explicit_prefs = []
-        implicit_prefs = []
-        topic_prefs = []
-        user_prefs = []
+        # Initialize all memory lists
+        mems = {
+            "textual_mems": [],
+            "explicit_prefs": [],
+            "implicit_prefs": [],
+            "topic_prefs": [],
+            "user_prefs": [],
+        }
 
-        # Single loop to categorize all memories by preference type
         for memory in memories:
             if memory.metadata.preference_type == "explicit_preference":
-                explicit_prefs.append(
-                    {
-                        "dialog_str": memory.metadata.dialog_str,
-                        "explicit_preference": memory.metadata.explicit_preference,
-                    }
-                )
+                mems["explicit_prefs"].append(memory.metadata.explicit_preference)
             elif memory.metadata.preference_type == "implicit_preference":
-                implicit_prefs.append(
-                    {
-                        "dialog_str": memory.metadata.center_dialog,
-                        "implicit_preference": memory.metadata.implicit_preference,
-                    }
-                )
+                mems["implicit_prefs"].append(memory.metadata.implicit_preference)
             elif memory.metadata.preference_type == "topic_preference":
-                topic_prefs.append(
-                    {
-                        "center_dialog_str": memory.metadata.center_dialog,
-                        "topic_preferences": memory.metadata.topic_preferences,
-                    }
-                )
+                mems["topic_prefs"].append(memory.metadata.topic_preference)
             elif memory.metadata.preference_type == "user_preference":
-                user_prefs.append({"user_preferences": memory.metadata.user_preferences})
+                mems["user_prefs"].append(memory.metadata.user_preference)
             else:
-                textual_mems.append(memory.memory)
+                mems["textual_mems"].append(memory.memory)
 
         # Build memories string with different titles for different types
         memories_parts = []
-        if textual_mems:
+        if mems["textual_mems"]:
             memories_parts.append("## Textual Memories:")
-            for i, mem in enumerate(textual_mems, 1):
+            for i, mem in enumerate(mems["textual_mems"], 1):
                 memories_parts.append(f"{i}. {mem}")
-        if explicit_prefs:
+        if mems["explicit_prefs"]:
             memories_parts.append("## Explicit Preferences:")
-            for i, pref in enumerate(explicit_prefs, 1):
-                memories_parts.append(f"{i}. {pref['dialog_str']}")
+            for i, pref in enumerate(mems["explicit_prefs"], 1):
+                memories_parts.append(f"{i}. {pref}")
 
-        if implicit_prefs:
+        if mems["implicit_prefs"]:
             memories_parts.append("\n## Implicit Preferences:")
-            for i, pref in enumerate(implicit_prefs, 1):
-                memories_parts.append(f"{i}. {pref['dialog_str']}")
+            for i, pref in enumerate(mems["implicit_prefs"], 1):
+                memories_parts.append(f"{i}. {pref}")
 
-        if topic_prefs:
+        if mems["topic_prefs"]:
             memories_parts.append("\n## Topic Preferences:")
-            for i, pref in enumerate(topic_prefs, 1):
-                memories_parts.append(f"{i}. {pref['center_dialog_str']}")
+            for i, pref in enumerate(mems["topic_prefs"], 1):
+                memories_parts.append(f"{i}. {pref}")
 
-        if user_prefs:
+        if mems["user_prefs"]:
             memories_parts.append("\n## User Preferences:")
-            for i, pref in enumerate(user_prefs, 1):
-                memories_parts.append(f"{i}. {pref['user_preferences']}")
+            for i, pref in enumerate(mems["user_prefs"], 1):
+                memories_parts.append(f"{i}. {pref}")
 
         memories_str = "\n".join(memories_parts)
 

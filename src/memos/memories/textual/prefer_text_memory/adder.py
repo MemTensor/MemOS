@@ -6,7 +6,7 @@ from typing import Any
 
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.prefer_complete_prompt import NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT
-from memos.vec_dbs.item import VecDBItem
+from memos.vec_dbs.item import MilvusVecDBItem
 
 
 class BaseAdder(ABC):
@@ -59,9 +59,12 @@ class NaiveAdder(BaseAdder):
         """Process a single memory and return its ID if added successfully."""
         try:
             payload = memory.to_dict()["metadata"]
-            vec_db_item = VecDBItem(
-                id=memory.id, vector=memory.metadata.dialog_vector, payload=payload
+            fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
+            payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
+            vec_db_item = MilvusVecDBItem(
+                id=memory.id, memory=memory.memory, vector=memory.metadata.embedding, payload=payload
             )
+
             pref_type_collection_map = {
                 "explicit_preference": "explicit_preference",
                 "implicit_preference": "implicit_preference",
@@ -72,15 +75,15 @@ class NaiveAdder(BaseAdder):
             collection_name = pref_type_collection_map[preference_type]
 
             search_results = self.vector_db.search(
-                memory.metadata.dialog_vector, collection_name, top_k=1
+                memory.metadata.embedding, collection_name, top_k=1
             )
             recall = search_results[0] if search_results else None
             if not recall or (recall.score is not None and recall.score < 0.5):
                 self.vector_db.update(collection_name, memory.id, vec_db_item)
                 return memory.id
 
-            old_msg_str = recall.payload.get("dialog_str", "")
-            new_msg_str = memory.metadata.dialog_str
+            old_msg_str = recall.memory
+            new_msg_str = memory.memory
             is_same = self._judge_update_or_add(old_msg_str, new_msg_str)
             if is_same:
                 self.vector_db.delete(collection_name, [recall.id])

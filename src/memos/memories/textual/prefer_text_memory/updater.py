@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from memos.memories.textual.prefer_text_memory.clustering import ClusterResult, HDBSCANClusterer
-from memos.vec_dbs.item import VecDBItem
+from memos.vec_dbs.item import MilvusVecDBItem
 
 
 class BaseUpdater(ABC):
@@ -30,17 +30,6 @@ class NaiveUpdater(BaseUpdater):
         self.extractor = extractor
         self.clusterer = HDBSCANClusterer()
 
-    def _implicit_cluster(self, informations: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Implicit cluster."""
-        vectors = [info.get("dialog_vector") for info in informations]
-        if not vectors:
-            return []
-        res = self.clusterer.cluster(vectors)
-        for cluster in res:
-            cluster.center_dialog_msgs = informations[cluster.center_index].get("dialog_msgs", [])
-            cluster.center_dialog_str = informations[cluster.center_index].get("dialog_str", "")
-        return res
-
     def _topic_cluster(self, informations: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Topic cluster."""
         vectors = [info.get("topic_vector") for info in informations]
@@ -48,7 +37,6 @@ class NaiveUpdater(BaseUpdater):
             return []
         res = self.clusterer.cluster(vectors)
         for cluster in res:
-            cluster.center_dialog_msgs = informations[cluster.center_index].get("dialog_msgs", [])
             cluster.center_dialog_str = informations[cluster.center_index].get("dialog_str", "")
         return res
 
@@ -119,57 +107,18 @@ class NaiveUpdater(BaseUpdater):
 
         return result
 
-    def _process_single_implicit_cluster(
-        self, cluster_id: str, cluster_dialogs: list[str]
-    ) -> dict[str, Any]:
-        """Process a single implicit cluster."""
-        try:
-            result = self.extractor.extract_implicit_preferences(cluster_dialogs)
-            return {"cluster_id": cluster_id, "implicit_exract_result": result}
-        except Exception as e:
-            print(f"Error processing implicit cluster {cluster_id}: {e}")
-            return {"cluster_id": cluster_id, "implicit_exract_result": None}
-
-    def _extract_implicit_preferences(
-        self, implicit_extract_inputs: dict[str, list[str]], max_workers: int = 10
-    ) -> dict[str, dict[str, Any]]:
-        """Extract implicit preferences from implicit extract inputs using thread pool."""
-        if not implicit_extract_inputs:
-            return {}
-
-        results = {}
-        with ThreadPoolExecutor(
-            max_workers=min(max_workers, len(implicit_extract_inputs))
-        ) as executor:
-            futures = [
-                executor.submit(self._process_single_implicit_cluster, cluster_id, cluster_dialogs)
-                for cluster_id, cluster_dialogs in implicit_extract_inputs.items()
-            ]
-
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result["implicit_exract_result"] is not None:
-                        cluster_id = result["cluster_id"]
-                        results[cluster_id] = result["implicit_exract_result"]
-                except Exception as e:
-                    print(f"Error processing implicit cluster: {e}")
-                    continue
-
-        return results
-
     def _process_single_topic_cluster(
         self, cluster_id: str, cluster_dialogs: list[str]
     ) -> dict[str, Any]:
         """Process a single topic cluster."""
         try:
-            result = self.extractor.extract_topic_preferences(cluster_dialogs)
+            result = self.extractor.extract_topic_preference(cluster_dialogs)
             return {"cluster_id": cluster_id, "topic_exract_result": result}
         except Exception as e:
             print(f"Error processing topic cluster {cluster_id}: {e}")
             return {"cluster_id": cluster_id, "topic_exract_result": None}
 
-    def _extract_topic_preferences(
+    def _extract_topic_preference(
         self, topic_extract_inputs: dict[str, list[str]], max_workers: int = 10
     ) -> dict[str, dict[str, Any]]:
         """Extract topic preferences from topic extract inputs using thread pool."""
@@ -197,53 +146,23 @@ class NaiveUpdater(BaseUpdater):
 
         return results
 
-    def _extract_user_preferences(
+    def _extract_user_preference(
         self, topic_cluster_pref_infos: dict[str, Any]
     ) -> dict[str, Any] | None:
         """Extract user preferences from topic cluster info."""
         # topic_prefs is a dict, so we just pass the values as a list
         topic_cluster_pref = list(topic_cluster_pref_infos.values())
-        return self.extractor.extract_user_preferences(topic_cluster_pref)
+        return self.extractor.extract_user_preference(topic_cluster_pref)
 
     def _store_preferences(
         self,
-        implicit_clusters,
         topic_clusters,
-        implicit_cluster_prefs,
         topic_cluster_prefs,
         user_prefs,
         user_id,
     ):
         """Create store data."""
-        implicit_memories = []
         topic_memories = []
-
-        if implicit_clusters:
-            for cluster in implicit_clusters:
-                if cluster.cluster_id not in implicit_cluster_prefs:
-                    print(
-                        f"Warning: No preference found for cluster {cluster.cluster_id}, skipping..."
-                    )
-                    continue
-                pref = implicit_cluster_prefs[cluster.cluster_id]
-                mem = VecDBItem(
-                    id=cluster.cluster_id,
-                    vector=cluster.center_vector,
-                    payload={
-                        "cluster_id": cluster.cluster_id,
-                        "center_dialog_msgs": cluster.center_dialog_msgs,
-                        "center_dialog_str": cluster.center_dialog_str,
-                        "center_vector": cluster.center_vector,
-                        "implicit_preference": pref.get("implicit_preference", ""),
-                        "created_at": cluster.created_at,
-                        "user_id": user_id,
-                        "size": cluster.size,
-                        "preference_type": "implicit_preference",
-                    },
-                )
-                implicit_memories.append(mem)
-
-            self.vector_db.add("implicit_preference", implicit_memories)
 
         if topic_clusters:
             for cluster in topic_clusters:
@@ -253,14 +172,12 @@ class NaiveUpdater(BaseUpdater):
                     )
                     continue
                 pref = topic_cluster_prefs[cluster.cluster_id]
-                mem = VecDBItem(
+                mem = MilvusVecDBItem(
                     id=cluster.cluster_id,
+                    memory=cluster.center_dialog_str,
                     vector=cluster.center_vector,
                     payload={
                         "cluster_id": cluster.cluster_id,
-                        "center_dialog_msgs": cluster.center_dialog_msgs,
-                        "center_dialog_str": cluster.center_dialog_str,
-                        "center_vector": cluster.center_vector,
                         "topic_cluster_name": pref.get("topic_cluster_name", ""),
                         "topic_cluster_description": pref.get("topic_cluster_description", ""),
                         "topic_preference": pref.get("topic_preference", ""),
@@ -275,7 +192,7 @@ class NaiveUpdater(BaseUpdater):
             self.vector_db.add("topic_preference", topic_memories)
 
         if user_prefs:
-            mem = VecDBItem(
+            mem = MilvusVecDBItem(
                 id=str(uuid.uuid4()),
                 vector=[0.0] * self.vector_db.config.vector_dimension,
                 payload={
@@ -290,17 +207,15 @@ class NaiveUpdater(BaseUpdater):
     def _generate_memory_summary(
         self,
         explicit_infos: list[dict[str, Any]],
-        implicit_infos: list[dict[str, Any]],
         topic_infos: list[dict[str, Any]],
         user_infos: dict[str, Any],
     ) -> str:
         """Generate a summary of the built memory."""
         summary = {
             "memory_build_summary": {
-                "explicit_preferences_count": len(explicit_infos),
-                "implicit_preferences_count": len(implicit_infos),
-                "topic_preferences_count": len(topic_infos),
-                "user_preferences_count": 1 if user_infos else 0,
+                "explicit_preference_count": len(explicit_infos),
+                "topic_preference_count": len(topic_infos),
+                "user_preference_count": 1 if user_infos else 0,
                 "build_timestamp": datetime.now().isoformat(),
             }
         }
@@ -312,13 +227,7 @@ class NaiveUpdater(BaseUpdater):
         and reconstruct the implicit preference collection, topic collection and user preference collection.
         """
 
-        # refresh the implicit preference collection, topic collection and user preference collection
-        impl_ids = [
-            item.id
-            for item in self.vector_db.get_by_filter(
-                collection_name="implicit_preference", filter={"user_id": user_id}
-            )
-        ]
+        # refresh the topic collection and user preference collection
         topic_ids = [
             item.id
             for item in self.vector_db.get_by_filter(
@@ -332,7 +241,6 @@ class NaiveUpdater(BaseUpdater):
             )
         ]
 
-        self.vector_db.delete("implicit_preference", impl_ids)
         self.vector_db.delete("topic_preference", topic_ids)
         self.vector_db.delete("user_preference", user_ids)
 
@@ -341,31 +249,23 @@ class NaiveUpdater(BaseUpdater):
         informations = [item.payload for item in all_data]
 
         # Perform clustering
-        implicit_clusters = self._implicit_cluster(informations)
         topic_clusters = self._topic_cluster(informations)
 
         # create extract inputs for each implicit and topic cluster
-        implicit_extract_inputs = self._create_cluster_extract_input(
-            implicit_clusters, informations, "original"
-        )
         topic_extract_inputs = self._create_cluster_extract_input(
             topic_clusters, informations, "original"
         )
 
         # Extract preferences
-        if implicit_extract_inputs:
-            implicit_cluster_prefs = self._extract_implicit_preferences(implicit_extract_inputs)
         if topic_extract_inputs:
-            topic_cluster_prefs = self._extract_topic_preferences(topic_extract_inputs)
+            topic_cluster_prefs = self._extract_topic_preference(topic_extract_inputs)
 
             # Extract user preferences
-            user_prefs = self._extract_user_preferences(topic_cluster_prefs)
+            user_prefs = self._extract_user_preference(topic_cluster_prefs)
 
         # Store all preferences in memory
         self._store_preferences(
-            implicit_clusters=implicit_clusters,
             topic_clusters=topic_clusters,
-            implicit_cluster_prefs=implicit_cluster_prefs,
             topic_cluster_prefs=topic_cluster_prefs,
             user_prefs=user_prefs,
             user_id=user_id,
@@ -374,7 +274,6 @@ class NaiveUpdater(BaseUpdater):
         # Return summary of built memory
         return self._generate_memory_summary(
             explicit_infos=informations,
-            implicit_infos=implicit_clusters,
             topic_infos=topic_clusters,
             user_infos=user_prefs,
         )

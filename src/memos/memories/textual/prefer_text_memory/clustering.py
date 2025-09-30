@@ -21,7 +21,6 @@ class ClusterResult(BaseModel):
     size: int
     created_at: str
     items: list[dict[str, Any]]
-    center_dialog_msgs: MessageList = None
     center_dialog_str: str = None
 
 

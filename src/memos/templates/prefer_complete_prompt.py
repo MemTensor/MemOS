@@ -66,7 +66,7 @@ Notes:
 - Do not duplicate: do not treat explicit preferences as implicit preferences.
 
 Requirements:
-1. Output in JSON format with two fields: "explicit_preferences" and "implicit_preferences".
+1. Output in JSON format with two fields: "explicit_preference" and "implicit_preference".
 2. Each field should be an array, with each element being a concise natural language preference statement.
 3. Output only the preference statements themselves; do not include any extra explanation, reasoning, or confidence information.
 4. If a type of preference does not exist, its array should be empty.
@@ -77,8 +77,8 @@ Conversation:
 Output Format:
 ```json
 {
-  "explicit_preferences": ["The user clearly likes coffee", "The user does not want to sit by the window"],
-  "implicit_preferences": ["The user prefers a quiet environment"]
+  "explicit_preference": ["The user clearly likes coffee", "The user does not want to sit by the window"],
+  "implicit_preference": ["The user prefers a quiet environment"]
 }
 ```
 Don't output anything except the JSON.

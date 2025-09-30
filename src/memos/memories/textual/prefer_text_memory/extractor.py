@@ -42,7 +42,6 @@ class NaiveExtractor(BaseExtractor):
         """Extract basic information from a QA pair (no LLM needed)."""
         basic_info = {
             "dialog_id": str(uuid.uuid4()),
-            "dialog_msgs": qa_pair,
             "dialog_str": convert_messages_to_string(qa_pair),
             "created_at": datetime.now().isoformat(),
         }
@@ -77,7 +76,7 @@ class NaiveExtractor(BaseExtractor):
             print(f"Error extracting explicit preference: {e}, return None")
             return None
 
-    def extract_implicit_preferences(
+    def extract_implicit_preference(
         self, qa_pairs: MessageList | list[str]
     ) -> dict[str, Any] | None:
         """Extract implicit preferences from cluster qa pairs."""
@@ -99,7 +98,7 @@ class NaiveExtractor(BaseExtractor):
             print(f"Error extracting implicit preferences: {e}, return None")
             return None
 
-    def extract_topic_preferences(self, qa_pairs: MessageList | list[str]) -> dict[str, Any] | None:
+    def extract_topic_preference(self, qa_pairs: MessageList | list[str]) -> dict[str, Any] | None:
         """Extract topic preferences from cluster qa pairs."""
         if not qa_pairs:
             return None
@@ -121,15 +120,15 @@ class NaiveExtractor(BaseExtractor):
             print(f"Error extracting topic preferences: {qa_pairs}\n{e}, return None")
             return None
 
-    def extract_user_preferences(
-        self, topic_preferences: list[dict[str, Any]]
+    def extract_user_preference(
+        self, topic_preference: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
         """Extract user-level preferences."""
-        if not topic_preferences:
+        if not topic_preference:
             return []
 
         prompt = NAIVE_USER_PREFERENCE_EXTRACT_PROMPT.replace(
-            "{cluster_info}", json.dumps(topic_preferences, ensure_ascii=False, indent=2)
+            "{cluster_info}", json.dumps(topic_preference, ensure_ascii=False, indent=2)
         )
 
         try:
@@ -139,7 +138,7 @@ class NaiveExtractor(BaseExtractor):
             if result.get("user_preference"):
                 return result
         except Exception as e:
-            print(f"Error processing user preferences: {topic_preferences}\n{e}, return None")
+            print(f"Error processing user preferences: {topic_preference}\n{e}, return None")
             return ""
 
     def _process_single_chunk_explicit(
@@ -155,7 +154,7 @@ class NaiveExtractor(BaseExtractor):
             return None
 
         vector_info = {
-            "dialog_vector": self.embedder.embed([basic_info["dialog_str"]])[0],
+            "embedding": self.embedder.embed([basic_info["dialog_str"]])[0],
         }
         extract_info = {**basic_info, **explicit_pref, **vector_info, **info}
 
@@ -165,6 +164,7 @@ class NaiveExtractor(BaseExtractor):
         memory = TextualMemoryItem(
             id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata
         )
+
         return memory
 
     def _process_single_chunk_implicit(
@@ -173,12 +173,12 @@ class NaiveExtractor(BaseExtractor):
         basic_info = self.extract_basic_info(chunk)
         if not basic_info["dialog_str"]:
             return None
-        implicit_pref = self.extract_implicit_preferences(basic_info["dialog_str"])
+        implicit_pref = self.extract_implicit_preference(basic_info["dialog_str"])
         if not implicit_pref:
             return None
 
         vector_info = {
-            "dialog_vector": self.embedder.embed([basic_info["dialog_str"]])[0],
+            "embedding": self.embedder.embed([basic_info["dialog_str"]])[0],
         }
 
         extract_info = {**basic_info, **implicit_pref, **vector_info, **info}
@@ -189,6 +189,7 @@ class NaiveExtractor(BaseExtractor):
         memory = TextualMemoryItem(
             id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata
         )
+
         return memory
 
     def extract(
