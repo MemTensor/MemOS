@@ -44,8 +44,6 @@ class NaiveAssembler(BaseAssembler):
             "textual_mems": [],
             "explicit_prefs": [],
             "implicit_prefs": [],
-            "topic_prefs": [],
-            "user_prefs": [],
         }
 
         for memory in memories:
@@ -53,10 +51,6 @@ class NaiveAssembler(BaseAssembler):
                 mems["explicit_prefs"].append(memory.metadata.explicit_preference)
             elif memory.metadata.preference_type == "implicit_preference":
                 mems["implicit_prefs"].append(memory.metadata.implicit_preference)
-            elif memory.metadata.preference_type == "topic_preference":
-                mems["topic_prefs"].append(memory.metadata.topic_preference)
-            elif memory.metadata.preference_type == "user_preference":
-                mems["user_prefs"].append(memory.metadata.user_preference)
             else:
                 mems["textual_mems"].append(memory.memory)
 
@@ -74,16 +68,6 @@ class NaiveAssembler(BaseAssembler):
         if mems["implicit_prefs"]:
             memories_parts.append("\n## Implicit Preferences:")
             for i, pref in enumerate(mems["implicit_prefs"], 1):
-                memories_parts.append(f"{i}. {pref}")
-
-        if mems["topic_prefs"]:
-            memories_parts.append("\n## Topic Preferences:")
-            for i, pref in enumerate(mems["topic_prefs"], 1):
-                memories_parts.append(f"{i}. {pref}")
-
-        if mems["user_prefs"]:
-            memories_parts.append("\n## User Preferences:")
-            for i, pref in enumerate(mems["user_prefs"], 1):
                 memories_parts.append(f"{i}. {pref}")
 
         memories_str = "\n".join(memories_parts)

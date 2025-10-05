@@ -106,39 +106,6 @@ class RetrieverConfigFactory(BaseConfig):
         return self
 
 
-class BaseUpdaterConfig(BaseConfig):
-    """Base configuration class for Updater."""
-
-
-class NaiveUpdaterConfig(BaseUpdaterConfig):
-    """Configuration for Naive Updater."""
-
-
-class UpdaterConfigFactory(BaseConfig):
-    """Factory class for creating Updater configurations."""
-
-    backend: str = Field(..., description="Backend for Updater")
-    config: dict[str, Any] = Field(..., description="Configuration for the Updater backend")
-
-    backend_to_class: ClassVar[dict[str, Any]] = {
-        "naive": NaiveUpdaterConfig,
-    }
-
-    @field_validator("backend")
-    @classmethod
-    def validate_backend(cls, backend: str) -> str:
-        """Validate the backend field."""
-        if backend not in cls.backend_to_class:
-            raise ValueError(f"Invalid backend: {backend}")
-        return backend
-
-    @model_validator(mode="after")
-    def create_config(self) -> "UpdaterConfigFactory":
-        config_class = self.backend_to_class[self.backend]
-        self.config = config_class(**self.config)
-        return self
-
-
 class BaseAssemblerConfig(BaseConfig):
     """Base configuration class for Assembler."""
 

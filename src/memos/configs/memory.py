@@ -15,7 +15,6 @@ from memos.memories.textual.prefer_text_memory.config import (
     AssemblerConfigFactory,
     ExtractorConfigFactory,
     RetrieverConfigFactory,
-    UpdaterConfigFactory,
 )
 
 
@@ -219,11 +218,6 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
         ...,
         default_factory=RetrieverConfigFactory,
         description="Retriever configuration for the memory retrieving",
-    )
-    updater: UpdaterConfigFactory = Field(
-        ...,
-        default_factory=UpdaterConfigFactory,
-        description="Updater configuration for the memory updating",
     )
     assembler: AssemblerConfigFactory = Field(
         ...,

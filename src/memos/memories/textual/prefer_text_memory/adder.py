@@ -68,8 +68,6 @@ class NaiveAdder(BaseAdder):
             pref_type_collection_map = {
                 "explicit_preference": "explicit_preference",
                 "implicit_preference": "implicit_preference",
-                "topic_preference": "topic_preference",
-                "user_preference": "user_preference",
             }
             preference_type = memory.metadata.preference_type
             collection_name = pref_type_collection_map[preference_type]

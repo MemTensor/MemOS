@@ -12,9 +12,6 @@ from memos.memories.textual.prefer_text_memory.utils import convert_messages_to_
 from memos.templates.prefer_complete_prompt import (
     NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT,
     NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT,
-    NAIVE_TOPIC_INFO_EXTRACT_PROMPT,
-    NAIVE_TOPIC_PREFERENCE_EXTRACT_PROMPT,
-    NAIVE_USER_PREFERENCE_EXTRACT_PROMPT,
 )
 from memos.types import MessageList
 
@@ -47,20 +44,6 @@ class NaiveExtractor(BaseExtractor):
         }
 
         return basic_info
-
-    def extract_topic_info(self, qa_pair: MessageList | str) -> dict[str, Any]:
-        """Extract topic information from a QA pair."""
-        qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, list) else qa_pair
-        prompt = NAIVE_TOPIC_INFO_EXTRACT_PROMPT.replace("{qa_pair}", qa_pair_str)
-
-        try:
-            response = self.llm_provider.generate([{"role": "user", "content": prompt}])
-            response = response.strip().replace("```json", "").replace("```", "").strip()
-            result = json.loads(response)
-            return result
-        except Exception as e:
-            print(f"Error extracting topic info: {e}, return None")
-            return None
 
     def extract_explicit_preference(self, qa_pair: MessageList | str) -> dict[str, Any] | None:
         """Extract explicit preference from a QA pair."""
@@ -97,49 +80,6 @@ class NaiveExtractor(BaseExtractor):
         except Exception as e:
             print(f"Error extracting implicit preferences: {e}, return None")
             return None
-
-    def extract_topic_preference(self, qa_pairs: MessageList | list[str]) -> dict[str, Any] | None:
-        """Extract topic preferences from cluster qa pairs."""
-        if not qa_pairs:
-            return None
-        qa_pairs_str = (
-            convert_messages_to_string(qa_pairs)
-            if isinstance(qa_pairs[0], dict)
-            else "\n\n".join(qa_pairs)
-        )
-        prompt = NAIVE_TOPIC_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pairs}", qa_pairs_str)
-
-        try:
-            response = self.llm_provider.generate([{"role": "user", "content": prompt}])
-            response = response.strip().replace("```json", "").replace("```", "").strip()
-            result = json.loads(response)
-
-            if result.get("topic_cluster_name"):
-                return result
-        except Exception as e:
-            print(f"Error extracting topic preferences: {qa_pairs}\n{e}, return None")
-            return None
-
-    def extract_user_preference(
-        self, topic_preference: list[dict[str, Any]]
-    ) -> dict[str, Any] | None:
-        """Extract user-level preferences."""
-        if not topic_preference:
-            return []
-
-        prompt = NAIVE_USER_PREFERENCE_EXTRACT_PROMPT.replace(
-            "{cluster_info}", json.dumps(topic_preference, ensure_ascii=False, indent=2)
-        )
-
-        try:
-            response = self.llm_provider.generate([{"role": "user", "content": prompt}])
-            response = response.strip().replace("```json", "").replace("```", "").strip()
-            result = json.loads(response)
-            if result.get("user_preference"):
-                return result
-        except Exception as e:
-            print(f"Error processing user preferences: {topic_preference}\n{e}, return None")
-            return ""
 
     def _process_single_chunk_explicit(
         self, chunk: MessageList, msg_type: str, info: dict[str, Any]

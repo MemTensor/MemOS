@@ -20,7 +20,6 @@ from memos.memories.textual.prefer_text_memory.factory import (
     AssemblerFactory,
     ExtractorFactory,
     RetrieverFactory,
-    UpdaterFactory,
 )
 from memos.types import MessageList
 from memos.vec_dbs.factory import MilvusVecDB, QdrantVecDB, VecDBFactory
@@ -63,13 +62,6 @@ class PreferenceTextMemory(BaseTextMemory):
             embedder=self.embedder,
             vector_db=self.vector_db,
         )
-        self.updater = UpdaterFactory.from_config(
-            config.updater,
-            llm_provider=self.extractor_llm,
-            embedder=self.embedder,
-            vector_db=self.vector_db,
-            extractor=self.extractor,
-        )
         self.assembler = AssemblerFactory.from_config(
             config.assembler,
             llm_provider=self.extractor_llm,
@@ -87,15 +79,6 @@ class PreferenceTextMemory(BaseTextMemory):
             info (dict[str, Any]): The info to get memory.
         """
         return self.extractor.extract(messages, type, info)
-
-    def slow_update(self, user_id: str) -> str:
-        """Perform a slow update of preferences by reconstructing all preference collections.
-        Args:
-            user_id (str): The user ID to update preferences for.
-        Returns:
-            str: Summary of the memory build process.
-        """
-        return self.updater.slow_update(user_id)
 
     def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
