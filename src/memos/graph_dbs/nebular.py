@@ -1007,12 +1007,12 @@ class NebulaGraphDB(BaseGraphDB):
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         gql = f"""
+               let a = {gql_vector}
                MATCH (n@Memory)
                {where_clause}
-               ORDER BY inner_product(n.{self.dim_field}, {gql_vector}) DESC
+               ORDER BY inner_product(n.{self.dim_field}, a) DESC
                LIMIT {top_k}
-               RETURN n.id AS id, inner_product(n.{self.dim_field}, {gql_vector}) AS score
-           """
+               RETURN n.id AS id, inner_product(n.{self.dim_field}, a) AS score"""
         try:
             result = self.execute_query(gql)
         except Exception as e:
