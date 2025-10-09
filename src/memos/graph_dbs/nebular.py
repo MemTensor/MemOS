@@ -188,6 +188,19 @@ class NebulaGraphDB(BaseGraphDB):
             client = cls._CLIENT_CACHE.get(key)
             if client is None:
                 # Connection setting
+
+                tmp_client = NebulaClient(
+                    hosts=cfg.uri,
+                    username=cfg.user,
+                    password=cfg.password,
+                    session_config=SessionConfig(graph=None),
+                    session_pool_config=SessionPoolConfig(size=1, wait_timeout=3000),
+                )
+                try:
+                    cls._ensure_space_exists(tmp_client, cfg)
+                finally:
+                    tmp_client.close()
+
                 conn_conf: ConnectionConfig | None = getattr(cfg, "conn_config", None)
                 if conn_conf is None:
                     conn_conf = ConnectionConfig.from_defults(
@@ -1466,6 +1479,25 @@ class NebulaGraphDB(BaseGraphDB):
             ID of the resulting merged node.
         """
         raise NotImplementedError
+
+    @classmethod
+    def _ensure_space_exists(cls, tmp_client, cfg):
+        """Lightweight check to ensure target graph (space) exists."""
+        db_name = getattr(cfg, "space", None)
+        if not db_name:
+            logger.warning("[NebulaGraphDBSync] No `space` specified in cfg.")
+            return
+
+        try:
+            res = tmp_client.execute("SHOW GRAPHS;")
+            existing = {row.values()[0].as_string() for row in res}
+            if db_name not in existing:
+                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type;")
+                logger.info(f"✅ Graph `{db_name}` created before session binding.")
+            else:
+                logger.debug(f"Graph `{db_name}` already exists.")
+        except Exception:
+            logger.exception("[NebulaGraphDBSync] Failed to ensure space exists")
 
     @timed
     def _ensure_database_exists(self):
