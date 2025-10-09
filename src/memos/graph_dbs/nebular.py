@@ -985,8 +985,7 @@ class NebulaGraphDB(BaseGraphDB):
         dim = len(vector)
         vector_str = ",".join(f"{float(x)}" for x in vector)
         gql_vector = f"VECTOR<{dim}, FLOAT>([{vector_str}])"
-
-        where_clauses = []
+        where_clauses = ["n.embedding_1024 IS NOT NULL"]
         if scope:
             where_clauses.append(f'n.memory_type = "{scope}"')
         if status:
@@ -1011,12 +1010,9 @@ class NebulaGraphDB(BaseGraphDB):
                MATCH (n@Memory)
                {where_clause}
                ORDER BY inner_product(n.{self.dim_field}, {gql_vector}) DESC
-               APPROXIMATE
                LIMIT {top_k}
-               OPTIONS {{ METRIC: IP, TYPE: IVF, NPROBE: 8 }}
                RETURN n.id AS id, inner_product(n.{self.dim_field}, {gql_vector}) AS score
            """
-
         try:
             result = self.execute_query(gql)
         except Exception as e:
