@@ -331,6 +331,7 @@ class NebulaGraphDB(BaseGraphDB):
             }
         """
 
+        assert config.use_multi_db is False, "Multi-DB MODE IS NOT SUPPORTED"
         self.config = config
         self.db_name = config.space
         self.user_name = config.user_name
