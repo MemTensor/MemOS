@@ -17,7 +17,6 @@ from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.prefer_text_memory.factory import (
     AdderFactory,
-    AssemblerFactory,
     ExtractorFactory,
     RetrieverFactory,
 )
@@ -65,12 +64,6 @@ class PreferenceTextMemory(BaseTextMemory):
             reranker=self.reranker,
             vector_db=self.vector_db,
         )
-        self.assembler = AssemblerFactory.from_config(
-            config.assembler,
-            llm_provider=self.extractor_llm,
-            embedder=self.embedder,
-            vector_db=self.vector_db,
-        )
 
     def get_memory(
         self, messages: MessageList, type: str, info: dict[str, Any]
@@ -93,16 +86,6 @@ class PreferenceTextMemory(BaseTextMemory):
             list[TextualMemoryItem]: List of matching memories.
         """
         return self.retriever.retrieve(query, top_k, info)
-
-    def get_prompt(self, query: str, memories: list[TextualMemoryItem]) -> str:
-        """Construct the prompt for the query with memories.
-        Args:
-            query (str): The query to get the prompt for.
-            memories (list[TextualMemoryItem]): The memories to get the prompt for.
-        Returns:
-            str: The prompt for the query with memories.
-        """
-        return self.assembler.assemble(query, memories)
 
     def load(self, dir: str) -> None:
         """Load memories from the specified directory.

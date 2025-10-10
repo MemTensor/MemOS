@@ -12,7 +12,6 @@ from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
 from memos.memories.textual.prefer_text_memory.config import (
     AdderConfigFactory,
-    AssemblerConfigFactory,
     ExtractorConfigFactory,
     RetrieverConfigFactory,
 )
@@ -222,11 +221,6 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
         ...,
         default_factory=RetrieverConfigFactory,
         description="Retriever configuration for the memory retrieving",
-    )
-    assembler: AssemblerConfigFactory = Field(
-        ...,
-        default_factory=AssemblerConfigFactory,
-        description="Assembler configuration for the memory assembling",
     )
 
 

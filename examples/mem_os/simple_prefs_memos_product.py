@@ -102,7 +102,6 @@ def get_config(user_id: str):
                 "extractor": {"backend": "naive", "config": {}},
                 "adder": {"backend": "naive", "config": {}},
                 "retriever": {"backend": "naive", "config": {}},
-                "assembler": {"backend": "naive", "config": {}},
             },
         },
     }
