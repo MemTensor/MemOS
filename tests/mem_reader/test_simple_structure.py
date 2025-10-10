@@ -43,9 +43,9 @@ class TestSimpleStructMemReader(unittest.TestCase):
     def test_process_chat_data(self):
         """Test processing chat data into memory items."""
         scene_data_info = [
-            "user: Hello",
-            "assistant: Hi there",
-            "user: How are you?",
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "How are you?"},
         ]
         info = {"user_id": "user1", "session_id": "session1"}
 
@@ -115,7 +115,14 @@ class TestSimpleStructMemReader(unittest.TestCase):
 
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0][0], "user: [3 May 2025]: I'm feeling a bit down today.")
+        self.assertEqual(
+            result[0][0],
+            {
+                "role": "user",
+                "chat_time": "3 May 2025",
+                "content": "I'm feeling a bit down today.",
+            },
+        )
 
     @patch("memos.mem_reader.simple_struct.ParserFactory")
     def test_get_scene_data_info_with_doc(self, mock_parser_factory):

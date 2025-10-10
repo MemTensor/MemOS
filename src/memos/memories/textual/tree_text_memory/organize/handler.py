@@ -1,5 +1,6 @@
 import json
 import re
+
 from datetime import datetime
 
 from dateutil import parser
@@ -13,6 +14,7 @@ from memos.templates.tree_reorganize_prompts import (
     MEMORY_RELATION_DETECTOR_PROMPT,
     MEMORY_RELATION_RESOLVER_PROMPT,
 )
+
 
 logger = get_logger(__name__)
 
@@ -50,12 +52,12 @@ class NodeHandler:
             ]
             result = self.llm.generate(prompt).strip()
             if result == "contradictory":
-                logger.warning(
+                logger.info(
                     f'detected "{memory.memory}" <==CONFLICT==> "{embedding_candidate.memory}"'
                 )
                 detected_relationships.append([memory, embedding_candidate, "contradictory"])
             elif result == "redundant":
-                logger.warning(
+                logger.info(
                     f'detected "{memory.memory}" <==REDUNDANT==> "{embedding_candidate.memory}"'
                 )
                 detected_relationships.append([memory, embedding_candidate, "redundant"])

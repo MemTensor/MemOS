@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import random
-import threading
 import time
 
 from collections.abc import Generator
@@ -14,6 +13,7 @@ from transformers import AutoTokenizer
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
+from memos.context.context import ContextThread
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.core import MOSCore
@@ -46,6 +46,7 @@ from memos.templates.mos_prompts import (
     get_memos_prompt,
 )
 from memos.types import MessageList
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -257,6 +258,7 @@ class MOSProduct(MOSCore):
         except Exception as e:
             logger.error(f"Error pre-loading cubes for user {user_id}: {e}", exc_info=True)
 
+    @timed
     def _load_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
     ) -> None:
@@ -288,6 +290,7 @@ class MOSProduct(MOSCore):
                         )
                 except Exception as e:
                     logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
+        logger.info(f"load user {user_id} cubes successfully")
 
     def _ensure_user_instance(self, user_id: str, max_instances: int | None = None) -> None:
         """
@@ -694,8 +697,8 @@ class MOSProduct(MOSCore):
                 else None
             )
         except RuntimeError:
-            # No event loop, run in a new thread
-            thread = threading.Thread(
+            # No event loop, run in a new thread with context propagation
+            thread = ContextThread(
                 target=run_async_in_thread,
                 name=f"PostChatProcessing-{user_id}",
                 # Set as a daemon thread to avoid blocking program exit
@@ -775,9 +778,13 @@ class MOSProduct(MOSCore):
                 return
 
             # Create MemCube from path
+            time_start = time.time()
             if os.path.exists(mem_cube_name_or_path):
                 mem_cube = GeneralMemCube.init_from_dir(
                     mem_cube_name_or_path, memory_types, default_config
+                )
+                logger.info(
+                    f"time register_mem_cube: init_from_dir time is: {time.time() - time_start}"
                 )
             else:
                 logger.warning(
@@ -791,7 +798,10 @@ class MOSProduct(MOSCore):
         logger.info(
             f"Registering MemCube {mem_cube_id} with cube config {mem_cube.config.model_dump(mode='json')}"
         )
+        time_start = time.time()
         self.mem_cubes[mem_cube_id] = mem_cube
+        time_end = time.time()
+        logger.info(f"time register_mem_cube: add mem_cube time is: {time_end - time_start}")
 
     def user_register(
         self,
@@ -801,6 +811,7 @@ class MOSProduct(MOSCore):
         interests: str | None = None,
         default_mem_cube: GeneralMemCube | None = None,
         default_cube_config: GeneralMemCubeConfig | None = None,
+        mem_cube_id: str | None = None,
     ) -> dict[str, str]:
         """Register a new user with configuration and default cube.
 
@@ -836,15 +847,19 @@ class MOSProduct(MOSCore):
             default_cube_name = f"{user_name}_{user_id}_default_cube"
             mem_cube_name_or_path = os.path.join(CUBE_PATH, default_cube_name)
             default_cube_id = self.create_cube_for_user(
-                cube_name=default_cube_name, owner_id=user_id, cube_path=mem_cube_name_or_path
+                cube_name=default_cube_name,
+                owner_id=user_id,
+                cube_path=mem_cube_name_or_path,
+                cube_id=mem_cube_id,
             )
-
+            time_start = time.time()
             if default_mem_cube:
                 try:
-                    default_mem_cube.dump(mem_cube_name_or_path)
+                    default_mem_cube.dump(mem_cube_name_or_path, memory_types=[])
                 except Exception as e:
                     logger.error(f"Failed to dump default cube: {e}")
-
+            time_end = time.time()
+            logger.info(f"time user_register: dump default cube time is: {time_end - time_start}")
             # Register the default cube with MOS
             self.register_mem_cube(
                 mem_cube_name_or_path_or_object=default_mem_cube,
@@ -924,6 +939,7 @@ class MOSProduct(MOSCore):
         moscube: bool = False,
         top_k: int = 10,
         threshold: float = 0.5,
+        session_id: str | None = None,
     ) -> str:
         """
         Chat with LLM with memory references and complete response.
@@ -938,6 +954,7 @@ class MOSProduct(MOSCore):
             mode="fine",
             internet_search=internet_search,
             moscube=moscube,
+            session_id=session_id,
         )["text_mem"]
 
         memories_list = []
@@ -982,6 +999,7 @@ class MOSProduct(MOSCore):
         top_k: int = 20,
         internet_search: bool = False,
         moscube: bool = False,
+        session_id: str | None = None,
     ) -> Generator[str, None, None]:
         """
         Chat with LLM with memory references and streaming output.
@@ -1008,6 +1026,7 @@ class MOSProduct(MOSCore):
             mode="fine",
             internet_search=internet_search,
             moscube=moscube,
+            session_id=session_id,
         )["text_mem"]
 
         yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
@@ -1028,7 +1047,7 @@ class MOSProduct(MOSCore):
         system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
         # Get chat history
         if user_id not in self.chat_history_manager:
-            self._register_chat_history(user_id)
+            self._register_chat_history(user_id, session_id)
 
         chat_history = self.chat_history_manager[user_id]
         if history:
@@ -1296,6 +1315,7 @@ class MOSProduct(MOSCore):
         install_cube_ids: list[str] | None = None,
         top_k: int = 10,
         mode: Literal["fast", "fine"] = "fast",
+        session_id: str | None = None,
     ):
         """Search memories for a specific user."""
 
@@ -1306,7 +1326,9 @@ class MOSProduct(MOSCore):
         logger.info(
             f"time search: load_user_cubes time user_id: {user_id} time is: {load_user_cubes_time_end - time_start}"
         )
-        search_result = super().search(query, user_id, install_cube_ids, top_k, mode=mode)
+        search_result = super().search(
+            query, user_id, install_cube_ids, top_k, mode=mode, session_id=session_id
+        )
         search_time_end = time.time()
         logger.info(
             f"time search: search text_mem time user_id: {user_id} time is: {search_time_end - load_user_cubes_time_end}"
@@ -1360,13 +1382,15 @@ class MOSProduct(MOSCore):
         mem_cube_id: str | None = None,
         source: str | None = None,
         user_profile: bool = False,
+        session_id: str | None = None,
     ):
         """Add memory for a specific user."""
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
-
-        result = super().add(messages, memory_content, doc_path, mem_cube_id, user_id)
+        result = super().add(
+            messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id
+        )
         if user_profile:
             try:
                 user_interests = memory_content.split("'userInterests': '")[1].split("', '")[0]

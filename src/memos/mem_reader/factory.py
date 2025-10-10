@@ -3,6 +3,7 @@ from typing import Any, ClassVar
 from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.mem_reader.base import BaseMemReader
 from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.memos_tools.singleton import singleton_factory
 
 
 class MemReaderFactory(BaseMemReader):
@@ -13,6 +14,7 @@ class MemReaderFactory(BaseMemReader):
     }
 
     @classmethod
+    @singleton_factory()
     def from_config(cls, config_factory: MemReaderConfigFactory) -> BaseMemReader:
         backend = config_factory.backend
         if backend not in cls.backend_to_class:

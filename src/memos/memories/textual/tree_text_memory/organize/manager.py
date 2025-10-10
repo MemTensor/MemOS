@@ -1,8 +1,10 @@
+import traceback
 import uuid
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
@@ -42,6 +44,7 @@ class MemoryManager:
                 "LongTermMemory": 1500,
                 "UserMemory": 480,
             }
+        logger.info(f"MemorySize is {self.memory_size}")
         self._threshold = threshold
         self.is_reorganize = is_reorganize
         self.reorganizer = GraphStructureReorganizer(
@@ -55,24 +58,35 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self._process_memory, m): m for m in memories}
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=60):
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
 
-        self.graph_store.remove_oldest_memory(
-            memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
-        )
-        self.graph_store.remove_oldest_memory(
-            memory_type="LongTermMemory", keep_latest=self.memory_size["LongTermMemory"]
-        )
-        self.graph_store.remove_oldest_memory(
-            memory_type="UserMemory", keep_latest=self.memory_size["UserMemory"]
-        )
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
+            )
+        except Exception:
+            logger.warning(f"Remove WorkingMemory error: {traceback.format_exc()}")
+
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="LongTermMemory", keep_latest=self.memory_size["LongTermMemory"]
+            )
+        except Exception:
+            logger.warning(f"Remove LongTermMemory error: {traceback.format_exc()}")
+
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="UserMemory", keep_latest=self.memory_size["UserMemory"]
+            )
+        except Exception:
+            logger.warning(f"Remove UserMemory error: {traceback.format_exc()}")
 
         self._refresh_memory_size()
         return added_ids
@@ -82,12 +96,12 @@ class MemoryManager:
         Replace WorkingMemory
         """
         working_memory_top_k = memories[: self.memory_size["WorkingMemory"]]
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
                 executor.submit(self._add_memory_to_db, memory, "WorkingMemory")
                 for memory in working_memory_top_k
             ]
-            for future in as_completed(futures):
+            for future in as_completed(futures, timeout=60):
                 try:
                     future.result()
                 except Exception as e:
@@ -102,6 +116,7 @@ class MemoryManager:
         """
         Return the cached memory type counts.
         """
+        self._refresh_memory_size()
         return self.current_memory_size
 
     def _refresh_memory_size(self) -> None:

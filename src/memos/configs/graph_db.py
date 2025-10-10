@@ -140,6 +140,10 @@ class NebulaGraphDBConfig(BaseGraphDBConfig):
             "If False: use a single shared database with logical isolation by user_name."
         ),
     )
+    max_client: int = Field(
+        default=1000,
+        description=("max_client"),
+    )
     embedding_dimension: int = Field(default=3072, description="Dimension of vector embedding")
 
     @model_validator(mode="after")

@@ -3,7 +3,6 @@ import traceback
 
 from contextlib import suppress
 from datetime import datetime
-from queue import Empty, Queue
 from threading import Lock
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -17,10 +16,25 @@ from memos.utils import timed
 
 
 if TYPE_CHECKING:
-    from nebulagraph_python.client.pool import NebulaPool
+    from nebulagraph_python import (
+        NebulaClient,
+    )
 
 
 logger = get_logger(__name__)
+
+
+_TRANSIENT_ERR_KEYS = (
+    "Session not found",
+    "Connection not established",
+    "timeout",
+    "deadline exceeded",
+    "Broken pipe",
+    "EOFError",
+    "socket closed",
+    "connection reset",
+    "connection refused",
+)
 
 
 @timed
@@ -87,137 +101,6 @@ def _normalize_datetime(val):
     return str(val)
 
 
-class SessionPoolError(Exception):
-    pass
-
-
-class SessionPool:
-    @require_python_package(
-        import_name="nebulagraph_python",
-        install_command="pip install ... @Tianxing",
-        install_link=".....",
-    )
-    def __init__(
-        self,
-        hosts: list[str],
-        user: str,
-        password: str,
-        minsize: int = 1,
-        maxsize: int = 10000,
-    ):
-        self.hosts = hosts
-        self.user = user
-        self.password = password
-        self.minsize = minsize
-        self.maxsize = maxsize
-        self.pool = Queue(maxsize)
-        self.lock = Lock()
-
-        self.clients = []
-
-        for _ in range(minsize):
-            self._create_and_add_client()
-
-    @timed
-    def _create_and_add_client(self):
-        from nebulagraph_python import NebulaClient
-
-        client = NebulaClient(self.hosts, self.user, self.password)
-        self.pool.put(client)
-        self.clients.append(client)
-
-    @timed
-    def get_client(self, timeout: float = 5.0):
-        try:
-            return self.pool.get(timeout=timeout)
-        except Empty:
-            with self.lock:
-                if len(self.clients) < self.maxsize:
-                    from nebulagraph_python import NebulaClient
-
-                    client = NebulaClient(self.hosts, self.user, self.password)
-                    self.clients.append(client)
-                    return client
-            raise RuntimeError("NebulaClientPool exhausted") from None
-
-    @timed
-    def return_client(self, client):
-        try:
-            client.execute("YIELD 1")
-            self.pool.put(client)
-        except Exception:
-            logger.info("[Pool] Client dead, replacing...")
-            self.replace_client(client)
-
-    @timed
-    def close(self):
-        for client in self.clients:
-            with suppress(Exception):
-                client.close()
-        self.clients.clear()
-
-    @timed
-    def get(self):
-        """
-        Context manager: with pool.get() as client:
-        """
-
-        class _ClientContext:
-            def __init__(self, outer):
-                self.outer = outer
-                self.client = None
-
-            def __enter__(self):
-                self.client = self.outer.get_client()
-                return self.client
-
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                if self.client:
-                    self.outer.return_client(self.client)
-
-        return _ClientContext(self)
-
-    @timed
-    def reset_pool(self):
-        """⚠️ Emergency reset: Close all clients and clear the pool."""
-        logger.warning("[Pool] Resetting all clients. Existing sessions will be lost.")
-        with self.lock:
-            for client in self.clients:
-                try:
-                    client.close()
-                except Exception:
-                    logger.error("Fail to close!!!")
-            self.clients.clear()
-            while not self.pool.empty():
-                try:
-                    self.pool.get_nowait()
-                except Empty:
-                    break
-            for _ in range(self.minsize):
-                self._create_and_add_client()
-        logger.info("[Pool] Pool has been reset successfully.")
-
-    @timed
-    def replace_client(self, client):
-        try:
-            client.close()
-        except Exception:
-            logger.error("Fail to close client")
-
-        if client in self.clients:
-            self.clients.remove(client)
-
-        from nebulagraph_python import NebulaClient
-
-        new_client = NebulaClient(self.hosts, self.user, self.password)
-        self.clients.append(new_client)
-
-        self.pool.put(new_client)
-
-        logger.info("[Pool] Replaced dead client with a new one.")
-        return new_client
-
-
 class NebulaGraphDB(BaseGraphDB):
     """
     NebulaGraph-based implementation of a graph memory store.
@@ -226,94 +109,194 @@ class NebulaGraphDB(BaseGraphDB):
     # ====== shared pool cache & refcount ======
     # These are process-local; in a multi-process model each process will
     # have its own cache.
-    _POOL_CACHE: ClassVar[dict[str, "NebulaPool"]] = {}
-    _POOL_REFCOUNT: ClassVar[dict[str, int]] = {}
-    _POOL_LOCK: ClassVar[Lock] = Lock()
+    _CLIENT_CACHE: ClassVar[dict[str, "NebulaClient"]] = {}
+    _CLIENT_REFCOUNT: ClassVar[dict[str, int]] = {}
+    _CLIENT_LOCK: ClassVar[Lock] = Lock()
+    _CLIENT_INIT_DONE: ClassVar[set[str]] = set()
 
     @staticmethod
-    def _make_pool_key(cfg: NebulaGraphDBConfig) -> str:
-        """
-        Build a cache key that captures all connection-affecting options.
-        Keep this key stable and include fields that change the underlying pool behavior.
-        """
-        # NOTE: Do not include tenant-like or query-scope-only fields here.
-        # Only include things that affect the actual TCP/auth/session pool.
+    def _get_hosts_from_cfg(cfg: NebulaGraphDBConfig) -> list[str]:
+        hosts = getattr(cfg, "uri", None) or getattr(cfg, "hosts", None)
+        if isinstance(hosts, str):
+            return [hosts]
+        return list(hosts or [])
+
+    @staticmethod
+    def _make_client_key(cfg: NebulaGraphDBConfig) -> str:
+        hosts = NebulaGraphDB._get_hosts_from_cfg(cfg)
         return "|".join(
             [
-                "nebula",
-                str(getattr(cfg, "uri", "")),
+                "nebula-sync",
+                ",".join(hosts),
                 str(getattr(cfg, "user", "")),
-                str(getattr(cfg, "password", "")),
-                # pool sizing / tls / timeouts if you have them in config:
-                str(getattr(cfg, "max_client", 1000)),
-                # multi-db mode can impact how we use sessions; keep it to be safe
                 str(getattr(cfg, "use_multi_db", False)),
+                str(getattr(cfg, "space", "")),
             ]
         )
 
     @classmethod
-    def _get_or_create_shared_pool(cls, cfg: NebulaGraphDBConfig):
-        """
-        Get a shared NebulaPool from cache or create one if missing.
-        Thread-safe with a lock; maintains a simple refcount.
-        """
-        key = cls._make_pool_key(cfg)
+    def _bootstrap_admin(cls, cfg: NebulaGraphDBConfig, client: "NebulaClient") -> "NebulaGraphDB":
+        tmp = object.__new__(NebulaGraphDB)
+        tmp.config = cfg
+        tmp.db_name = cfg.space
+        tmp.user_name = getattr(cfg, "user_name", None)
+        tmp.embedding_dimension = getattr(cfg, "embedding_dimension", 3072)
+        tmp.default_memory_dimension = 3072
+        tmp.common_fields = {
+            "id",
+            "memory",
+            "user_name",
+            "user_id",
+            "session_id",
+            "status",
+            "key",
+            "confidence",
+            "tags",
+            "created_at",
+            "updated_at",
+            "memory_type",
+            "sources",
+            "source",
+            "node_type",
+            "visibility",
+            "usage",
+            "background",
+        }
+        tmp.base_fields = set(tmp.common_fields) - {"usage"}
+        tmp.heavy_fields = {"usage"}
+        tmp.dim_field = (
+            f"embedding_{tmp.embedding_dimension}"
+            if str(tmp.embedding_dimension) != str(tmp.default_memory_dimension)
+            else "embedding"
+        )
+        tmp.system_db_name = "system" if getattr(cfg, "use_multi_db", False) else cfg.space
+        tmp._client = client
+        tmp._owns_client = False
+        return tmp
 
-        with cls._POOL_LOCK:
-            pool = cls._POOL_CACHE.get(key)
-            if pool is None:
-                # Create a new pool and put into cache
-                pool = SessionPool(
-                    hosts=cfg.get("uri"),
-                    user=cfg.get("user"),
-                    password=cfg.get("password"),
-                    minsize=1,
-                    maxsize=cfg.get("max_client", 1000),
+    @classmethod
+    def _get_or_create_shared_client(cls, cfg: NebulaGraphDBConfig) -> tuple[str, "NebulaClient"]:
+        from nebulagraph_python import (
+            ConnectionConfig,
+            NebulaClient,
+            SessionConfig,
+            SessionPoolConfig,
+        )
+
+        key = cls._make_client_key(cfg)
+        with cls._CLIENT_LOCK:
+            client = cls._CLIENT_CACHE.get(key)
+            if client is None:
+                # Connection setting
+                conn_conf: ConnectionConfig | None = getattr(cfg, "conn_config", None)
+                if conn_conf is None:
+                    conn_conf = ConnectionConfig.from_defults(
+                        cls._get_hosts_from_cfg(cfg),
+                        getattr(cfg, "ssl_param", None),
+                    )
+
+                sess_conf = SessionConfig(graph=getattr(cfg, "space", None))
+                pool_conf = SessionPoolConfig(
+                    size=int(getattr(cfg, "max_client", 1000)), wait_timeout=5000
                 )
-                cls._POOL_CACHE[key] = pool
-                cls._POOL_REFCOUNT[key] = 0
-                logger.info(f"[NebulaGraphDB] Created new shared NebulaPool for key={key}")
 
-            # Increase refcount for the caller
-            cls._POOL_REFCOUNT[key] = cls._POOL_REFCOUNT.get(key, 0) + 1
-            return key, pool
+                client = NebulaClient(
+                    hosts=conn_conf.hosts,
+                    username=cfg.user,
+                    password=cfg.password,
+                    conn_config=conn_conf,
+                    session_config=sess_conf,
+                    session_pool_config=pool_conf,
+                )
+                cls._CLIENT_CACHE[key] = client
+                cls._CLIENT_REFCOUNT[key] = 0
+                logger.info(f"[NebulaGraphDBSync] Created shared NebulaClient key={key}")
+
+            cls._CLIENT_REFCOUNT[key] = cls._CLIENT_REFCOUNT.get(key, 0) + 1
+
+            if getattr(cfg, "auto_create", False) and key not in cls._CLIENT_INIT_DONE:
+                try:
+                    pass
+                finally:
+                    pass
+
+        if getattr(cfg, "auto_create", False) and key not in cls._CLIENT_INIT_DONE:
+            with cls._CLIENT_LOCK:
+                if key not in cls._CLIENT_INIT_DONE:
+                    admin = cls._bootstrap_admin(cfg, client)
+                    try:
+                        admin._ensure_database_exists()
+                        admin._create_basic_property_indexes()
+                        admin._create_vector_index(
+                            dimensions=int(
+                                admin.embedding_dimension or admin.default_memory_dimension
+                            ),
+                        )
+                        cls._CLIENT_INIT_DONE.add(key)
+                        logger.info("[NebulaGraphDBSync] One-time init done")
+                    except Exception:
+                        logger.exception("[NebulaGraphDBSync] One-time init failed")
+
+        return key, client
+
+    def _refresh_client(self):
+        """
+        refresh NebulaClient:
+        """
+        old_key = getattr(self, "_client_key", None)
+        if not old_key:
+            return
+
+        cls = self.__class__
+        with cls._CLIENT_LOCK:
+            try:
+                if old_key in cls._CLIENT_CACHE:
+                    try:
+                        cls._CLIENT_CACHE[old_key].close()
+                    except Exception as e:
+                        logger.warning(f"[refresh_client] close old client error: {e}")
+                    finally:
+                        cls._CLIENT_CACHE.pop(old_key, None)
+            finally:
+                cls._CLIENT_REFCOUNT[old_key] = 0
+
+            new_key, new_client = cls._get_or_create_shared_client(self.config)
+            self._client_key = new_key
+            self._client = new_client
+            logger.info(f"[NebulaGraphDBSync] client refreshed: {old_key} -> {new_key}")
 
     @classmethod
-    def _release_shared_pool(cls, key: str):
-        """
-        Decrease refcount for the given pool key; only close when refcount hits zero.
-        """
-        with cls._POOL_LOCK:
-            if key not in cls._POOL_CACHE:
+    def _release_shared_client(cls, key: str):
+        with cls._CLIENT_LOCK:
+            if key not in cls._CLIENT_CACHE:
                 return
-            cls._POOL_REFCOUNT[key] = max(0, cls._POOL_REFCOUNT.get(key, 0) - 1)
-            if cls._POOL_REFCOUNT[key] == 0:
+            cls._CLIENT_REFCOUNT[key] = max(0, cls._CLIENT_REFCOUNT.get(key, 0) - 1)
+            if cls._CLIENT_REFCOUNT[key] == 0:
                 try:
-                    cls._POOL_CACHE[key].close()
+                    cls._CLIENT_CACHE[key].close()
                 except Exception as e:
-                    logger.warning(f"[NebulaGraphDB] Error closing shared pool: {e}")
+                    logger.warning(f"[NebulaGraphDBSync] Error closing client: {e}")
                 finally:
-                    cls._POOL_CACHE.pop(key, None)
-                    cls._POOL_REFCOUNT.pop(key, None)
-                    logger.info(f"[NebulaGraphDB] Closed and removed shared pool key={key}")
+                    cls._CLIENT_CACHE.pop(key, None)
+                    cls._CLIENT_REFCOUNT.pop(key, None)
+                    logger.info(f"[NebulaGraphDBSync] Closed & removed client key={key}")
 
     @classmethod
-    def close_all_shared_pools(cls):
-        """Force close all cached pools. Call this on graceful shutdown."""
-        with cls._POOL_LOCK:
-            for key, pool in list(cls._POOL_CACHE.items()):
+    def close_all_shared_clients(cls):
+        with cls._CLIENT_LOCK:
+            for key, client in list(cls._CLIENT_CACHE.items()):
                 try:
-                    pool.close()
+                    client.close()
                 except Exception as e:
-                    logger.warning(f"[NebulaGraphDB] Error closing pool key={key}: {e}")
+                    logger.warning(f"[NebulaGraphDBSync] Error closing client {key}: {e}")
                 finally:
-                    logger.info(f"[NebulaGraphDB] Closed pool key={key}")
-            cls._POOL_CACHE.clear()
-            cls._POOL_REFCOUNT.clear()
+                    logger.info(f"[NebulaGraphDBSync] Closed client key={key}")
+            cls._CLIENT_CACHE.clear()
+            cls._CLIENT_REFCOUNT.clear()
 
     @require_python_package(
         import_name="nebulagraph_python",
-        install_command="pip install ... @Tianxing",
+        install_command="pip install nebulagraph-python>=5.1.1",
         install_link=".....",
     )
     def __init__(self, config: NebulaGraphDBConfig):
@@ -371,34 +354,32 @@ class NebulaGraphDB(BaseGraphDB):
 
         # ---- NEW: pool acquisition strategy
         # Get or create a shared pool from the class-level cache
-        self._pool_key, self.pool = self._get_or_create_shared_pool(config)
-        self._owns_pool = True  # We manage refcount for this instance
-
-        # auto-create graph type / graph / index if needed
-        if config.auto_create:
-            self._ensure_database_exists()
-
-        self.execute_query(f"SESSION SET GRAPH `{self.db_name}`")
-
-        # Create only if not exists
-        self.create_index(dimensions=config.embedding_dimension)
+        self._client_key, self._client = self._get_or_create_shared_client(config)
+        self._owns_client = True
 
         logger.info("Connected to NebulaGraph successfully.")
 
     @timed
-    def execute_query(self, gql: str, timeout: float = 10.0, auto_set_db: bool = True):
-        with self.pool.get() as client:
-            try:
-                if auto_set_db and self.db_name:
-                    client.execute(f"SESSION SET GRAPH `{self.db_name}`")
-                return client.execute(gql, timeout=timeout)
+    def execute_query(self, gql: str, timeout: float = 60.0, auto_set_db: bool = True):
+        def _wrap_use_db(q: str) -> str:
+            if auto_set_db and self.db_name:
+                return f"USE `{self.db_name}`\n{q}"
+            return q
 
-            except Exception as e:
-                if "Session not found" in str(e) or "Connection not established" in str(e):
-                    logger.warning(f"[execute_query] {e!s}, replacing client...")
-                    self.pool.replace_client(client)
-                    return self.execute_query(gql, timeout, auto_set_db)
-                raise
+        try:
+            return self._client.execute(_wrap_use_db(gql), timeout=timeout)
+
+        except Exception as e:
+            emsg = str(e)
+            if any(k.lower() in emsg.lower() for k in _TRANSIENT_ERR_KEYS):
+                logger.warning(f"[execute_query] {e!s} → refreshing session pool and retry once...")
+                try:
+                    self._refresh_client()
+                    return self._client.execute(_wrap_use_db(gql), timeout=timeout)
+                except Exception:
+                    logger.exception("[execute_query] retry after refresh failed")
+                    raise
+            raise
 
     @timed
     def close(self):
@@ -409,13 +390,13 @@ class NebulaGraphDB(BaseGraphDB):
         - If pool was acquired via shared cache, decrement refcount and close
           when the last owner releases it.
         """
-        if not self._owns_pool:
-            logger.debug("[NebulaGraphDB] close() skipped (injected pool).")
+        if not self._owns_client:
+            logger.debug("[NebulaGraphDBSync] close() skipped (injected client).")
             return
-        if self._pool_key:
-            self._release_shared_pool(self._pool_key)
-            self._pool_key = None
-            self.pool = None
+        if self._client_key:
+            self._release_shared_client(self._client_key)
+            self._client_key = None
+            self._client = None
 
     # NOTE: __del__ is best-effort; do not rely on GC order.
     def __del__(self):
@@ -972,6 +953,7 @@ class NebulaGraphDB(BaseGraphDB):
         scope: str | None = None,
         status: str | None = None,
         threshold: float | None = None,
+        search_filter: dict | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -984,6 +966,8 @@ class NebulaGraphDB(BaseGraphDB):
             status (str, optional): Node status filter (e.g., 'active', 'archived').
                             If provided, restricts results to nodes with matching status.
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
+            search_filter (dict, optional): Additional metadata filters for search results.
+                            Keys should match node properties, values are the expected values.
 
         Returns:
             list[dict]: A list of dicts with 'id' and 'score', ordered by similarity.
@@ -993,6 +977,7 @@ class NebulaGraphDB(BaseGraphDB):
             - If scope is provided, it restricts results to nodes with matching memory_type.
             - If 'status' is provided, only nodes with the matching status will be returned.
             - If threshold is provided, only results with score >= threshold will be returned.
+            - If search_filter is provided, additional WHERE clauses will be added for metadata filtering.
             - Typical use case: restrict to 'status = activated' to avoid
             matching archived or merged nodes.
         """
@@ -1012,10 +997,17 @@ class NebulaGraphDB(BaseGraphDB):
             else:
                 where_clauses.append(f'n.user_name = "{self.config.user_name}"')
 
+                # Add search_filter conditions
+                if search_filter:
+                    for key, value in search_filter.items():
+                        if isinstance(value, str):
+                            where_clauses.append(f'n.{key} = "{value}"')
+                        else:
+                            where_clauses.append(f"n.{key} = {value}")
+
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         gql = f"""
-               USE `{self.db_name}`
                MATCH (n@Memory)
                {where_clause}
                ORDER BY inner_product(n.{self.dim_field}, {gql_vector}) DESC
@@ -1038,7 +1030,7 @@ class NebulaGraphDB(BaseGraphDB):
                 id_val = values[0].as_string()
                 score_val = values[1].as_double()
                 score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
-                if threshold is None or score_val <= threshold:
+                if threshold is None or score_val >= threshold:
                     output.append({"id": id_val, "score": score_val})
             return output
         except Exception as e:
@@ -1368,9 +1360,9 @@ class NebulaGraphDB(BaseGraphDB):
             where_clause += f' AND n.user_name = "{self.config.user_name}"'
 
         return_fields = self._build_return_fields(include_embedding)
+        return_fields += f", n.{self.dim_field} AS {self.dim_field}"
 
         query = f"""
-            USE `{self.db_name}`
             MATCH (n@Memory)
             WHERE {where_clause}
             OPTIONAL MATCH (n)-[@PARENT]->(c@Memory)
@@ -1380,11 +1372,16 @@ class NebulaGraphDB(BaseGraphDB):
         """
 
         candidates = []
+        node_ids = set()
         try:
             results = self.execute_query(query)
             for row in results:
                 props = {k: v.value for k, v in row.items()}
-                candidates.append(self._parse_node(props))
+                node = self._parse_node(props)
+                node_id = node["id"]
+                if node_id not in node_ids:
+                    candidates.append(node)
+                    node_ids.add(node_id)
         except Exception as e:
             logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
         return candidates
@@ -1538,18 +1535,19 @@ class NebulaGraphDB(BaseGraphDB):
                 logger.info(f"✅ Graph Type {graph_type_name} already include {self.dim_field}")
 
         create_graph = f"CREATE GRAPH IF NOT EXISTS `{self.db_name}` TYPED {graph_type_name}"
-        set_graph_working = f"SESSION SET GRAPH `{self.db_name}`"
-
         try:
             self.execute_query(create_graph, auto_set_db=False)
-            self.execute_query(set_graph_working)
             logger.info(f"✅ Graph ``{self.db_name}`` is now the working graph.")
         except Exception as e:
             logger.error(f"❌ Failed to create tag: {e} trace: {traceback.format_exc()}")
 
     @timed
     def _create_vector_index(
-        self, label: str, vector_property: str, dimensions: int, index_name: str
+        self,
+        label: str = "Memory",
+        vector_property: str = "embedding",
+        dimensions: int = 3072,
+        index_name: str = "memory_vector_index",
     ) -> None:
         """
         Create a vector index for the specified property in the label.
