@@ -1031,7 +1031,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         gql = f"""
                let a = {gql_vector}
-               MATCH (n@Memory)
+               MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
                {where_clause}
                ORDER BY inner_product(n.{self.dim_field}, a) DESC
                LIMIT {top_k}
