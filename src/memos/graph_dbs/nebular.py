@@ -451,6 +451,10 @@ class NebulaGraphDB(BaseGraphDB):
             OFFSET {keep_latest}
             DETACH DELETE n
         """
+        try:
+            self.execute_query(query)
+        except Exception as e:
+            logger.warning(f"Delete old mem error: {e}")
         self.execute_query(query)
 
     @timed
@@ -611,14 +615,19 @@ class NebulaGraphDB(BaseGraphDB):
             return -1
 
     @timed
-    def count_nodes(self, scope: str) -> int:
-        query = f"""
-                MATCH (n@Memory)
-                WHERE n.memory_type = "{scope}"
-                """
+    def count_nodes(self, scope: str | None = None) -> int:
+        query = "MATCH (n@Memory)"
+        conditions = []
+
+        if scope:
+            conditions.append(f'n.memory_type = "{scope}"')
         if not self.config.use_multi_db and self.config.user_name:
             user_name = self.config.user_name
-            query += f"\nAND n.user_name = '{user_name}'"
+            conditions.append(f"n.user_name = '{user_name}'")
+
+        if conditions:
+            query += "\nWHERE " + " AND ".join(conditions)
+
         query += "\nRETURN count(n) AS count"
 
         result = self.execute_query(query)
