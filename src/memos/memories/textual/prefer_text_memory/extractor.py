@@ -81,6 +81,32 @@ class NaiveExtractor(BaseExtractor):
             print(f"Error extracting implicit preferences: {e}, return None")
             return None
 
+    # def _process_single_chunk_explicit(
+    #     self, chunk: MessageList, msg_type: str, info: dict[str, Any]
+    # ) -> TextualMemoryItem | None:
+    #     """Process a single chunk and return a TextualMemoryItem."""
+    #     basic_info = self.extract_basic_info(chunk)
+    #     if not basic_info["dialog_str"]:
+    #         return None
+
+    #     explicit_pref = self.extract_explicit_preference(basic_info["dialog_str"])
+    #     if not explicit_pref:
+    #         return None
+
+    #     vector_info = {
+    #         "embedding": self.embedder.embed([basic_info["dialog_str"]])[0],
+    #     }
+    #     extract_info = {**basic_info, **explicit_pref, **vector_info, **info}
+
+    #     metadata = PreferenceTextualMemoryMetadata(
+    #         type=msg_type, preference_type="explicit_preference", **extract_info
+    #     )
+    #     memory = TextualMemoryItem(
+    #         id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata
+    #     )
+
+    #     return memory
+
     def _process_single_chunk_explicit(
         self, chunk: MessageList, msg_type: str, info: dict[str, Any]
     ) -> TextualMemoryItem | None:
@@ -93,19 +119,56 @@ class NaiveExtractor(BaseExtractor):
         if not explicit_pref:
             return None
 
-        vector_info = {
-            "embedding": self.embedder.embed([basic_info["dialog_str"]])[0],
-        }
-        extract_info = {**basic_info, **explicit_pref, **vector_info, **info}
+        memories = []
+        for pref in explicit_pref:
+            vector_info = {
+                "embedding": self.embedder.embed([pref["context_summary"]])[0],
+            }
+            extract_info = {**basic_info, **pref, **vector_info, **info}
 
-        metadata = PreferenceTextualMemoryMetadata(
-            type=msg_type, preference_type="explicit_preference", **extract_info
-        )
-        memory = TextualMemoryItem(
-            id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata
-        )
+            metadata = PreferenceTextualMemoryMetadata(
+                type=msg_type, preference_type="explicit_preference", **extract_info
+            )
+            memory = TextualMemoryItem(
+                id=str(uuid.uuid4()), memory=pref["context_summary"], metadata=metadata
+            )
 
-        return memory
+            memories.append(memory)
+
+        return memories
+
+    # def _process_single_chunk_explicit(
+    #     self, chunk: MessageList, msg_type: str, info: dict[str, Any]
+    # ) -> TextualMemoryItem | None:
+    #     """Process a single chunk and return a TextualMemoryItem."""
+    #     basic_info = self.extract_basic_info(chunk)
+    #     if not basic_info["dialog_str"]:
+    #         return None
+
+    #     explicit_pref = self.extract_explicit_preference(basic_info["dialog_str"])
+    #     if not explicit_pref:
+    #         return None
+        
+    #     mem_texts = []
+    #     prefs = []
+    #     for pref in explicit_pref:
+    #         mem_texts.append(pref["context_summary"])
+    #         prefs.append(pref["explicit_preference"])
+    #     mem_str = "\n".join(mem_texts)
+    #     pref_dict = {"explicit_preference": "\n".join(prefs)}
+    #     vector_info = {
+    #         "embedding": self.embedder.embed([mem_str])[0],
+    #     }
+    #     extract_info = {**basic_info, **pref_dict, **vector_info, **info}
+
+    #     metadata = PreferenceTextualMemoryMetadata(
+    #         type=msg_type, preference_type="explicit_preference", **extract_info
+    #     )
+    #     memory = TextualMemoryItem(
+    #         id=basic_info["dialog_id"], memory=mem_str, metadata=metadata
+    #     )
+
+    #     return memory
 
     def _process_single_chunk_implicit(
         self, chunk: MessageList, msg_type: str, info: dict[str, Any]
@@ -142,7 +205,7 @@ class NaiveExtractor(BaseExtractor):
         """Extract preference memories based on the messages using thread pool for acceleration."""
         chunks_for_explicit: list[MessageList] = []
         for message in messages:
-            chunk = self.splitter.split_chunks(message, split_type="lookback")
+            chunk = self.splitter.split_chunks(message, split_type="overlap")
             chunks_for_explicit.extend(chunk)
         if not chunks_for_explicit:
             return []
@@ -177,7 +240,10 @@ class NaiveExtractor(BaseExtractor):
                 try:
                     memory = future.result()
                     if memory:
-                        memories.append(memory)
+                        if isinstance(memory, list):
+                            memories.extend(memory)
+                        else:
+                            memories.append(memory)
                 except Exception as e:
                     task_type, chunk = futures[future]
                     print(f"Error processing {task_type} chunk: {chunk}\n{e}")
