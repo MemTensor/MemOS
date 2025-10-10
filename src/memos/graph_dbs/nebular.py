@@ -1008,7 +1008,7 @@ class NebulaGraphDB(BaseGraphDB):
         dim = len(vector)
         vector_str = ",".join(f"{float(x)}" for x in vector)
         gql_vector = f"VECTOR<{dim}, FLOAT>([{vector_str}])"
-        where_clauses = ["n.embedding_1024 IS NOT NULL"]
+        where_clauses = [f"n.{self.dim_field} IS NOT NULL"]
         if scope:
             where_clauses.append(f'n.memory_type = "{scope}"')
         if status:
