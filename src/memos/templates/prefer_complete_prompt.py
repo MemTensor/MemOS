@@ -4,6 +4,34 @@ Please extract the user's explicitly mentioned preferences from the following co
 
 Notes:
 - A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".
+- This includes, but is not limited to, any clearly expressed inclination, desire, rejection, or priority that counts as an explicit preference.
+
+Requirements:
+1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.
+2. Output should be a list of concise natural language summaries and the corresponding context summary, context summary must contain complete information of the conversation fragment that the preference is mentioned.
+3. If multiple preferences are mentioned within the same topic, you need to merge the preferences and context summary.
+
+Conversation:
+{qa_pair}
+
+Find ALL explicit preferences. If no explicit preferences found, return []. Output JSON only:
+```json
+[
+  {
+    "explicit_preference": "A short natural language summary of the preferences",
+    "context_summary": "The corresponding context summary, which is a summary of the corresponding conversation, do not lack any scenario information",
+    "reasoning": "reasoning process to find the explicit preferences"
+  },
+]
+```
+"""
+
+NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_BAK = """
+You are a preference extraction assistant.
+Please extract the user's explicitly mentioned preferences from the following conversation.
+
+Notes:
+- A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".
 - Any clearly expressed inclination, desire, rejection, or priority counts as an explicit preference.
 
 Requirements:

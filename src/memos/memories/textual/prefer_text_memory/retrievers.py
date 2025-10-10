@@ -54,6 +54,10 @@ class NaiveRetriever(BaseRetriever):
             explicit_prefs = future_explicit.result()
             implicit_prefs = future_implicit.result()
 
+        # sort by score
+        explicit_prefs.sort(key=lambda x: x.score, reverse=True)
+        implicit_prefs.sort(key=lambda x: x.score, reverse=True)
+
         explicit_prefs = [
             TextualMemoryItem(
                 id=pref.id,
