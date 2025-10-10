@@ -204,6 +204,10 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
         default_factory=EmbedderConfigFactory,
         description="Embedder configuration for the memory embedding",
     )
+    reranker: RerankerConfigFactory | None = Field(
+        None,
+        description="Reranker configuration (optional).",
+    )
     extractor: ExtractorConfigFactory = Field(
         ...,
         default_factory=ExtractorConfigFactory,

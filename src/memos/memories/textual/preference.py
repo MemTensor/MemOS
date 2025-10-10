@@ -21,6 +21,7 @@ from memos.memories.textual.prefer_text_memory.factory import (
     ExtractorFactory,
     RetrieverFactory,
 )
+from memos.reranker.factory import RerankerFactory
 from memos.types import MessageList
 from memos.vec_dbs.factory import MilvusVecDB, QdrantVecDB, VecDBFactory
 from memos.vec_dbs.item import VecDBItem
@@ -42,6 +43,7 @@ class PreferenceTextMemory(BaseTextMemory):
         self.embedder: OllamaEmbedder | ArkEmbedder | SenTranEmbedder | UniversalAPIEmbedder = (
             EmbedderFactory.from_config(config.embedder)
         )
+        self.reranker = RerankerFactory.from_config(config.reranker)
 
         self.extractor = ExtractorFactory.from_config(
             config.extractor,
@@ -60,6 +62,7 @@ class PreferenceTextMemory(BaseTextMemory):
             config.retriever,
             llm_provider=self.extractor_llm,
             embedder=self.embedder,
+            reranker=self.reranker,
             vector_db=self.vector_db,
         )
         self.assembler = AssemblerFactory.from_config(

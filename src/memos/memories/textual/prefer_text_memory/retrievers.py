@@ -9,7 +9,7 @@ class BaseRetriever(ABC):
     """Abstract base class for retrievers."""
 
     @abstractmethod
-    def __init__(self, llm_provider=None, embedder=None, vector_db=None):
+    def __init__(self, llm_provider=None, embedder=None, reranker=None, vector_db=None):
         """Initialize the retriever."""
 
     @abstractmethod
@@ -22,9 +22,10 @@ class BaseRetriever(ABC):
 class NaiveRetriever(BaseRetriever):
     """Naive retriever."""
 
-    def __init__(self, llm_provider=None, embedder=None, vector_db=None):
+    def __init__(self, llm_provider=None, embedder=None, reranker=None, vector_db=None):
         """Initialize the naive retriever."""
-        super().__init__(llm_provider, embedder, vector_db)
+        super().__init__(llm_provider, embedder, reranker, vector_db)
+        self.reranker = reranker
         self.vector_db = vector_db
         self.embedder = embedder
 
@@ -44,10 +45,10 @@ class NaiveRetriever(BaseRetriever):
         with ThreadPoolExecutor(max_workers=2) as executor:
             # Submit all search tasks
             future_explicit = executor.submit(
-                self.vector_db.search, query_embedding, "explicit_preference", top_k, info
+                self.vector_db.search, query_embedding, "explicit_preference", max(top_k, 20), info
             )
             future_implicit = executor.submit(
-                self.vector_db.search, query_embedding, "implicit_preference", top_k, info
+                self.vector_db.search, query_embedding, "implicit_preference", max(top_k, 20), info
             )
 
             # Wait for all results
@@ -77,5 +78,11 @@ class NaiveRetriever(BaseRetriever):
             for pref in implicit_prefs
             if pref.payload["implicit_preference"]
         ]
+
+        if self.reranker:
+            explicit_prefs = self.reranker.rerank(query, explicit_prefs, top_k)
+            implicit_prefs = self.reranker.rerank(query, implicit_prefs, top_k)
+            explicit_prefs = [item for item, _ in explicit_prefs]
+            implicit_prefs = [item for item, _ in implicit_prefs]
 
         return explicit_prefs + implicit_prefs
