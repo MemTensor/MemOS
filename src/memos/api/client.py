@@ -26,10 +26,7 @@ class MemOSClient:
         if not api_key:
             raise ValueError("MemOS API key is required")
 
-        self.headers = {
-          "Content-Type": "application/json",
-          "Authorization": f"Token {api_key}"
-        }
+        self.headers = {"Content-Type": "application/json", "Authorization": f"Token {api_key}"}
 
     def _validate_required_params(self, **params):
         """Validate required parameters - if passed, they must not be empty"""
@@ -45,7 +42,7 @@ class MemOSClient:
         self._validate_required_params(user_id=user_id)
 
         url = f"{self.base_url}/get/message"
-        payload = { "user_id": user_id, "conversation_id": conversation_id }
+        payload = {"user_id": user_id, "conversation_id": conversation_id}
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
@@ -70,7 +67,7 @@ class MemOSClient:
         )
 
         url = f"{self.base_url}/add/message"
-        payload = { "messages": messages, "user_id": user_id, "conversation_id": conversation_id }
+        payload = {"messages": messages, "user_id": user_id, "conversation_id": conversation_id}
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
