@@ -188,6 +188,19 @@ class NebulaGraphDB(BaseGraphDB):
             client = cls._CLIENT_CACHE.get(key)
             if client is None:
                 # Connection setting
+
+                tmp_client = NebulaClient(
+                    hosts=cfg.uri,
+                    username=cfg.user,
+                    password=cfg.password,
+                    session_config=SessionConfig(graph=None),
+                    session_pool_config=SessionPoolConfig(size=1, wait_timeout=3000),
+                )
+                try:
+                    cls._ensure_space_exists(tmp_client, cfg)
+                finally:
+                    tmp_client.close()
+
                 conn_conf: ConnectionConfig | None = getattr(cfg, "conn_config", None)
                 if conn_conf is None:
                     conn_conf = ConnectionConfig.from_defults(
@@ -318,6 +331,7 @@ class NebulaGraphDB(BaseGraphDB):
             }
         """
 
+        assert config.use_multi_db is False, "Multi-DB MODE IS NOT SUPPORTED"
         self.config = config
         self.db_name = config.space
         self.user_name = config.user_name
@@ -429,15 +443,21 @@ class NebulaGraphDB(BaseGraphDB):
         if not self.config.use_multi_db and self.config.user_name:
             optional_condition = f"AND n.user_name = '{self.config.user_name}'"
 
-        query = f"""
-            MATCH (n@Memory)
-            WHERE n.memory_type = '{memory_type}'
-            {optional_condition}
-            ORDER BY n.updated_at DESC
-            OFFSET {keep_latest}
-            DETACH DELETE n
-        """
-        self.execute_query(query)
+        count = self.count_nodes(memory_type)
+
+        if count > keep_latest:
+            delete_query = f"""
+                MATCH (n@Memory)
+                WHERE n.memory_type = '{memory_type}'
+                {optional_condition}
+                ORDER BY n.updated_at DESC
+                OFFSET {keep_latest}
+                DETACH DELETE n
+            """
+            try:
+                self.execute_query(delete_query)
+            except Exception as e:
+                logger.warning(f"Delete old mem error: {e}")
 
     @timed
     def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
@@ -597,14 +617,19 @@ class NebulaGraphDB(BaseGraphDB):
             return -1
 
     @timed
-    def count_nodes(self, scope: str) -> int:
-        query = f"""
-                MATCH (n@Memory)
-                WHERE n.memory_type = "{scope}"
-                """
+    def count_nodes(self, scope: str | None = None) -> int:
+        query = "MATCH (n@Memory)"
+        conditions = []
+
+        if scope:
+            conditions.append(f'n.memory_type = "{scope}"')
         if not self.config.use_multi_db and self.config.user_name:
             user_name = self.config.user_name
-            query += f"\nAND n.user_name = '{user_name}'"
+            conditions.append(f"n.user_name = '{user_name}'")
+
+        if conditions:
+            query += "\nWHERE " + " AND ".join(conditions)
+
         query += "\nRETURN count(n) AS count"
 
         result = self.execute_query(query)
@@ -985,8 +1010,7 @@ class NebulaGraphDB(BaseGraphDB):
         dim = len(vector)
         vector_str = ",".join(f"{float(x)}" for x in vector)
         gql_vector = f"VECTOR<{dim}, FLOAT>([{vector_str}])"
-
-        where_clauses = []
+        where_clauses = [f"n.{self.dim_field} IS NOT NULL"]
         if scope:
             where_clauses.append(f'n.memory_type = "{scope}"')
         if status:
@@ -1008,15 +1032,12 @@ class NebulaGraphDB(BaseGraphDB):
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         gql = f"""
-               MATCH (n@Memory)
+               let a = {gql_vector}
+               MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
                {where_clause}
-               ORDER BY inner_product(n.{self.dim_field}, {gql_vector}) DESC
-               APPROXIMATE
+               ORDER BY inner_product(n.{self.dim_field}, a) DESC
                LIMIT {top_k}
-               OPTIONS {{ METRIC: IP, TYPE: IVF, NPROBE: 8 }}
-               RETURN n.id AS id, inner_product(n.{self.dim_field}, {gql_vector}) AS score
-           """
-
+               RETURN n.id AS id, inner_product(n.{self.dim_field}, a) AS score"""
         try:
             result = self.execute_query(gql)
         except Exception as e:
@@ -1470,6 +1491,25 @@ class NebulaGraphDB(BaseGraphDB):
             ID of the resulting merged node.
         """
         raise NotImplementedError
+
+    @classmethod
+    def _ensure_space_exists(cls, tmp_client, cfg):
+        """Lightweight check to ensure target graph (space) exists."""
+        db_name = getattr(cfg, "space", None)
+        if not db_name:
+            logger.warning("[NebulaGraphDBSync] No `space` specified in cfg.")
+            return
+
+        try:
+            res = tmp_client.execute("SHOW GRAPHS;")
+            existing = {row.values()[0].as_string() for row in res}
+            if db_name not in existing:
+                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type;")
+                logger.info(f"✅ Graph `{db_name}` created before session binding.")
+            else:
+                logger.debug(f"Graph `{db_name}` already exists.")
+        except Exception:
+            logger.exception("[NebulaGraphDBSync] Failed to ensure space exists")
 
     @timed
     def _ensure_database_exists(self):
