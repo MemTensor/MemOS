@@ -443,21 +443,20 @@ class NebulaGraphDB(BaseGraphDB):
         if not self.config.use_multi_db and self.config.user_name:
             optional_condition = f"AND n.user_name = '{self.config.user_name}'"
 
-        count = self.count_nodes(memory_type)
-
-        if count > keep_latest:
-            delete_query = f"""
-                MATCH (n@Memory)
-                WHERE n.memory_type = '{memory_type}'
-                {optional_condition}
-                ORDER BY n.updated_at DESC
-                OFFSET {keep_latest}
-                DETACH DELETE n
-            """
-            try:
+        try:
+            count = self.count_nodes(memory_type)
+            if count > keep_latest:
+                delete_query = f"""
+                    MATCH (n@Memory)
+                    WHERE n.memory_type = '{memory_type}'
+                    {optional_condition}
+                    ORDER BY n.updated_at DESC
+                    OFFSET {keep_latest}
+                    DETACH DELETE n
+                """
                 self.execute_query(delete_query)
-            except Exception as e:
-                logger.warning(f"Delete old mem error: {e}")
+        except Exception as e:
+            logger.warning(f"Delete old mem error: {e}")
 
     @timed
     def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
