@@ -164,6 +164,32 @@ class SearchRequest(BaseRequest):
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
 
+class APISearchRequest(BaseRequest):
+    """Request model for searching memories."""
+
+    query: str = Field(..., description="Search query")
+    mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    internet_search: bool = Field(False, description="Whether to use internet search")
+    moscube: bool = Field(False, description="Whether to use MemOSCube")
+    top_k: int = Field(10, description="Number of results to return")
+    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+
+
+class APIMemoryADDRequest(BaseRequest):
+    """Request model for creating memories."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    mode: str = Field("fast", description="search mode fast or fine")
+    messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
+    memory_content: str | None = Field(None, description="Memory content to store")
+    doc_path: str | None = Field(None, description="Path to document to store")
+    source: str | None = Field(None, description="Source of the memory")
+    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
+    session_id: str | None = Field(
+        default_factory=lambda: str(uuid.uuid4()), description="Session id"
+    )
+
+
 class SuggestionRequest(BaseRequest):
     """Request model for getting suggestion queries."""
 
