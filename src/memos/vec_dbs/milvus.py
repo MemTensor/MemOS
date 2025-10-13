@@ -336,6 +336,8 @@ class MilvusVecDB(BaseVecDB):
 
     def update(self, collection_name: str, id: str, data: MilvusVecDBItem | dict[str, Any]) -> None:
         """Update an item in the vector database."""
+        if id != data.id:
+            raise ValueError(f"The id of the data to update must be the same as the id of the item to update, ID mismatch: expected {id}, got {data.id}")
         if isinstance(data, dict):
             data = data.copy()
             data = MilvusVecDBItem.from_dict(data)

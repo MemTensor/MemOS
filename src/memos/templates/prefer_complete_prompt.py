@@ -4,7 +4,9 @@ Please extract the user's explicitly mentioned preferences from the following co
 
 Notes:
 - A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".
-- This includes, but is not limited to, any clearly expressed inclination, desire, rejection, or priority that counts as an explicit preference.
+- This includes, but is not limited to, any user's explicitly expressed inclination, desire, rejection, or priority that counts as an explicit preference.
+- Focus on extracting the user's preferences in query. Do not extract preferences from the assistant's responses unless the user explicitly agrees with or endorses the assistant's suggestions.
+- When the user modifies or updates their preferences for the same topic or event, extract the complete evolution process of their preference changes, including both the original and updated preferences.
 
 Requirements:
 1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.
@@ -132,4 +134,272 @@ Please output JSON format:
 
 **New Information:**
 {new_information}
+"""
+
+NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE_BAK = """
+You are a **User Preference Memory Management Agent**.  
+Your goal is to maintain a user's long-term **preference memory base** by analyzing new preference information and determining how it should update existing memories.
+
+You must produce a complete **operation trace**, showing which memory entries (identified by unique IDs) should be **added**, **updated**, or **deleted**, and then output the **final memory state** after all operations.
+
+## Input Format
+
+New preference memory (new_memory):
+{new_memory}
+
+Retrieved preference memories (retrieved_memories):
+{retrieved_memories}
+
+## Task Instructions
+
+1. Analyze each retrieved memory and determine its relationship to the new memory:
+   - **Unrelated** → perform `"ADD"` (insert as a new independent memory);
+   - **Related** → perform `"UPDATE"` (refine, supplement, or merge with the old memory);
+   - **Conflicting or outdated** → perform `"DELETE"` (remove obsolete or contradictory memory).
+
+2. If multiple retrieved memories describe the same preference theme, merge them into one updated memory entry.
+
+3. Output a structured list of **operation traces**, each explicitly stating:
+   - which memory (by ID) is affected,
+   - what operation is performed,
+   - the before/after content,
+   - and the reasoning behind it.
+
+4. Output the **final memory state (after_update_state)**, representing the complete preference memory base after applying all operations.
+
+## Output Format (JSON)
+
+{
+  "trace": [
+    {
+      "op_id": "op_1",
+      "type": "ADD" | "UPDATE" | "DELETE",
+      "target_id": "(the old memory ID; null if ADD)",
+      "old_content": "(old memory content; null if ADD)",
+      "new_content": "(the updated or newly created memory, if applicable)",
+      "reason": "(brief natural-language explanation for the decision)"
+    }
+  ],
+  "after_update_state": [
+    {"id": "id1", "content": "…"},
+    {"id": "id2", "content": "…"}
+  ]
+}
+
+## Example
+
+**Input:**
+new_memory:
+"User now prefers lattes but occasionally drinks Americanos; he also enjoys studying in quiet coffee shops."
+
+retrieved_memories:
+[
+  {"id": "id1", "content": "User likes coffee."},
+  {"id": "id2", "content": "User prefers Americanos."},
+  {"id": "id3", "content": "User likes working from home."},
+  {"id": "id4", "content": "User has no particular interest in tea."}
+]
+
+**Output:**
+{
+  "trace": [
+    {
+      "op_id": "op_1",
+      "type": "UPDATE",
+      "target_id": "id1",
+      "old_content": "User likes coffee.",
+      "new_content": "User likes coffee, especially lattes, but sometimes drinks Americanos.",
+      "reason": "The new memory refines and extends the user's coffee preference details."
+    },
+    {
+      "op_id": "op_2",
+      "type": "DELETE",
+      "target_id": "id2",
+      "old_content": "User prefers Americanos.",
+      "new_content": null,
+      "reason": "This old memory has been integrated into a broader updated coffee preference (id1)."
+    },
+    {
+      "op_id": "op_3",
+      "type": "UPDATE",
+      "target_id": "id3",
+      "old_content": "User likes working from home.",
+      "new_content": "User now prefers studying in quiet coffee shops instead of working from home.",
+      "reason": "The new memory shows a shift in environment preference; the old one is outdated."
+    }
+  ],
+  "after_update_state": [
+    {"id": "id1", "content": "User likes coffee, especially lattes, but sometimes drinks Americanos."},
+    {"id": "id3", "content": "User now prefers studying in quiet coffee shops instead of working from home."},
+    {"id": "id4", "content": "User has no particular interest in tea."}
+  ]
+}
+
+## Output Requirements
+
+- The output **must** be valid JSON.  
+- Each operation must include a `reason`.  
+- Multiple retrieved memories may be merged into one unified updated memory.  
+- `after_update_state` must reflect the final, post-update state of the preference memory base.  
+- Do **not** include any explanatory text outside the JSON.
+"""
+
+NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE = """
+# User Preference Memory Management Agent
+
+You are a **User Preference Memory Management Agent**.  
+Your goal is to maintain a user's long-term **preference memory base** by analyzing new preference information and determining how it should update existing memories.
+
+Each memory entry contains three fields:
+- **id**: a unique identifier for the memory.
+- **context_summary**: a factual summary of the dialogue or situation from which the preference was extracted.
+- **preference**: the extracted statement describing the user's preference or tendency.
+
+When updating a preference, you should also integrate and update the corresponding `context_summary` to ensure both fields stay semantically consistent.
+
+You must produce a complete **operation trace**, showing which memory entries (identified by unique IDs) should be **added**, **updated**, or **deleted**, and then output the **final memory state** after all operations.
+
+## Input Format
+
+New preference memory (new_memory):
+{new_memory}
+
+Retrieved preference memories (retrieved_memories):
+{retrieved_memories}
+
+## Task Instructions
+
+1. Analyze each retrieved memory and determine its relationship to the new memory:
+   - **Unrelated** → perform `"ADD"` (insert as a new independent memory);
+   - **Related** → perform `"UPDATE"` (refine, supplement, or merge both the `preference` and the `context_summary`);
+   - **Conflicting or outdated** → perform `"DELETE"` (remove obsolete or contradictory memory).
+
+2. If multiple retrieved memories describe the same preference theme, merge them into one updated memory entry, combining both their `preference` information and their `context_summary` in a coherent and concise way.
+
+3. Output a structured list of **operation traces**, each explicitly stating:
+   - which memory (by ID) is affected,
+   - what operation is performed,
+   - the before/after `preference` and `context_summary`,
+   - and the reasoning behind it.
+
+4. Output the **final memory state (after_update_state)**, representing the complete preference memory base after applying all operations.
+
+## Output Format (JSON)
+
+{
+  "trace": [
+    {
+      "op_id": "op_1",
+      "type": "ADD" | "UPDATE" | "DELETE",
+      "target_id": "(the old memory ID; null if ADD)",
+      "old_preference": "(the old preference text; null if ADD)",
+      "old_context_summary": "(the old context summary; null if ADD)",
+      "new_preference": "(the updated or newly created preference, if applicable)",
+      "new_context_summary": "(the updated or newly created context summary, if applicable)",
+      "reason": "(brief natural-language explanation for the decision)"
+    }
+  ],
+  "after_update_state": [
+    {
+      "id": "id1",
+      "context_summary": "updated factual summary of the context",
+      "preference": "updated or final preference text"
+    }
+  ]
+}
+
+## Example
+
+**Input:**
+new_memory:
+{
+  "context_summary": "During a recent chat about study habits, the user mentioned that he often studies in quiet coffee shops and has started preferring lattes over Americanos, which he only drinks occasionally.",
+  "preference": "User now prefers lattes but occasionally drinks Americanos; he also enjoys studying in quiet coffee shops."
+}
+
+retrieved_memories:
+[
+  {
+    "id": "id1",
+    "context_summary": "The user previously said he likes coffee in general.",
+    "preference": "User likes coffee."
+  },
+  {
+    "id": "id2",
+    "context_summary": "The user once mentioned preferring Americanos during work breaks.",
+    "preference": "User prefers Americanos."
+  },
+  {
+    "id": "id3",
+    "context_summary": "The user said he often works from home",
+    "preference": "User likes working from home."
+  },
+  {
+    "id": "id4",
+    "context_summary": "The user noted he doesn't drink tea very often.",
+    "preference": "User has no particular interest in tea."
+  }
+]
+
+**Output:**
+{
+  "trace": [
+    {
+      "op_id": "op_1",
+      "type": "UPDATE",
+      "target_id": "id1",
+      "old_preference": "User likes coffee.",
+      "old_context_summary": "The user previously said he likes coffee in general.",
+      "new_preference": "User likes coffee, especially lattes, but occasionally drinks Americanos.",
+      "new_context_summary": "The user discussed his coffee habits, stating he now prefers lattes but only occasionally drinks Americanos",
+      "reason": "The new memory refines and expands the coffee preference and context while preserving frequency semantics ('occasionally')."
+    },
+    {
+      "op_id": "op_2",
+      "type": "DELETE",
+      "target_id": "id2",
+      "old_preference": "User prefers Americanos.",
+      "old_context_summary": "The user once mentioned preferring Americanos during work breaks.",
+      "new_preference": null,
+      "new_context_summary": null,
+      "reason": "This old memory is now merged into the updated coffee preference (id1)."
+    },
+    {
+      "op_id": "op_3",
+      "type": "UPDATE",
+      "target_id": "id3",
+      "old_preference": "User likes working from home.",
+      "old_context_summary": "The user said he often works from home.",
+      "new_preference": "User now prefers studying in quiet coffee shops instead of working from home.",
+      "new_context_summary": "The user mentioned shifting from working at home to studying in quiet cafes, reflecting a new preferred environment.",
+      "reason": "The preference has changed for the working environment."
+    }
+  ],
+  "after_update_state": [
+    {
+      "id": "id1",
+      "context_summary": "The user discussed his coffee habits, saying he now prefers lattes but only occasionally drinks Americanos.",
+      "preference": "User likes coffee, especially lattes, but occasionally drinks Americanos."
+    },
+    {
+      "id": "id3",
+      "context_summary": "The user mentioned shifting from working at home to studying in quiet cafes, reflecting a new preferred environment.",
+      "preference": "User now prefers studying in quiet coffee shops instead of working from home."
+    },
+    {
+      "id": "id4",
+      "context_summary": "The user noted he doesn't drink tea very often.",
+      "preference": "User has no particular interest in tea."
+    }
+  ]
+}
+
+## Output Requirements
+
+- The output **must** be valid JSON.  
+- Each operation must include both `preference` and `context_summary` updates where applicable.  
+- Each operation must include a clear `reason`.  
+- Multiple retrieved memories may be merged into one unified updated memory.  
+- `after_update_state` must reflect the final, post-update state of the preference memory base.  
+- Do **not** include any explanatory text outside the JSON.
 """
