@@ -67,7 +67,32 @@ class MemoryManager:
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
+
+        # Only clean up if we're close to or over the limit
+        self._cleanup_memories_if_needed()
+        self._refresh_memory_size()
         return added_ids
+
+    def _cleanup_memories_if_needed(self) -> None:
+        """
+        Only clean up memories if we're close to or over the limit.
+        This reduces unnecessary database operations.
+        """
+        cleanup_threshold = 0.8  # Clean up when 80% full
+
+        for memory_type, limit in self.memory_size.items():
+            current_count = self.current_memory_size.get(memory_type, 0)
+            threshold = int(limit * cleanup_threshold)
+
+            # Only clean up if we're at or above the threshold
+            if current_count >= threshold:
+                try:
+                    self.graph_store.remove_oldest_memory(
+                        memory_type=memory_type, keep_latest=limit
+                    )
+                    logger.debug(f"Cleaned up {memory_type}: {current_count} -> {limit}")
+                except Exception:
+                    logger.warning(f"Remove {memory_type} error: {traceback.format_exc()}")
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         """
