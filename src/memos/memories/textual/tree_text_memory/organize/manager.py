@@ -1,4 +1,3 @@
-import asyncio
 import traceback
 import uuid
 
@@ -244,9 +243,9 @@ class MemoryManager:
         # Step 3: Return this structure node ID as the parent_id
         return node_id
 
-    async def _remove_and_refresh_memory(self):
-        await asyncio.to_thread(self._cleanup_memories_if_needed)
-        await asyncio.to_thread(self._refresh_memory_size)
+    def remove_and_refresh_memory(self):
+        self._cleanup_memories_if_needed()
+        self._refresh_memory_size()
 
     def _cleanup_memories_if_needed(self) -> None:
         """
