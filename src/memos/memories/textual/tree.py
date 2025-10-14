@@ -326,10 +326,10 @@ class TreeTextMemory(BaseTextMemory):
         except Exception as e:
             logger.error(f"An error occurred while loading memories: {e}")
 
-    def dump(self, dir: str) -> None:
+    def dump(self, dir: str, include_embedding: bool = False) -> None:
         """Dump memories to os.path.join(dir, self.config.memory_filename)"""
         try:
-            json_memories = self.graph_store.export_graph()
+            json_memories = self.graph_store.export_graph(include_embedding=include_embedding)
 
             os.makedirs(dir, exist_ok=True)
             memory_file = os.path.join(dir, self.config.memory_filename)
