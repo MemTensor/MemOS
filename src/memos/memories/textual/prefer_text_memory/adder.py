@@ -99,30 +99,37 @@ class NaiveAdder(BaseAdder):
             )
             self.vector_db.add(collection_name, [vec_db_item])
             return new_memory.id
-
-        op_trace = rsp["trace"]
-        added_ids = []
-        for op in op_trace:
-            if op["type"].lower() == "add":
+        
+        def execute_op(op):
+            op_type = op["type"].lower()
+            if op_type == "add":
                 payload = new_memory.to_dict()["metadata"]
-                fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
-                payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
+                payload = {k: v for k, v in payload.items() if k not in {"dialog_id", "dialog_str", "embedding"}}
                 vec_db_item = MilvusVecDBItem(
-                    id=new_memory.id, memory=new_memory.memory, vector=new_memory.metadata.embedding, payload=payload
+                    id=new_memory.id, memory=new_memory.memory, 
+                    vector=new_memory.metadata.embedding, payload=payload
                 )
                 self.vector_db.add(collection_name, [vec_db_item])
-                added_ids.append(new_memory.id)
-            elif op["type"].lower() == "update":
+                return new_memory.id
+            elif op_type == "update":
                 payload = {"preference_type": preference_type, preference_type: op["new_preference"]}
                 vec_db_item = MilvusVecDBItem(
-                    id=op["target_id"], memory=op["new_context_summary"], vector=self.embedder.embed([op["new_context_summary"]])[0], payload=payload
+                    id=op["target_id"], memory=op["new_context_summary"], 
+                    vector=self.embedder.embed([op["new_context_summary"]])[0], payload=payload
                 )
                 self.vector_db.update(collection_name, op["target_id"], vec_db_item)
-                added_ids.append(op["target_id"])
-            elif op["type"].lower() == "delete":
+                return op["target_id"]
+            elif op_type == "delete":
                 self.vector_db.delete(collection_name, [op["target_id"]])
-            else:
-                continue
+                return None
+        
+        with ThreadPoolExecutor(max_workers=min(len(rsp["trace"]), 5)) as executor:
+            future_to_op = {executor.submit(execute_op, op): op for op in rsp["trace"]}
+            added_ids = []
+            for future in as_completed(future_to_op):
+                result = future.result()
+                if result is not None:
+                    added_ids.append(result)
 
         return added_ids
 
