@@ -112,6 +112,14 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
         return None
 
 
+def _derive_key(text: str, max_len: int = 80) -> str:
+    """default key when without LLM: first max_len words"""
+    if not text:
+        return ""
+    sent = re.split(r"[。！？!?]\s*|\n", text.strip())[0]
+    return (sent[:max_len]).strip()
+
+
 class SimpleStructMemReader(BaseMemReader, ABC):
     """Naive implementation of MemReader."""
 
@@ -127,11 +135,186 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
 
+    def _make_memory_item(
+        self,
+        value: str,
+        info: dict,
+        memory_type: str,
+        tags: list[str] | None = None,
+        key: str | None = None,
+        sources: list | None = None,
+        background: str = "",
+        type_: str = "fact",
+        confidence: float = 0.99,
+    ) -> TextualMemoryItem:
+        """construct memory item"""
+        return TextualMemoryItem(
+            memory=value,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=info.get("user_id", ""),
+                session_id=info.get("session_id", ""),
+                memory_type=memory_type,
+                status="activated",
+                tags=tags or [],
+                key=key if key is not None else _derive_key(value),
+                embedding=self.embedder.embed([value])[0],
+                usage=[],
+                sources=sources or [],
+                background=background,
+                confidence=confidence,
+                type=type_,
+            ),
+        )
+
     @timed
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         if mode == "fast":
-            raise NotImplementedError
+            # 使用合并逻辑处理短消息
+            raw_content_list = []
+            current_content = ""
+            current_roles = set()
+            current_sources = []
+            current_idx = 0
+
+            for idx, item in enumerate(scene_data_info):
+                try:
+                    role = item.get("role", "user")
+                    content = item.get("content", "")
+                    chat_time = item.get("chat_time", None)
+
+                    prefix = f"{role}: " + (f"[{chat_time}]: " if chat_time else "")
+                    mem = f"{prefix}{content}\n"
+
+                    if len(mem) > 2000:
+                        if current_content:
+                            raw_content_list.append(
+                                {
+                                    "text": current_content,
+                                    "roles": current_roles,
+                                    "sources": current_sources,
+                                    "start_idx": current_idx,
+                                }
+                            )
+                            current_content = ""
+                            current_roles = set()
+                            current_sources = []
+
+                        try:
+                            chunks = self.chunker.chunk(content) or []
+                        except Exception as e:
+                            logger.warning(f"[ChatFast] chunker failed on item {idx}: {e}")
+                            chunks = []
+
+                        if not chunks:
+                            chunks = [type("C", (), {"text": content})]
+
+                        for chunk in chunks:
+                            chunk_text = f"{prefix}{chunk.text}"
+                            raw_content_list.append(
+                                {
+                                    "text": chunk_text,
+                                    "roles": {role},
+                                    "sources": [
+                                        {
+                                            "type": "chat",
+                                            "index": idx,
+                                            "role": role,
+                                            "chat_time": chat_time,
+                                        }
+                                    ],
+                                    "start_idx": idx,
+                                }
+                            )
+                    else:
+                        if len(current_content + mem) > 2000:
+                            if current_content:
+                                raw_content_list.append(
+                                    {
+                                        "text": current_content,
+                                        "roles": current_roles,
+                                        "sources": current_sources,
+                                        "start_idx": current_idx,
+                                    }
+                                )
+                            current_content = mem
+                            current_roles = {role}
+                            current_sources = [
+                                {
+                                    "type": "chat",
+                                    "index": idx,
+                                    "role": role,
+                                    "chat_time": chat_time,
+                                }
+                            ]
+                            current_idx = idx
+                        else:
+                            current_content += mem
+                            current_roles.add(role)
+                            current_sources.append(
+                                {
+                                    "type": "chat",
+                                    "index": idx,
+                                    "role": role,
+                                    "chat_time": chat_time,
+                                }
+                            )
+
+                except Exception as e:
+                    logger.error(f"[ChatFast] Error preparing item {idx}: {e}")
+
+            if current_content:
+                raw_content_list.append(
+                    {
+                        "text": current_content,
+                        "roles": current_roles,
+                        "sources": current_sources,
+                        "start_idx": current_idx,
+                    }
+                )
+
+            chat_nodes = []
+
+            def _process_single_item(item_data):
+                try:
+                    text = item_data["text"]
+                    roles = item_data["roles"]
+                    sources = item_data["sources"]
+
+                    mem_type = "UserMemory" if (roles and roles == {"user"}) else "LongTermMemory"
+                    tags = ["mode:fast", f"lang:{detect_lang(text)}"] + [
+                        f"role:{r}" for r in sorted(roles)
+                    ]
+
+                    node = self._make_memory_item(
+                        value=text,
+                        info=info,
+                        memory_type=mem_type,
+                        tags=tags,
+                        key=None,
+                        sources=sources,
+                        background="",
+                        type_="fact",
+                        confidence=0.99,
+                    )
+                    return node
+                except Exception as e:
+                    logger.error(f"[ChatFast] Error processing item: {e}")
+                    return None
+
+            with ContextThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(_process_single_item, item) for item in raw_content_list]
+
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        node = future.result()
+                        if node:
+                            chat_nodes.append(node)
+                    except Exception as e:
+                        logger.error(f"[ChatFast] Future result error: {e}")
+
+            return chat_nodes
+
         mem_list = []
         for item in scene_data_info:
             if "chat_time" in item:
@@ -179,24 +362,18 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 if memory_type not in ["LongTermMemory", "UserMemory"]:
                     memory_type = "LongTermMemory"
 
-                node_i = TextualMemoryItem(
-                    memory=memory_i_raw.get("value", ""),
-                    metadata=TreeNodeTextualMemoryMetadata(
-                        user_id=info.get("user_id"),
-                        session_id=info.get("session_id"),
-                        memory_type=memory_type,
-                        status="activated",
-                        tags=memory_i_raw.get("tags", [])
-                        if type(memory_i_raw.get("tags", [])) is list
-                        else [],
-                        key=memory_i_raw.get("key", ""),
-                        embedding=self.embedder.embed([memory_i_raw.get("value", "")])[0],
-                        usage=[],
-                        sources=scene_data_info,
-                        background=response_json.get("summary", ""),
-                        confidence=0.99,
-                        type="fact",
-                    ),
+                node_i = self._make_memory_item(
+                    value=memory_i_raw.get("value", ""),
+                    info=info,
+                    memory_type=memory_type,
+                    tags=memory_i_raw.get("tags", [])
+                    if isinstance(memory_i_raw.get("tags", []), list)
+                    else [],
+                    key=memory_i_raw.get("key", ""),
+                    sources=scene_data_info,
+                    background=response_json.get("summary", ""),
+                    type_="fact",
+                    confidence=0.99,
                 )
                 chat_read_nodes.append(node_i)
             except Exception as e:
@@ -205,7 +382,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast"
+        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fine"
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
