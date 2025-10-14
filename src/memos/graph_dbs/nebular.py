@@ -700,7 +700,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         return_fields = self._build_return_fields(include_embedding)
         query = f"""
-            MATCH (n@Memory)
+            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             WHERE n.id IN [{id_list}] {where_user}
             RETURN {return_fields}
         """
@@ -972,8 +972,7 @@ class NebulaGraphDB(BaseGraphDB):
         dim = len(vector)
         vector_str = ",".join(f"{float(x)}" for x in vector)
         gql_vector = f"VECTOR<{dim}, FLOAT>([{vector_str}])"
-
-        where_clauses = []
+        where_clauses = [f"n.{self.dim_field} IS NOT NULL"]
         if scope:
             where_clauses.append(f'n.memory_type = "{scope}"')
         if status:
@@ -991,15 +990,12 @@ class NebulaGraphDB(BaseGraphDB):
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
         gql = f"""
-               MATCH (n@Memory)
-               {where_clause}
-               ORDER BY inner_product(n.{self.dim_field}, {gql_vector}) DESC
-               APPROXIMATE
-               LIMIT {top_k}
-               OPTIONS {{ METRIC: IP, TYPE: IVF, NPROBE: 8 }}
-               RETURN n.id AS id, inner_product(n.{self.dim_field}, {gql_vector}) AS score
-           """
-
+                   let a = {gql_vector}
+                   MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
+                   {where_clause}
+                   ORDER BY inner_product(n.{self.dim_field}, a) DESC
+                   LIMIT {top_k}
+                   RETURN n.id AS id, inner_product(n.{self.dim_field}, a) AS score"""
         try:
             result = self.execute_query(gql)
         except Exception as e:
@@ -1074,7 +1070,7 @@ class NebulaGraphDB(BaseGraphDB):
         where_clauses.append(f'n.user_name = "{user_name}"')
 
         where_str = " AND ".join(where_clauses)
-        gql = f"MATCH (n@Memory) WHERE {where_str} RETURN n.id AS id"
+        gql = f"MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */) WHERE {where_str} RETURN n.id AS id"
         ids = []
         try:
             result = self.execute_query(gql)
@@ -1303,11 +1299,12 @@ class NebulaGraphDB(BaseGraphDB):
 
         where_clause = f"WHERE n.memory_type = '{scope}'"
         where_clause += f" AND n.user_name = '{user_name}'"
+        # where_clause = f"WHERE n.user_name = '{user_name}'"
 
         return_fields = self._build_return_fields(include_embedding)
 
         query = f"""
-                   MATCH (n@Memory)
+                   MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
                    {where_clause}
                    RETURN {return_fields}
                    LIMIT 100
