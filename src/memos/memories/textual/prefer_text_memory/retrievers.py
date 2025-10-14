@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
+from memos.memories.textual.prefer_text_memory.utils import deduplicate_preferences
 
 
 class BaseRetriever(ABC):
@@ -84,5 +85,8 @@ class NaiveRetriever(BaseRetriever):
             implicit_prefs = self.reranker.rerank(query, implicit_prefs, top_k)
             explicit_prefs = [item for item, _ in explicit_prefs]
             implicit_prefs = [item for item, _ in implicit_prefs]
+
+        # deduplicate implicit preferences, due to more duplicates
+        implicit_prefs = deduplicate_preferences(implicit_prefs, similarity_threshold=0.8, num_perm=256)
 
         return explicit_prefs + implicit_prefs

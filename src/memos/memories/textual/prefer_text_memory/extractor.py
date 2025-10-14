@@ -122,7 +122,7 @@ class NaiveExtractor(BaseExtractor):
             return None
 
         vector_info = {
-            "embedding": self.embedder.embed([basic_info["dialog_str"]])[0],
+            "embedding": self.embedder.embed([implicit_pref["context_summary"]])[0],
         }
 
         extract_info = {**basic_info, **implicit_pref, **vector_info, **info}
@@ -131,7 +131,7 @@ class NaiveExtractor(BaseExtractor):
             type=msg_type, preference_type="implicit_preference", **extract_info
         )
         memory = TextualMemoryItem(
-            id=extract_info["dialog_id"], memory=extract_info["dialog_str"], metadata=metadata
+            id=extract_info["dialog_id"], memory=implicit_pref["context_summary"], metadata=metadata
         )
 
         return memory
@@ -144,28 +144,23 @@ class NaiveExtractor(BaseExtractor):
         max_workers: int = 10,
     ) -> list[TextualMemoryItem]:
         """Extract preference memories based on the messages using thread pool for acceleration."""
-        chunks_for_explicit: list[MessageList] = []
+        chunks: list[MessageList] = []
         for message in messages:
             chunk = self.splitter.split_chunks(message, split_type="overlap")
-            chunks_for_explicit.extend(chunk)
-        if not chunks_for_explicit:
+            chunks.extend(chunk)
+        if not chunks:
             return []
-
-        chunks_for_implicit: list[MessageList] = []
-        for message in messages:
-            chunk = self.splitter.split_chunks(message, split_type="overlap")
-            chunks_for_implicit.extend(chunk)
 
         memories = []
         with ThreadPoolExecutor(
-            max_workers=min(max_workers, len(chunks_for_explicit) + len(chunks_for_implicit))
+            max_workers=min(max_workers, len(chunks))
         ) as executor:
             futures = {
                 executor.submit(self._process_single_chunk_explicit, chunk, msg_type, info): (
                     "explicit",
                     chunk,
                 )
-                for chunk in chunks_for_explicit
+                for chunk in chunks
             }
             futures.update(
                 {
@@ -173,7 +168,7 @@ class NaiveExtractor(BaseExtractor):
                         "implicit",
                         chunk,
                     )
-                    for chunk in chunks_for_implicit
+                    for chunk in chunks
                 }
             )
 

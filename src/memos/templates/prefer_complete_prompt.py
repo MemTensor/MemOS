@@ -28,32 +28,6 @@ Find ALL explicit preferences. If no explicit preferences found, return []. Outp
 ```
 """
 
-NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_BAK = """
-You are a preference extraction assistant.
-Please extract the user's explicitly mentioned preferences from the following conversation.
-
-Notes:
-- A preference means the user's explicit attitude or choice toward something. It is not limited to words like "like/dislike/want/don't want/prefer".
-- Any clearly expressed inclination, desire, rejection, or priority counts as an explicit preference.
-
-Requirements:
-1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.
-2. Output should be a concise natural language summary, not a list or categories.
-3. If there are no explicit preferences in the conversation, output an empty string "".
-4. Output only the preference statements themselves, without any additional explanation.
-
-Conversation:
-{qa_pair}
-
-Output format:
-```json
-{
-  "explicit_preference": "A short natural language summary of the preferences, or an empty string"
-}
-```
-Don't output anything except the JSON.
-"""
-
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
 You are a preference inference assistant. Please extract **implicit preferences** from the following conversation
@@ -77,38 +51,8 @@ Output format:
 ```json
 {
   "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string",
+  "context_summary": "The corresponding context summary, which is a summary of the corresponding conversation, do not lack any scenario information",
   "reasoning": "Briefly explain the reasoning process for the implicit preference"
-}
-```
-Don't output anything except the JSON.
-"""
-
-
-NAIVE_EXPLICIT_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
-You are a preference extraction and inference assistant. Please extract the user's preferences from the following conversation, including:
-
-1. **Explicit preferences**: Preferences that the user directly expresses, such as likes, dislikes, wants, does not want, or prioritized choices.
-2. **Implicit preferences**: Preferences that are not explicitly stated but can be reasonably inferred from context, behavior, frequency, comparisons, exclusions, or scenario choices.
-
-Notes:
-- For explicit preferences, only extract what the user directly states, do not infer.
-- For implicit preferences, only infer when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
-- Do not duplicate: do not treat explicit preferences as implicit preferences.
-
-Requirements:
-1. Output in JSON format with two fields: "explicit_preference" and "implicit_preference".
-2. Each field should be an array, with each element being a concise natural language preference statement.
-3. Output only the preference statements themselves; do not include any extra explanation, reasoning, or confidence information.
-4. If a type of preference does not exist, its array should be empty.
-
-Conversation:
-{qa_pair}
-
-Output Format:
-```json
-{
-  "explicit_preference": ["The user clearly likes coffee", "The user does not want to sit by the window"],
-  "implicit_preference": ["The user prefers a quiet environment"]
 }
 ```
 Don't output anything except the JSON.
@@ -136,113 +80,6 @@ Please output JSON format:
 {new_information}
 """
 
-NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE_BAK = """
-You are a **User Preference Memory Management Agent**.  
-Your goal is to maintain a user's long-term **preference memory base** by analyzing new preference information and determining how it should update existing memories.
-
-You must produce a complete **operation trace**, showing which memory entries (identified by unique IDs) should be **added**, **updated**, or **deleted**, and then output the **final memory state** after all operations.
-
-## Input Format
-
-New preference memory (new_memory):
-{new_memory}
-
-Retrieved preference memories (retrieved_memories):
-{retrieved_memories}
-
-## Task Instructions
-
-1. Analyze each retrieved memory and determine its relationship to the new memory:
-   - **Unrelated** → perform `"ADD"` (insert as a new independent memory);
-   - **Related** → perform `"UPDATE"` (refine, supplement, or merge with the old memory);
-   - **Conflicting or outdated** → perform `"DELETE"` (remove obsolete or contradictory memory).
-
-2. If multiple retrieved memories describe the same preference theme, merge them into one updated memory entry.
-
-3. Output a structured list of **operation traces**, each explicitly stating:
-   - which memory (by ID) is affected,
-   - what operation is performed,
-   - the before/after content,
-   - and the reasoning behind it.
-
-4. Output the **final memory state (after_update_state)**, representing the complete preference memory base after applying all operations.
-
-## Output Format (JSON)
-
-{
-  "trace": [
-    {
-      "op_id": "op_1",
-      "type": "ADD" | "UPDATE" | "DELETE",
-      "target_id": "(the old memory ID; null if ADD)",
-      "old_content": "(old memory content; null if ADD)",
-      "new_content": "(the updated or newly created memory, if applicable)",
-      "reason": "(brief natural-language explanation for the decision)"
-    }
-  ],
-  "after_update_state": [
-    {"id": "id1", "content": "…"},
-    {"id": "id2", "content": "…"}
-  ]
-}
-
-## Example
-
-**Input:**
-new_memory:
-"User now prefers lattes but occasionally drinks Americanos; he also enjoys studying in quiet coffee shops."
-
-retrieved_memories:
-[
-  {"id": "id1", "content": "User likes coffee."},
-  {"id": "id2", "content": "User prefers Americanos."},
-  {"id": "id3", "content": "User likes working from home."},
-  {"id": "id4", "content": "User has no particular interest in tea."}
-]
-
-**Output:**
-{
-  "trace": [
-    {
-      "op_id": "op_1",
-      "type": "UPDATE",
-      "target_id": "id1",
-      "old_content": "User likes coffee.",
-      "new_content": "User likes coffee, especially lattes, but sometimes drinks Americanos.",
-      "reason": "The new memory refines and extends the user's coffee preference details."
-    },
-    {
-      "op_id": "op_2",
-      "type": "DELETE",
-      "target_id": "id2",
-      "old_content": "User prefers Americanos.",
-      "new_content": null,
-      "reason": "This old memory has been integrated into a broader updated coffee preference (id1)."
-    },
-    {
-      "op_id": "op_3",
-      "type": "UPDATE",
-      "target_id": "id3",
-      "old_content": "User likes working from home.",
-      "new_content": "User now prefers studying in quiet coffee shops instead of working from home.",
-      "reason": "The new memory shows a shift in environment preference; the old one is outdated."
-    }
-  ],
-  "after_update_state": [
-    {"id": "id1", "content": "User likes coffee, especially lattes, but sometimes drinks Americanos."},
-    {"id": "id3", "content": "User now prefers studying in quiet coffee shops instead of working from home."},
-    {"id": "id4", "content": "User has no particular interest in tea."}
-  ]
-}
-
-## Output Requirements
-
-- The output **must** be valid JSON.  
-- Each operation must include a `reason`.  
-- Multiple retrieved memories may be merged into one unified updated memory.  
-- `after_update_state` must reflect the final, post-update state of the preference memory base.  
-- Do **not** include any explanatory text outside the JSON.
-"""
 
 NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE = """
 # User Preference Memory Management Agent
