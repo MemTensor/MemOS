@@ -20,24 +20,36 @@ def ingest_session(session, user_id, session_id, frame, client):
         pass
         for idx, msg in enumerate(session):
             print(
-                f"[{frame}] 💬 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}...")
-            client.memory.add(messages=[Message(role=msg["role"], role_type=msg["role"], content=msg["content"], )], )
+                f"[{frame}] 💬 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}..."
+            )
+            client.memory.add(
+                messages=[
+                    Message(
+                        role=msg["role"],
+                        role_type=msg["role"],
+                        content=msg["content"],
+                    )
+                ],
+            )
     elif frame == "mem0-local" or frame == "mem0-api":
         for idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"]})
             print(
-                f"[{frame}] 📝 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}...")
+                f"[{frame}] 📝 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}..."
+            )
         if frame == "mem0-local":
             client.add(messages=messages, user_id=user_id)
         elif frame == "mem0-api":
-            client.add(messages=messages,
-                       user_id=user_id,
-                       session_id=session_id,
-                       version="v2", )
+            client.add(
+                messages=messages,
+                user_id=user_id,
+                session_id=session_id,
+                version="v2",
+            )
         print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
     elif frame == "memos-local" or frame == "memos-api":
         for i in range(0, len(session), 10):
-            messages = session[i: i + 10]
+            messages = session[i : i + 10]
             client.add(messages=messages, user_id=user_id, conv_id=session_id)
         print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
 
@@ -48,7 +60,7 @@ def build_jsonl_index(jsonl_path):
     Assumes each line is a JSON object with a single key-value pair.
     """
     index = {}
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, "r", encoding="utf-8") as f:
         while True:
             offset = f.tell()
             line = f.readline()
@@ -60,14 +72,14 @@ def build_jsonl_index(jsonl_path):
 
 
 def load_context_by_id(jsonl_path, offset):
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, "r", encoding="utf-8") as f:
         f.seek(offset)
         item = json.loads(f.readline())
         return next(iter(item.values()))
 
 
 def load_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, mode="r", newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for _, row in enumerate(reader, start=1):
             row_data = {}
@@ -79,7 +91,7 @@ def load_rows(csv_path):
 def load_rows_with_context(csv_path, jsonl_path):
     jsonl_index = build_jsonl_index(jsonl_path)
 
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, mode="r", newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         prev_sid = None
         prev_context = None
@@ -99,13 +111,13 @@ def load_rows_with_context(csv_path, jsonl_path):
 
 
 def count_csv_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as f:
+    with open(csv_path, mode="r", newline="", encoding="utf-8") as f:
         return sum(1 for _ in f) - 1
 
 
 def ingest_conv(row_data, context, version, conv_idx, frame):
     end_index_in_shared_context = row_data["end_index_in_shared_context"]
-    context = context[:int(end_index_in_shared_context)]
+    context = context[: int(end_index_in_shared_context)]
     user_id = f"pm_exper_user_{conv_idx}_{version}"
     print(f"👤 User ID: {user_id}")
     print("\n" + "=" * 80)
@@ -157,7 +169,13 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
     print(f"📊 Total sessions to ingest: {len(sessions)}")
 
     for idx, session in enumerate(sessions):
-        ingest_session(session=session, user_id=user_id, session_id=idx, frame=frame, client=client, )
+        ingest_session(
+            session=session,
+            user_id=user_id,
+            session_id=idx,
+            frame=frame,
+            client=client,
+        )
     print(f"✅ Ingestion of conversation {conv_idx} completed")
     print("=" * 80)
 
@@ -180,16 +198,25 @@ def main(frame, version, num_workers=2):
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_idx = {
-            executor.submit(ingest_conv, row_data=row_data, context=context, version=version, conv_idx=idx,
-                            frame=frame, ): idx
-            for idx, (row_data, context) in enumerate(all_data)}
+            executor.submit(
+                ingest_conv,
+                row_data=row_data,
+                context=context,
+                version=version,
+                conv_idx=idx,
+                frame=frame,
+            ): idx
+            for idx, (row_data, context) in enumerate(all_data)
+        }
 
-        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"):
+        for future in tqdm(
+            as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
+        ):
             idx = future_to_idx[future]
             try:
                 future.result()
             except Exception as exc:
-                print(f'\n❌ Conversation {idx} generated an exception: {exc}')
+                print(f"\n❌ Conversation {idx} generated an exception: {exc}")
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
@@ -205,10 +232,18 @@ def main(frame, version, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Ingestion Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
-                        default='memos-api')
-    parser.add_argument("--version", type=str, default="0925-1", help="Version of the evaluation framework.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
+        default="memos-api",
+    )
+    parser.add_argument(
+        "--version", type=str, default="0925-1", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3, help="Number of parallel workers for processing users."
+    )
     args = parser.parse_args()
 
     main(frame=args.lib, version=args.version, num_workers=args.workers)
