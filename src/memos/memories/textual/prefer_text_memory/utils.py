@@ -17,7 +17,7 @@ def convert_messages_to_string(messages: MessageList) -> str:
     return message_text
 
 
-def deduplicate_preferences(prefs: list[TextualMemoryItem], similarity_threshold: float = 0.8, num_perm: int = 256) -> list[TextualMemoryItem]:
+def deduplicate_preferences(prefs: list[TextualMemoryItem], similarity_threshold: float = 0.6, num_perm: int = 256) -> list[TextualMemoryItem]:
     """
     Deduplicate preference texts using MinHash algorithm.
     
