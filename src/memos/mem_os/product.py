@@ -179,14 +179,14 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get all user configurations from persistent storage
-            user_configs = self.user_manager.list_user_configs()
+            user_configs = self.user_manager.list_user_configs(self.max_user_instances)
 
             # Get the raw database records for sorting by updated_at
             session = self.user_manager._get_session()
             try:
                 from memos.mem_user.persistent_user_manager import UserConfig
 
-                db_configs = session.query(UserConfig).all()
+                db_configs = session.query(UserConfig).limit(self.max_user_instances).all()
                 # Create a mapping of user_id to updated_at timestamp
                 updated_at_map = {config.user_id: config.updated_at for config in db_configs}
 
