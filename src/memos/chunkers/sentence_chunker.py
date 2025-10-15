@@ -30,9 +30,6 @@ class SentenceChunker(BaseChunker):
 
     def chunk(self, text: str) -> list[str] | list[Chunk]:
         """Chunk the given text into smaller chunks based on sentences."""
-        if len(text) <= self.config.chunk_size:
-            return [text]
-
         chonkie_chunks = self.chunker.chunk(text)
 
         chunks = []

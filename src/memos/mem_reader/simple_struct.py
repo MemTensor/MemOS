@@ -134,6 +134,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.llm = LLMFactory.from_config(config.llm)
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
+        self.memory_max_length = 8000
 
     def _make_memory_item(
         self,
@@ -170,7 +171,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         if mode == "fast":
-            # 使用合并逻辑处理短消息
             raw_content_list = []
             current_content = ""
             current_roles = set()
@@ -185,8 +185,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
                     prefix = f"{role}: " + (f"[{chat_time}]: " if chat_time else "")
                     mem = f"{prefix}{content}\n"
-
-                    if len(mem) > 2000:
+                    if len(mem) > self.memory_max_length:
                         if current_content:
                             raw_content_list.append(
                                 {
@@ -196,9 +195,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                                     "start_idx": current_idx,
                                 }
                             )
-                            current_content = ""
-                            current_roles = set()
-                            current_sources = []
+                            current_content, current_roles, current_sources = "", set(), []
 
                         try:
                             chunks = self.chunker.chunk(content) or []
@@ -209,8 +206,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         if not chunks:
                             chunks = [type("C", (), {"text": content})]
 
-                        for chunk in chunks:
-                            chunk_text = f"{prefix}{chunk.text}"
+                        for c in chunks:
+                            chunk_text = c.text if hasattr(c, "text") else c
                             raw_content_list.append(
                                 {
                                     "text": chunk_text,
@@ -227,7 +224,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                                 }
                             )
                     else:
-                        if len(current_content + mem) > 2000:
+                        if len(current_content + mem) > self.memory_max_length:
                             if current_content:
                                 raw_content_list.append(
                                     {
@@ -240,24 +237,14 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                             current_content = mem
                             current_roles = {role}
                             current_sources = [
-                                {
-                                    "type": "chat",
-                                    "index": idx,
-                                    "role": role,
-                                    "chat_time": chat_time,
-                                }
+                                {"type": "chat", "index": idx, "role": role, "chat_time": chat_time}
                             ]
                             current_idx = idx
                         else:
                             current_content += mem
                             current_roles.add(role)
                             current_sources.append(
-                                {
-                                    "type": "chat",
-                                    "index": idx,
-                                    "role": role,
-                                    "chat_time": chat_time,
-                                }
+                                {"type": "chat", "index": idx, "role": role, "chat_time": chat_time}
                             )
 
                 except Exception as e:

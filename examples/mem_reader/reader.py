@@ -11,7 +11,7 @@ def main():
     )
     reader = SimpleStructMemReader(reader_config)
 
-    # 3. Define scene data
+    # 2. Define scene data
     scene_data = [
         [
             {"role": "user", "chat_time": "3 May 2025", "content": "I'm feeling a bit down today."},
@@ -187,32 +187,77 @@ def main():
         ],
     ]
 
-    # 4. Acquiring memories
-    start_time = time.time()
-    chat_memory = reader.get_memory(
-        scene_data, type="chat", info={"user_id": "user1", "session_id": "session1"}
-    )
-    print("\nChat Memory:\n", chat_memory)
+    print("=== Mem-Reader Fast vs Fine Mode Comparison ===\n")
 
-    # 5. Example of processing documents
-    print("\n=== Processing Documents ===")
+    # 3. Test Fine Mode (default)
+    print("🔄 Testing FINE mode (default, with LLM processing)...")
+    start_time = time.time()
+    fine_memory = reader.get_memory(
+        scene_data, type="chat", info={"user_id": "user1", "session_id": "session1"}, mode="fine"
+    )
+    fine_time = time.time() - start_time
+    print(f"✅ Fine mode completed in {fine_time:.2f} seconds")
+    print(f"📊 Fine mode generated {sum(len(mem_list) for mem_list in fine_memory)} memory items")
+
+    # 4. Test Fast Mode
+    print("\n⚡ Testing FAST mode (quick processing, no LLM calls)...")
+    start_time = time.time()
+    fast_memory = reader.get_memory(
+        scene_data, type="chat", info={"user_id": "user1", "session_id": "session1"}, mode="fast"
+    )
+    fast_time = time.time() - start_time
+    print(f"✅ Fast mode completed in {fast_time:.2f} seconds")
+    print(f"📊 Fast mode generated {sum(len(mem_list) for mem_list in fast_memory)} memory items")
+
+    # 5. Performance Comparison
+    print("\n📈 Performance Comparison:")
+    print(f"   Fine mode: {fine_time:.2f}s")
+    print(f"   Fast mode: {fast_time:.2f}s")
+    print(f"   Speed improvement: {fine_time / fast_time:.1f}x faster")
+
+    # 6. Show sample results from both modes
+    print("\n🔍 Sample Results Comparison:")
+    print("\n--- FINE Mode Results (first 3 items) ---")
+    for i, mem_list in enumerate(fine_memory[:3]):
+        for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
+            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+
+    print("\n--- FAST Mode Results (first 3 items) ---")
+    for i, mem_list in enumerate(fast_memory[:3]):
+        for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
+            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+
+    # 7. Example of processing documents (only in fine mode)
+    print("\n=== Processing Documents (Fine Mode Only) ===")
     # Example document paths (you should replace these with actual document paths)
     doc_paths = [
         "examples/mem_reader/text1.txt",
         "examples/mem_reader/text2.txt",
     ]
-    # 6. Acquiring memories from documents
-    doc_memory = reader.get_memory(
-        doc_paths,
-        "doc",
-        info={
-            "user_id": "1111",
-            "session_id": "2222",
-        },
-    )
-    print("\nDocument Memory:\n", doc_memory)
-    end_time = time.time()
-    print(f"The runtime is {end_time - start_time} seconds.")
+
+    try:
+        # 6. Acquiring memories from documents
+        doc_memory = reader.get_memory(
+            doc_paths,
+            "doc",
+            info={
+                "user_id": "1111",
+                "session_id": "2222",
+            },
+            mode="fine",
+        )
+        print(
+            f"\n📄 Document Memory generated {sum(len(mem_list) for mem_list in doc_memory)} items"
+        )
+    except Exception as e:
+        print(f"⚠️  Document processing failed: {e}")
+        print("   (This is expected if document files don't exist)")
+
+    print("\n🎯 Summary:")
+    print(f"   • Fast mode: {fast_time:.2f}s - Quick processing, no LLM calls")
+    print(f"   • Fine mode: {fine_time:.2f}s - Full LLM processing for better understanding")
+    print("   • Use fast mode for: Real-time applications, high-throughput scenarios")
+    print("   • Use fine mode for: Quality analysis, detailed memory extraction")
 
 
 if __name__ == "__main__":
