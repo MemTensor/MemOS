@@ -251,8 +251,8 @@ class APIConfig:
             "user": os.getenv("NEBULAR_USER", "root"),
             "password": os.getenv("NEBULAR_PASSWORD", "xxxxxx"),
             "space": os.getenv("NEBULAR_SPACE", "shared-tree-textual-memory"),
-            # "user_name": f"memos{user_id.replace('-', '')}",
-            # "use_multi_db": False,
+            "user_name": f"memos{user_id.replace('-', '')}",
+            "use_multi_db": False,
             "auto_create": True,
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
         }
