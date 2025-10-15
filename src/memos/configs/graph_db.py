@@ -124,21 +124,9 @@ class NebulaGraphDBConfig(BaseGraphDBConfig):
     space: str = Field(
         ..., description="The name of the target NebulaGraph space (like a database)"
     )
-    user_name: str | None = Field(
-        default=None,
-        description="Logical user or tenant ID for data isolation (optional, used in metadata tagging)",
-    )
     auto_create: bool = Field(
         default=False,
         description="Whether to auto-create the space if it does not exist",
-    )
-    use_multi_db: bool = Field(
-        default=True,
-        description=(
-            "If True: use Neo4j's multi-database feature for physical isolation; "
-            "each user typically gets a separate database. "
-            "If False: use a single shared database with logical isolation by user_name."
-        ),
     )
     max_client: int = Field(
         default=1000,

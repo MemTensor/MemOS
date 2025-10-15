@@ -115,17 +115,16 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
 class SimpleStructMemReader(BaseMemReader, ABC):
     """Naive implementation of MemReader."""
 
-    def __init__(self, config: SimpleStructMemReaderConfig):
+    def __init__(self, llm, embedder, chunker):
         """
         Initialize the NaiveMemReader with configuration.
 
         Args:
             config: Configuration object for the reader
         """
-        self.config = config
-        self.llm = LLMFactory.from_config(config.llm)
-        self.embedder = EmbedderFactory.from_config(config.embedder)
-        self.chunker = ChunkerFactory.from_config(config.chunker)
+        self.llm = llm
+        self.embedder = embedder
+        self.chunker = chunker
 
     @timed
     def _process_chat_data(self, scene_data_info, info):
@@ -142,8 +141,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
 
         prompt = template.replace("${conversation}", "\n".join(mem_list))
-        if self.config.remove_prompt_example:
-            prompt = prompt.replace(examples, "")
+        # if self.config.remove_prompt_example:
+        #     prompt = prompt.replace(examples, "")
 
         messages = [{"role": "user", "content": prompt}]
 
