@@ -1,5 +1,4 @@
 import os
-import time
 
 from typing import Any
 
@@ -189,9 +188,11 @@ def search_memories(search_req: APISearchRequest):
     """Search memories for a specific user."""
     # Create UserContext object - how to assign values
     user_context = UserContext(
-        user_id=search_req.user_id, session_id=search_req.session_id or "default_session"
+        user_id=search_req.user_id,
+        mem_cube_id=search_req.mem_cube_id,
+        session_id=search_req.session_id or "default_session",
     )
-
+    logger.info(f"Search user_id is: {user_context.mem_cube_id}")
     memories_result: MOSSearchResult = {
         "text_mem": [],
         "act_mem": [],
@@ -206,7 +207,7 @@ def search_memories(search_req: APISearchRequest):
     naive_mem_cube = _create_naive_mem_cube()
     search_results = naive_mem_cube.text_mem.search(
         query=search_req.query,
-        user_name=search_req.mem_cube_id,
+        user_name=user_context.mem_cube_id,
         top_k=search_req.top_k,
         mode=search_req.mode,
         manual_close_internet=not search_req.internet_search,
@@ -237,9 +238,11 @@ def search_memories(search_req: APISearchRequest):
 def add_memories(add_req: APIADDRequest):
     """Add memories for a specific user."""
     # Create UserContext object - how to assign values
-    user_context = UserContext(user_id=add_req.user_id, session_id=add_req.session_id)
-
-    time_start = time.time()
+    user_context = UserContext(
+        user_id=add_req.user_id,
+        mem_cube_id=add_req.mem_cube_id,
+        session_id=add_req.session_id or "default_session",
+    )
     naive_mem_cube = _create_naive_mem_cube()
     target_session_id = add_req.session_id
     if not target_session_id:
@@ -255,12 +258,10 @@ def add_memories(add_req: APIADDRequest):
 
     # Flatten memory list
     flattened_memories = [mm for m in memories for mm in m]
-
-    elapsed_time = time.time() - time_start
-    logger.info(f"Memory extraction completed for user {add_req.user_id} in {elapsed_time:.2f}s")
+    logger.info(f"Memory extraction completed for user {add_req.user_id}")
     mem_id_list: list[str] = naive_mem_cube.text_mem.add(
         flattened_memories,
-        user_name=add_req.mem_cube_id,
+        user_name=user_context.mem_cube_id,
     )
 
     logger.info(

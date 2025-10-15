@@ -5,6 +5,7 @@ This module provides persistent storage for user configurations using Redis.
 
 import json
 
+from memos.configs.mem_os import MOSConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
 
@@ -103,7 +104,7 @@ class RedisPersistentUserManager:
             logger.error(f"Error saving configuration for user {user_id}: {e}")
             return False
 
-    def get_user_config(self, user_id: str) -> MOSConfig | None:
+    def get_user_config(self, user_id: str) -> dict | None:
         """Get user configuration from Redis (search interface).
 
         Args:
@@ -176,7 +177,7 @@ class RedisPersistentUserManager:
 
     def list_user_configs(
         self, pattern: str = "user_config:*", count: int = 100
-    ) -> dict[str, MOSConfig]:
+    ) -> dict[str, dict]:
         """List all user configurations.
 
         Args:
@@ -184,7 +185,7 @@ class RedisPersistentUserManager:
             count (int): Number of keys to return per scan. Defaults to 100.
 
         Returns:
-            dict[str, MOSConfig]: Dictionary mapping user_id to MOSConfig objects.
+            dict[str, dict]: Dictionary mapping user_id to dict objects.
         """
         result = {}
         try:

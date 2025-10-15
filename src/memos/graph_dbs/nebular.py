@@ -1330,7 +1330,6 @@ class NebulaGraphDB(BaseGraphDB):
 
         where_clause = f"WHERE n.memory_type = '{scope}'"
         where_clause += f" AND n.user_name = '{user_name}'"
-        # where_clause = f"WHERE n.user_name = '{user_name}'"
 
         return_fields = self._build_return_fields(include_embedding)
 

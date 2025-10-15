@@ -74,6 +74,7 @@ class PermissionDict(TypedDict, total=False):
 class UserContext(BaseModel):
     """Model to represent user context."""
 
-    user_id: str
+    user_id: str | None = None
+    mem_cube_id: str | None = None
     session_id: str | None = None
     operation: list[PermissionDict] | None = None

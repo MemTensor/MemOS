@@ -5,8 +5,6 @@ If you want to start server_api set .env to MemOS/.env and run:
 uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8002 --workers 4
 """
 
-import time
-
 from typing import Any
 
 from dotenv import load_dotenv
@@ -45,8 +43,6 @@ def test_add_memories(
     """
     logger.info(f"Testing add memories for user: {user_id}, mem_cube: {mem_cube_id}")
 
-    time_start = time.time()
-
     # Create NaiveMemCube using server_router function
     naive_mem_cube = _create_naive_mem_cube()
 
@@ -62,8 +58,6 @@ def test_add_memories(
 
     # Flatten memory list
     flattened_memories = [mm for m in memories for mm in m]
-
-    elapsed_time = time.time() - time_start
 
     # Add memories to the system
     mem_id_list: list[str] = naive_mem_cube.text_mem.add(
@@ -117,8 +111,6 @@ def test_search_memories(
     # Prepare search filter
     search_filter = {"session_id": session_id} if session_id != "default_session" else None
 
-    # Perform search
-    time_start = time.time()
     search_results = naive_mem_cube.text_mem.search(
         query=query,
         user_name=mem_cube_id,

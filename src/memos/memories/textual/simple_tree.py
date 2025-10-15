@@ -1,15 +1,12 @@
 import time
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.embedders.base import BaseEmbedder
-from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.base import BaseGraphDB
-from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.base import BaseLLM
-from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -18,6 +15,12 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.base import BaseReranker
 from memos.types import MessageList
+
+
+if TYPE_CHECKING:
+    from memos.embedders.factory import OllamaEmbedder
+    from memos.graph_dbs.factory import Neo4jGraphDB
+    from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 
 
 logger = get_logger(__name__)
