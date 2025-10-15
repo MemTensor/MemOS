@@ -60,17 +60,13 @@ class NaiveExtractor(BaseExtractor):
             return None
 
     def extract_implicit_preference(
-        self, qa_pairs: MessageList | list[str]
+        self, qa_pair: MessageList | str
     ) -> dict[str, Any] | None:
         """Extract implicit preferences from cluster qa pairs."""
-        if not qa_pairs:
+        if not qa_pair:
             return None
-        qa_pairs_str = (
-            convert_messages_to_string(qa_pairs)
-            if isinstance(qa_pairs[0], dict)
-            else "\n\n".join(qa_pairs)
-        )
-        prompt = NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pairs}", qa_pairs_str)
+        qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, list) else qa_pair
+        prompt = NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pair}", qa_pair_str)
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
