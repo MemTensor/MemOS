@@ -191,7 +191,7 @@ class NaiveAdder(BaseAdder):
             collection_name = pref_type_collection_map[preference_type]
 
             search_results = self.vector_db.search(
-                memory.metadata.embedding, collection_name, top_k=5
+                memory.metadata.embedding, collection_name, top_k=5, filter={"user_id": memory.metadata.user_id}
             )
             search_results.sort(key=lambda x: x.score, reverse=True)
             
