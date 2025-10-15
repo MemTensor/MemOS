@@ -424,7 +424,7 @@ class NebulaGraphDB(BaseGraphDB):
 
         optional_condition = f"AND n.user_name = '{user_name}'"
         query = f"""
-            MATCH (n@Memory)
+            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             WHERE n.memory_type = '{memory_type}'
             {optional_condition}
             ORDER BY n.updated_at DESC
