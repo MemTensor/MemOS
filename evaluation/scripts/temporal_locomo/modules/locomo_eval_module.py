@@ -194,6 +194,10 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         start = time.time()
         client: MOS = client
 
+        if not self.scheduler_flag:
+            # if not scheduler_flag, search to update working memory
+            self.memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client)
+
         # Search for speaker A
         search_a_results = client.mem_scheduler.search_for_eval(
             query=query,
@@ -526,6 +530,25 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         with open(user_search_path, "w") as fw:
             json.dump(dict(search_results), fw, indent=2)
             print(f"Save search results {conv_id}")
+
+        search_durations = []
+        for result in response_results[conv_id]:
+            if "search_duration_ms" in result:
+                search_durations.append(result["search_duration_ms"])
+
+        if search_durations:
+            avg_search_duration = sum(search_durations) / len(search_durations)
+            with self.stats_lock:
+                if self.stats[self.frame][self.version]["memory_stats"]["avg_search_duration_ms"]:
+                    self.stats[self.frame][self.version]["memory_stats"][
+                        "avg_search_duration_ms"
+                    ] = (
+                        self.stats[self.frame][self.version]["memory_stats"][
+                            "avg_search_duration_ms"
+                        ]
+                        + avg_search_duration
+                    ) / 2
+                print(f"Average search duration: {avg_search_duration:.2f} ms")
 
         # Dump stats after processing each user
         self.save_stats()

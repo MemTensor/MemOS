@@ -463,6 +463,47 @@ class MOSProduct(MOSCore):
             + mem_block
         )
 
+    def _build_base_system_prompt(
+        self,
+        base_prompt: str | None = None,
+        tone: str = "friendly",
+        verbosity: str = "mid",
+        mode: str = "enhance",
+    ) -> str:
+        """
+        Build base system prompt without memory references.
+        """
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d (%A)")
+        sys_body = get_memos_prompt(date=formatted_date, tone=tone, verbosity=verbosity, mode=mode)
+        prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
+        return prefix + sys_body
+
+    def _build_memory_context(
+        self,
+        memories_all: list[TextualMemoryItem],
+        mode: str = "enhance",
+    ) -> str:
+        """
+        Build memory context to be included in user message.
+        """
+        if not memories_all:
+            return ""
+
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+
+        if mode == "enhance":
+            return (
+                "# Memories\n## PersonalMemory (ordered)\n"
+                + mem_block_p
+                + "\n## OuterMemory (ordered)\n"
+                + mem_block_o
+                + "\n\n"
+            )
+        else:
+            mem_block = mem_block_o + "\n" + mem_block_p
+            return "# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block + "\n\n"
+
     def _build_enhance_system_prompt(
         self,
         user_id: str,
@@ -472,6 +513,7 @@ class MOSProduct(MOSCore):
     ) -> str:
         """
         Build enhance prompt for the user with memory references.
+        [DEPRECATED] Use _build_base_system_prompt and _build_memory_context instead.
         """
         now = datetime.now()
         formatted_date = now.strftime("%Y-%m-%d (%A)")
@@ -1002,14 +1044,22 @@ class MOSProduct(MOSCore):
                 m.metadata.embedding = []
                 new_memories_list.append(m)
             memories_list = new_memories_list
-        system_prompt = super()._build_system_prompt(memories_list, base_prompt)
+        # Build base system prompt without memory
+        system_prompt = self._build_base_system_prompt(base_prompt, mode="base")
+
+        # Build memory context to be included in user message
+        memory_context = self._build_memory_context(memories_list, mode="base")
+
+        # Combine memory context with user query
+        user_content = memory_context + query if memory_context else query
+
         history_info = []
         if history:
             history_info = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *history_info,
-            {"role": "user", "content": query},
+            {"role": "user", "content": user_content},
         ]
         response = self.chat_llm.generate(current_messages)
         time_end = time.time()
@@ -1079,8 +1129,16 @@ class MOSProduct(MOSCore):
 
         reference = prepare_reference_data(memories_list)
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
-        # Build custom system prompt with relevant memories)
-        system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
+
+        # Build base system prompt without memory
+        system_prompt = self._build_base_system_prompt(mode="enhance")
+
+        # Build memory context to be included in user message
+        memory_context = self._build_memory_context(memories_list, mode="enhance")
+
+        # Combine memory context with user query
+        user_content = memory_context + query if memory_context else query
+
         # Get chat history
         if user_id not in self.chat_history_manager:
             self._register_chat_history(user_id, session_id)
@@ -1091,7 +1149,7 @@ class MOSProduct(MOSCore):
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
-            {"role": "user", "content": query},
+            {"role": "user", "content": user_content},
         ]
         logger.info(
             f"user_id: {user_id}, cube_id: {cube_id}, current_system_prompt: {system_prompt}"

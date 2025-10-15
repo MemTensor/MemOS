@@ -1,11 +1,14 @@
 import concurrent
+import threading
 
 from collections import defaultdict
 from collections.abc import Callable
+from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
+from memos.mem_scheduler.general_modules.task_threads import ThreadRace
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
@@ -22,6 +25,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
     - Batch message processing
     - Graceful shutdown
     - Bulk handler registration
+    - Thread race competition for parallel task execution
     """
 
     def __init__(self, max_workers=30, enable_parallel_dispatch=False):
@@ -48,6 +52,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         # Set to track active futures for monitoring purposes
         self._futures = set()
+
+        # Thread race module for competitive task execution
+        self.thread_race = ThreadRace()
 
     def register_handler(self, label: str, handler: Callable[[list[ScheduleMessageItem]], None]):
         """
@@ -176,6 +183,22 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 logger.error("Handler failed during shutdown", exc_info=True)
 
         return len(not_done) == 0
+
+    def run_competitive_tasks(
+        self, tasks: dict[str, Callable[[threading.Event], Any]], timeout: float = 10.0
+    ) -> tuple[str, Any] | None:
+        """
+        Run multiple tasks in a competitive race, returning the result of the first task to complete.
+
+        Args:
+            tasks: Dictionary mapping task names to task functions that accept a stop_flag parameter
+            timeout: Maximum time to wait for any task to complete (in seconds)
+
+        Returns:
+            Tuple of (task_name, result) from the winning task, or None if no task completes
+        """
+        logger.info(f"Starting competitive execution of {len(tasks)} tasks")
+        return self.thread_race.run_race(tasks, timeout)
 
     def shutdown(self) -> None:
         """Gracefully shutdown the dispatcher."""

@@ -16,7 +16,6 @@ from memos.log import get_logger
 
 from .constants import (
     BASE_DIR,
-    MEMOS_MODEL,
     MEMOS_SCHEDULER_MODEL,
 )
 from .prompts import (
@@ -42,10 +41,9 @@ class BaseEvalModule:
         self.top_k = self.args.top_k
 
         # attributes
-        if self.frame in [MEMOS_MODEL, MEMOS_SCHEDULER_MODEL]:
-            self.context_update_method = ContextUpdateMethod.DIRECT
-        else:
-            self.context_update_method = ContextUpdateMethod.TEMPLATE
+        self.context_update_method = getattr(
+            self.args, "context_update_method", ContextUpdateMethod.PRE_CONTEXT
+        )
         self.custom_instructions = CUSTOM_INSTRUCTIONS
         self.data_dir = Path(f"{BASE_DIR}/data")
         self.locomo_df = pd.read_json(f"{self.data_dir}/locomo/locomo10.json")
@@ -64,7 +62,7 @@ class BaseEvalModule:
         # Configure result dir; if scheduler disabled and using memos scheduler, mark as ablation
         if (
             hasattr(self.args, "scheduler_flag")
-            and self.frame == "memos_scheduler"
+            and self.frame == MEMOS_SCHEDULER_MODEL
             and self.args.scheduler_flag is False
         ):
             self.result_dir = Path(
@@ -73,6 +71,11 @@ class BaseEvalModule:
         else:
             self.result_dir = Path(
                 f"{BASE_DIR}/results/temporal_locomo/{self.frame}-{self.version}/"
+            )
+
+        if self.context_update_method != ContextUpdateMethod.PRE_CONTEXT:
+            self.result_dir = (
+                self.result_dir.parent / f"{self.result_dir.name}_{self.context_update_method}"
             )
         self.result_dir.mkdir(parents=True, exist_ok=True)
 
@@ -135,10 +138,6 @@ class BaseEvalModule:
 
         # Statistics tracking with thread safety
         self.stats = {self.frame: {self.version: defaultdict(dict)}}
-        self.stats[self.frame][self.version]["response_stats"] = defaultdict(dict)
-        self.stats[self.frame][self.version]["response_stats"]["response_failure"] = 0
-        self.stats[self.frame][self.version]["response_stats"]["response_count"] = 0
-
         self.stats[self.frame][self.version]["memory_stats"] = defaultdict(dict)
         self.stats[self.frame][self.version]["memory_stats"]["total_queries"] = 0
         self.stats[self.frame][self.version]["memory_stats"]["can_answer_count"] = 0

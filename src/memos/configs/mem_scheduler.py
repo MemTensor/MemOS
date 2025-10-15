@@ -11,7 +11,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
-    DEFAULT_THREAD__POOL_MAX_WORKERS,
+    DEFAULT_THREAD_POOL_MAX_WORKERS,
 )
 
 
@@ -25,12 +25,12 @@ class BaseSchedulerConfig(BaseConfig):
         default=True, description="Whether to enable parallel message processing using thread pool"
     )
     thread_pool_max_workers: int = Field(
-        default=DEFAULT_THREAD__POOL_MAX_WORKERS,
+        default=DEFAULT_THREAD_POOL_MAX_WORKERS,
         gt=1,
         lt=20,
-        description=f"Maximum worker threads in pool (default: {DEFAULT_THREAD__POOL_MAX_WORKERS})",
+        description=f"Maximum worker threads in pool (default: {DEFAULT_THREAD_POOL_MAX_WORKERS})",
     )
-    consume_interval_seconds: int = Field(
+    consume_interval_seconds: float = Field(
         default=DEFAULT_CONSUME_INTERVAL_SECONDS,
         gt=0,
         le=60,
