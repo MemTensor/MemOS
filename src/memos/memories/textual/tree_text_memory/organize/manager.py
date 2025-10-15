@@ -130,9 +130,8 @@ class MemoryManager:
         """
         ids = []
 
-        # Add to WorkingMemory
+        # Add to WorkingMemory do not return working_id
         working_id = self._add_memory_to_db(memory, "WorkingMemory", user_name)
-        ids.append(working_id)
 
         # Add to LongTermMemory and UserMemory
         if memory.metadata.memory_type in ["LongTermMemory", "UserMemory"]:
