@@ -680,33 +680,6 @@ class MOSCore:
                 if pref_result is not None:
                     result["pref_mem"].append(pref_result)
 
-            if (
-                (mem_cube_id in install_cube_ids)
-                and (mem_cube.text_mem is not None)
-                and self.config.enable_textual_memory
-            ):
-                time_start = time.time()
-                memories = mem_cube.text_mem.search(
-                    query,
-                    top_k=top_k if top_k else self.config.top_k,
-                    mode=mode,
-                    manual_close_internet=not internet_search,
-                    info={
-                        "user_id": target_user_id,
-                        "session_id": target_session_id,
-                        "chat_history": chat_history.chat_history,
-                    },
-                    moscube=moscube,
-                    search_filter=search_filter,
-                )
-                result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
-                logger.info(
-                    f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
-                )
-                search_time_end = time.time()
-                logger.info(
-                    f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
-                )
         return result
 
     def add(
