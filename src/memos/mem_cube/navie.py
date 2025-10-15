@@ -13,6 +13,14 @@ from memos.memories.activation.base import BaseActMemory
 from memos.memories.factory import MemoryFactory
 from memos.memories.parametric.base import BaseParaMemory
 from memos.memories.textual.base import BaseTextMemory
+from memos.mem_reader.base import BaseMemReader
+from memos.llms.base import BaseLLM
+from memos.embedders.base import BaseEmbedder
+from memos.graph_dbs.base import BaseGraphDB
+from memos.reranker.base import BaseReranker
+from memos.memories.textual.simple_tree import SimpleTreeTextMemory
+from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+
 
 
 logger = get_logger(__name__)
@@ -21,26 +29,29 @@ logger = get_logger(__name__)
 class NaiveMemCube(BaseMemCube):
     """MemCube is a box for loading and dumping three types of memories."""
 
-    def __init__(self, config: GeneralMemCubeConfig):
+    def __init__(self, 
+            llm: BaseLLM, 
+            embedder: BaseEmbedder, 
+            mem_reader: BaseMemReader, 
+            graph_db: BaseGraphDB, 
+            reranker: BaseReranker, 
+            memory_manager: MemoryManager,
+            default_cube_config: GeneralMemCubeConfig,
+            internet_retriever: None = None,
+    ):
         """Initialize the MemCube with a configuration."""
-        self.config = config
-        time_start = time.time()
-        self._text_mem: BaseTextMemory | None = (
-            MemoryFactory.from_config(config.text_mem)
-            if config.text_mem.backend != "uninitialized"
-            else None
-        )
-        logger.info(f"init_text_mem in {time.time() - time_start} seconds")
-        self._act_mem: BaseActMemory | None = (
-            MemoryFactory.from_config(config.act_mem)
-            if config.act_mem.backend != "uninitialized"
-            else None
-        )
-        self._para_mem: BaseParaMemory | None = (
-            MemoryFactory.from_config(config.para_mem)
-            if config.para_mem.backend != "uninitialized"
-            else None
-        )
+        self._text_mem: BaseTextMemory | None = SimpleTreeTextMemory(
+            llm, 
+            embedder, 
+            mem_reader, 
+            graph_db, 
+            reranker,
+            memory_manager, 
+            default_cube_config.text_mem.config,
+            internet_retriever,
+            )
+        self._act_mem: BaseActMemory | None = None
+        self._para_mem: BaseParaMemory | None = None
 
     def load(
         self, dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None
@@ -114,57 +125,6 @@ class NaiveMemCube(BaseMemCube):
             logger.info(f"Dumped para_mem to {dir}")
 
         logger.info(f"MemCube dumped successfully to {dir} (types: {memory_types})")
-
-    @staticmethod
-    def init_from_dir(
-        dir: str,
-        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
-        default_config: GeneralMemCubeConfig | None = None,
-    ) -> "GeneralMemCube":
-        """Create a MemCube instance from a MemCube directory.
-
-        Args:
-            dir (str): The directory containing the memory files.
-            memory_types (list[str], optional): List of memory types to load.
-                If None, loads all available memory types.
-            default_config (GeneralMemCubeConfig, optional): Default configuration to merge with existing config.
-                If provided, will merge general settings while preserving critical user-specific fields.
-
-        Returns:
-            MemCube: An instance of MemCube loaded with memories from the specified directory.
-        """
-        config_path = os.path.join(dir, "config.json")
-        config = GeneralMemCubeConfig.from_json_file(config_path)
-
-        # Merge with default config if provided
-        if default_config is not None:
-            config = merge_config_with_default(config, default_config)
-            logger.info(f"Applied default config to cube {config.cube_id}")
-        mem_cube = GeneralMemCube(config)
-        mem_cube.load(dir, memory_types)
-        return mem_cube
-
-    @staticmethod
-    def init_from_remote_repo(
-        cube_id: str,
-        base_url: str = "https://huggingface.co/datasets",
-        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
-        default_config: GeneralMemCubeConfig | None = None,
-    ) -> "GeneralMemCube":
-        """Create a MemCube instance from a remote repository.
-
-        Args:
-            cube_id (str): The repository name.
-            base_url (str): The base URL of the remote repository.
-            memory_types (list[str], optional): List of memory types to load.
-                If None, loads all available memory types.
-            default_config (GeneralMemCubeConfig, optional): Default configuration to merge with existing config.
-
-        Returns:
-            MemCube: An instance of MemCube loaded with memories from the specified remote repository.
-        """
-        dir = download_repo(cube_id, base_url)
-        return GeneralMemCube.init_from_dir(dir, memory_types, default_config)
 
     @property
     def text_mem(self) -> "BaseTextMemory | None":

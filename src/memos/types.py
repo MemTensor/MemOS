@@ -56,3 +56,24 @@ class MOSSearchResult(TypedDict):
     text_mem: list[dict[str, str | list[TextualMemoryItem]]]
     act_mem: list[dict[str, str | list[ActivationMemoryItem]]]
     para_mem: list[dict[str, str | list[ParametricMemoryItem]]]
+
+
+# ─── API Types ────────────────────────────────────────────────────────────────────
+# for API Permission
+Permission: TypeAlias = Literal["read", "write", "delete", "execute"]
+
+
+# Message structure
+class PermissionDict(TypedDict, total=False):
+    """Typed dictionary for chat message dictionaries."""
+
+    permissions: list[Permission]
+    mem_cube_id: str
+
+
+class UserContext(BaseModel):
+    """Model to represent user context."""
+
+    user_id: str
+    session_id: str | None = None
+    operation: list[PermissionDict] | None = None

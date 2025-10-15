@@ -5,7 +5,7 @@ from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 # Import message types from core types module
-from memos.types import MessageDict
+from memos.types import MessageDict, PermissionDict
 
 
 T = TypeVar("T")
@@ -168,26 +168,28 @@ class APISearchRequest(BaseRequest):
     """Request model for searching memories."""
 
     query: str = Field(..., description="Search query")
+    user_id: str = Field(None, description="User ID")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    mode: str = Field("fast", description="search mode fast or fine")
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
     top_k: int = Field(10, description="Number of results to return")
+    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    operation: list[PermissionDict] | None = Field(None, description="operation ids for multi cubes")
 
 
-class APIMemoryADDRequest(BaseRequest):
+class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
-
+    user_id: str = Field(None, description="User ID")
     mem_cube_id: str = Field(..., description="Cube ID")
-    mode: str = Field("fast", description="search mode fast or fine")
     messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
     source: str | None = Field(None, description="Source of the memory")
     chat_history: list[MessageDict] | None = Field(None, description="Chat history")
-    session_id: str | None = Field(
-        default_factory=lambda: str(uuid.uuid4()), description="Session id"
-    )
+    session_id: str | None = Field(None, description="Session id")
+    operation: list[PermissionDict] | None = Field(None, description="operation ids for multi cubes")
 
 
 class SuggestionRequest(BaseRequest):
