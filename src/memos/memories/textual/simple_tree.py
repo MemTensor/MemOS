@@ -1,7 +1,7 @@
 import time
 
 from datetime import datetime
-from typing import Optional, Any
+from typing import Any
 
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.embedders.base import BaseEmbedder
@@ -77,7 +77,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         logger.info(f"time init: internet_retriever time is: {time.time() - time_start_ir}")
 
     def add(
-        self, memories: list[TextualMemoryItem | dict[str, Any]], user_name: Optional[str] = None
+        self, memories: list[TextualMemoryItem | dict[str, Any]], user_name: str | None = None
     ) -> list[str]:
         """Add memories.
         Args:
@@ -91,11 +91,11 @@ class SimpleTreeTextMemory(TreeTextMemory):
         return self.memory_manager.add(memories, user_name=user_name)
 
     def replace_working_memory(
-        self, memories: list[TextualMemoryItem], user_name: Optional[str] = None
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
     ) -> None:
         self.memory_manager.replace_working_memory(memories, user_name=user_name)
 
-    def get_working_memory(self, user_name: Optional[str] = None) -> list[TextualMemoryItem]:
+    def get_working_memory(self, user_name: str | None = None) -> list[TextualMemoryItem]:
         working_memories = self.graph_store.get_all_memory_items(
             scope="WorkingMemory", user_name=user_name
         )
@@ -106,7 +106,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         )
         return sorted_items
 
-    def get_current_memory_size(self, user_name: Optional[str] = None) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: str | None = None) -> dict[str, int]:
         """
         Get the current size of each memory type.
         This delegates to the MemoryManager.
@@ -123,7 +123,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         manual_close_internet: bool = False,
         moscube: bool = False,
         search_filter: dict | None = None,
-        user_name: Optional[str] = None,
+        user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->

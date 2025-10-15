@@ -7,7 +7,7 @@ uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8002 --workers 4
 
 import time
 
-from typing import Optional, Any
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -91,7 +91,7 @@ def test_search_memories(
     mode: str = "fast",
     internet_search: bool = False,
     moscube: bool = False,
-    chat_history: Optional[list] = None,
+    chat_history: list | None = None,
 ) -> list[Any]:
     """
     Test searching memories from the system.
@@ -133,10 +133,6 @@ def test_search_memories(
             "chat_history": chat_history or [],
         },
     )
-
-    elapsed_time = time.time() - time_start
-    logger.info(f"Search completed in {elapsed_time:.2f}s")
-    logger.info(f"Found {len(search_results)} results")
 
     # Print search results
     for idx, result in enumerate(search_results, 1):

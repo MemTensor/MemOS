@@ -15,7 +15,6 @@ from memos.utils import timed
 from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
 from .task_goal_parser import TaskGoalParser
-from typing import Optional
 
 
 logger = get_logger(__name__)
@@ -54,7 +53,7 @@ class Searcher:
         mode="fast",
         memory_type="All",
         search_filter: dict | None = None,
-        user_name: Optional[str] = None,
+        user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """
         Search for memories based on a query.
@@ -114,7 +113,13 @@ class Searcher:
 
     @timed
     def _parse_task(
-        self, query, info, mode, top_k=5, search_filter: dict | None = None, user_name: Optional[str] = None
+        self,
+        query,
+        info,
+        mode,
+        top_k=5,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
     ):
         """Parse user query, do embedding search and create context"""
         context = []
@@ -179,7 +184,7 @@ class Searcher:
         mode,
         memory_type,
         search_filter: dict | None = None,
-        user_name: Optional[str] = None,
+        user_name: str | None = None,
     ):
         """Run A/B/C retrieval paths in parallel"""
         tasks = []
@@ -250,7 +255,7 @@ class Searcher:
         top_k,
         memory_type,
         search_filter: dict | None = None,
-        user_name: Optional[str] = None,
+        user_name: str | None = None,
     ):
         """Retrieve and rerank from WorkingMemory"""
         if memory_type not in ["All", "WorkingMemory"]:
@@ -283,7 +288,7 @@ class Searcher:
         top_k,
         memory_type,
         search_filter: dict | None = None,
-        user_name: Optional[str] = None,
+        user_name: str | None = None,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
@@ -361,7 +366,7 @@ class Searcher:
         info,
         mode,
         memory_type,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
     ):
         """Retrieve and rerank from Internet source"""
         if not self.internet_retriever or mode == "fast":
@@ -409,7 +414,7 @@ class Searcher:
         return final_items
 
     @timed
-    def _update_usage_history(self, items, info, user_name: Optional[str] = None):
+    def _update_usage_history(self, items, info, user_name: str | None = None):
         """Update usage history in graph DB"""
         now_time = datetime.now().isoformat()
         info_copy = dict(info or {})
@@ -435,7 +440,9 @@ class Searcher:
                 self._update_usage_history_worker, payload, usage_record, user_name
             )
 
-    def _update_usage_history_worker(self, payload, usage_record: str, user_name: Optional[str] = None):
+    def _update_usage_history_worker(
+        self, payload, usage_record: str, user_name: str | None = None
+    ):
         try:
             for item_id, usage_list in payload:
                 self.graph_store.update_node(item_id, {"usage": usage_list}, user_name=user_name)

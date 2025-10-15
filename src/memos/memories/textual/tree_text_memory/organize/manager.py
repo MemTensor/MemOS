@@ -14,7 +14,6 @@ from memos.memories.textual.tree_text_memory.organize.reorganizer import (
     GraphStructureReorganizer,
     QueueMessage,
 )
-from typing import Optional
 
 
 logger = get_logger(__name__)
@@ -52,7 +51,7 @@ class MemoryManager:
         )
         self._merged_threshold = merged_threshold
 
-    def add(self, memories: list[TextualMemoryItem], user_name: Optional[str] = None) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem], user_name: str | None = None) -> list[str]:
         """
         Add new memories in parallel to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         """
@@ -81,7 +80,7 @@ class MemoryManager:
         return added_ids
 
     def replace_working_memory(
-        self, memories: list[TextualMemoryItem], user_name: Optional[str] = None
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
     ) -> None:
         """
         Replace WorkingMemory
@@ -107,14 +106,14 @@ class MemoryManager:
         )
         self._refresh_memory_size(user_name=user_name)
 
-    def get_current_memory_size(self, user_name: Optional[str] = None) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: str | None = None) -> dict[str, int]:
         """
         Return the cached memory type counts.
         """
         self._refresh_memory_size(user_name=user_name)
         return self.current_memory_size
 
-    def _refresh_memory_size(self, user_name: Optional[str] = None) -> None:
+    def _refresh_memory_size(self, user_name: str | None = None) -> None:
         """
         Query the latest counts from the graph store and update internal state.
         """
@@ -124,7 +123,7 @@ class MemoryManager:
         self.current_memory_size = {record["memory_type"]: record["count"] for record in results}
         logger.info(f"[MemoryManager] Refreshed memory sizes: {self.current_memory_size}")
 
-    def _process_memory(self, memory: TextualMemoryItem, user_name: Optional[str] = None):
+    def _process_memory(self, memory: TextualMemoryItem, user_name: str | None = None):
         """
         Process and add memory to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         This method runs asynchronously to process each memory item.
@@ -133,7 +132,7 @@ class MemoryManager:
 
         # Add to WorkingMemory
         working_id = self._add_memory_to_db(memory, "WorkingMemory", user_name)
-        # ids.append(working_id)
+        ids.append(working_id)
 
         # Add to LongTermMemory and UserMemory
         if memory.metadata.memory_type in ["LongTermMemory", "UserMemory"]:
@@ -145,7 +144,7 @@ class MemoryManager:
         return ids
 
     def _add_memory_to_db(
-        self, memory: TextualMemoryItem, memory_type: str, user_name: Optional[str] = None
+        self, memory: TextualMemoryItem, memory_type: str, user_name: str | None = None
     ) -> str:
         """
         Add a single memory item to the graph store, with FIFO logic for WorkingMemory.
@@ -161,7 +160,7 @@ class MemoryManager:
         return working_memory.id
 
     def _add_to_graph_memory(
-        self, memory: TextualMemoryItem, memory_type: str, user_name: Optional[str] = None
+        self, memory: TextualMemoryItem, memory_type: str, user_name: str | None = None
     ):
         """
         Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
