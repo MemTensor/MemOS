@@ -33,7 +33,7 @@ from memos.types import MOSSearchResult, UserContext
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/server", tags=["Server API"])
+router = APIRouter(prefix="/product", tags=["Server API"])
 
 
 def _build_graph_db_config(user_id: str = "default") -> Dict[str, Any]:
@@ -209,7 +209,7 @@ def search_memories(search_req: APISearchRequest):
         user_name=search_req.mem_cube_id,
         top_k=search_req.top_k,
         mode=search_req.mode,
-        internet_search=not search_req.internet_search,
+        manual_close_internet=not search_req.internet_search,
         moscube=search_req.moscube,
         search_filter=search_filter,
         info={

@@ -86,7 +86,7 @@ class Searcher:
             logger.debug(f"[SEARCH] Received info dict: {info}")
 
         parsed_goal, query_embedding, context, query = self._parse_task(
-            query, info, mode, search_filter=search_filter, user_id=user_id
+            query, info, mode, search_filter=search_filter, user_name=user_name
         )
         results = self._retrieve_paths(
             query, parsed_goal, query_embedding, info, top_k, mode, memory_type, search_filter,user_name

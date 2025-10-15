@@ -73,18 +73,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         logger.info(f"time init: reranker time is: {time.time() - time_start_rr}")
 
         time_start_mm = time.time()
-        self.memory_manager: MemoryManager = MemoryManager(
-            self.graph_store,
-            self.embedder,
-            self.extractor_llm,
-            memory_size=config.memory_size
-            or {
-                "WorkingMemory": 20,
-                "LongTermMemory": 1500,
-                "UserMemory": 480,
-            },
-            is_reorganize=is_reorganize,
-        )
+        self.memory_manager: MemoryManager = memory_manager
         logger.info(f"time init: memory_manager time is: {time.time() - time_start_mm}")
         time_start_ir = time.time()
         # Create internet retriever if configured
