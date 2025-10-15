@@ -6,6 +6,7 @@ from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
+from typing import Optional
 
 
 logger = get_logger(__name__)
@@ -30,7 +31,7 @@ class GraphMemoryRetriever:
         memory_scope: str,
         query_embedding: list[list[float]] | None = None,
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
@@ -94,7 +95,7 @@ class GraphMemoryRetriever:
         memory_scope: str,
         query_embedding: list[list[float]] | None = None,
         cube_name: str = "memos_cube01",
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
@@ -135,7 +136,7 @@ class GraphMemoryRetriever:
         return list(combined.values())
 
     def _graph_recall(
-        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str
+        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: Optional[str] = None
     ) -> list[TextualMemoryItem]:
         """
         Perform structured node-based retrieval from Neo4j.

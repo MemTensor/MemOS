@@ -176,11 +176,14 @@ class APISearchRequest(BaseRequest):
     top_k: int = Field(10, description="Number of results to return")
     chat_history: list[MessageDict] | None = Field(None, description="Chat history")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
-    operation: list[PermissionDict] | None = Field(None, description="operation ids for multi cubes")
+    operation: list[PermissionDict] | None = Field(
+        None, description="operation ids for multi cubes"
+    )
 
 
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
+
     user_id: str = Field(None, description="User ID")
     mem_cube_id: str = Field(..., description="Cube ID")
     messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
@@ -189,7 +192,9 @@ class APIADDRequest(BaseRequest):
     source: str | None = Field(None, description="Source of the memory")
     chat_history: list[MessageDict] | None = Field(None, description="Chat history")
     session_id: str | None = Field(None, description="Session id")
-    operation: list[PermissionDict] | None = Field(None, description="operation ids for multi cubes")
+    operation: list[PermissionDict] | None = Field(
+        None, description="operation ids for multi cubes"
+    )
 
 
 class SuggestionRequest(BaseRequest):

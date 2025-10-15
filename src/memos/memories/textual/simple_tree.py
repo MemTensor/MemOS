@@ -1,34 +1,22 @@
-import json
-import os
-import shutil
-import tempfile
 import time
 
 from datetime import datetime
-from pathlib import Path
-from typing import Any
+from typing import Optional, Any
 
 from memos.configs.memory import TreeTextMemoryConfig
-from memos.configs.reranker import RerankerConfigFactory
-from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
-from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
-from memos.llms.base import BaseLLM
 from memos.embedders.base import BaseEmbedder
-from memos.mem_reader.base import BaseMemReader
+from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.base import BaseGraphDB
-from memos.reranker.base import BaseReranker
-
-from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
+from memos.graph_dbs.factory import Neo4jGraphDB
+from memos.llms.base import BaseLLM
+from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
-from memos.memories.textual.base import BaseTextMemory
-from memos.memories.textual.tree import TreeTextMemory
+from memos.mem_reader.base import BaseMemReader
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
-from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
-    InternetRetrieverFactory,
-)
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.reranker.factory import RerankerFactory
+from memos.reranker.base import BaseReranker
 from memos.types import MessageList
 
 
@@ -38,21 +26,22 @@ logger = get_logger(__name__)
 class SimpleTreeTextMemory(TreeTextMemory):
     """General textual memory implementation for storing and retrieving memories."""
 
-    def __init__(self, 
-            llm: BaseLLM, 
-            embedder: BaseEmbedder, 
-            mem_reader: BaseMemReader, 
-            graph_db: BaseGraphDB, 
-            reranker: BaseReranker,
-            memory_manager: MemoryManager,
-            config: TreeTextMemoryConfig,
-            internet_retriever: None = None,
-            is_reorganize: bool = False
-        ):
+    def __init__(
+        self,
+        llm: BaseLLM,
+        embedder: BaseEmbedder,
+        mem_reader: BaseMemReader,
+        graph_db: BaseGraphDB,
+        reranker: BaseReranker,
+        memory_manager: MemoryManager,
+        config: TreeTextMemoryConfig,
+        internet_retriever: None = None,
+        is_reorganize: bool = False,
+    ):
         """Initialize memory with the given configuration."""
         time_start = time.time()
         self.config: TreeTextMemoryConfig = config
-        
+
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = llm
         logger.info(f"time init: extractor_llm time is: {time.time() - time_start}")
 
@@ -65,7 +54,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         logger.info(f"time init: embedder time is: {time.time() - time_start_em}")
 
         time_start_gs = time.time()
-        self.graph_store: Neo4jGraphDB  = graph_db
+        self.graph_store: Neo4jGraphDB = graph_db
         logger.info(f"time init: graph_store time is: {time.time() - time_start_gs}")
 
         time_start_rr = time.time()
@@ -87,7 +76,9 @@ class SimpleTreeTextMemory(TreeTextMemory):
             logger.info("No internet retriever configured")
         logger.info(f"time init: internet_retriever time is: {time.time() - time_start_ir}")
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], user_name: str = None) -> list[str]:
+    def add(
+        self, memories: list[TextualMemoryItem | dict[str, Any]], user_name: Optional[str] = None
+    ) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
@@ -99,11 +90,15 @@ class SimpleTreeTextMemory(TreeTextMemory):
         """
         return self.memory_manager.add(memories, user_name=user_name)
 
-    def replace_working_memory(self, memories: list[TextualMemoryItem], user_name: str = None) -> None:
+    def replace_working_memory(
+        self, memories: list[TextualMemoryItem], user_name: Optional[str] = None
+    ) -> None:
         self.memory_manager.replace_working_memory(memories, user_name=user_name)
 
-    def get_working_memory(self,user_name: str = None) -> list[TextualMemoryItem]:
-        working_memories = self.graph_store.get_all_memory_items(scope="WorkingMemory", user_name=user_name)
+    def get_working_memory(self, user_name: Optional[str] = None) -> list[TextualMemoryItem]:
+        working_memories = self.graph_store.get_all_memory_items(
+            scope="WorkingMemory", user_name=user_name
+        )
         items = [TextualMemoryItem.from_dict(record) for record in (working_memories)]
         # Sort by updated_at in descending order
         sorted_items = sorted(
@@ -111,7 +106,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         )
         return sorted_items
 
-    def get_current_memory_size(self,user_name: str = None) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: Optional[str] = None) -> dict[str, int]:
         """
         Get the current size of each memory type.
         This delegates to the MemoryManager.
@@ -128,7 +123,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         manual_close_internet: bool = False,
         moscube: bool = False,
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -173,7 +168,9 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
             )
-        return searcher.search(query, top_k, info, mode, memory_type, search_filter, user_name=user_name)
+        return searcher.search(
+            query, top_k, info, mode, memory_type, search_filter, user_name=user_name
+        )
 
     def get_relevant_subgraph(
         self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"

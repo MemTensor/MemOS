@@ -179,8 +179,10 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ),
     )
 
+
 class SimpleTreeTextMemoryConfig(TreeTextMemoryConfig):
     """Simple tree text memory configuration class."""
+
 
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 

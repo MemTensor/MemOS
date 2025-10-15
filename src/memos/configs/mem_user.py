@@ -30,6 +30,7 @@ class MySQLUserManagerConfig(BaseUserManagerConfig):
     database: str = Field(default="memos_users", description="MySQL database name")
     charset: str = Field(default="utf8mb4", description="MySQL charset")
 
+
 class RedisUserManagerConfig(BaseUserManagerConfig):
     """Redis user manager configuration."""
 

@@ -1,14 +1,15 @@
 import os
 import time
-from typing import Any, Dict, List
+
+from typing import Any
 
 from fastapi import APIRouter
 
 from memos.api.config import APIConfig
 from memos.api.product_models import (
     APIADDRequest,
-    MemoryResponse,
     APISearchRequest,
+    MemoryResponse,
     SearchResponse,
 )
 from memos.configs.embedder import EmbedderConfigFactory
@@ -36,58 +37,56 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/product", tags=["Server API"])
 
 
-def _build_graph_db_config(user_id: str = "default") -> Dict[str, Any]:
+def _build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
     """Build graph database configuration."""
     graph_db_backend_map = {
         "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "nebular": APIConfig.get_nebular_config(user_id=user_id),
     }
-    
+
     graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
-    return GraphDBConfigFactory.model_validate({
-        "backend": graph_db_backend,
-        "config": graph_db_backend_map[graph_db_backend],
-    })
-
-
-def _build_llm_config() -> Dict[str, Any]:
-    """Build LLM configuration."""
-    return LLMConfigFactory.model_validate({
-        "backend": "openai",
-        "config": APIConfig.get_openai_config(),
-    })
-
-
-def _build_embedder_config() -> Dict[str, Any]:
-    """Build embedder configuration."""
-    return EmbedderConfigFactory.model_validate(
-        APIConfig.get_embedder_config()
+    return GraphDBConfigFactory.model_validate(
+        {
+            "backend": graph_db_backend,
+            "config": graph_db_backend_map[graph_db_backend],
+        }
     )
 
 
-def _build_mem_reader_config() -> Dict[str, Any]:
+def _build_llm_config() -> dict[str, Any]:
+    """Build LLM configuration."""
+    return LLMConfigFactory.model_validate(
+        {
+            "backend": "openai",
+            "config": APIConfig.get_openai_config(),
+        }
+    )
+
+
+def _build_embedder_config() -> dict[str, Any]:
+    """Build embedder configuration."""
+    return EmbedderConfigFactory.model_validate(APIConfig.get_embedder_config())
+
+
+def _build_mem_reader_config() -> dict[str, Any]:
     """Build memory reader configuration."""
     return MemReaderConfigFactory.model_validate(
         APIConfig.get_product_default_config()["mem_reader"]
     )
 
 
-def _build_reranker_config() -> Dict[str, Any]:
+def _build_reranker_config() -> dict[str, Any]:
     """Build reranker configuration."""
-    return RerankerConfigFactory.model_validate(
-        APIConfig.get_reranker_config()
-    )
+    return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
 
 
-def _build_internet_retriever_config() -> Dict[str, Any]:
+def _build_internet_retriever_config() -> dict[str, Any]:
     """Build internet retriever configuration."""
-    return InternetRetrieverConfigFactory.model_validate(
-        APIConfig.get_internet_config()
-    )
+    return InternetRetrieverConfigFactory.model_validate(APIConfig.get_internet_config())
 
 
-def _get_default_memory_size(cube_config) -> Dict[str, int]:
+def _get_default_memory_size(cube_config) -> dict[str, int]:
     """Get default memory size configuration."""
     return getattr(cube_config.text_mem.config, "memory_size", None) or {
         "WorkingMemory": 20,
@@ -100,7 +99,7 @@ def init_server():
     """Initialize server components and configurations."""
     # Get default cube configuration
     default_cube_config = APIConfig.get_default_cube_config()
-    
+
     # Build component configurations
     graph_db_config = _build_graph_db_config()
     print(graph_db_config)
@@ -109,15 +108,17 @@ def init_server():
     mem_reader_config = _build_mem_reader_config()
     reranker_config = _build_reranker_config()
     internet_retriever_config = _build_internet_retriever_config()
-    
+
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
     mem_reader = MemReaderFactory.from_config(mem_reader_config)
     reranker = RerankerFactory.from_config(reranker_config)
-    internet_retriever = InternetRetrieverFactory.from_config(internet_retriever_config, embedder=embedder)
-    
+    internet_retriever = InternetRetrieverFactory.from_config(
+        internet_retriever_config, embedder=embedder
+    )
+
     # Initialize memory manager
     memory_manager = MemoryManager(
         graph_db,
@@ -126,7 +127,7 @@ def init_server():
         memory_size=_get_default_memory_size(default_cube_config),
         is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
     )
-    
+
     return (
         graph_db,
         mem_reader,
@@ -167,19 +168,19 @@ def _create_naive_mem_cube() -> NaiveMemCube:
     return naive_mem_cube
 
 
-def _format_memory_item(memory_data: Any) -> Dict[str, Any]:
+def _format_memory_item(memory_data: Any) -> dict[str, Any]:
     """Format a single memory item for API response."""
     memory = memory_data.model_dump()
     memory_id = memory["id"]
     ref_id = f"[{memory_id.split('-')[0]}]"
-    
+
     memory["ref_id"] = ref_id
     memory["metadata"]["embedding"] = []
     memory["metadata"]["sources"] = []
     memory["metadata"]["ref_id"] = ref_id
     memory["metadata"]["id"] = memory_id
     memory["metadata"]["memory"] = memory["memory"]
-    
+
     return memory
 
 
@@ -188,10 +189,9 @@ def search_memories(search_req: APISearchRequest):
     """Search memories for a specific user."""
     # Create UserContext object - how to assign values
     user_context = UserContext(
-        user_id=search_req.user_id,
-        session_id=search_req.session_id or "default_session"
+        user_id=search_req.user_id, session_id=search_req.session_id or "default_session"
     )
-    
+
     memories_result: MOSSearchResult = {
         "text_mem": [],
         "act_mem": [],
@@ -201,7 +201,7 @@ def search_memories(search_req: APISearchRequest):
     if not target_session_id:
         target_session_id = "default_session"
     search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-    
+
     # Create MemCube and perform search
     naive_mem_cube = _create_naive_mem_cube()
     search_results = naive_mem_cube.text_mem.search(
@@ -219,12 +219,14 @@ def search_memories(search_req: APISearchRequest):
         },
     )
     formatted_memories = [_format_memory_item(data) for data in search_results]
-    
-    memories_result["text_mem"].append({
-        "cube_id": search_req.mem_cube_id,
-        "memories": formatted_memories,
-    })
-    
+
+    memories_result["text_mem"].append(
+        {
+            "cube_id": search_req.mem_cube_id,
+            "memories": formatted_memories,
+        }
+    )
+
     return SearchResponse(
         message="Search completed successfully",
         data=memories_result,
@@ -235,11 +237,8 @@ def search_memories(search_req: APISearchRequest):
 def add_memories(add_req: APIADDRequest):
     """Add memories for a specific user."""
     # Create UserContext object - how to assign values
-    user_context = UserContext(
-        user_id=add_req.user_id,
-        session_id=add_req.session_id
-    )
-    
+    user_context = UserContext(user_id=add_req.user_id, session_id=add_req.session_id)
+
     time_start = time.time()
     naive_mem_cube = _create_naive_mem_cube()
     target_session_id = add_req.session_id
@@ -253,19 +252,17 @@ def add_memories(add_req: APIADDRequest):
             "session_id": target_session_id,
         },
     )
-    
+
     # Flatten memory list
     flattened_memories = [mm for m in memories for mm in m]
-    
+
     elapsed_time = time.time() - time_start
-    logger.info(
-        f"Memory extraction completed for user {add_req.user_id} in {elapsed_time:.2f}s"
-    )
-    mem_id_list: List[str] = naive_mem_cube.text_mem.add(
+    logger.info(f"Memory extraction completed for user {add_req.user_id} in {elapsed_time:.2f}s")
+    mem_id_list: list[str] = naive_mem_cube.text_mem.add(
         flattened_memories,
         user_name=add_req.mem_cube_id,
     )
-    
+
     logger.info(
         f"Added {len(mem_id_list)} memories for user {add_req.user_id} "
         f"in session {add_req.session_id}: {mem_id_list}"

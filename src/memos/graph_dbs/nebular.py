@@ -4,7 +4,7 @@ import traceback
 from contextlib import suppress
 from datetime import datetime
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import Optional, TYPE_CHECKING, Any, ClassVar, Literal
 
 import numpy as np
 
@@ -417,7 +417,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def remove_oldest_memory(
-        self, memory_type: str, keep_latest: int, user_name: str = None
+        self, memory_type: str, keep_latest: int, user_name: Optional[str] = None
     ) -> None:
         """
         Remove all WorkingMemory nodes except the latest `keep_latest` entries.
@@ -427,7 +427,7 @@ class NebulaGraphDB(BaseGraphDB):
             keep_latest (int): Number of latest WorkingMemory entries to keep.
         """
         optional_condition = ""
-        
+
         user_name = user_name if user_name else self.config.user_name
 
         optional_condition = f"AND n.user_name = '{user_name}'"
@@ -443,7 +443,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def add_node(
-        self, id: str, memory: str, metadata: dict[str, Any], user_name: str = None
+        self, id: str, memory: str, metadata: dict[str, Any], user_name: Optional[str] = None
     ) -> None:
         """
         Insert or update a Memory node in NebulaGraph.
@@ -477,8 +477,8 @@ class NebulaGraphDB(BaseGraphDB):
             )
 
     @timed
-    def node_not_exist(self, scope: str, user_name: str = None) -> int:
-        user_name  = user_name if user_name else self.config.user_name
+    def node_not_exist(self, scope: str, user_name: Optional[str] = None) -> int:
+        user_name = user_name if user_name else self.config.user_name
         filter_clause = f'n.memory_type = "{scope}" AND n.user_name = "{user_name}"'
         query = f"""
         MATCH (n@Memory)
@@ -495,7 +495,7 @@ class NebulaGraphDB(BaseGraphDB):
             raise
 
     @timed
-    def update_node(self, id: str, fields: dict[str, Any], user_name: str = None) -> None:
+    def update_node(self, id: str, fields: dict[str, Any], user_name: Optional[str] = None) -> None:
         """
         Update node fields in Nebular, auto-converting `created_at` and `updated_at` to datetime type if present.
         """
@@ -516,7 +516,7 @@ class NebulaGraphDB(BaseGraphDB):
         self.execute_query(query)
 
     @timed
-    def delete_node(self, id: str, user_name: str = None) -> None:
+    def delete_node(self, id: str, user_name: Optional[str] = None) -> None:
         """
         Delete a node from the graph.
         Args:
@@ -531,7 +531,7 @@ class NebulaGraphDB(BaseGraphDB):
         self.execute_query(query)
 
     @timed
-    def add_edge(self, source_id: str, target_id: str, type: str, user_name: str = None):
+    def add_edge(self, source_id: str, target_id: str, type: str, user_name: Optional[str] = None):
         """
         Create an edge from source node to target node.
         Args:
@@ -555,7 +555,7 @@ class NebulaGraphDB(BaseGraphDB):
             logger.error(f"Failed to insert edge: {e}", exc_info=True)
 
     @timed
-    def delete_edge(self, source_id: str, target_id: str, type: str, user_name: str = None) -> None:
+    def delete_edge(self, source_id: str, target_id: str, type: str, user_name: Optional[str] = None) -> None:
         """
         Delete a specific edge between two nodes.
         Args:
@@ -575,8 +575,7 @@ class NebulaGraphDB(BaseGraphDB):
         self.execute_query(query)
 
     @timed
-    def get_memory_count(self, memory_type: str, user_name: str = None) -> int:
-
+    def get_memory_count(self, memory_type: str, user_name: Optional[str] = None) -> int:
         user_name = user_name if user_name else self.config.user_name
         query = f"""
                 MATCH (n@Memory)
@@ -593,7 +592,7 @@ class NebulaGraphDB(BaseGraphDB):
             return -1
 
     @timed
-    def count_nodes(self, scope: str, user_name: str = None) -> int:
+    def count_nodes(self, scope: str, user_name: Optional[str] = None) -> int:
         user_name = user_name if user_name else self.config.user_name
         query = f"""
                 MATCH (n@Memory)
@@ -612,7 +611,7 @@ class NebulaGraphDB(BaseGraphDB):
         target_id: str,
         type: str = "ANY",
         direction: str = "OUTGOING",
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> bool:
         """
         Check if an edge exists between two nodes.
@@ -655,7 +654,7 @@ class NebulaGraphDB(BaseGraphDB):
     @timed
     # Graph Query & Reasoning
     def get_node(
-        self, id: str, include_embedding: bool = False, user_name: str = None
+        self, id: str, include_embedding: bool = False, user_name: Optional[str] = None
     ) -> dict[str, Any] | None:
         """
         Retrieve a Memory node by its unique ID.
@@ -692,7 +691,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def get_nodes(
-        self, ids: list[str], include_embedding: bool = False, user_name: str = None, **kwargs
+        self, ids: list[str], include_embedding: bool = False, user_name: Optional[str] = None, **kwargs
     ) -> list[dict[str, Any]]:
         """
         Retrieve the metadata and memory of a list of nodes.
@@ -735,7 +734,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def get_edges(
-        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str = None
+        self, id: str, type: str = "ANY", direction: str = "ANY", user_name: Optional[str] = None
     ) -> list[dict[str, str]]:
         """
         Get edges connected to a node, with optional type and direction filter.
@@ -797,7 +796,7 @@ class NebulaGraphDB(BaseGraphDB):
         top_k: int = 5,
         min_overlap: int = 1,
         include_embedding: bool = False,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """
         Find top-K neighbor nodes with maximum tag overlap.
@@ -858,7 +857,7 @@ class NebulaGraphDB(BaseGraphDB):
         return result
 
     @timed
-    def get_children_with_embeddings(self, id: str, user_name: str = None) -> list[dict[str, Any]]:
+    def get_children_with_embeddings(self, id: str, user_name: Optional[str] = None) -> list[dict[str, Any]]:
         user_name = user_name if user_name else self.config.user_name
         where_user = f"AND p.user_name = '{user_name}' AND c.user_name = '{user_name}'"
 
@@ -884,7 +883,7 @@ class NebulaGraphDB(BaseGraphDB):
         center_id: str,
         depth: int = 2,
         center_status: str = "activated",
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Retrieve a local subgraph centered at a given node.
@@ -956,7 +955,7 @@ class NebulaGraphDB(BaseGraphDB):
         status: str | None = None,
         threshold: float | None = None,
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -1035,7 +1034,7 @@ class NebulaGraphDB(BaseGraphDB):
             return []
 
     @timed
-    def get_by_metadata(self, filters: list[dict[str, Any]], user_name: str = None) -> list[str]:
+    def get_by_metadata(self, filters: list[dict[str, Any]], user_name: Optional[str] = None) -> list[str]:
         """
         1. ADD logic: "AND" vs "OR"(support logic combination);
         2. Support nested conditional expressions;
@@ -1103,7 +1102,7 @@ class NebulaGraphDB(BaseGraphDB):
         group_fields: list[str],
         where_clause: str = "",
         params: dict[str, Any] | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """
         Count nodes grouped by any fields.
@@ -1168,7 +1167,7 @@ class NebulaGraphDB(BaseGraphDB):
         return output
 
     @timed
-    def clear(self, user_name: str = None) -> None:
+    def clear(self, user_name: Optional[str] = None) -> None:
         """
         Clear the entire graph if the target database exists.
 
@@ -1186,7 +1185,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def export_graph(
-        self, include_embedding: bool = False, user_name: str = None
+        self, include_embedding: bool = False, user_name: Optional[str] = None
     ) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
@@ -1264,7 +1263,7 @@ class NebulaGraphDB(BaseGraphDB):
         return {"nodes": nodes, "edges": edges}
 
     @timed
-    def import_graph(self, data: dict[str, Any], user_name: str = None) -> None:
+    def import_graph(self, data: dict[str, Any], user_name: Optional[str] = None) -> None:
         """
         Import the entire graph from a serialized dictionary.
 
@@ -1302,7 +1301,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def get_all_memory_items(
-        self, scope: str, include_embedding: bool = False, user_name: str = None
+        self, scope: str, include_embedding: bool = False, user_name: Optional[str] = None
     ) -> (list)[dict]:
         """
         Retrieve all memory items of a specific memory_type.
@@ -1343,7 +1342,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def get_structure_optimization_candidates(
-        self, scope: str, include_embedding: bool = False, user_name: str = None
+        self, scope: str, include_embedding: bool = False, user_name: Optional[str] = None
     ) -> list[dict]:
         """
         Find nodes that are likely candidates for structure optimization:

@@ -10,8 +10,8 @@ from memos.memories.parametric.lora import LoRAMemory
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.general import GeneralTextMemory
 from memos.memories.textual.naive import NaiveTextMemory
-from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
+from memos.memories.textual.tree import TreeTextMemory
 
 
 class MemoryFactory(BaseMemory):

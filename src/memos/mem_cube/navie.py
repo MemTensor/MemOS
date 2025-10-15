@@ -1,26 +1,22 @@
 import os
-import time
 
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.utils import get_json_file_model_schema
+from memos.embedders.base import BaseEmbedder
 from memos.exceptions import ConfigurationError, MemCubeError
+from memos.graph_dbs.base import BaseGraphDB
+from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
-from memos.mem_cube.utils import download_repo, merge_config_with_default
+from memos.mem_reader.base import BaseMemReader
 from memos.memories.activation.base import BaseActMemory
-from memos.memories.factory import MemoryFactory
 from memos.memories.parametric.base import BaseParaMemory
 from memos.memories.textual.base import BaseTextMemory
-from memos.mem_reader.base import BaseMemReader
-from memos.llms.base import BaseLLM
-from memos.embedders.base import BaseEmbedder
-from memos.graph_dbs.base import BaseGraphDB
-from memos.reranker.base import BaseReranker
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
-
+from memos.reranker.base import BaseReranker
 
 
 logger = get_logger(__name__)
@@ -29,27 +25,28 @@ logger = get_logger(__name__)
 class NaiveMemCube(BaseMemCube):
     """MemCube is a box for loading and dumping three types of memories."""
 
-    def __init__(self, 
-            llm: BaseLLM, 
-            embedder: BaseEmbedder, 
-            mem_reader: BaseMemReader, 
-            graph_db: BaseGraphDB, 
-            reranker: BaseReranker, 
-            memory_manager: MemoryManager,
-            default_cube_config: GeneralMemCubeConfig,
-            internet_retriever: None = None,
+    def __init__(
+        self,
+        llm: BaseLLM,
+        embedder: BaseEmbedder,
+        mem_reader: BaseMemReader,
+        graph_db: BaseGraphDB,
+        reranker: BaseReranker,
+        memory_manager: MemoryManager,
+        default_cube_config: GeneralMemCubeConfig,
+        internet_retriever: None = None,
     ):
         """Initialize the MemCube with a configuration."""
         self._text_mem: BaseTextMemory | None = SimpleTreeTextMemory(
-            llm, 
-            embedder, 
-            mem_reader, 
-            graph_db, 
+            llm,
+            embedder,
+            mem_reader,
+            graph_db,
             reranker,
-            memory_manager, 
+            memory_manager,
             default_cube_config.text_mem.config,
             internet_retriever,
-            )
+        )
         self._act_mem: BaseActMemory | None = None
         self._para_mem: BaseParaMemory | None = None
 

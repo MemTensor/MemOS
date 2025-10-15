@@ -12,10 +12,10 @@ from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, T
 from memos.reranker.base import BaseReranker
 from memos.utils import timed
 
-from .internet_retriever_factory import InternetRetrieverFactory
 from .reasoner import MemoryReasoner
 from .recall import GraphMemoryRetriever
 from .task_goal_parser import TaskGoalParser
+from typing import Optional
 
 
 logger = get_logger(__name__)
@@ -28,7 +28,7 @@ class Searcher:
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         reranker: BaseReranker,
-        internet_retriever:  None = None,
+        internet_retriever: None = None,
         moscube: bool = False,
     ):
         self.graph_store = graph_store
@@ -54,7 +54,7 @@ class Searcher:
         mode="fast",
         memory_type="All",
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ) -> list[TextualMemoryItem]:
         """
         Search for memories based on a query.
@@ -89,7 +89,15 @@ class Searcher:
             query, info, mode, search_filter=search_filter, user_name=user_name
         )
         results = self._retrieve_paths(
-            query, parsed_goal, query_embedding, info, top_k, mode, memory_type, search_filter,user_name
+            query,
+            parsed_goal,
+            query_embedding,
+            info,
+            top_k,
+            mode,
+            memory_type,
+            search_filter,
+            user_name,
         )
         deduped = self._deduplicate_results(results)
         final_results = self._sort_and_trim(deduped, top_k)
@@ -105,7 +113,9 @@ class Searcher:
         return final_results
 
     @timed
-    def _parse_task(self, query, info, mode, top_k=5, search_filter: dict | None = None, user_name: str = None):
+    def _parse_task(
+        self, query, info, mode, top_k=5, search_filter: dict | None = None, user_name: Optional[str] = None
+    ):
         """Parse user query, do embedding search and create context"""
         context = []
         query_embedding = None
@@ -169,7 +179,7 @@ class Searcher:
         mode,
         memory_type,
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ):
         """Run A/B/C retrieval paths in parallel"""
         tasks = []
@@ -240,7 +250,7 @@ class Searcher:
         top_k,
         memory_type,
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ):
         """Retrieve and rerank from WorkingMemory"""
         if memory_type not in ["All", "WorkingMemory"]:
@@ -273,7 +283,7 @@ class Searcher:
         top_k,
         memory_type,
         search_filter: dict | None = None,
-        user_name: str = None,
+        user_name: Optional[str] = None,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
@@ -343,7 +353,15 @@ class Searcher:
     # --- Path C
     @timed
     def _retrieve_from_internet(
-        self, query, parsed_goal, query_embedding, top_k, info, mode, memory_type, user_id: str = None
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        info,
+        mode,
+        memory_type,
+        user_id: Optional[str] = None,
     ):
         """Retrieve and rerank from Internet source"""
         if not self.internet_retriever or mode == "fast":
@@ -391,7 +409,7 @@ class Searcher:
         return final_items
 
     @timed
-    def _update_usage_history(self, items, info, user_name: str = None):
+    def _update_usage_history(self, items, info, user_name: Optional[str] = None):
         """Update usage history in graph DB"""
         now_time = datetime.now().isoformat()
         info_copy = dict(info or {})
@@ -413,9 +431,11 @@ class Searcher:
                 logger.exception("[USAGE] snapshot item failed")
 
         if payload:
-            self._usage_executor.submit(self._update_usage_history_worker, payload, usage_record, user_name)
+            self._usage_executor.submit(
+                self._update_usage_history_worker, payload, usage_record, user_name
+            )
 
-    def _update_usage_history_worker(self, payload, usage_record: str, user_name: str = None):
+    def _update_usage_history_worker(self, payload, usage_record: str, user_name: Optional[str] = None):
         try:
             for item_id, usage_list in payload:
                 self.graph_store.update_node(item_id, {"usage": usage_list}, user_name=user_name)

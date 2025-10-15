@@ -5,7 +5,6 @@ This module provides persistent storage for user configurations using Redis.
 
 import json
 
-from typing import Any
 from memos.dependency import require_python_package
 from memos.log import get_logger
 
@@ -40,6 +39,7 @@ class RedisPersistentUserManager:
             decode_responses (bool): Whether to decode responses to strings. Defaults to True.
         """
         import redis
+
         self.host = host
         self.port = port
         self.db = db
@@ -174,7 +174,9 @@ class RedisPersistentUserManager:
             logger.error(f"Error checking if configuration exists for user {user_id}: {e}")
             return False
 
-    def list_user_configs(self, pattern: str = "user_config:*", count: int = 100) -> dict[str, MOSConfig]:
+    def list_user_configs(
+        self, pattern: str = "user_config:*", count: int = 100
+    ) -> dict[str, MOSConfig]:
         """List all user configurations.
 
         Args:
@@ -220,4 +222,3 @@ class RedisPersistentUserManager:
                 logger.info("Redis connection closed")
         except Exception as e:
             logger.error(f"Error closing Redis connection: {e}")
-
