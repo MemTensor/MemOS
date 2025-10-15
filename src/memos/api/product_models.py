@@ -151,9 +151,7 @@ class MemoryCreateRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID")
     source: str | None = Field(None, description="Source of the memory")
     user_profile: bool = Field(False, description="User profile memory")
-    session_id: str | None = Field(
-        default_factory=lambda: str(uuid.uuid4()), description="Session id"
-    )
+    session_id: str | None = Field(None, description="Session id")
 
 
 class SearchRequest(BaseRequest):
@@ -161,6 +159,7 @@ class SearchRequest(BaseRequest):
 
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Search query")
+    mem_cube_id: str | None = Field(None, description="Cube ID to search in")
     top_k: int = Field(10, description="Number of results to return")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
 
