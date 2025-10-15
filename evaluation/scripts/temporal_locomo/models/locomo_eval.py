@@ -9,7 +9,6 @@ import numpy as np
 
 from bert_score import score as bert_score
 from dotenv import load_dotenv
-from modules.locomo_eval_module import LocomoEvalModelModules
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 from nltk.translate.meteor_score import meteor_score
 from openai import AsyncOpenAI
@@ -19,6 +18,7 @@ from scipy.spatial.distance import cosine
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
+from evaluation.scripts.temporal_locomo.modules.locomo_eval_module import LocomoEvalModelModules
 from memos.log import get_logger
 
 
@@ -281,31 +281,62 @@ class LocomoEvaluator(LocomoEvalModelModules):
             api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL")
         )
 
-    async def run(self):
-        print(
-            f"\n=== Starting LoCoMo evaluation for {self.frame} (version: {self.version}) with {self.num_runs} run(s) per question ==="
-        )
-        print(f"Using {self.max_workers} concurrent workers for processing groups")
+    def _load_response_data(self):
+        """
+        Load response data from the response path file.
 
+        Returns:
+            dict: The loaded response data
+        """
         with open(self.response_path) as file:
-            locomo_responses = json.load(file)
+            return json.load(file)
 
-        num_users = 10
+    def _load_existing_evaluation_results(self):
+        """
+        Attempt to load existing evaluation results from the judged path.
+        If the file doesn't exist or there's an error loading it, return an empty dict.
+
+        Returns:
+            dict: Existing evaluation results or empty dict if none available
+        """
         all_grades = {}
+        try:
+            if os.path.exists(self.judged_path):
+                with open(self.judged_path) as f:
+                    all_grades = json.load(f)
+                print(f"Loaded existing evaluation results from {self.judged_path}")
+        except Exception as e:
+            print(f"Error loading existing evaluation results: {e}")
 
-        total_responses_count = sum(
-            len(locomo_responses.get(f"locomo_exp_user_{i}", [])) for i in range(num_users)
-        )
-        print(f"Found {total_responses_count} total responses across {num_users} users to evaluate")
+        return all_grades
 
-        # Create tasks for processing each group
+    def _create_evaluation_tasks(self, locomo_responses, all_grades, num_users):
+        """
+        Create evaluation tasks for groups that haven't been evaluated yet.
+
+        Args:
+            locomo_responses (dict): The loaded response data
+            all_grades (dict): Existing evaluation results
+            num_users (int): Number of user groups to process
+
+        Returns:
+            tuple: (tasks list, active users count)
+        """
         tasks = []
         active_users = 0
+
         for group_idx in range(num_users):
             group_id = f"locomo_exp_user_{group_idx}"
             group_responses = locomo_responses.get(group_id, [])
+
             if not group_responses:
                 print(f"No responses found for group {group_id}")
+                continue
+
+            # Skip groups that already have evaluation results
+            if all_grades.get(group_id):
+                print(f"Skipping group {group_id} as it already has evaluation results")
+                active_users += 1
                 continue
 
             active_users += 1
@@ -319,29 +350,50 @@ class LocomoEvaluator(LocomoEvalModelModules):
                 )
             )
 
-        print(f"Starting evaluation of {active_users} user groups with responses")
+        return tasks, active_users
+
+    async def _process_tasks(self, tasks):
+        """
+        Process evaluation tasks with concurrency control.
+
+        Args:
+            tasks (list): List of tasks to process
+
+        Returns:
+            list: Results from processing all tasks
+        """
+        if not tasks:
+            return []
 
         semaphore = asyncio.Semaphore(self.max_workers)
 
         async def limited_task(task):
+            """Helper function to limit concurrent task execution"""
             async with semaphore:
                 return await task
 
         limited_tasks = [limited_task(task) for task in tasks]
-        group_results = await asyncio.gather(*limited_tasks)
+        return await asyncio.gather(*limited_tasks)
 
-        for group_id, graded_responses in group_results:
-            all_grades[group_id] = graded_responses
+    def _calculate_scores(self, all_grades):
+        """
+        Calculate evaluation scores based on all grades.
 
-        print("\n=== Evaluation Complete: Calculating final scores ===")
+        Args:
+            all_grades (dict): The complete evaluation results
 
+        Returns:
+            tuple: (run_scores, evaluated_count)
+        """
         run_scores = []
         evaluated_count = 0
+
         if self.num_runs > 0:
             for i in range(1, self.num_runs + 1):
                 judgment_key = f"judgment_{i}"
                 current_run_correct_count = 0
                 current_run_total_count = 0
+
                 for group in all_grades.values():
                     for response in group:
                         if judgment_key in response["llm_judgments"]:
@@ -355,6 +407,16 @@ class LocomoEvaluator(LocomoEvalModelModules):
 
             evaluated_count = current_run_total_count
 
+        return run_scores, evaluated_count
+
+    def _report_scores(self, run_scores, evaluated_count):
+        """
+        Report evaluation scores to the console.
+
+        Args:
+            run_scores (list): List of accuracy scores for each run
+            evaluated_count (int): Number of evaluated responses
+        """
         if evaluated_count > 0:
             mean_of_scores = np.mean(run_scores)
             std_of_scores = np.std(run_scores)
@@ -368,10 +430,62 @@ class LocomoEvaluator(LocomoEvalModelModules):
             print("No responses were evaluated")
             print("LLM-as-a-Judge score: N/A (0/0)")
 
+    def _save_results(self, all_grades):
+        """
+        Save evaluation results to the judged path file.
+
+        Args:
+            all_grades (dict): The complete evaluation results to save
+        """
         all_grades = convert_numpy_types(all_grades)
         with open(self.judged_path, "w") as f:
             json.dump(all_grades, f, indent=2)
             print(f"Saved detailed evaluation results to {self.judged_path}")
+
+    async def run(self):
+        """
+        Main execution method for the LoCoMo evaluation process.
+        This method orchestrates the entire evaluation workflow:
+        1. Loads existing evaluation results if available
+        2. Processes only groups that haven't been evaluated yet
+        3. Calculates and reports final evaluation scores
+        """
+        print(
+            f"\n=== Starting LoCoMo evaluation for {self.frame} (version: {self.version}) with {self.num_runs} run(s) per question ==="
+        )
+        print(f"Using {self.max_workers} concurrent workers for processing groups")
+
+        # Load response data and existing evaluation results
+        locomo_responses = self._load_response_data()
+        all_grades = self._load_existing_evaluation_results()
+
+        # Count total responses for reporting
+        num_users = 10
+        total_responses_count = sum(
+            len(locomo_responses.get(f"locomo_exp_user_{i}", [])) for i in range(num_users)
+        )
+        print(f"Found {total_responses_count} total responses across {num_users} users to evaluate")
+
+        # Create tasks only for groups that haven't been evaluated yet
+        tasks, active_users = self._create_evaluation_tasks(locomo_responses, all_grades, num_users)
+        print(
+            f"Starting evaluation of {len(tasks)} user groups with responses (out of {active_users} active users)"
+        )
+
+        # Process tasks and update all_grades with results
+        if tasks:
+            group_results = await self._process_tasks(tasks)
+            for group_id, graded_responses in group_results:
+                all_grades[group_id] = graded_responses
+
+        print("\n=== Evaluation Complete: Calculating final scores ===")
+
+        # Calculate and report scores
+        run_scores, evaluated_count = self._calculate_scores(all_grades)
+        self._report_scores(run_scores, evaluated_count)
+
+        # Save results
+        self._save_results(all_grades)
 
 
 if __name__ == "__main__":

@@ -1,14 +1,23 @@
-from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class ContextUpdateMethod(Enum):
+class ContextUpdateMethod:
     """Enumeration for context update methods"""
 
-    DIRECT = "direct"  # Directly update with current context
-    TEMPLATE = "chat_history"  # Update using template with history queries and answers
+    PRE_CONTEXT = "pre_context"
+    CHAT_HISTORY = "chat_history"
+    CURRENT_CONTEXT = "current_context"
+
+    @classmethod
+    def values(cls):
+        """Return a list of all constant values"""
+        return [
+            getattr(cls, attr)
+            for attr in dir(cls)
+            if not attr.startswith("_") and isinstance(getattr(cls, attr), str)
+        ]
 
 
 class RecordingCase(BaseModel):
@@ -21,11 +30,6 @@ class RecordingCase(BaseModel):
 
     # Conversation identification
     conv_id: str = Field(description="Conversation identifier for this evaluation case")
-
-    # Conversation history and context
-    history_queries: list[str] = Field(
-        default_factory=list, description="List of previous queries in the conversation history"
-    )
 
     context: str = Field(
         default="",
@@ -41,16 +45,6 @@ class RecordingCase(BaseModel):
     query: str = Field(description="The current question/query being evaluated")
 
     answer: str = Field(description="The generated answer for the query")
-
-    # Memory data
-    memories: list[Any] = Field(
-        default_factory=list,
-        description="Current memories retrieved from the memory system for this query",
-    )
-
-    pre_memories: list[Any] | None = Field(
-        default=None, description="Previous memories from the last query, used for comparison"
-    )
 
     # Evaluation metrics
     can_answer: bool | None = Field(

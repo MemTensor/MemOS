@@ -20,7 +20,7 @@ from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
-    DEFAULT_THREAD__POOL_MAX_WORKERS,
+    DEFAULT_THREAD_POOL_MAX_WORKERS,
     MemCubeID,
     TreeTextMemory_SEARCH_METHOD,
     UserID,
@@ -60,7 +60,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.search_method = TreeTextMemory_SEARCH_METHOD
         self.enable_parallel_dispatch = self.config.get("enable_parallel_dispatch", False)
         self.thread_pool_max_workers = self.config.get(
-            "thread_pool_max_workers", DEFAULT_THREAD__POOL_MAX_WORKERS
+            "thread_pool_max_workers", DEFAULT_THREAD_POOL_MAX_WORKERS
         )
 
         self.retriever: SchedulerRetriever | None = None

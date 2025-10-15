@@ -4,7 +4,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from modules.locomo_eval_module import LocomoEvalModelModules
+from evaluation.scripts.temporal_locomo.modules.locomo_eval_module import LocomoEvalModelModules
 
 
 # Category mapping as per your request

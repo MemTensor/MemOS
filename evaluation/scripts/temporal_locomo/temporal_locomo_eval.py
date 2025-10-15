@@ -5,13 +5,14 @@ import sys
 
 from pathlib import Path
 
-from locomo_eval import LocomoEvaluator
-from locomo_ingestion import LocomoIngestor
-from locomo_metric import LocomoMetric
-from locomo_processor import LocomoProcessor
 from modules.locomo_eval_module import LocomoEvalModelModules
+from modules.schemas import ContextUpdateMethod
 from modules.utils import compute_can_answer_count_by_pre_evidences
 
+from evaluation.scripts.temporal_locomo.models.locomo_eval import LocomoEvaluator
+from evaluation.scripts.temporal_locomo.models.locomo_ingestion import LocomoIngestor
+from evaluation.scripts.temporal_locomo.models.locomo_metric import LocomoMetric
+from evaluation.scripts.temporal_locomo.models.locomo_processor import LocomoProcessor
 from memos.log import get_logger
 
 
@@ -29,8 +30,10 @@ class TemporalLocomoEval(LocomoEvalModelModules):
 
         self.locomo_ingestor = LocomoIngestor(args=args)
         self.locomo_processor = LocomoProcessor(args=args)
+        self.locomo_evaluator = LocomoEvaluator(args=args)
+        self.locomo_metric = LocomoMetric(args=args)
 
-    def run_eval_pipeline(self):
+    def run_answer_hit_eval_pipeline(self, skip_ingestion=True, skip_processing=False):
         """
         Run the complete evaluation pipeline including dataset conversion,
         data ingestion, and processing.
@@ -50,46 +53,39 @@ class TemporalLocomoEval(LocomoEvalModelModules):
             print(f"Temporal locomo dataset found at {temporal_locomo_file}, skipping conversion.")
 
         # Step 2: Data ingestion
-        print("\n" + "=" * 50)
-        print("Step 2: Data Ingestion")
-        print("=" * 50)
-        if not self.ingestion_storage_dir.exists() or not any(self.ingestion_storage_dir.iterdir()):
-            print(f"Directory {self.ingestion_storage_dir} not found, starting data ingestion...")
+        if not skip_ingestion:
+            print("\n" + "=" * 50)
+            print("Step 2: Data Ingestion")
+            print("=" * 50)
             self.locomo_ingestor.run_ingestion()
-            print("Data ingestion completed.")
-        else:
-            print(
-                f"Directory {self.ingestion_storage_dir} already exists and is not empty, skipping ingestion."
-            )
 
         # Step 3: Processing and evaluation
-        print("\n" + "=" * 50)
-        print("Step 3: Processing and Evaluation")
-        print("=" * 50)
-        print("Running locomo processing to search and answer...")
+        if not skip_processing:
+            print("\n" + "=" * 50)
+            print("Step 3: Processing and Evaluation")
+            print("=" * 50)
+            print("Running locomo processing to search and answer...")
 
-        print("Starting locomo processing to generate search and response results...")
-        self.locomo_processor.run_locomo_processing(num_users=self.num_of_users)
-        print("Processing completed successfully.")
+            print("Starting locomo processing to generate search and response results...")
+            self.locomo_processor.run_locomo_processing(num_users=self.num_of_users)
+            print("Processing completed successfully.")
 
         # Optional: run post-hoc evaluation over generated responses if available
         try:
-            evaluator = LocomoEvaluator(args=args)
-
-            if os.path.exists(evaluator.response_path):
+            if os.path.exists(self.response_path):
                 print("Running LocomoEvaluator over existing response results...")
-                asyncio.run(evaluator.run())
+                asyncio.run(self.locomo_evaluator.run())
             else:
                 print(
                     f"Skipping LocomoEvaluator: response file not found at {evaluator.response_path}"
                 )
             # Run metrics summarization if judged file is produced
-            metric = LocomoMetric(args=args)
-            if os.path.exists(metric.judged_path):
+
+            if os.path.exists(self.judged_path):
                 print("Running LocomoMetric over judged results...")
-                metric.run()
+                self.locomo_metric.run()
             else:
-                print(f"Skipping LocomoMetric: judged file not found at {metric.judged_path}")
+                print(f"Skipping LocomoMetric: judged file not found at {self.judged_path}")
         except Exception as e:
             logger.error(f"LocomoEvaluator step skipped due to error: {e}", exc_info=True)
 
@@ -102,6 +98,32 @@ class TemporalLocomoEval(LocomoEvalModelModules):
         print(f"  - Response results: {self.response_path}")
         print(f"  - Statistics: {self.stats_path}")
         print("=" * 80)
+
+    def run_inference_eval_pipeline(self, skip_ingestion=True, skip_processing=False):
+        """
+        Run the complete evaluation pipeline including dataset conversion,
+        data ingestion, and processing.
+        """
+        print("=" * 80)
+        print("Starting TimeLocomo Evaluation Pipeline")
+        print("=" * 80)
+
+        # Step 1: Check if temporal_locomo dataset exists, if not convert it
+        temporal_locomo_file = self.data_dir / "temporal_locomo" / "temporal_locomo_qa.json"
+        if not temporal_locomo_file.exists():
+            print(f"Temporal locomo dataset not found at {temporal_locomo_file}")
+            print("Converting locomo dataset to temporal_locomo format...")
+            self.convert_locomo_to_temporal_locomo(output_dir=self.data_dir / "temporal_locomo")
+            print("Dataset conversion completed.")
+        else:
+            print(f"Temporal locomo dataset found at {temporal_locomo_file}, skipping conversion.")
+
+        # Step 2: Data ingestion
+        if not skip_ingestion:
+            print("\n" + "=" * 50)
+            print("Step 2: Data Ingestion")
+            print("=" * 50)
+            self.locomo_ingestor.run_ingestion()
 
     def compute_can_answer_count_by_pre_evidences(self, rounds_to_consider):
         """
@@ -124,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--frame",
         type=str,
-        default="memos_scheduler",
+        default="memos",
         choices=["zep", "memos", "mem0", "mem0_graph", "memos_scheduler"],
         help="Specify the memory framework (zep or memos or mem0 or mem0_graph)",
     )
@@ -143,14 +165,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scheduler-flag",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Enable or disable memory scheduler features",
+    )
+    parser.add_argument(
+        "--context_update_method",
+        type=str,
+        default="chat_history",
+        choices=ContextUpdateMethod.values(),
+        help="Method to update context: direct (use current context directly), chat_history (use template with history), current_context (use current context)",
     )
     args = parser.parse_args()
 
     evaluator = TemporalLocomoEval(args=args)
-    evaluator.run_eval_pipeline()
-
-    # rule-based baselines
-    evaluator.compute_can_answer_count_by_pre_evidences(rounds_to_consider=float("inf"))
-    evaluator.compute_can_answer_count_by_pre_evidences(rounds_to_consider=1)
+    evaluator.run_answer_hit_eval_pipeline()
