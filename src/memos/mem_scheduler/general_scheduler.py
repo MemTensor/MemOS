@@ -37,6 +37,101 @@ class GeneralScheduler(BaseScheduler):
         }
         self.dispatcher.register_handlers(handlers)
 
+    def long_memory_update_process(
+        self, user_id: str, mem_cube_id: str, messages: list[ScheduleMessageItem]
+    ):
+        mem_cube = messages[0].mem_cube
+
+        # for status update
+        self._set_current_context_from_message(msg=messages[0])
+
+        # update query monitors
+        for msg in messages:
+            self.monitor.register_query_monitor_if_not_exists(
+                user_id=user_id, mem_cube_id=mem_cube_id
+            )
+
+            query = msg.content
+            query_keywords = self.monitor.extract_query_keywords(query=query)
+            logger.info(
+                f'Extracted keywords "{query_keywords}" from query "{query}" for user_id={user_id}'
+            )
+
+            if len(query_keywords) == 0:
+                stripped_query = query.strip()
+                # Determine measurement method based on language
+                if is_all_english(stripped_query):
+                    words = stripped_query.split()  # Word count for English
+                elif is_all_chinese(stripped_query):
+                    words = stripped_query  # Character count for Chinese
+                else:
+                    logger.debug(
+                        f"Mixed-language memory, using character count: {stripped_query[:50]}..."
+                    )
+                    words = stripped_query  # Default to character count
+
+                query_keywords = list(set(words[: self.query_key_words_limit]))
+                logger.error(
+                    f"Keyword extraction failed for query '{query}' (user_id={user_id}). Using fallback keywords: {query_keywords[:10]}... (truncated)",
+                    exc_info=True,
+                )
+
+            item = QueryMonitorItem(
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                query_text=query,
+                keywords=query_keywords,
+                max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
+            )
+
+            query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
+            query_db_manager.obj.put(item=item)
+            # Sync with database after adding new item
+            query_db_manager.sync_with_orm()
+        logger.debug(
+            f"Queries in monitor for user_id={user_id}, mem_cube_id={mem_cube_id}: {query_db_manager.obj.get_queries_with_timesort()}"
+        )
+
+        queries = [msg.content for msg in messages]
+
+        # recall
+        cur_working_memory, new_candidates = self.process_session_turn(
+            queries=queries,
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+            top_k=self.top_k,
+        )
+        logger.info(
+            f"Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} new candidate memories for user_id={user_id}"
+        )
+
+        # rerank
+        new_order_working_memory = self.replace_working_memory(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+            original_memory=cur_working_memory,
+            new_memory=new_candidates,
+        )
+        logger.info(
+            f"Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
+        )
+
+        # update activation memories
+        logger.info(
+            f"Activation memory update {'enabled' if self.enable_activation_memory else 'disabled'} "
+            f"(interval: {self.monitor.act_mem_update_interval}s)"
+        )
+        if self.enable_activation_memory:
+            self.update_activation_memory_periodically(
+                interval_seconds=self.monitor.act_mem_update_interval,
+                label=QUERY_LABEL,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=messages[0].mem_cube,
+            )
+
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
         Process and handle query trigger messages from the queue.
@@ -56,98 +151,9 @@ class GeneralScheduler(BaseScheduler):
                 messages = grouped_messages[user_id][mem_cube_id]
                 if len(messages) == 0:
                     return
-
-                mem_cube = messages[0].mem_cube
-
-                # for status update
-                self._set_current_context_from_message(msg=messages[0])
-
-                # update query monitors
-                for msg in messages:
-                    self.monitor.register_query_monitor_if_not_exists(
-                        user_id=user_id, mem_cube_id=mem_cube_id
-                    )
-
-                    query = msg.content
-                    query_keywords = self.monitor.extract_query_keywords(query=query)
-                    logger.info(
-                        f'Extracted keywords "{query_keywords}" from query "{query}" for user_id={user_id}'
-                    )
-
-                    if len(query_keywords) == 0:
-                        stripped_query = query.strip()
-                        # Determine measurement method based on language
-                        if is_all_english(stripped_query):
-                            words = stripped_query.split()  # Word count for English
-                        elif is_all_chinese(stripped_query):
-                            words = stripped_query  # Character count for Chinese
-                        else:
-                            logger.debug(
-                                f"Mixed-language memory, using character count: {stripped_query[:50]}..."
-                            )
-                            words = stripped_query  # Default to character count
-
-                        query_keywords = list(set(words[: self.query_key_words_limit]))
-                        logger.error(
-                            f"Keyword extraction failed for query '{query}' (user_id={user_id}). Using fallback keywords: {query_keywords[:10]}... (truncated)",
-                            exc_info=True,
-                        )
-
-                    item = QueryMonitorItem(
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        query_text=query,
-                        keywords=query_keywords,
-                        max_keywords=DEFAULT_MAX_QUERY_KEY_WORDS,
-                    )
-
-                    query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
-                    query_db_manager.obj.put(item=item)
-                    # Sync with database after adding new item
-                    query_db_manager.sync_with_orm()
-                logger.debug(
-                    f"Queries in monitor for user_id={user_id}, mem_cube_id={mem_cube_id}: {query_db_manager.obj.get_queries_with_timesort()}"
+                self.long_memory_update_process(
+                    user_id=user_id, mem_cube_id=mem_cube_id, messages=messages
                 )
-
-                queries = [msg.content for msg in messages]
-
-                # recall
-                cur_working_memory, new_candidates = self.process_session_turn(
-                    queries=queries,
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                    top_k=self.top_k,
-                )
-                logger.info(
-                    f"Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} new candidate memories for user_id={user_id}"
-                )
-
-                # rerank
-                new_order_working_memory = self.replace_working_memory(
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                    original_memory=cur_working_memory,
-                    new_memory=new_candidates,
-                )
-                logger.info(
-                    f"Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
-                )
-
-                # update activation memories
-                logger.info(
-                    f"Activation memory update {'enabled' if self.enable_activation_memory else 'disabled'} "
-                    f"(interval: {self.monitor.act_mem_update_interval}s)"
-                )
-                if self.enable_activation_memory:
-                    self.update_activation_memory_periodically(
-                        interval_seconds=self.monitor.act_mem_update_interval,
-                        label=QUERY_LABEL,
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=messages[0].mem_cube,
-                    )
 
     def _answer_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """

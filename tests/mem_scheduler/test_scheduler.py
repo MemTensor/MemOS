@@ -106,8 +106,8 @@ class TestGeneralScheduler(unittest.TestCase):
             user_id="test_user",
             mem_cube_id="test_cube",
             label=QUERY_LABEL,
-            from_memory_type="WorkingMemory",  # 新增字段
-            to_memory_type="LongTermMemory",  # 新增字段
+            from_memory_type="WorkingMemory",  # New field
+            to_memory_type="LongTermMemory",  # New field
             log_content="Test Content",
             current_memory_sizes={
                 "long_term_memory_size": 0,

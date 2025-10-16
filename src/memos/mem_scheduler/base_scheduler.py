@@ -138,7 +138,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             if self.auth_config is not None:
                 self.rabbitmq_config = self.auth_config.rabbitmq
-                self.initialize_rabbitmq(config=self.rabbitmq_config)
+                if self.rabbitmq_config is not None:
+                    self.initialize_rabbitmq(config=self.rabbitmq_config)
 
             logger.debug("GeneralScheduler has been initialized")
         except Exception as e:
@@ -497,6 +498,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Args:
             messages: Single log message or list of log messages
         """
+        if self.rabbitmq_config is None:
+            return
+
         if isinstance(messages, ScheduleLogForWebItem):
             messages = [messages]  # transform single message to list
 
@@ -526,7 +530,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         messages = []
         while True:
             try:
-                item = self._web_log_message_queue.get_nowait()  # 线程安全的 get
+                item = self._web_log_message_queue.get_nowait()  # Thread-safe get
                 messages.append(item.to_dict())
             except queue.Empty:
                 break

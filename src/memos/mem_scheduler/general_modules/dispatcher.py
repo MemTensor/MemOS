@@ -206,7 +206,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
             bool: True if all tasks completed, False if timeout occurred.
         """
         if not self.enable_parallel_dispatch or self.dispatcher_executor is None:
-            return True  # 串行模式无需等待
+            return True  # Serial mode requires no waiting
 
         done, not_done = concurrent.futures.wait(
             self._futures, timeout=timeout, return_when=concurrent.futures.ALL_COMPLETED
