@@ -23,7 +23,7 @@ class MemOSAPI:
             try:
                 url = f"{self.base_url}/product/add"
                 payload = json.dumps(
-                    {"messages": messages, "mem_cube_id": user_id, "session_id": conv_id}
+                    {"messages": messages, "mem_cube_id": user_id, "user_id": user_id, "session_id": conv_id}
                 )
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
