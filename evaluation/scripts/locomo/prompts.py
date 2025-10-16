@@ -138,3 +138,67 @@ Generate personal memories that follow these guidelines:
 
 5. Format each memory as a paragraph with a clear narrative structure that captures the person's experience, challenges, and aspirations
 """
+
+
+TEMPLATE_ZEP = """
+FACTS and ENTITIES represent relevant context to the current conversation.
+
+# These are the most relevant facts for the conversation along with the datetime of the event that the fact refers to.
+If a fact mentions something happening a week ago, then the datetime will be the date time of last week and not the datetime
+of when the fact was stated.
+Timestamps in memories represent the actual time the event occurred, not the time the event was mentioned in a message.
+
+<FACTS>
+{facts}
+</FACTS>
+
+# These are the most relevant entities
+# ENTITY_NAME: entity summary
+<ENTITIES>
+{entities}
+</ENTITIES>
+"""
+
+TEMPLATE_MEM0 = """Memories for user {speaker_1_user_id}:
+
+    {speaker_1_memories}
+
+    Memories for user {speaker_2_user_id}:
+
+    {speaker_2_memories}
+"""
+
+TEMPLATE_MEM0_GRAPH = """Memories for user {speaker_1_user_id}:
+
+    {speaker_1_memories}
+
+    Relations for user {speaker_1_user_id}:
+
+    {speaker_1_graph_memories}
+
+    Memories for user {speaker_2_user_id}:
+
+    {speaker_2_memories}
+
+    Relations for user {speaker_2_user_id}:
+
+    {speaker_2_graph_memories}
+"""
+
+TEMPLATE_MEMOS = """Memories for user {speaker_1}:
+
+    {speaker_1_memories}
+
+    Memories for user {speaker_2}:
+
+    {speaker_2_memories}
+"""
+
+TEMPLATE_MEMOBASE = """Memories for user {speaker_1_user_id}:
+
+    {speaker_1_memories}
+
+    Memories for user {speaker_2_user_id}:
+
+    {speaker_2_memories}
+"""

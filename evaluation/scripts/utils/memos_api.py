@@ -21,9 +21,9 @@ class MemOSAPI:
         retry = 0
         while retry < 10:
             try:
-                url = f"{self.base_url}/product/add"
+                url = f"{self.base_url}/add"
                 payload = json.dumps(
-                    {"messages": messages, "mem_cube_id": user_id, "user_id": user_id, "session_id": conv_id}
+                    {"messages": messages, "user_id": user_id, "conversation_id": conv_id}
                 )
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
@@ -42,12 +42,12 @@ class MemOSAPI:
         retry = 0
         while retry < 10:
             try:
-                url = f"{self.base_url}/product/search"
+                url = f"{self.base_url}/search"
                 payload = json.dumps(
                     {
                         "query": query,
-                        "mem_cube_id": user_id,
-                        "session_id": conv_id,
+                        "user_id": user_id,
+                        "conversation_id": conv_id,
                         "top_k": top_k,
                     },
                     ensure_ascii=False,

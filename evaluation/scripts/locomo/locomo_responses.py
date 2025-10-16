@@ -129,13 +129,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        choices=["mem0", "mem0_graph", "openai", "memos-api", "memobase"],
         default="memos-api",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="0917-test",
+        default="default",
         help="Version identifier for loading results (e.g., 1010)",
     )
     args = parser.parse_args()
