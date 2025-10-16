@@ -232,7 +232,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="defalut",
+        default="default",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(

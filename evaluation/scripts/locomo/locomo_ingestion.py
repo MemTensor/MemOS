@@ -61,6 +61,13 @@ def ingest_session(client, session, frame, version, metadata):
             m['created_at'] = iso_date
         client.add(speaker_a_messages, speaker_a_user_id)
         client.add(speaker_b_messages, speaker_b_user_id)
+    elif frame == "memu":
+        # speaker_a_user_id = metadata['speaker_a']
+        # speaker_b_user_id = metadata['speaker_b']
+        # client.agent_id = speaker_b_user_id
+        client.add(speaker_a_messages, speaker_a_user_id, iso_date)
+        # client.agent_id = speaker_a_user_id
+        client.add(speaker_b_messages, speaker_b_user_id, iso_date)
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -99,6 +106,9 @@ def process_user(conv_idx, frame, locomo_df, version):
                 pass
         speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
         speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
+    elif frame == "memu":
+        from utils.client import memu_client
+        client = memu_client()
 
     sessions_to_process = []
     for session_idx in range(max_session_count):
@@ -131,7 +141,7 @@ def process_user(conv_idx, frame, locomo_df, version):
     return elapsed_time
 
 
-async def main(frame, version="default", num_workers=4):
+def main(frame, version="default", num_workers=4):
     load_dotenv()
     locomo_df = pd.read_json("data/locomo/locomo10.json")
     num_users = 10
@@ -162,8 +172,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase"],
-        default="memos-api",
+        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu"],
+        default="memu",
     )
     parser.add_argument(
         "--version",
@@ -172,11 +182,11 @@ if __name__ == "__main__":
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=10, help="Number of parallel workers to process users"
+        "--workers", type=int, default=3, help="Number of parallel workers to process users"
     )
     args = parser.parse_args()
     lib = args.lib
     version = args.version
     workers = args.workers
 
-    asyncio.run(main(lib, version, workers))
+    main(lib, version, workers)

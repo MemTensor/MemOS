@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
@@ -25,8 +26,8 @@ class zep_client:
     def search(self, query, user_id, top_k):
         search_results = (
             self.client.graph.search(query=query, group_id=user_id, scope="nodes", reranker="rrf", limit=top_k),
-            self.client.graph.search(query=query, group_id=user_id, scope="edges", reranker="cross_encoder", limit=top_k)
-        )
+            self.client.graph.search(query=query, group_id=user_id, scope="edges", reranker="cross_encoder",
+                                     limit=top_k))
 
         nodes = search_results[0].nodes
         edges = search_results[1].edges
@@ -74,7 +75,7 @@ class memobase_client:
     def search(self, query, user_id, top_k):
         user = self.client.get_user(user_id, no_get=True)
         memories = user.context(
-            max_token_size=top_k*100,
+            max_token_size=top_k * 100,
             chats=[{"role": "user", "content": query}],
             event_similarity_threshold=0.2,
             fill_window_with_events=True,
@@ -106,138 +107,69 @@ class memos_api_client:
         return json.loads(response.text)["data"]
 
 
+class supermemory_client:
+    def __init__(self):
+        from supermemory import Supermemory
+        self.client = Supermemory(api_key=os.getenv("SUPERMEMORY_API_KEY"))
+
+    def add(self, messages, user_id):
+        content = '\n'.join([f"{msg['chat_time']} {msg['role']}: {msg['content']}" for msg in messages])
+        self.client.memories.add(content=content, container_tag=user_id)
+
+    def search(self, query, user_id, top_k):
+        results = self.client.search.memories(q=query, container_tag=user_id, threshold=0.2,
+                                              rerank=True, rewrite_query=True, limit=top_k)
+        context = '\n\n'.join([r.memory for r in results.results])
+        return context
+
+
+class memu_client:
+    def __init__(self):
+        from memu import MemuClient
+        self.memu_client = MemuClient(base_url="https://api.memu.so", api_key=os.getenv("MEMU_API_KEY"))
+        self.agent_id = "assistant_001"
+
+    def add(self, messages, user_id, iso_date):
+        try:
+            response = self.memu_client.memorize_conversation(
+                conversation=messages,
+                user_id=user_id,
+                user_name=user_id,
+                agent_id=self.agent_id,
+                agent_name=self.agent_id,
+                session_date=iso_date
+            )
+            self.wait_for_completion(response.task_id)
+        except Exception as error:
+            print('❌ Error saving conversation:', error)
+
+    def search(self, query, user_id, top_k):
+        user_memories = self.memu_client.retrieve_related_memory_items(
+            user_id=user_id, agent_id=self.agent_id,
+            query=query, top_k=top_k, min_similarity=0.3)
+        res = [m.memory.content for m in user_memories.related_memories]
+        return res
+
+    def wait_for_completion(self, task_id):
+        while True:
+            status = self.memu_client.get_task_status(task_id)
+            if status.status in ['SUCCESS', 'FAILURE', 'REVOKED']:
+                break
+            time.sleep(2)
+
+
 if __name__ == "__main__":
-    pass
-    # # zep
-    # # Example usage of the Zep client
-    # zep = zep_client()
-    # print("Zep client initialized successfully.")
-    #
-    # # Example of adding a session and a message to Zep memory
-    # user_id = "user123"
-    # session_id = "session123"
-    #
-    # zep.memory.add_session(
-    #     session_id=session_id,
-    #     user_id=user_id,
-    # )
-    # from zep_cloud.types import Message
-    #
-    # messages = [
-    #     Message(
-    #         role="Jane",
-    #         role_type="user",
-    #         content="Who was Octavia Butler?",
-    #     )
-    # ]
-    # new_episode = zep.memory.add(
-    #     session_id=session_id,
-    #     messages=messages,
-    # )
-    # print("New episode added:", new_episode)
-    #
-    # # Example of searching for nodes and edges in Zep memory
-    # nodes_result = zep.graph.search(
-    #     query="Octavia Butler",
-    #     user_id="user123",
-    #     scope="nodes",
-    #     reranker="rrf",
-    #     limit=10,
-    # ).nodes
-    #
-    # edges_result = zep.graph.search(
-    #     query="Octavia Butler",
-    #     user_id="user123",
-    #     scope="edges",
-    #     reranker="cross_encoder",
-    #     limit=10,
-    # ).edges
-    #
-    # print("Nodes found:", nodes_result)
-    # print("Edges found:", edges_result)
-    #
-    # # Example usage of the Mem0 client
-    # mem0 = mem0_client(mode="local")
-    # print("Mem0 client initialized successfully.")
-    # print("Adding memories...")
-    # result = mem0.add(
-    #     messages=[
-    #         {"role": "user", "content": "I like drinking coffee in the morning"},
-    #         {"role": "user", "content": "I enjoy reading books at night"},
-    #     ],
-    #     user_id="alice",
-    # )
-    # print("Memory added:", result)
-    #
-    # print("Searching memories...")
-    # search_result = mem0.search(query="coffee", user_id="alice", top_k=2)
-    # print("Search results:", search_result)
-    #
-    # # Example usage of the Memos client
-    # memos_a = memos_client(
-    #     mode="local",
-    #     db_name="session333",
-    #     user_id="dlice",
-    #     top_k=20,
-    #     mem_cube_path="./mem_cube_a",
-    #     mem_cube_config_path="configs/lme_mem_cube_config.json",
-    #     mem_os_config_path="configs/mos_memos_config.json",
-    # )
-    # print("Memos a client initialized successfully.")
-    # memos_b = memos_client(
-    #     mode="local",
-    #     db_name="session444",
-    #     user_id="alice",
-    #     top_k=20,
-    #     mem_cube_path="./mem_cube_b",
-    #     mem_cube_config_path="configs/lme_mem_cube_config.json",
-    #     mem_os_config_path="configs/mos_memos_config.json",
-    # )
-    # print("Memos b client initialized successfully.")
-    #
-    # # Example of adding memories in Memos
-    # memos_a.add(
-    #     messages=[
-    #         {"role": "user", "content": "I like drinking coffee in the morning"},
-    #         {"role": "user", "content": "I enjoy reading books at night"},
-    #     ],
-    #     user_id="dlice",
-    # )
-    # memos_b.add(
-    #     messages=[
-    #         {"role": "user", "content": "I like playing football in the evening"},
-    #         {"role": "user", "content": "I enjoy watching movies at night"},
-    #     ],
-    #     user_id="alice",
-    # )
-    #
-    # # Example of searching memories in Memos
-    # search_result_a = memos_a.search(query="coffee", user_id="dlice")
-    # filtered_search_result_a = filter_memory_data(search_result_a)["text_mem"][0]["memories"]
-    # print("Search results in Memos A:", filtered_search_result_a)
-    #
-    # search_result_b = memos_b.search(query="football", user_id="alice")
-    # filtered_search_result_b = filter_memory_data(search_result_b)["text_mem"][0]["memories"]
-    # print("Search results in Memos B:", filtered_search_result_b)
-    #
-    # # Example usage of MemoBase client
-    # client = memobase_client()
-    # print("MemoBase client initialized successfully.")
-    #
-    # # Example of adding a user and retrieving user information
-    # user_id = client.add_user()
-    # user = client.get_user(user_id)
-    #
-    # # Example of adding a chat blob to the user
-    # print(f"Adding chat blob for user {user_id}...")
-    # b = ChatBlob(
-    #     messages=[
-    #         {"role": "user", "content": "Hi, I'm here again"},
-    #         {"role": "assistant", "content": "Hi, Gus! How can I help you?"},
-    #     ]
-    # )
-    # bid = user.insert(b)
-    #
-    # # Example of retrieving the context of the user
-    # context = user.context()
-    # print(context)
+    messages = [{"role": "user", "content": "杭州西湖有什么好玩的"},
+                {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"}]
+    user_id = 'test_user'
+    iso_date = "2023-05-01T00:00:00.000Z"
+    query = "杭州西湖有什么"
+    top_k = 5
+
+    # memu
+    memu_client = memu_client()
+    memu_client.add(messages, user_id, iso_date)
+    res = memu_client.search(query, user_id, top_k)
+
+    # supermemory
+
