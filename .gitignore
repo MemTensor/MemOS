@@ -15,6 +15,7 @@ evaluation/.env
 !evaluation/configs-example/*.json
 evaluation/configs/*
 **tree_textual_memory_locomo**
+**script.py**
 .env
 evaluation/scripts/personamem
 
