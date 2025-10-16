@@ -59,6 +59,9 @@ class BaseEvalModule:
             )
         else:
             logger.warning(f"Temporal locomo dataset not found at {temporal_locomo_file}")
+
+        result_dir_prefix = getattr(self.args, "result_dir_prefix", "")
+
         # Configure result dir; if scheduler disabled and using memos scheduler, mark as ablation
         if (
             hasattr(self.args, "scheduler_flag")
@@ -66,11 +69,11 @@ class BaseEvalModule:
             and self.args.scheduler_flag is False
         ):
             self.result_dir = Path(
-                f"{BASE_DIR}/results/temporal_locomo/{self.frame}-{self.version}-ablation/"
+                f"{BASE_DIR}/results/temporal_locomo/{result_dir_prefix}{self.frame}-{self.version}-ablation/"
             )
         else:
             self.result_dir = Path(
-                f"{BASE_DIR}/results/temporal_locomo/{self.frame}-{self.version}/"
+                f"{BASE_DIR}/results/temporal_locomo/{result_dir_prefix}{self.frame}-{self.version}/"
             )
 
         if self.context_update_method != ContextUpdateMethod.PRE_CONTEXT:
@@ -95,6 +98,10 @@ class BaseEvalModule:
         auth_config_path = Path(f"{BASE_DIR}/scripts/temporal_locomo/eval_auth.json")
         if auth_config_path.exists():
             auth_config = AuthConfig.from_local_config(config_path=auth_config_path)
+
+            self.openai_api_key = auth_config.openai.api_key
+            self.openai_base_url = auth_config.openai.base_url
+            self.openai_chat_model = auth_config.openai.default_model
 
             self.mos_config_data = json.load(self.mos_config_path.open("r", encoding="utf-8"))
             self.mem_cube_config_data = json.load(
@@ -126,9 +133,6 @@ class BaseEvalModule:
                 auth_config.graph_db.auto_create
             )
 
-            self.openai_api_key = auth_config.openai.api_key
-            self.openai_base_url = auth_config.openai.base_url
-            self.openai_chat_model = auth_config.openai.default_model
         else:
             print("Please referring to configs-example to provide valid configs.")
             exit()

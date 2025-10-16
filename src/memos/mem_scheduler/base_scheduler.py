@@ -2,6 +2,7 @@ import queue
 import threading
 import time
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -68,9 +69,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.dispatcher = SchedulerDispatcher(
+            config=self.config,
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
         )
+
+        # optional configs
+        self.disable_handlers: list | None = self.config.get("disable_handlers", None)
 
         # internal message queue
         self.max_internal_message_queue_size = self.config.get(
@@ -476,6 +481,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.error(error_msg)
                 raise TypeError(error_msg)
 
+            # Check if this handler is disabled
+            if self.disable_handlers and message.label in self.disable_handlers:
+                logger.info(f"Skipping disabled handler: {message.label} - {message.content}")
+                continue
+
             self.memos_message_queue.put(message)
             logger.info(f"Submitted message: {message.label} - {message.content}")
 
@@ -621,6 +631,52 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Clean up queues
         self._cleanup_queues()
         logger.info("Memory Scheduler stopped completely")
+
+    @property
+    def handlers(self) -> dict[str, Callable]:
+        """
+        Access the dispatcher's handlers dictionary.
+
+        Returns:
+            dict[str, Callable]: Dictionary mapping labels to handler functions
+        """
+        if not self.dispatcher:
+            logger.warning("Dispatcher is not initialized, returning empty handlers dict")
+            return {}
+
+        return self.dispatcher.handlers
+
+    def register_handlers(
+        self, handlers: dict[str, Callable[[list[ScheduleMessageItem]], None]]
+    ) -> None:
+        """
+        Bulk register multiple handlers from a dictionary.
+
+        Args:
+            handlers: Dictionary mapping labels to handler functions
+                      Format: {label: handler_callable}
+        """
+        if not self.dispatcher:
+            logger.warning("Dispatcher is not initialized, cannot register handlers")
+            return
+
+        self.dispatcher.register_handlers(handlers)
+
+    def unregister_handlers(self, labels: list[str]) -> dict[str, bool]:
+        """
+        Unregister handlers from the dispatcher by their labels.
+
+        Args:
+            labels: List of labels to unregister handlers for
+
+        Returns:
+            dict[str, bool]: Dictionary mapping each label to whether it was successfully unregistered
+        """
+        if not self.dispatcher:
+            logger.warning("Dispatcher is not initialized, cannot unregister handlers")
+            return dict.fromkeys(labels, False)
+
+        return self.dispatcher.unregister_handlers(labels)
 
     def _cleanup_queues(self) -> None:
         """Ensure all queues are emptied and marked as closed."""

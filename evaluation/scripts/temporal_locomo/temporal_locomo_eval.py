@@ -99,32 +99,6 @@ class TemporalLocomoEval(LocomoEvalModelModules):
         print(f"  - Statistics: {self.stats_path}")
         print("=" * 80)
 
-    def run_inference_eval_pipeline(self, skip_ingestion=True, skip_processing=False):
-        """
-        Run the complete evaluation pipeline including dataset conversion,
-        data ingestion, and processing.
-        """
-        print("=" * 80)
-        print("Starting TimeLocomo Evaluation Pipeline")
-        print("=" * 80)
-
-        # Step 1: Check if temporal_locomo dataset exists, if not convert it
-        temporal_locomo_file = self.data_dir / "temporal_locomo" / "temporal_locomo_qa.json"
-        if not temporal_locomo_file.exists():
-            print(f"Temporal locomo dataset not found at {temporal_locomo_file}")
-            print("Converting locomo dataset to temporal_locomo format...")
-            self.convert_locomo_to_temporal_locomo(output_dir=self.data_dir / "temporal_locomo")
-            print("Dataset conversion completed.")
-        else:
-            print(f"Temporal locomo dataset found at {temporal_locomo_file}, skipping conversion.")
-
-        # Step 2: Data ingestion
-        if not skip_ingestion:
-            print("\n" + "=" * 50)
-            print("Step 2: Data Ingestion")
-            print("=" * 50)
-            self.locomo_ingestor.run_ingestion()
-
     def compute_can_answer_count_by_pre_evidences(self, rounds_to_consider):
         """
         Compute can-answer statistics per day for each conversation using the
@@ -163,7 +137,7 @@ if __name__ == "__main__":
         "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"
     )
     parser.add_argument(
-        "--scheduler-flag",
+        "--scheduler_flag",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Enable or disable memory scheduler features",
@@ -173,7 +147,7 @@ if __name__ == "__main__":
         type=str,
         default="chat_history",
         choices=ContextUpdateMethod.values(),
-        help="Method to update context: direct (use current context directly), chat_history (use template with history), current_context (use current context)",
+        help="Method to update context: pre_context (use previous context), chat_history (use template with history), current_context (use current context)",
     )
     args = parser.parse_args()
 

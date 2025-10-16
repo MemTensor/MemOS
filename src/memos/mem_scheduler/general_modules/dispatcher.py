@@ -8,7 +8,7 @@ from typing import Any
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.mem_scheduler.general_modules.task_threads import ThreadRace
+from memos.mem_scheduler.general_modules.task_threads import ThreadManager
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
@@ -28,8 +28,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
     - Thread race competition for parallel task execution
     """
 
-    def __init__(self, max_workers=30, enable_parallel_dispatch=False):
+    def __init__(self, max_workers=30, enable_parallel_dispatch=False, config=None):
         super().__init__()
+        self.config = config
+
         # Main dispatcher thread pool
         self.max_workers = max_workers
 
@@ -54,7 +56,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         self._futures = set()
 
         # Thread race module for competitive task execution
-        self.thread_race = ThreadRace()
+        self.thread_manager = ThreadManager(thread_pool_executor=self.dispatcher_executor)
 
     def register_handler(self, label: str, handler: Callable[[list[ScheduleMessageItem]], None]):
         """
@@ -85,6 +87,41 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 continue
             self.register_handler(label=label, handler=handler)
         logger.info(f"Registered {len(handlers)} handlers in bulk")
+
+    def unregister_handler(self, label: str) -> bool:
+        """
+        Unregister a handler for a specific label.
+
+        Args:
+            label: The label to unregister the handler for
+
+        Returns:
+            bool: True if handler was found and removed, False otherwise
+        """
+        if label in self.handlers:
+            del self.handlers[label]
+            logger.info(f"Unregistered handler for label: {label}")
+            return True
+        else:
+            logger.warning(f"No handler found for label: {label}")
+            return False
+
+    def unregister_handlers(self, labels: list[str]) -> dict[str, bool]:
+        """
+        Unregister multiple handlers by their labels.
+
+        Args:
+            labels: List of labels to unregister handlers for
+
+        Returns:
+            dict[str, bool]: Dictionary mapping each label to whether it was successfully unregistered
+        """
+        results = {}
+        for label in labels:
+            results[label] = self.unregister_handler(label)
+
+        logger.info(f"Unregistered handlers for {len(labels)} labels")
+        return results
 
     def _default_message_handler(self, messages: list[ScheduleMessageItem]) -> None:
         logger.debug(f"Using _default_message_handler to deal with messages: {messages}")
@@ -198,7 +235,45 @@ class SchedulerDispatcher(BaseSchedulerModule):
             Tuple of (task_name, result) from the winning task, or None if no task completes
         """
         logger.info(f"Starting competitive execution of {len(tasks)} tasks")
-        return self.thread_race.run_race(tasks, timeout)
+        return self.thread_manager.run_race(tasks, timeout)
+
+    def run_multiple_tasks(
+        self,
+        tasks: dict[str, tuple[Callable, tuple, dict]],
+        use_thread_pool: bool | None = None,
+        timeout: float | None = 30.0,
+    ) -> dict[str, Any]:
+        """
+        Execute multiple tasks concurrently and return all results.
+
+        Args:
+            tasks: Dictionary mapping task names to (function, args, kwargs) tuples
+            use_thread_pool: Whether to use ThreadPoolExecutor. If None, uses dispatcher's parallel mode setting
+            timeout: Maximum time to wait for all tasks to complete (in seconds). None for infinite timeout.
+
+        Returns:
+            Dictionary mapping task names to their results
+
+        Raises:
+            TimeoutError: If tasks don't complete within the specified timeout
+        """
+        # Use dispatcher's parallel mode setting if not explicitly specified
+        if use_thread_pool is None:
+            use_thread_pool = self.enable_parallel_dispatch
+
+        logger.info(f"Executing {len(tasks)} tasks concurrently (thread_pool: {use_thread_pool})")
+
+        try:
+            results = self.thread_manager.run_multiple_tasks(
+                tasks=tasks, use_thread_pool=use_thread_pool, timeout=timeout
+            )
+            logger.info(
+                f"Successfully completed {len([r for r in results.values() if r is not None])}/{len(tasks)} tasks"
+            )
+            return results
+        except Exception as e:
+            logger.error(f"Multiple tasks execution failed: {e}", exc_info=True)
+            raise
 
     def shutdown(self) -> None:
         """Gracefully shutdown the dispatcher."""
