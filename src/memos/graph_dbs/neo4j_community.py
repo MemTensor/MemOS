@@ -1,4 +1,5 @@
 import json
+
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
@@ -43,9 +44,12 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Create indexes
         self._create_basic_property_indexes()
 
-    def add_node(self, id: str, memory: str, metadata: dict[str, Any]) -> None:
-        if not self.config.use_multi_db and self.config.user_name:
-            metadata["user_name"] = self.config.user_name
+    def add_node(
+        self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
+    ) -> None:
+        user_name = user_name if user_name else self.config.user_name
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
+            metadata["user_name"] = user_name
 
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
@@ -98,13 +102,16 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                 metadata=metadata,
             )
 
-    def get_children_with_embeddings(self, id: str) -> list[dict[str, Any]]:
+    def get_children_with_embeddings(
+        self, id: str, user_name: str | None = None
+    ) -> list[dict[str, Any]]:
+        user_name = user_name if user_name else self.config.user_name
         where_user = ""
         params = {"id": id}
 
-        if not self.config.use_multi_db and self.config.user_name:
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
             where_user = "AND p.user_name = $user_name AND c.user_name = $user_name"
-            params["user_name"] = self.config.user_name
+            params["user_name"] = user_name
 
         query = f"""
                 MATCH (p:Memory)-[:PARENT]->(c:Memory)
@@ -135,6 +142,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         status: str | None = None,
         threshold: float | None = None,
         search_filter: dict | None = None,
+        user_name: str | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -159,6 +167,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             - If 'search_filter' is provided, it applies additional metadata-based filtering.
             - The returned IDs can be used to fetch full node data from Neo4j if needed.
         """
+        user_name = user_name if user_name else self.config.user_name
         # Build VecDB filter
         vec_filter = {}
         if scope:
@@ -169,7 +178,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if kwargs.get("cube_name"):
             vec_filter["user_name"] = kwargs["cube_name"]
         else:
-            vec_filter["user_name"] = self.config.user_name
+            vec_filter["user_name"] = user_name
 
         # Add search_filter conditions
         if search_filter:
@@ -194,15 +203,16 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
+        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
 
         where_clause = "WHERE n.memory_type = $scope"
         params = {"scope": scope}
 
-        if not self.config.use_multi_db and self.config.user_name:
+        if not self.config.use_multi_db and (self.config.user_name or user_name):
             where_clause += " AND n.user_name = $user_name"
-            params["user_name"] = self.config.user_name
+            params["user_name"] = user_name
 
         query = f"""
             MATCH (n:Memory)
@@ -214,23 +224,24 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             results = session.run(query, params)
             return [self._parse_node(dict(record["n"])) for record in results]
 
-    def clear(self) -> None:
+    def clear(self, user_name: str | None = None) -> None:
         """
         Clear the entire graph if the target database exists.
         """
         # Step 1: clear Neo4j part via parent logic
-        super().clear()
+        user_name = user_name if user_name else self.config.user_name
+        super().clear(user_name=user_name)
 
         # Step2: Clear the vector db
         try:
-            items = self.vec_db.get_by_filter({"user_name": self.config.user_name})
+            items = self.vec_db.get_by_filter({"user_name": user_name})
             if items:
                 self.vec_db.delete([item.id for item in items])
-                logger.info(f"Cleared {len(items)} vectors for user '{self.config.user_name}'.")
+                logger.info(f"Cleared {len(items)} vectors for user '{user_name}'.")
             else:
-                logger.info(f"No vectors to clear for user '{self.config.user_name}'.")
+                logger.info(f"No vectors to clear for user '{user_name}'.")
         except Exception as e:
-            logger.warning(f"Failed to clear vector DB for user '{self.config.user_name}': {e}")
+            logger.warning(f"Failed to clear vector DB for user '{user_name}': {e}")
 
     def drop_database(self) -> None:
         """
