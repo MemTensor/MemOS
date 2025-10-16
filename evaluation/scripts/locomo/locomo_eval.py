@@ -378,7 +378,7 @@ if __name__ == "__main__":
         default=3,
         help="Number of times to run the LLM grader for each question",
     )
-    parser.add_argument("--options", nargs="+", default=[])
+    parser.add_argument("--options", nargs="+", default=["lexical"])
     parser.add_argument(
         "--workers", type=int, default=10, help="Number of concurrent workers for processing groups"
     )
