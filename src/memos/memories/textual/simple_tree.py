@@ -151,9 +151,9 @@ class SimpleTreeTextMemory(TreeTextMemory):
             list[TextualMemoryItem]: List of matching memories.
         """
         if (self.internet_retriever is not None) and manual_close_internet:
-            logger.warning(
-                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
-            )
+            # logger.warning(
+            #     "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
+            # )
             searcher = Searcher(
                 self.dispatcher_llm,
                 self.graph_store,
