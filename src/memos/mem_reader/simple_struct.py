@@ -413,7 +413,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return memory_list
 
     def fine_transfer_simple_mem(
-        self, input_memories: list[list[TextualMemoryItem]], type: str
+        self, input_memories: list[TextualMemoryItem], type: str
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []

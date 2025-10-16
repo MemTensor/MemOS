@@ -118,7 +118,7 @@ class Searcher:
             related_nodes = [
                 self.graph_store.get_node(n["id"])
                 for n in self.graph_store.search_by_embedding(
-                    query_embedding, top_k=top_k, search_filter=search_filter
+                    query_embedding, top_k=top_k, status="activated", search_filter=search_filter
                 )
             ]
             memories = []

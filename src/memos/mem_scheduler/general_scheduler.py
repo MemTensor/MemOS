@@ -1,4 +1,5 @@
 import json
+import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.log import get_logger
@@ -297,27 +298,13 @@ class GeneralScheduler(BaseScheduler):
                 logger.warning("No valid memory items found for processing")
                 return
 
-            # Prepare scene data for mem_reader
-            scene_data = []
-            for memory_item in memory_items:
-                scene_data.append(
-                    {
-                        "role": "user",  # or determine from metadata
-                        "content": memory_item.memory,
-                        "chat_time": memory_item.metadata.updated_at
-                        or memory_item.metadata.created_at,
-                    }
-                )
-
             # Use mem_reader to process the memories
-            logger.info(f"Processing {len(scene_data)} memories with mem_reader")
+            logger.info(f"Processing {len(memory_items)} memories with mem_reader")
 
             # Extract memories using mem_reader
-            processed_memories = self.mem_reader.get_memory(
-                scene_data=scene_data,
+            processed_memories = self.mem_reader.fine_transfer_simple_mem(
+                memory_items,
                 type="chat",
-                info={"user_id": user_id, "session_id": "", "mem_cube_id": mem_cube_id},
-                mode="fine",  # Use fast mode for async processing
             )
 
             if processed_memories and len(processed_memories) > 0:
@@ -349,8 +336,10 @@ class GeneralScheduler(BaseScheduler):
             text_mem.memory_manager.remove_and_refresh_memory()
             logger.info("Remove and Refresh Memories")
 
-        except Exception as e:
-            logger.error(f"Error in _process_memories_with_reader: {e}", exc_info=True)
+        except Exception:
+            logger.error(
+                f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
+            )
 
     def _trigger_memory_reorganization(
         self,

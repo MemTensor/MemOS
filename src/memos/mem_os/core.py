@@ -688,6 +688,12 @@ class MOSCore:
         logger.info(
             f"time add: get mem_cube_id check in mem_cubes time user_id: {target_user_id} time is: {time.time() - time_start_0}"
         )
+        sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
+        if sync_mode == "async":
+            assert self.mem_scheduler is not None, (
+                "Mem-Scheduler must be working when use synchronous memory adding."
+            )
+        logger.debug(f"Mem-reader mode is: {sync_mode}")
         time_start_1 = time.time()
         if (
             (messages is not None)
@@ -697,11 +703,6 @@ class MOSCore:
             logger.info(
                 f"time add: messages is not None and enable_textual_memory and text_mem is not None time user_id: {target_user_id} time is: {time.time() - time_start_1}"
             )
-            sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
-            if sync_mode == "async":
-                assert self.mem_scheduler is not None, (
-                    "Mem-Scheduler must be working when use synchronous memory adding."
-                )
 
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 add_memory = []
@@ -774,10 +775,12 @@ class MOSCore:
                 messages_list = [
                     [{"role": "user", "content": memory_content}]
                 ]  # for only user-str input and convert message
+
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
                     info={"user_id": target_user_id, "session_id": target_session_id},
+                    mode="fast" if sync_mode == "async" else "fine",
                 )
 
                 mem_ids = []
@@ -791,6 +794,16 @@ class MOSCore:
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
                     mem_cube = self.mem_cubes[mem_cube_id]
+                    if sync_mode == "async":
+                        message_item = ScheduleMessageItem(
+                            user_id=target_user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=MEM_READ_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,

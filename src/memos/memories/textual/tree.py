@@ -274,7 +274,14 @@ class TreeTextMemory(BaseTextMemory):
         return all_items
 
     def delete(self, memory_ids: list[str]) -> None:
-        raise NotImplementedError
+        """Hard delete: permanently remove nodes and their edges from the graph."""
+        if not memory_ids:
+            return
+        for mid in memory_ids:
+            try:
+                self.graph_store.delete_node(mid)
+            except Exception as e:
+                logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
 
     def delete_all(self) -> None:
         """Delete all memories and their relationships from the graph store."""

@@ -125,12 +125,17 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 self.dispatcher_monitor.start()
 
             # initialize with auth_config
-            if self.auth_config_path is not None and Path(self.auth_config_path).exists():
-                self.auth_config = AuthConfig.from_local_config(config_path=self.auth_config_path)
-            elif AuthConfig.default_config_exists():
-                self.auth_config = AuthConfig.from_local_config()
-            else:
-                self.auth_config = AuthConfig.from_local_env()
+            try:
+                if self.auth_config_path is not None and Path(self.auth_config_path).exists():
+                    self.auth_config = AuthConfig.from_local_config(
+                        config_path=self.auth_config_path
+                    )
+                elif AuthConfig.default_config_exists():
+                    self.auth_config = AuthConfig.from_local_config()
+                else:
+                    self.auth_config = AuthConfig.from_local_env()
+            except Exception:
+                pass
 
             if self.auth_config is not None:
                 self.rabbitmq_config = self.auth_config.rabbitmq
@@ -637,3 +642,54 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 self._web_log_message_queue.get_nowait()
         except queue.Empty:
             pass
+
+    def mem_scheduler_wait(self, timeout: float = 180.0, poll: float = 0.1) -> bool:
+        """
+        Block until the scheduler has finished processing all submitted messages.
+
+        Strategy:
+        1) Wait for the internal memos_message_queue to drain
+           - Prefer "unfinished_tasks" if available; otherwise fallback to empty() polling.
+        2) If parallel dispatch is enabled, wait for all dispatched futures to complete via dispatcher.join().
+
+        Args:
+            timeout: Maximum seconds to wait in total.
+            poll:    Polling interval when falling back to checks.
+        Returns:
+            True if drained before timeout, otherwise False.
+        """
+        deadline = time.time() + timeout
+
+        # 1) Wait for internal queue to drain
+        while True:
+            try:
+                unfinished = getattr(self.memos_message_queue, "unfinished_tasks", None)
+                if unfinished is not None:
+                    if int(unfinished) == 0:
+                        break
+                else:
+                    if self.memos_message_queue.empty():
+                        break
+            except Exception:
+                # Be conservative: if any issue reading metrics, fallback to empty()
+                if self.memos_message_queue.empty():
+                    break
+
+            if time.time() >= deadline:
+                logger.warning("mem_scheduler_wait: queue did not drain before timeout")
+                return False
+            time.sleep(poll)
+
+        # 2) Wait for dispatcher futures (if running in parallel mode)
+        remaining = max(0.0, deadline - time.time())
+        if self.enable_parallel_dispatch and self.dispatcher is not None:
+            try:
+                ok = self.dispatcher.join(timeout=remaining if remaining > 0 else 0)
+            except TypeError:
+                # Some implementations may not accept timeout
+                ok = self.dispatcher.join()
+            if not ok:
+                logger.warning("mem_scheduler_wait: dispatcher did not complete before timeout")
+                return False
+
+        return True
