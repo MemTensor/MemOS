@@ -197,6 +197,23 @@ class APIADDRequest(BaseRequest):
     )
 
 
+class APIChatCompleteRequest(BaseRequest):
+    """Request model for chat operations."""
+
+    user_id: str = Field(..., description="User ID")
+    query: str = Field(..., description="Chat query message")
+    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    history: list[MessageDict] | None = Field(None, description="Chat history")
+    internet_search: bool = Field(False, description="Whether to use internet search")
+    moscube: bool = Field(True, description="Whether to use MemOSCube")
+    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    top_k: int = Field(10, description="Number of results to return")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
+    session_id: str | None = Field(
+        "default_session", description="Session ID for soft-filtering memories"
+    )
+
+
 class SuggestionRequest(BaseRequest):
     """Request model for getting suggestion queries."""
 

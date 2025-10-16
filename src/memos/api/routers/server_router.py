@@ -1,12 +1,14 @@
 import os
+import traceback
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from memos.api.config import APIConfig
 from memos.api.product_models import (
     APIADDRequest,
+    APIChatCompleteRequest,
     APISearchRequest,
     MemoryResponse,
     SearchResponse,
@@ -22,6 +24,7 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
@@ -126,7 +129,11 @@ def init_server():
         memory_size=_get_default_memory_size(default_cube_config),
         is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
     )
-
+    mos_server = MOSServer(
+        mem_reader=mem_reader,
+        llm=llm,
+        online_bot=False,
+    )
     return (
         graph_db,
         mem_reader,
@@ -136,6 +143,7 @@ def init_server():
         internet_retriever,
         memory_manager,
         default_cube_config,
+        mos_server,
     )
 
 
@@ -149,6 +157,7 @@ def init_server():
     internet_retriever,
     memory_manager,
     default_cube_config,
+    mos_server,
 ) = init_server()
 
 
@@ -280,3 +289,36 @@ def add_memories(add_req: APIADDRequest):
         message="Memory added successfully",
         data=response_data,
     )
+
+
+@router.post("/chat/complete", summary="Chat with MemOS (Complete Response)")
+def chat_complete(chat_req: APIChatCompleteRequest):
+    """Chat with MemOS for a specific user. Returns complete response (non-streaming)."""
+    try:
+        # Collect all responses from the generator
+        naive_mem_cube = _create_naive_mem_cube()
+        content, references = mos_server.chat(
+            query=chat_req.query,
+            user_id=chat_req.user_id,
+            cube_id=chat_req.mem_cube_id,
+            mem_cube=naive_mem_cube,
+            history=chat_req.history,
+            internet_search=chat_req.internet_search,
+            moscube=chat_req.moscube,
+            base_prompt=chat_req.base_prompt,
+            top_k=chat_req.top_k,
+            threshold=chat_req.threshold,
+            session_id=chat_req.session_id,
+        )
+
+        # Return the complete response
+        return {
+            "message": "Chat completed successfully",
+            "data": {"response": content, "references": references},
+        }
+
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+    except Exception as err:
+        logger.error(f"Failed to start chat: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
