@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import re
+import traceback
 
 from abc import ABC
 from typing import Any
@@ -40,6 +41,26 @@ PROMPT_DICT = {
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
 }
+
+try:
+    import tiktoken
+
+    try:
+        _ENC = tiktoken.encoding_for_model("gpt-4o-mini")
+    except Exception:
+        _ENC = tiktoken.get_encoding("cl100k_base")
+
+    def _count_tokens_text(s: str) -> int:
+        return len(_ENC.encode(s or ""))
+except Exception:
+    # Heuristic fallback: zh chars ~1 token, others ~1 token per ~4 chars
+    def _count_tokens_text(s: str) -> int:
+        if not s:
+            return 0
+        zh_chars = re.findall(r"[\u4e00-\u9fff]", s)
+        zh = len(zh_chars)
+        rest = len(s) - zh
+        return zh + max(1, rest // 4)
 
 
 def detect_lang(text):
@@ -135,6 +156,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.memory_max_length = 8000
+        # Use token-based windowing; default to ~5000 tokens if not configured
+        self.chat_window_max_tokens = getattr(self.config, "chat_window_max_tokens", 5000)
+        self._count_tokens = _count_tokens_text
 
     def _make_memory_item(
         self,
@@ -167,10 +191,37 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             ),
         )
 
+    def _get_llm_response(self, mem_str: str) -> dict:
+        lang = detect_lang(mem_str)
+        template = PROMPT_DICT["chat"][lang]
+        examples = PROMPT_DICT["chat"][f"{lang}_example"]
+        prompt = template.replace("${conversation}", mem_str)
+        if self.config.remove_prompt_example:
+            prompt = prompt.replace(examples, "")
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response_text = self.llm.generate(messages)
+            response_json = self.parse_json_result(response_text)
+        except Exception as e:
+            logger.error(f"[LLM] Exception during chat generation: {e}")
+            response_json = {
+                "memory list": [
+                    {
+                        "key": mem_str[:10],
+                        "memory_type": "UserMemory",
+                        "value": mem_str,
+                        "tags": [],
+                    }
+                ],
+                "summary": mem_str,
+            }
+        return response_json
+
     @timed
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         if mode == "fast":
+            logger.debug("Using Fast Mode")
             raw_content_list = []
             current_content = ""
             current_roles = set()
@@ -179,13 +230,19 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
             for idx, item in enumerate(scene_data_info):
                 try:
-                    role = item.get("role", "user")
+                    role = item.get("role", "")
                     content = item.get("content", "")
                     chat_time = item.get("chat_time", None)
 
-                    prefix = f"{role}: " + (f"[{chat_time}]: " if chat_time else "")
+                    prefix = (
+                        f"{role}: "
+                        if (role and role != "mix")
+                        else f"[{chat_time}]: "
+                        if chat_time
+                        else ""
+                    )
                     mem = f"{prefix}{content}\n"
-                    if len(mem) > self.memory_max_length:
+                    if self._count_tokens(mem) > self.chat_window_max_tokens:
                         if current_content:
                             raw_content_list.append(
                                 {
@@ -207,7 +264,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                             chunks = [type("C", (), {"text": content})]
 
                         for c in chunks:
-                            chunk_text = c.text if hasattr(c, "text") else c
+                            chunk_body = c.text if hasattr(c, "text") else c
+                            chunk_text = f"{prefix}{chunk_body}"
                             raw_content_list.append(
                                 {
                                     "text": chunk_text,
@@ -224,7 +282,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                                 }
                             )
                     else:
-                        if len(current_content + mem) > self.memory_max_length:
+                        if self._count_tokens(current_content + mem) > self.chat_window_max_tokens:
                             if current_content:
                                 raw_content_list.append(
                                     {
@@ -290,53 +348,73 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     return None
 
             with ContextThreadPoolExecutor(max_workers=8) as executor:
-                futures = [executor.submit(_process_single_item, item) for item in raw_content_list]
+                futures = {
+                    executor.submit(_process_single_item, item): i
+                    for i, item in enumerate(raw_content_list)
+                }
 
-                for future in concurrent.futures.as_completed(futures):
+                chat_nodes = [None] * len(futures)
+                for fut in concurrent.futures.as_completed(futures):
+                    i = futures[fut]
                     try:
-                        node = future.result()
+                        node = fut.result()
                         if node:
-                            chat_nodes.append(node)
+                            chat_nodes[i] = node
                     except Exception as e:
                         logger.error(f"[ChatFast] Future result error: {e}")
 
+                chat_nodes = [n for n in chat_nodes if n is not None]
             return chat_nodes
+        else:
+            logger.debug("Using Fine Mode")
+            mem_list = []
+            for item in scene_data_info:
+                role = item.get("role", "")
+                content = item.get("content", "")
+                chat_time = item.get("chat_time", "")
+                prefix = (
+                    f"{role}: "
+                    if (role and role != "mix")
+                    else f"[{chat_time}]: "
+                    if chat_time
+                    else ""
+                )
+                mem_list.append(f"{prefix}{content}\n")
+            response_json = self._get_llm_response("\n".join(mem_list))
+            chat_read_nodes = []
+            for memory_i_raw in response_json.get("memory list", []):
+                try:
+                    memory_type = (
+                        memory_i_raw.get("memory_type", "LongTermMemory")
+                        .replace("长期记忆", "LongTermMemory")
+                        .replace("用户记忆", "UserMemory")
+                    )
 
-        mem_list = []
-        for item in scene_data_info:
-            if "chat_time" in item:
-                mem = item["role"] + ": " + f"[{item['chat_time']}]: " + item["content"]
-                mem_list.append(mem)
-            else:
-                mem = item["role"] + ":" + item["content"]
-                mem_list.append(mem)
-        lang = detect_lang("\n".join(mem_list))
-        template = PROMPT_DICT["chat"][lang]
-        examples = PROMPT_DICT["chat"][f"{lang}_example"]
+                    if memory_type not in ["LongTermMemory", "UserMemory"]:
+                        memory_type = "LongTermMemory"
 
-        prompt = template.replace("${conversation}", "\n".join(mem_list))
-        if self.config.remove_prompt_example:
-            prompt = prompt.replace(examples, "")
+                    node_i = self._make_memory_item(
+                        value=memory_i_raw.get("value", ""),
+                        info=info,
+                        memory_type=memory_type,
+                        tags=memory_i_raw.get("tags", [])
+                        if isinstance(memory_i_raw.get("tags", []), list)
+                        else [],
+                        key=memory_i_raw.get("key", ""),
+                        sources=scene_data_info,
+                        background=response_json.get("summary", ""),
+                        type_="fact",
+                        confidence=0.99,
+                    )
+                    chat_read_nodes.append(node_i)
+                except Exception as e:
+                    logger.error(f"[ChatReader] Error parsing memory item: {e}")
 
-        messages = [{"role": "user", "content": prompt}]
+            return chat_read_nodes
 
-        try:
-            response_text = self.llm.generate(messages)
-            response_json = self.parse_json_result(response_text)
-        except Exception as e:
-            logger.error(f"[LLM] Exception during chat generation: {e}")
-            response_json = {
-                "memory list": [
-                    {
-                        "key": "\n".join(mem_list)[:10],
-                        "memory_type": "UserMemory",
-                        "value": "\n".join(mem_list),
-                        "tags": [],
-                    }
-                ],
-                "summary": "\n".join(mem_list),
-            }
-
+    def _process_transfer_chat_data(self, raw_node: TextualMemoryItem):
+        raw_memory = raw_node.memory
+        response_json = self._get_llm_response(raw_memory)
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
             try:
@@ -345,19 +423,20 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     .replace("长期记忆", "LongTermMemory")
                     .replace("用户记忆", "UserMemory")
                 )
-
                 if memory_type not in ["LongTermMemory", "UserMemory"]:
                     memory_type = "LongTermMemory"
-
                 node_i = self._make_memory_item(
                     value=memory_i_raw.get("value", ""),
-                    info=info,
+                    info={
+                        "user_id": raw_node.metadata.user_id,
+                        "session_id": raw_node.metadata.session_id,
+                    },
                     memory_type=memory_type,
                     tags=memory_i_raw.get("tags", [])
                     if isinstance(memory_i_raw.get("tags", []), list)
                     else [],
                     key=memory_i_raw.get("key", ""),
-                    sources=scene_data_info,
+                    sources=raw_node.metadata.sources,
                     background=response_json.get("summary", ""),
                     type_="fact",
                     confidence=0.99,
@@ -426,9 +505,44 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 for scene_data_info in list_scene_data_info
             ]
             for future in concurrent.futures.as_completed(futures):
-                res_memory = future.result()
-                memory_list.append(res_memory)
+                try:
+                    res_memory = future.result()
+                    if res_memory is not None:
+                        memory_list.append(res_memory)
+                except Exception as e:
+                    logger.error(f"Task failed with exception: {e}")
+                    logger.error(traceback.format_exc())
+        return memory_list
 
+    def fine_transfer_simple_mem(
+        self, input_memories: list[list[TextualMemoryItem]], type: str
+    ) -> list[list[TextualMemoryItem]]:
+        if not input_memories:
+            return []
+
+        memory_list = []
+
+        if type == "chat":
+            processing_func = self._process_transfer_chat_data
+        elif type == "doc":
+            processing_func = self._process_transfer_doc_data
+        else:
+            processing_func = self._process_transfer_doc_data
+
+        # Process Q&A pairs concurrently with context propagation
+        with ContextThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(processing_func, scene_data_info)
+                for scene_data_info in input_memories
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    res_memory = future.result()
+                    if res_memory is not None:
+                        memory_list.append(res_memory)
+                except Exception as e:
+                    logger.error(f"Task failed with exception: {e}")
+                    logger.error(traceback.format_exc())
         return memory_list
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
@@ -444,13 +558,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             List of strings containing the processed scene data
         """
         results = []
-        parser_config = ParserConfigFactory.model_validate(
-            {
-                "backend": "markitdown",
-                "config": {},
-            }
-        )
-        parser = ParserFactory.from_config(parser_config)
 
         if type == "chat":
             for items in scene_data:
@@ -468,6 +575,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 if result:
                     results.append(result)
         elif type == "doc":
+            parser_config = ParserConfigFactory.model_validate(
+                {
+                    "backend": "markitdown",
+                    "config": {},
+                }
+            )
+            parser = ParserFactory.from_config(parser_config)
             for item in scene_data:
                 try:
                     if os.path.exists(item):
@@ -528,6 +642,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     tqdm.write(f"[ERROR] {e}")
                     logger.error(f"[DocReader] Future task failed: {e}")
         return doc_nodes
+
+    def _process_transfer_doc_data(self, raw_node: TextualMemoryItem):
+        raise NotImplementedError
 
     def parse_json_result(self, response_text):
         try:
