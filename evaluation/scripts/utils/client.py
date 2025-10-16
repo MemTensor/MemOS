@@ -62,7 +62,7 @@ class memobase_client:
         self.client = MemoBaseClient(project_url=os.getenv("MEMOBASE_PROJECT_URL"),
                                      api_key=os.getenv("MEMOBASE_API_KEY"))
 
-    def add(self, messages, user_id, conv_id, timestamp):
+    def add(self, messages, user_id):
         from memobase import ChatBlob
         """
         user_id: memobase user_id

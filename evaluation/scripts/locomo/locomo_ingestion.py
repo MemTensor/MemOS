@@ -59,8 +59,8 @@ def ingest_session(client, session, frame, version, metadata):
             m['created_at'] = iso_date
         for m in speaker_b_messages:
             m['created_at'] = iso_date
-        client.add(speaker_a_messages, speaker_a_user_id, timestamp)
-        client.add(speaker_b_messages, speaker_b_user_id, timestamp)
+        client.add(speaker_a_messages, speaker_a_user_id)
+        client.add(speaker_b_messages, speaker_b_user_id)
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)

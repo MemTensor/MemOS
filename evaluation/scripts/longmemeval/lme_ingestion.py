@@ -13,80 +13,25 @@ from tqdm import tqdm
 
 def ingest_session(session, date, user_id, session_id, frame, client):
     messages = []
-    if frame == "zep":
-        for idx, msg in enumerate(session):
-            print(
-                f"[{frame}] 📝 User {user_id} 💬 Session {session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}... at {date.isoformat()}"
-            )
-            client.memory.add(
-                session_id=session_id,
-                messages=[
-                    Message(
-                        role=msg["role"],
-                        role_type=msg["role"],
-                        content=msg["content"][:8000],
-                        created_at=date.isoformat(),
-                    )
-                ],
-            )
-    elif frame == "mem0-local" or frame == "mem0-api":
+    if "mem0" in frame:
         for idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
-            print(
-                f"[{frame}] 📝 Session {session_id}: [{idx + 1}/{len(session)}] Reading message: {msg['role']} - {msg['content'][:50]}... at {date.isoformat()}"
-            )
-        if frame == "mem0-local":
-            client.add(
-                messages=messages, user_id=user_id, run_id=session_id, timestamp=date.isoformat()
-            )
-        elif frame == "mem0-api":
-            client.add(
-                messages=messages,
-                user_id=user_id,
-                session_id=session_id,
-                timestamp=int(date.timestamp()),
-                version="v2",
-            )
-        print(
-            f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}"
-        )
+            client.add(messages, user_id, int(date.timestamp()))
     elif frame == "memobase":
         for idx, msg in enumerate(session):
-            messages.append(
-                {
-                    "role": msg["role"],
-                    "content": msg["content"][:8000],
-                    "created_at": date.isoformat(),
-                }
-            )
-            # print(f"[{frame}] 📝 User {user_id} 💬 Session {session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}... at {date.isoformat()}")
-
-        user = client.get_user(user_id)
-        memobase_add_memory(user, messages)
-        # print(f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}")
-    elif frame == "memos-local" or frame == "memos-api":
-        for _idx, msg in enumerate(session):
-            messages.append(
-                {
-                    "role": msg["role"],
-                    "content": msg["content"][:8000],
-                    "chat_time": date.isoformat(),
-                }
-            )
-        if frame == "memos-local":
-            client.add(messages=messages, user_id=user_id)
-            client.mem_reorganizer_wait()
-        elif frame == "memos-api":
-            if messages:
-                client.add(messages=messages, user_id=user_id, conv_id=session_id)
-        print(
-            f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}"
-        )
+            messages.append({"role": msg["role"], "content": msg["content"][:8000], "created_at": date.isoformat()})
+        client.add(messages, user_id)
+    elif frame == "memos-api":
+        for msg in session:
+            messages.append({"role": msg["role"], "content": msg["content"][:8000],
+                             "chat_time": date.isoformat()})
+        if messages:
+            client.add(messages=messages, user_id=user_id, conv_id=session_id)
+    print(f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}")
 
 
 def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     conversation = lme_df.iloc[conv_idx]
-
     sessions = conversation["haystack_sessions"]
     dates = conversation["haystack_dates"]
 
@@ -96,49 +41,28 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     print(f"🔄 [INGESTING CONVERSATION {conv_idx}".center(80))
     print("=" * 80)
 
-    if frame == "zep":
-        from utils.client import zep_client
-
-        client = zep_client()
-        client.user.add(user_id=user_id)
-        print(f"➕ Added user {user_id} to Zep memory...")
-    elif frame == "mem0-api":
+    if frame == "mem0" or frame == "mem0_graph":
         from utils.client import mem0_client
-
-        client = mem0_client(mode="api")
-    elif frame == "memos-local":
-        from utils.client import memos_client
-
-        client = memos_client(
-            mode="local",
-            db_name=f"lme_{frame}-{version}",
-            user_id=user_id,
-            top_k=20,
-            mem_cube_path=f"results/lme/{frame}-{version}/storages/{user_id}",
-            mem_cube_config_path="configs/mu_mem_cube_config.json",
-            mem_os_config_path="configs/mos_memos_config.json",
-            addorsearch="add",
-        )
-        print("🔌 Using Memos Local client for ingestion...")
+        client = mem0_client(enable_graph='graph' in frame)
+        client.client.delete_all(user_id=user_id)
     elif frame == "memos-api":
-        from utils.memos_api import MemOSAPI
-
-        client = MemOSAPI()
+        from utils.client import memos_api_client
+        client = memos_api_client()
     elif frame == "memobase":
         from utils.client import memobase_client
-
         client = memobase_client()
-        memobase_user_id = client.add_user({"user_id": user_id})
-        user_id = memobase_user_id
+        all_users = client.get_all_users(limit=5000)
+        for user in all_users:
+            try:
+                if user["additional_fields"]["user_id"] == user_id:
+                    client.delete_user(user["id"])
+            except:
+                pass
+        user_id = client.client.add_user({"user_id": user_id})
 
     for idx, session in enumerate(sessions):
         if f"{conv_idx}_{idx}" not in success_records:
             session_id = user_id + "_lme_exper_session_" + str(idx)
-            if frame == "zep":
-                client.memory.add_session(
-                    user_id=user_id,
-                    session_id=session_id,
-                )
             date = dates[idx] + " UTC"
             date_format = "%Y/%m/%d (%a) %H:%M UTC"
             date_string = datetime.strptime(date, date_format).replace(tzinfo=timezone.utc)
@@ -151,9 +75,6 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
                 print(f"❌ Error ingesting session: {e}")
         else:
             print(f"✅ Session {conv_idx}_{idx} already ingested")
-
-    if frame == "memos-local":
-        client.mem_reorganizer_off()
 
     print("=" * 80)
 
@@ -183,14 +104,10 @@ def main(frame, version, num_workers=2):
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = []
         for session_idx in range(num_multi_sessions):
-            future = executor.submit(
-                ingest_conv, lme_df, version, session_idx, frame, success_records, f
-            )
+            future = executor.submit(ingest_conv, lme_df, version, session_idx, frame, success_records, f)
             futures.append(future)
 
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="📊 Processing conversations"
-        ):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="📊 Processing conversations"):
             try:
                 future.result()
             except Exception as e:
@@ -213,16 +130,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+        choices=["mem0", "mem0_graph" "memos-api", "memobase"],
         default="memos-api",
     )
-    parser.add_argument(
-        "--version", type=str, default="0929-1", help="Version of the evaluation framework."
-    )
-    parser.add_argument(
-        "--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation."
-    )
+    parser.add_argument("--version", type=str, default="default", help="Version of the evaluation framework.")
+    parser.add_argument("--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation.")
 
     args = parser.parse_args()
-
     main(frame=args.lib, version=args.version, num_workers=args.workers)
