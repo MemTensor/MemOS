@@ -217,199 +217,97 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             }
         return response_json
 
+    def _iter_chat_windows(self, scene_data_info, max_tokens=None, overlap=200):
+        """
+        use token counter to get a slide window generator
+        """
+        max_tokens = max_tokens or self.chat_window_max_tokens
+        buf, sources, start_idx = [], [], 0
+        cur_text = ""
+
+        for idx, item in enumerate(scene_data_info):
+            role = item.get("role", "")
+            content = item.get("content", "")
+            chat_time = item.get("chat_time", None)
+            prefix = (
+                f"{role}: "
+                if (role and role != "mix")
+                else (f"[{chat_time}]: " if chat_time else "")
+            )
+            line = f"{prefix}{content}\n"
+
+            if self._count_tokens(cur_text + line) > max_tokens and cur_text:
+                text = "".join(buf)
+                yield {"text": text, "sources": sources.copy(), "start_idx": start_idx}
+                while buf and self._count_tokens("".join(buf)) > overlap:
+                    buf.pop(0)
+                    sources.pop(0)
+                start_idx = idx
+                cur_text = "".join(buf)
+
+            buf.append(line)
+            sources.append({"type": "chat", "index": idx, "role": role, "chat_time": chat_time})
+            cur_text = "".join(buf)
+
+        if buf:
+            yield {"text": "".join(buf), "sources": sources.copy(), "start_idx": start_idx}
+
     @timed
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
+        windows = list(self._iter_chat_windows(scene_data_info))
+
         if mode == "fast":
-            logger.debug("Using Fast Mode")
-            raw_content_list = []
-            current_content = ""
-            current_roles = set()
-            current_sources = []
-            current_idx = 0
+            logger.debug("Using unified Fast Mode")
 
-            for idx, item in enumerate(scene_data_info):
-                try:
-                    role = item.get("role", "")
-                    content = item.get("content", "")
-                    chat_time = item.get("chat_time", None)
-
-                    prefix = (
-                        f"{role}: "
-                        if (role and role != "mix")
-                        else f"[{chat_time}]: "
-                        if chat_time
-                        else ""
-                    )
-                    mem = f"{prefix}{content}\n"
-                    if self._count_tokens(mem) > self.chat_window_max_tokens:
-                        if current_content:
-                            raw_content_list.append(
-                                {
-                                    "text": current_content,
-                                    "roles": current_roles,
-                                    "sources": current_sources,
-                                    "start_idx": current_idx,
-                                }
-                            )
-                            current_content, current_roles, current_sources = "", set(), []
-
-                        try:
-                            chunks = self.chunker.chunk(content) or []
-                        except Exception as e:
-                            logger.warning(f"[ChatFast] chunker failed on item {idx}: {e}")
-                            chunks = []
-
-                        if not chunks:
-                            chunks = [type("C", (), {"text": content})]
-
-                        for c in chunks:
-                            chunk_body = c.text if hasattr(c, "text") else c
-                            chunk_text = f"{prefix}{chunk_body}"
-                            raw_content_list.append(
-                                {
-                                    "text": chunk_text,
-                                    "roles": {role},
-                                    "sources": [
-                                        {
-                                            "type": "chat",
-                                            "index": idx,
-                                            "role": role,
-                                            "chat_time": chat_time,
-                                        }
-                                    ],
-                                    "start_idx": idx,
-                                }
-                            )
-                    else:
-                        if self._count_tokens(current_content + mem) > self.chat_window_max_tokens:
-                            if current_content:
-                                raw_content_list.append(
-                                    {
-                                        "text": current_content,
-                                        "roles": current_roles,
-                                        "sources": current_sources,
-                                        "start_idx": current_idx,
-                                    }
-                                )
-                            current_content = mem
-                            current_roles = {role}
-                            current_sources = [
-                                {"type": "chat", "index": idx, "role": role, "chat_time": chat_time}
-                            ]
-                            current_idx = idx
-                        else:
-                            current_content += mem
-                            current_roles.add(role)
-                            current_sources.append(
-                                {"type": "chat", "index": idx, "role": role, "chat_time": chat_time}
-                            )
-
-                except Exception as e:
-                    logger.error(f"[ChatFast] Error preparing item {idx}: {e}")
-
-            if current_content:
-                raw_content_list.append(
-                    {
-                        "text": current_content,
-                        "roles": current_roles,
-                        "sources": current_sources,
-                        "start_idx": current_idx,
-                    }
+            def _build_fast_node(w):
+                text = w["text"]
+                roles = {s.get("role", "") for s in w["sources"] if s.get("role")}
+                mem_type = "UserMemory" if roles == {"user"} else "LongTermMemory"
+                tags = ["mode:fast", f"lang:{detect_lang(text)}"] + [
+                    f"role:{r}" for r in sorted(roles)
+                ]
+                return self._make_memory_item(
+                    value=text, info=info, memory_type=mem_type, tags=tags, sources=w["sources"]
                 )
 
-            chat_nodes = []
-
-            def _process_single_item(item_data):
-                try:
-                    text = item_data["text"]
-                    roles = item_data["roles"]
-                    sources = item_data["sources"]
-
-                    mem_type = "UserMemory" if (roles and roles == {"user"}) else "LongTermMemory"
-                    tags = ["mode:fast", f"lang:{detect_lang(text)}"] + [
-                        f"role:{r}" for r in sorted(roles)
-                    ]
-
-                    node = self._make_memory_item(
-                        value=text,
-                        info=info,
-                        memory_type=mem_type,
-                        tags=tags,
-                        key=None,
-                        sources=sources,
-                        background="",
-                        type_="fact",
-                        confidence=0.99,
-                    )
-                    return node
-                except Exception as e:
-                    logger.error(f"[ChatFast] Error processing item: {e}")
-                    return None
-
-            with ContextThreadPoolExecutor(max_workers=8) as executor:
-                futures = {
-                    executor.submit(_process_single_item, item): i
-                    for i, item in enumerate(raw_content_list)
-                }
-
-                chat_nodes = [None] * len(futures)
+            with ContextThreadPoolExecutor(max_workers=8) as ex:
+                futures = {ex.submit(_build_fast_node, w): i for i, w in enumerate(windows)}
+                results = [None] * len(futures)
                 for fut in concurrent.futures.as_completed(futures):
                     i = futures[fut]
                     try:
                         node = fut.result()
                         if node:
-                            chat_nodes[i] = node
+                            results[i] = node
                     except Exception as e:
-                        logger.error(f"[ChatFast] Future result error: {e}")
-
-                chat_nodes = [n for n in chat_nodes if n is not None]
+                        logger.error(f"[ChatFast] error: {e}")
+                chat_nodes = [r for r in results if r]
             return chat_nodes
         else:
-            logger.debug("Using Fine Mode")
-            mem_list = []
-            for item in scene_data_info:
-                role = item.get("role", "")
-                content = item.get("content", "")
-                chat_time = item.get("chat_time", "")
-                prefix = (
-                    f"{role}: "
-                    if (role and role != "mix")
-                    else f"[{chat_time}]: "
-                    if chat_time
-                    else ""
-                )
-                mem_list.append(f"{prefix}{content}\n")
-            response_json = self._get_llm_response("\n".join(mem_list))
+            logger.debug("Using unified Fine Mode")
             chat_read_nodes = []
-            for memory_i_raw in response_json.get("memory list", []):
-                try:
-                    memory_type = (
-                        memory_i_raw.get("memory_type", "LongTermMemory")
-                        .replace("长期记忆", "LongTermMemory")
-                        .replace("用户记忆", "UserMemory")
-                    )
-
-                    if memory_type not in ["LongTermMemory", "UserMemory"]:
-                        memory_type = "LongTermMemory"
-
-                    node_i = self._make_memory_item(
-                        value=memory_i_raw.get("value", ""),
-                        info=info,
-                        memory_type=memory_type,
-                        tags=memory_i_raw.get("tags", [])
-                        if isinstance(memory_i_raw.get("tags", []), list)
-                        else [],
-                        key=memory_i_raw.get("key", ""),
-                        sources=scene_data_info,
-                        background=response_json.get("summary", ""),
-                        type_="fact",
-                        confidence=0.99,
-                    )
-                    chat_read_nodes.append(node_i)
-                except Exception as e:
-                    logger.error(f"[ChatReader] Error parsing memory item: {e}")
-
+            for w in windows:
+                resp = self._get_llm_response(w["text"])
+                for m in resp.get("memory list", []):
+                    try:
+                        memory_type = (
+                            m.get("memory_type", "LongTermMemory")
+                            .replace("长期记忆", "LongTermMemory")
+                            .replace("用户记忆", "UserMemory")
+                        )
+                        node = self._make_memory_item(
+                            value=m.get("value", ""),
+                            info=info,
+                            memory_type=memory_type,
+                            tags=m.get("tags", []),
+                            key=m.get("key", ""),
+                            sources=w["sources"],
+                            background=resp.get("summary", ""),
+                        )
+                        chat_read_nodes.append(node)
+                    except Exception as e:
+                        logger.error(f"[ChatFine] parse error: {e}")
             return chat_read_nodes
 
     def _process_transfer_chat_data(self, raw_node: TextualMemoryItem):
