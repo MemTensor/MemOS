@@ -51,6 +51,21 @@ def memobase_search(client, query, user_id, top_k):
     return context, duration_ms
 
 
+def memu_search(client, query, user_id, top_k):
+    start = time()
+    results = client.search(query, user_id, top_k)
+    context = '\n'.join(results)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
+def supermemory_search(client, query, user_id, top_k):
+    start = time()
+    context = client.search(query, user_id, top_k)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
 def process_user(lme_df, conv_idx, frame, version, top_k=20):
     row = lme_df.iloc[conv_idx]
     question = row["question"]
@@ -103,6 +118,14 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         from utils.client import memos_client
         client = memos_client()
         context, duration_ms = memos_search(client, question, user_id, top_k)
+    elif frame == "memu":
+        from utils.client import memu_client
+        client = memu_client()
+        context, duration_ms = memu_search(client, question, user_id, top_k)
+    elif frame == "supermemory":
+        from utils.client import supermemory_client
+        client = supermemory_client()
+        context, duration_ms = supermemory_search(client, question, user_id, top_k)
 
     search_results[user_id].append(
         {

@@ -131,8 +131,6 @@ def supermemory_search(client, query, speaker_a_user_id, speaker_b_user_id, top_
     return context, duration_ms
 
 
-
-
 def search_query(client, query, metadata, frame, version, top_k=20):
     conv_id = metadata.get("conv_id")
     speaker_a = metadata.get("speaker_a")

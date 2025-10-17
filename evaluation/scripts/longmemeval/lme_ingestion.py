@@ -27,6 +27,15 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                              "chat_time": date.isoformat()})
         if messages:
             client.add(messages=messages, user_id=user_id, conv_id=session_id)
+    elif frame == "memu":
+        for idx, msg in enumerate(session):
+            messages.append({"role": msg["role"], "content": msg["content"][:8000]})
+        client.add(messages, user_id, date.isoformat())
+    elif frame == "supermemory":
+        for idx, msg in enumerate(session):
+            messages.append({"role": msg["role"], "content": msg["content"][:8000], "chat_time": date.isoformat()})
+        client.add(messages, user_id)
+
     print(f"[{frame}] ✅ Session {session_id}: Ingested {len(messages)} messages at {date.isoformat()}")
 
 
@@ -59,6 +68,12 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
             except:
                 pass
         user_id = client.client.add_user({"user_id": user_id})
+    elif frame == "memu":
+        from utils.client import memu_client
+        client = memu_client()
+    elif frame == "supermemory":
+        from utils.client import supermemory_client
+        client = supermemory_client()
 
     for idx, session in enumerate(sessions):
         if f"{conv_idx}_{idx}" not in success_records:
@@ -130,7 +145,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph" "memos-api", "memobase"],
+        choices=["mem0", "mem0_graph" "memos-api", "memobase", "memu", "supermemory"],
         default="memos-api",
     )
     parser.add_argument("--version", type=str, default="default", help="Version of the evaluation framework.")
