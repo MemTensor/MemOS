@@ -133,11 +133,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="0929-1", help="Version of the evaluation framework."
+        "--version", type=str, default="default", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation."
