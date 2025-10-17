@@ -58,7 +58,7 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ContextThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(self._process_memory, m): m for m in memories}
             for future in as_completed(futures, timeout=60):
                 try:
@@ -109,18 +109,28 @@ class MemoryManager:
         Process and add memory to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         This method runs asynchronously to process each memory item.
         """
-        ids = []
+        ids: list[str] = []
+        futures = []
 
-        # Add to WorkingMemory
-        self._add_memory_to_db(memory, "WorkingMemory")
+        with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
+            f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory")
+            futures.append(f_working)
 
-        # Add to LongTermMemory and UserMemory
-        if memory.metadata.memory_type in ["LongTermMemory", "UserMemory"]:
-            added_id = self._add_to_graph_memory(
-                memory=memory,
-                memory_type=memory.metadata.memory_type,
-            )
-            ids.append(added_id)
+            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
+                f_graph = ex.submit(
+                    self._add_to_graph_memory,
+                    memory=memory,
+                    memory_type=memory.metadata.memory_type,
+                )
+                futures.append(f_graph)
+
+            for fut in as_completed(futures):
+                try:
+                    res = fut.result()
+                    if isinstance(res, str) and res:
+                        ids.append(res)
+                except Exception:
+                    logger.warning("Parallel memory processing failed:\n%s", traceback.format_exc())
 
         return ids
 

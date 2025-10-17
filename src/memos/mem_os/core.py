@@ -726,14 +726,11 @@ class MOSCore:
                 logger.info(
                     f"time add: get mem_reader time user_id: {target_user_id} time is: {time.time() - time_start_2}"
                 )
-                mem_ids = []
-                for mem in memories:
-                    mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
-                    mem_ids.extend(mem_id_list)
-                    logger.info(
-                        f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
-                    )
-
+                memories_flatten = [m for m_list in memories for m in m_list]
+                mem_ids: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(memories_flatten)
+                logger.info(
+                    f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_ids}"
+                )
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
                     mem_cube = self.mem_cubes[mem_cube_id]
