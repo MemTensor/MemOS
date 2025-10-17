@@ -7,12 +7,14 @@ from typing import Dict, Any
 from collections import Counter
 from tqdm.asyncio import tqdm
 import os
+import pandas as pd  
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_URL = os.getenv("OPENAI_BASE_URL")
 
-INPUT_FILE = "./data/prefeval/pref_memos.jsonl"
-OUTPUT_FILE = "./data/prefeval/eval_pref_memos.jsonl"
+INPUT_FILE = "./results/prefeval/pref_memos_add.jsonl"
+OUTPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
+OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
 
 
 async def call_gpt4o_mini_async(session: aiohttp.ClientSession, prompt: str) -> str:
@@ -191,7 +193,7 @@ def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
     elif violate == "No" and helpful == "No":
         return "Unhelpful Response"
     else:
-        return "Unknown/No Error"
+        return "Personalized Response"
 
 
 async def process_line(
@@ -222,6 +224,7 @@ async def process_line(
             "original_data": data,
             "evaluations": evaluations,
             "error_type": classify_error_type(evaluations),
+            "metrics": data.get("metrics", {}) 
         }
         return result
 
@@ -249,11 +252,79 @@ def log_summary(error_counter: Counter, total_samples: int) -> Dict[str, Dict[st
     return summary_data
 
 
+def generate_excel_summary(
+    summary_results: Dict[str, Dict[str, float]],
+    avg_search_time: float,
+    avg_context_tokens: float,
+    model_name: str = "gpt-4o-mini", 
+):
+    """
+    Generates an Excel summary file based on the evaluation results.
+    """
+    print(f"Generating Excel summary at {OUTPUT_EXCEL_FILE}...")
+
+    def get_pct(key):
+        return summary_results.get(key, {}).get("percentage", 0)
+
+    unaware_pct = get_pct("Preference-Unaware Violation")
+    hallucination_pct = get_pct("Preference Hallucination Violation")
+    inconsistency_pct = get_pct("Inconsistency Violation")
+    unhelpful_pct = get_pct("Unhelpful Response")
+    personalized_pct = get_pct("Personalized Response") 
+
+    data = {
+        "Model": [model_name],
+        "Preference-Unaware\n没有意识到偏好": [unaware_pct / 100],
+        "Preference-Hallucination\n编造偏好": [hallucination_pct / 100],
+        "Inconsistency\n意识到偏好但给出了不一致的回答": [inconsistency_pct / 100],
+        "Unhelpful Response\n没帮助的回答": [unhelpful_pct / 100],
+        "Personalized Response\n个性化回答": [personalized_pct / 100],
+        "context token": [avg_context_tokens],
+        "Time添加": ["N/A"],  
+        "Time搜索": [f"{avg_search_time:.2f}s /chat"] 
+    }
+
+    df = pd.DataFrame(data)
+
+    with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Summary")
+        
+        workbook = writer.book
+        worksheet = writer.sheets["Summary"]
+
+  
+        pct_format = workbook.add_format({'num_format': '0.0%'})
+
+        float_format = workbook.add_format({'num_format': '0.00'})
+        
+        wrap_format = workbook.add_format({'text_wrap': True, 'align': 'center', 'valign': 'top'})
+        
+        worksheet.set_column("B:F", 18, pct_format) 
+        worksheet.set_column("G:G", 12, float_format)
+        worksheet.set_column("H:I", 15) 
+        worksheet.set_column("A:I", None, wrap_format) 
+        
+        worksheet.set_row(0, 45) 
+        
+        bold_pct_format = workbook.add_format({'num_format': '0.0%', 'bold': True})
+        worksheet.set_column("F:F", 18, bold_pct_format)
+
+
+    print(f"Successfully saved summary to {OUTPUT_EXCEL_FILE}")
+
+
 async def main(concurrency_limit: int):
     semaphore = asyncio.Semaphore(concurrency_limit)
     error_counter = Counter()
 
+    total_search_time = 0
+    total_context_tokens = 0
+    valid_metric_samples = 0
+
     print(f"Starting evaluation with a concurrency limit of {concurrency_limit}...")
+    print(f"Input file: {INPUT_FILE}")
+    print(f"Output JSONL: {OUTPUT_FILE}")
+    print(f"Output Excel: {OUTPUT_EXCEL_FILE}")
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -261,6 +332,10 @@ async def main(concurrency_limit: int):
                 lines = f.readlines()
         except FileNotFoundError:
             print(f"Error: Input file not found at '{INPUT_FILE}'")
+            return
+        
+        if not lines:
+            print("Error: Input file is empty.")
             return
 
         tasks = [process_line(line, session, semaphore) for line in lines]
@@ -279,12 +354,36 @@ async def main(concurrency_limit: int):
 
                     error_type = result["error_type"]
                     error_counter[error_type] += 1
+                    
+                    metrics = result.get("metrics", {})
+                    search_time = metrics.get("search_memories_duration_seconds")
+                    context_tokens = metrics.get("memory_tokens_used")
+
+                    if search_time is not None and context_tokens is not None:
+                        total_search_time += float(search_time)
+                        total_context_tokens += int(context_tokens)
+                        valid_metric_samples += 1
+
                     pbar.set_postfix({"Latest Type": error_type})
 
                 except Exception as e:
                     print(f"An error occurred while processing a line: {e}")
 
-    summary_results = log_summary(error_counter, len(lines))
+    
+    total_samples = len(lines)
+    summary_results = log_summary(error_counter, total_samples)
+    
+    avg_search_time = (total_search_time / valid_metric_samples) if valid_metric_samples > 0 else 0
+    avg_context_tokens = (total_context_tokens / valid_metric_samples) if valid_metric_samples > 0 else 0
+
+    try:
+        generate_excel_summary(
+            summary_results,
+            avg_search_time,
+            avg_context_tokens
+        )
+    except Exception as e:
+        print(f"\nFailed to generate Excel file: {e}")
 
 
 if __name__ == "__main__":

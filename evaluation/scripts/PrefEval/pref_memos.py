@@ -31,12 +31,12 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 
-def add_memory_for_line(line_data: tuple, mem_client: MemOSAPI, num_irrelevant_turns: int) -> dict:
+def add_memory_for_line(line_data: tuple, mem_client: MemOSAPI, num_irrelevant_turns: int, lib: str, version: str) -> dict:
     """
     Adds conversation memory for a single line of data to MemOS and returns the data with a persistent user_id.
     """
     i, line = line_data
-    user_id = f"user_pref_eval_{i}"
+    user_id = f"{lib}_user_pref_eval_{i}_{version}"
     
     try:
         original_data = json.loads(line)
@@ -61,7 +61,7 @@ def add_memory_for_line(line_data: tuple, mem_client: MemOSAPI, num_irrelevant_t
         return None
 
 
-def process_line_with_id(line_data: tuple, mem_client: MemOSAPI, openai_client: OpenAI, top_k_value: int) -> dict:
+def process_line_with_id(line_data: tuple, mem_client: MemOSAPI, openai_client: OpenAI, top_k_value: int, lib: str, version: str) -> dict:
     """
     Processes a single line of data using a pre-existing user_id, searching memory and generating a response.
     """
@@ -83,17 +83,12 @@ def process_line_with_id(line_data: tuple, mem_client: MemOSAPI, openai_client: 
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-
-        memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories.get('d', []))
         
-        # If search results are empty, can try retrying
-        max_tries = 3
-        if not memories_str:
-            for attempt in range(max_tries):
-                relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
-                memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories.get('d', []))
-                if memories_str:
-                    break
+        if lib == "memos-local":
+            memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories.get('d', []))
+        elif lib == "memos-api":
+            memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]['memories'])
+
         
         memory_tokens_used = len(tokenizer.encode(memories_str))
         
@@ -148,7 +143,7 @@ def main():
         with open(args.output, 'w', encoding='utf-8') as outfile:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
 
-                futures = [executor.submit(add_memory_for_line, (i, line), mem_client, args.add_turn) for i, line in enumerate(lines)]
+                futures = [executor.submit(add_memory_for_line, (i, line), mem_client, args.add_turn, args.lib, args.version) for i, line in enumerate(lines)]
                 
                 pbar = tqdm(concurrent.futures.as_completed(futures), total=len(lines), desc="Adding memories...")
                 for future in pbar:
