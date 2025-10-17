@@ -100,6 +100,22 @@ def memobase_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, 
     return context, duration_ms
 
 
+def memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+    start = time()
+    search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
+    search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
+
+    search_speaker_a_memory = '\n'.join(search_speaker_a_results)
+    search_speaker_b_memory = '\n'.join(search_speaker_b_results)
+
+    context = TEMPLATE_MEM0.format(
+        speaker_1_user_id=speaker_a,
+        speaker_1_memories=search_speaker_a_memory,
+        speaker_2_user_id=speaker_b,
+        speaker_2_memories=search_speaker_b_memory)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
 def search_query(client, query, metadata, frame, version, top_k=20):
     conv_id = metadata.get("conv_id")
     speaker_a = metadata.get("speaker_a")
@@ -115,6 +131,8 @@ def search_query(client, query, metadata, frame, version, top_k=20):
         context, duration_ms = memos_api_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
     elif frame == "memobase":
         context, duration_ms = memobase_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+    elif frame == "memu":
+        context, duration_ms = memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
     return context, duration_ms
 
 
@@ -165,6 +183,9 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
                     speaker_b_user_id = u["id"]
             except:
                 pass
+    elif frame == "memu":
+        from utils.client import memu_client
+        client = memu_client()
 
     metadata = {"speaker_a": speaker_a,
                 "speaker_b": speaker_b,

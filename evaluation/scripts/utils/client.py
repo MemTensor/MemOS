@@ -146,7 +146,7 @@ class memu_client:
     def search(self, query, user_id, top_k):
         user_memories = self.memu_client.retrieve_related_memory_items(
             user_id=user_id, agent_id=self.agent_id,
-            query=query, top_k=top_k, min_similarity=0.3)
+            query=query, top_k=top_k, min_similarity=0.1)
         res = [m.memory.content for m in user_memories.related_memories]
         return res
 

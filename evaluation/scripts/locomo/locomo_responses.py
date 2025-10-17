@@ -24,12 +24,7 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
             context=context,
             question=question,
         )
-    elif frame == "memos" or frame == "memos-api":
-        prompt = ANSWER_PROMPT_MEMOS.format(
-            context=context,
-            question=question,
-        )
-    elif frame == "memobase":
+    else:
         prompt = ANSWER_PROMPT_MEMOS.format(
             context=context,
             question=question,
