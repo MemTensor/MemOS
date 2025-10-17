@@ -116,6 +116,23 @@ def memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, spea
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
+
+def supermemory_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+    start = time()
+    search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
+    search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
+
+    context = TEMPLATE_MEM0.format(
+        speaker_1_user_id=speaker_a,
+        speaker_1_memories=search_speaker_a_results,
+        speaker_2_user_id=speaker_b,
+        speaker_2_memories=search_speaker_b_results)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
+
+
 def search_query(client, query, metadata, frame, version, top_k=20):
     conv_id = metadata.get("conv_id")
     speaker_a = metadata.get("speaker_a")
@@ -133,6 +150,11 @@ def search_query(client, query, metadata, frame, version, top_k=20):
         context, duration_ms = memobase_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
     elif frame == "memu":
         context, duration_ms = memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+    elif frame == "supermemory":
+        conv_idx = metadata["conv_idx"]
+        speaker_a_user_id = f"lcm{conv_idx}a_{version}"
+        speaker_b_user_id = f"lcm{conv_idx}b_{version}"
+        context, duration_ms = supermemory_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
     return context, duration_ms
 
 
@@ -186,6 +208,9 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
     elif frame == "memu":
         from utils.client import memu_client
         client = memu_client()
+    elif frame == "supermemory":
+        from utils.client import supermemory_client
+        client = supermemory_client()
 
     metadata = {"speaker_a": speaker_a,
                 "speaker_b": speaker_b,
@@ -247,7 +272,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase"],
+        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
         default="memos-api",
     )
     parser.add_argument(
@@ -257,7 +282,7 @@ if __name__ == "__main__":
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=10, help="Number of parallel workers to process users"
+        "--workers", type=int, default=5, help="Number of parallel workers to process users"
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"

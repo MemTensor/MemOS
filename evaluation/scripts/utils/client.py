@@ -114,13 +114,30 @@ class supermemory_client:
 
     def add(self, messages, user_id):
         content = '\n'.join([f"{msg['chat_time']} {msg['role']}: {msg['content']}" for msg in messages])
-        self.client.memories.add(content=content, container_tag=user_id)
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                self.client.memories.add(content=content, container_tag=user_id)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # 指数退避
+                else:
+                    raise e
 
     def search(self, query, user_id, top_k):
-        results = self.client.search.memories(q=query, container_tag=user_id, threshold=0.2,
-                                              rerank=True, rewrite_query=True, limit=top_k)
-        context = '\n\n'.join([r.memory for r in results.results])
-        return context
+        max_retries = 10
+        for attempt in range(max_retries):
+            try:
+                results = self.client.search.memories(q=query, container_tag=user_id, threshold=0.2,
+                                                      rerank=True, rewrite_query=True, limit=top_k)
+                context = '\n\n'.join([r.memory for r in results.results])
+                return context
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)  # 指数退避
+                else:
+                    raise e
 
 
 class memu_client:
@@ -166,10 +183,11 @@ if __name__ == "__main__":
     query = "杭州西湖有什么"
     top_k = 5
 
-    # memu
-    memu_client = memu_client()
-    memu_client.add(messages, user_id, iso_date)
-    res = memu_client.search(query, user_id, top_k)
+    # # memu
+    # memu_client = memu_client()
+    # memu_client.add(messages, user_id, iso_date)
+    # res = memu_client.search(query, user_id, top_k)
 
     # supermemory
-
+    supermemory_client = supermemory_client()
+    supermemory_client.delete('locomo_exp_user_5_speaker_b_default')

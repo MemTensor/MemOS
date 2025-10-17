@@ -68,6 +68,16 @@ def ingest_session(client, session, frame, version, metadata):
         client.add(speaker_a_messages, speaker_a_user_id, iso_date)
         # client.agent_id = speaker_a_user_id
         client.add(speaker_b_messages, speaker_b_user_id, iso_date)
+    elif frame == "supermemory":
+        for m in speaker_a_messages:
+            m['chat_time'] = iso_date
+        for m in speaker_b_messages:
+            m['chat_time'] = iso_date
+        # seems like user_id can not be too long
+        speaker_a_user_id = f"lcm{conv_idx}a_{version}"
+        speaker_b_user_id = f"lcm{conv_idx}b_{version}"
+        client.add(speaker_a_messages, speaker_a_user_id)
+        client.add(speaker_b_messages, speaker_b_user_id)
 
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
@@ -109,6 +119,9 @@ def process_user(conv_idx, frame, locomo_df, version):
     elif frame == "memu":
         from utils.client import memu_client
         client = memu_client()
+    elif frame == "supermemory":
+        from utils.client import supermemory_client
+        client = supermemory_client()
 
     sessions_to_process = []
     for session_idx in range(max_session_count):
@@ -172,13 +185,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu"],
-        default="memu",
+        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        default="supermemory",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="default",
+        default="default1",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
