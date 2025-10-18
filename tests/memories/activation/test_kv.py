@@ -34,10 +34,20 @@ def kv_memory(dummy_config):
 
 
 def make_filled_cache():
-    # Create a DynamicCache with at least one dummy tensor layer
+    # Create a DynamicCache with at least one dummy tensor layer, supporting new/old APIs
     cache = DynamicCache()
-    cache.key_cache.append(torch.zeros(1, 2, 3))
-    cache.value_cache.append(torch.zeros(1, 2, 3))
+    if hasattr(cache, "layers") and cache.layers is not None:
+        # For new API, append a layer-like object with keys/values tensors
+        class _Layer:
+            def __init__(self):
+                self.keys = torch.zeros(1, 2, 3)
+                self.values = torch.zeros(1, 2, 3)
+
+        cache.layers.append(_Layer())
+    else:
+        # Legacy API
+        cache.key_cache.append(torch.zeros(1, 2, 3))
+        cache.value_cache.append(torch.zeros(1, 2, 3))
     return cache
 
 
@@ -58,9 +68,14 @@ def test_get_cache_merge(kv_memory):
     kv_memory.add([item1, item2])
     merged = kv_memory.get_cache([item1.id, item2.id])
     assert isinstance(merged, DynamicCache)
-    # Check the number of layers in merged key/value cache
-    assert len(merged.key_cache) == 1
-    assert len(merged.value_cache) == 1
+    # Check the number of layers in merged cache (new or old API)
+    if hasattr(merged, "layers") and merged.layers is not None:
+        assert len(merged.layers) == 1
+        assert getattr(merged.layers[0], "keys", None) is not None
+        assert getattr(merged.layers[0], "values", None) is not None
+    else:
+        assert len(merged.key_cache) == 1
+        assert len(merged.value_cache) == 1
 
 
 def test_delete_and_get_all(kv_memory):

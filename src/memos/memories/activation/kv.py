@@ -2,9 +2,6 @@ import os
 import pickle
 
 from datetime import datetime
-from importlib.metadata import version
-
-from packaging.version import Version
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
@@ -210,29 +207,26 @@ class KVCacheMemory(BaseActMemory):
         if len(caches) == 1:
             return caches[0]
 
-        merged = DynamicCache()
-        num_layers = len(caches[0].key_cache)
-
-        if Version(version("transformers")) >= Version("4.54.0"):
-            merged.append_new_layers(num_layers - 1)
+        # Newer transformers expose `layers` with `.keys`/`.values`
+        if hasattr(caches[0], "layers") and caches[0].layers is not None:
+            num_layers = len(caches[0].layers)
+            base = caches[0]
             for layer in range(num_layers):
-                # gather all K and V for this layer
                 keys = [c.layers[layer].keys for c in caches]
                 vals = [c.layers[layer].values for c in caches]
-                # single concat per layer
-                merged.layers[layer].keys = torch.cat(keys, dim=-2)
-                merged.layers[layer].values = torch.cat(vals, dim=-2)
-
+                base.layers[layer].keys = torch.cat(keys, dim=-2)
+                base.layers[layer].values = torch.cat(vals, dim=-2)
+            return base
         else:
+            # Legacy API: key_cache/value_cache lists
+            merged = DynamicCache()
+            num_layers = len(caches[0].key_cache)
             for layer in range(num_layers):
-                # gather all K and V for this layer
                 keys = [c.key_cache[layer] for c in caches]
                 vals = [c.value_cache[layer] for c in caches]
-                # single concat per layer
                 merged.key_cache.append(torch.cat(keys, dim=-2))
                 merged.value_cache.append(torch.cat(vals, dim=-2))
-
-        return merged
+            return merged
 
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
@@ -242,11 +236,27 @@ def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> Dynamic
     So before inferring with DynamicCache, we should move it to GPU in-place first.
     """
     # Currently, we put this function outside [class KVCacheMemory]
-    for i in range(len(dynamic_cache.key_cache)):
-        if dynamic_cache.key_cache[i] is not None:
-            dynamic_cache.key_cache[i] = dynamic_cache.key_cache[i].to(device, non_blocking=True)
-        if dynamic_cache.value_cache[i] is not None:
-            dynamic_cache.value_cache[i] = dynamic_cache.value_cache[i].to(
-                device, non_blocking=True
-            )
+    # Support both old API (key_cache/value_cache) and new API (layers with keys/values)
+    if hasattr(dynamic_cache, "layers") and dynamic_cache.layers is not None:
+        for i, layer in enumerate(dynamic_cache.layers):
+            # Each layer is expected to have `.keys` and `.values` tensors
+            if hasattr(layer, "keys") and layer.keys is not None:
+                layer.keys = layer.keys.to(device, non_blocking=True)
+            if hasattr(layer, "values") and layer.values is not None:
+                layer.values = layer.values.to(device, non_blocking=True)
+    else:
+        # Fallback to legacy attributes
+        for i in range(len(getattr(dynamic_cache, "key_cache", []))):
+            if dynamic_cache.key_cache[i] is not None:
+                dynamic_cache.key_cache[i] = dynamic_cache.key_cache[i].to(
+                    device, non_blocking=True
+                )
+            if (
+                hasattr(dynamic_cache, "value_cache")
+                and i < len(dynamic_cache.value_cache)
+                and dynamic_cache.value_cache[i] is not None
+            ):
+                dynamic_cache.value_cache[i] = dynamic_cache.value_cache[i].to(
+                    device, non_blocking=True
+                )
     return dynamic_cache
