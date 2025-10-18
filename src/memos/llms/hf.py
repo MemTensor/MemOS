@@ -382,7 +382,23 @@ class HFLLM(BaseLLM):
         kv = DynamicCache()
         with torch.no_grad():
             self.model(**inputs, use_cache=True, past_key_values=kv)
-        for i, (k, v) in enumerate(zip(kv.key_cache, kv.value_cache, strict=False)):
-            kv.key_cache[i] = k[:, :, :seq_len, :]
-            kv.value_cache[i] = v[:, :, :seq_len, :]
+        try:
+            if hasattr(kv, "key_cache") and hasattr(kv, "value_cache"):
+                for i, (k, v) in enumerate(zip(kv.key_cache, kv.value_cache)):
+                    if isinstance(k, torch.Tensor):
+                        kv.key_cache[i] = k[..., :seq_len, :]
+                    if isinstance(v, torch.Tensor):
+                        kv.value_cache[i] = v[..., :seq_len, :]
+            elif hasattr(kv, "layers"):
+                for layer in kv.layers:
+                    if hasattr(layer, "keys") and isinstance(layer.keys, torch.Tensor):
+                        layer.keys = layer.keys[..., :seq_len, :]
+                    if hasattr(layer, "values") and isinstance(layer.values, torch.Tensor):
+                        layer.values = layer.values[..., :seq_len, :]
+            else:
+                logger.warning(
+                    "DynamicCache object has no key_cache/value_cache or layers attributes; returning unmodified cache"
+                )
+        except Exception as e:
+            logger.exception("Failed while trimming KV cache to seq_len: %s", e)
         return kv
