@@ -10,7 +10,9 @@ WORKERS=10
 
 # Parameters for pref_memos.py
 TOP_K=10
-ADD_TURN=10  # Options: 0, 10, or 300
+ADD_TURN=0  # Options: 0, 10, or 300
+LIB="memos-api" 
+VERSION="0929-1"  
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
@@ -18,17 +20,17 @@ ADD_TURN=10  # Options: 0, 10, or 300
 PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl" 
 
 # Intermediate file (output of 'add' mode, input for 'process' mode)
-IDS_FILE="data/prefeval/pref_memos_add.jsonl"
+IDS_FILE="results/prefeval/pref_memos_add.jsonl"
 
 # Final response file (output of 'process' mode, input for Step 3)
-RESPONSE_FILE="data/prefeval/pref_memos_process.jsonl"
+RESPONSE_FILE="results/prefeval/pref_memos_process.jsonl"
 
 
 # Set the Hugging Face mirror endpoint
 export HF_ENDPOINT="https://hf-mirror.com"
 
 echo "--- Starting PrefEval Pipeline ---"
-echo "Configuration: WORKERS=$WORKERS, TOP_K=$TOP_K, ADD_TURN=$ADD_TURN, HF_ENDPOINT=$HF_ENDPOINT"
+echo "Configuration: WORKERS=$WORKERS, TOP_K=$TOP_K, ADD_TURN=$ADD_TURN, LIB=$LIB, VERSION=$VERSION, HF_ENDPOINT=$HF_ENDPOINT"
 echo ""
 
 # --- Step 1: Preprocess the data ---
@@ -48,7 +50,9 @@ python scripts/PrefEval/pref_memos.py add \
     --input $PREPROCESSED_FILE \
     --output $IDS_FILE \
     --add-turn $ADD_TURN \
-    --max-workers $WORKERS
+    --max-workers $WORKERS \
+    --lib $LIB \
+    --version $VERSION
 
 if [ $? -ne 0 ]; then
     echo "Error: pref_memos.py 'add' mode failed."
@@ -62,7 +66,9 @@ python scripts/PrefEval/pref_memos.py process \
     --input $IDS_FILE \
     --output $RESPONSE_FILE \
     --top-k $TOP_K \
-    --max-workers $WORKERS
+    --max-workers $WORKERS \
+    --lib $LIB \
+    --version $VERSION
 
 if [ $? -ne 0 ]; then
     echo "Error: pref_memos.py 'process' mode failed."
@@ -72,7 +78,6 @@ fi
 # --- Step 3: Evaluate the generated responses ---
 echo ""
 echo "Running pref_eval.py..."
-
 # Pass the WORKERS variable to the script's --concurrency-limit argument
 python scripts/PrefEval/pref_eval.py --concurrency-limit $WORKERS
 if [ $? -ne 0 ]; then
