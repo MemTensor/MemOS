@@ -1144,10 +1144,9 @@ class NebulaGraphDB(BaseGraphDB):
             group_by_fields.append(alias)
         # Full GQL query construction
         gql = f"""
-            MATCH (n)
+            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             {where_clause}
             RETURN {", ".join(return_fields)}, COUNT(n) AS count
-            GROUP BY {", ".join(group_by_fields)}
             """
         result = self.execute_query(gql)  # Pure GQL string execution
 
