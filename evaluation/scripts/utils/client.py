@@ -89,8 +89,9 @@ class memos_api_client:
         self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
 
     def add(self, messages, user_id, conv_id):
-        url = f"{self.memos_url}/add"
-        payload = json.dumps({"messages": messages, "user_id": user_id, "conversation_id": conv_id})
+        url = f"{self.memos_url}/product/add"
+        payload = json.dumps({"messages": messages, "user_id": user_id,
+                              "mem_cube_id": user_id, "conversation_id": conv_id})
         response = requests.request("POST", url, data=payload, headers=self.headers)
         assert response.status_code == 200, response.text
         assert json.loads(response.text)["message"] == 'Memory added successfully', response.text
@@ -98,9 +99,10 @@ class memos_api_client:
 
     def search(self, query, user_id, top_k):
         """Search memories."""
-        url = f"{self.memos_url}/search"
+        url = f"{self.memos_url}/product/search"
         payload = json.dumps(
-            {"query": query, "user_id": user_id, "conversation_id": "", "top_k": top_k, }, ensure_ascii=False)
+            {"query": query, "user_id": user_id, "mem_cube_id": user_id,
+             "conversation_id": "", "top_k": top_k, }, ensure_ascii=False)
         response = requests.request("POST", url, data=payload, headers=self.headers)
         assert response.status_code == 200, response.text
         assert json.loads(response.text)["message"] == "Search completed successfully", response.text
