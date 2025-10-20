@@ -264,9 +264,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 text = w["text"]
                 roles = {s.get("role", "") for s in w["sources"] if s.get("role")}
                 mem_type = "UserMemory" if roles == {"user"} else "LongTermMemory"
-                tags = ["mode:fast", f"lang:{detect_lang(text)}"] + [
-                    f"role:{r}" for r in sorted(roles)
-                ]
+                tags = ["mode:fast"]
                 return self._make_memory_item(
                     value=text, info=info, memory_type=mem_type, tags=tags, sources=w["sources"]
                 )
@@ -544,19 +542,42 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def _process_transfer_doc_data(self, raw_node: TextualMemoryItem):
         raise NotImplementedError
 
-    def parse_json_result(self, response_text):
-        try:
-            json_start = response_text.find("{")
-            response_text = response_text[json_start:]
-            response_text = response_text.replace("```", "").strip()
-            if not response_text.endswith("}"):
-                response_text += "}"
-            return json.loads(response_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"[JSONParse] Failed to decode JSON: {e}\nRaw:\n{response_text}")
+    def parse_json_result(self, response_text: str) -> dict:
+        s = (response_text or "").strip()
+
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.I)
+        s = (m.group(1) if m else s.replace("```", "")).strip()
+
+        i = s.find("{")
+        if i == -1:
             return {}
-        except Exception as e:
-            logger.error(f"[JSONParse] Unexpected error: {e}")
+        s = s[i:].strip()
+
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError:
+            pass
+
+        j = max(s.rfind("}"), s.rfind("]"))
+        if j != -1:
+            try:
+                return json.loads(s[: j + 1])
+            except json.JSONDecodeError:
+                pass
+
+        def _cheap_close(t: str) -> str:
+            t += "}" * max(0, t.count("{") - t.count("}"))
+            t += "]" * max(0, t.count("[") - t.count("]"))
+            return t
+
+        t = _cheap_close(s)
+        try:
+            return json.loads(t)
+        except json.JSONDecodeError as e:
+            logger.error(
+                f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
+                n{s[-400:]}"
+            )
             return {}
 
     def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:

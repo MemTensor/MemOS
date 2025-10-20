@@ -146,7 +146,6 @@ class MemoryManager:
 
         # Insert node into graph
         self.graph_store.add_node(working_memory.id, working_memory.memory, metadata)
-        return working_memory.id
 
     def _add_to_graph_memory(self, memory: TextualMemoryItem, memory_type: str):
         """

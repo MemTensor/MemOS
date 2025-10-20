@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import traceback
 
@@ -222,7 +223,7 @@ class GeneralScheduler(BaseScheduler):
     def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
 
-        for message in messages:
+        def process_message(message: ScheduleMessageItem):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
@@ -231,6 +232,8 @@ class GeneralScheduler(BaseScheduler):
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
+                if not mem_ids:
+                    return
 
                 logger.info(
                     f"Processing mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
@@ -240,7 +243,7 @@ class GeneralScheduler(BaseScheduler):
                 text_mem = mem_cube.text_mem
                 if not isinstance(text_mem, TreeTextMemory):
                     logger.error(f"Expected TreeTextMemory but got {type(text_mem).__name__}")
-                    continue
+                    return
 
                 # Use mem_reader to process the memories
                 self._process_memories_with_reader(
@@ -257,6 +260,14 @@ class GeneralScheduler(BaseScheduler):
 
             except Exception as e:
                 logger.error(f"Error processing mem_read message: {e}", exc_info=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+            futures = [executor.submit(process_message, msg) for msg in messages]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Thread task failed: {e}", exc_info=True)
 
     def _process_memories_with_reader(
         self,

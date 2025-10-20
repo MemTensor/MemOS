@@ -643,50 +643,135 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         except queue.Empty:
             pass
 
-    def mem_scheduler_wait(self, timeout: float = 180.0, poll: float = 0.1) -> bool:
+    def mem_scheduler_wait(
+        self, timeout: float = 180.0, poll: float = 0.1, log_every: float = 1.0
+    ) -> bool:
         """
-        Block until the scheduler has finished processing all submitted messages.
-
-        Strategy:
-        1) Wait for the internal memos_message_queue to drain
-           - Prefer "unfinished_tasks" if available; otherwise fallback to empty() polling.
-        2) If parallel dispatch is enabled, wait for all dispatched futures to complete via dispatcher.join().
-
-        Args:
-            timeout: Maximum seconds to wait in total.
-            poll:    Polling interval when falling back to checks.
-        Returns:
-            True if drained before timeout, otherwise False.
+        Uses EWMA throughput, detects leaked `unfinished_tasks`, and waits for dispatcher.
         """
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
 
-        # 1) Wait for internal queue to drain
-        while True:
+        # --- helpers (local, no external deps) ---
+        def _unfinished() -> int:
+            """Prefer `unfinished_tasks`; fallback to `qsize()`."""
             try:
-                unfinished = getattr(self.memos_message_queue, "unfinished_tasks", None)
-                if unfinished is not None:
-                    if int(unfinished) == 0:
-                        break
-                else:
-                    if self.memos_message_queue.empty():
-                        break
+                u = getattr(self.memos_message_queue, "unfinished_tasks", None)
+                if u is not None:
+                    return int(u)
             except Exception:
-                # Be conservative: if any issue reading metrics, fallback to empty()
-                if self.memos_message_queue.empty():
-                    break
+                pass
+            try:
+                return int(self.memos_message_queue.qsize())
+            except Exception:
+                return 0
 
-            if time.time() >= deadline:
+        def _fmt_eta(seconds: float | None) -> str:
+            """Format seconds to human-readable string."""
+            if seconds is None or seconds != seconds or seconds == float("inf"):
+                return "unknown"
+            s = max(0, int(seconds))
+            h, s = divmod(s, 3600)
+            m, s = divmod(s, 60)
+            if h > 0:
+                return f"{h:d}h{m:02d}m{s:02d}s"
+            if m > 0:
+                return f"{m:d}m{s:02d}s"
+            return f"{s:d}s"
+
+        # --- EWMA throughput state (tasks/s) ---
+        alpha = 0.3
+        rate = 0.0
+        last_t = None  # type: float | None
+        last_done = 0
+
+        # --- dynamic totals & stuck detection ---
+        init_unfinished = _unfinished()
+        done_total = 0
+        last_unfinished = None
+        stuck_ticks = 0
+        next_log = 0.0
+
+        while True:
+            # 1) read counters
+            curr_unfinished = _unfinished()
+            try:
+                qsz = int(self.memos_message_queue.qsize())
+            except Exception:
+                qsz = -1
+
+            pend = run = 0
+            stats_fn = getattr(self.dispatcher, "stats", None)
+            if self.enable_parallel_dispatch and self.dispatcher is not None and callable(stats_fn):
+                try:
+                    st = (
+                        stats_fn()
+                    )  # expected: {'pending':int,'running':int,'done':int?,'rate':float?}
+                    pend = int(st.get("pending", 0))
+                    run = int(st.get("running", 0))
+                except Exception:
+                    pass
+
+            # 2) dynamic total (allows new tasks queued while waiting)
+            total_now = max(init_unfinished, done_total + curr_unfinished)
+            done_total = max(0, total_now - curr_unfinished)
+
+            # 3) update EWMA throughput
+            now = time.monotonic()
+            if last_t is None:
+                last_t = now
+            else:
+                dt = max(1e-6, now - last_t)
+                dc = max(0, done_total - last_done)
+                inst = dc / dt
+                rate = inst if rate == 0.0 else alpha * inst + (1 - alpha) * rate
+                last_t = now
+                last_done = done_total
+
+            eta = None if rate <= 1e-9 else (curr_unfinished / rate)
+
+            # 4) progress log (throttled)
+            if now >= next_log:
+                print(
+                    f"[mem_scheduler_wait] remaining≈{curr_unfinished} | throughput≈{rate:.2f} msg/s | ETA≈{_fmt_eta(eta)} "
+                    f"| qsize={qsz} pending={pend} running={run}"
+                )
+                next_log = now + max(0.2, log_every)
+
+            # 5) exit / stuck detection
+            idle_dispatcher = (
+                (pend == 0 and run == 0)
+                if (self.enable_parallel_dispatch and self.dispatcher is not None)
+                else True
+            )
+            if curr_unfinished == 0:
+                break
+            if curr_unfinished > 0 and qsz == 0 and idle_dispatcher:
+                if last_unfinished == curr_unfinished:
+                    stuck_ticks += 1
+                else:
+                    stuck_ticks = 0
+            else:
+                stuck_ticks = 0
+            last_unfinished = curr_unfinished
+
+            if stuck_ticks >= 3:
+                logger.warning(
+                    "mem_scheduler_wait: detected leaked 'unfinished_tasks' -> treating queue as drained"
+                )
+                break
+
+            if now >= deadline:
                 logger.warning("mem_scheduler_wait: queue did not drain before timeout")
                 return False
+
             time.sleep(poll)
 
-        # 2) Wait for dispatcher futures (if running in parallel mode)
-        remaining = max(0.0, deadline - time.time())
+        # 6) wait dispatcher (second stage)
+        remaining = max(0.0, deadline - time.monotonic())
         if self.enable_parallel_dispatch and self.dispatcher is not None:
             try:
                 ok = self.dispatcher.join(timeout=remaining if remaining > 0 else 0)
             except TypeError:
-                # Some implementations may not accept timeout
                 ok = self.dispatcher.join()
             if not ok:
                 logger.warning("mem_scheduler_wait: dispatcher did not complete before timeout")
