@@ -201,7 +201,15 @@ class GeneralScheduler(BaseScheduler):
 
                         mem_cube = msg.mem_cube
                         for memory_id in userinput_memory_ids:
-                            mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
+                            try:
+                                mem_item: TextualMemoryItem = mem_cube.text_mem.get(
+                                    memory_id=memory_id
+                                )
+                            except Exception:
+                                logger.warning(
+                                    f"This MemoryItem {memory_id} has already been deleted."
+                                )
+                                continue
                             mem_type = mem_item.metadata.memory_type
                             mem_content = mem_item.memory
 
