@@ -11,6 +11,7 @@ from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.general import GeneralTextMemory
 from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
+from memos.memories.textual.preference import PreferenceTextMemory
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -22,6 +23,7 @@ class MemoryFactory(BaseMemory):
         "general_text": GeneralTextMemory,
         "tree_text": TreeTextMemory,
         "simple_tree_text": SimpleTreeTextMemory,
+        "pref_text": PreferenceTextMemory,
         "kv_cache": KVCacheMemory,
         "vllm_kv_cache": VLLMKVCacheMemory,
         "lora": LoRAMemory,

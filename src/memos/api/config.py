@@ -109,6 +109,44 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_preference_memory_config() -> dict[str, Any]:
+        """Get preference memory configuration."""
+        return {
+            "backend": "pref_text",
+            "config": {
+                "extractor_llm": {"backend": "openai", "config": APIConfig.get_openai_config()},
+                "vector_db": {
+                    "backend": "milvus",
+                    "config": {
+                        "collection_name": [
+                            "explicit_preference",
+                            "implicit_preference",
+                        ],
+                        "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+                        "distance_metric": "cosine",
+                        "uri": os.getenv("MILVUS_URI", "http://localhost:19530"),
+                        "user_name": os.getenv("MILVUS_USER_NAME", "root"),
+                        "password": os.getenv("MILVUS_PASSWORD", "12345678")
+                    }
+                },
+                "embedder": APIConfig.get_embedder_config(),
+                "reranker": APIConfig.get_reranker_config(),
+                "extractor": {
+                    "backend": "naive",
+                    "config": {}
+                },
+                "adder": {
+                    "backend": "naive",
+                    "config": {}
+                },
+                "retriever": {
+                    "backend": "naive",
+                    "config": {}
+                },
+        }
+    }
+
+    @staticmethod
     def get_reranker_config() -> dict[str, Any]:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_RERANKER_BACKEND", "http_bge")
@@ -385,6 +423,8 @@ class APIConfig:
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
             == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
+            == "true",
             "top_k": int(os.getenv("MOS_TOP_K", "50")),
             "max_turns_window": int(os.getenv("MOS_MAX_TURNS_WINDOW", "20")),
         }
@@ -413,6 +453,8 @@ class APIConfig:
             "session_id": os.getenv("MOS_SESSION_ID", "default_session"),
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
+            == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
             == "true",
             "top_k": int(os.getenv("MOS_TOP_K", "5")),
             "chat_model": {
@@ -478,6 +520,8 @@ class APIConfig:
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
             == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
+            == "true",
             "top_k": 30,
             "max_turns_window": 20,
         }
@@ -530,12 +574,22 @@ class APIConfig:
                             "embedder": APIConfig.get_embedder_config(),
                             "internet_retriever": internet_config,
                             "reranker": APIConfig.get_reranker_config(),
+                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
+                            == "true",
+                            "memory_size": {
+                                "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
+                                "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
+                                "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                            },
                         },
                     },
                     "act_mem": {}
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
+                    "pref_mem": {} 
+                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_preference_memory_config(),
                 }
             )
         else:
@@ -587,12 +641,20 @@ class APIConfig:
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
                             "internet_retriever": internet_config,
+                            "memory_size": {
+                                "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
+                                "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
+                                "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                            },
                         },
                     },
                     "act_mem": {}
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
+                    "pref_mem": {} 
+                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_preference_memory_config(),
                 }
             )
         else:

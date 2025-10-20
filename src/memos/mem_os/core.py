@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
+from concurrent.futures import ThreadPoolExecutor
 
 from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory
@@ -586,6 +587,7 @@ class MOSCore:
             "text_mem": [],
             "act_mem": [],
             "para_mem": [],
+            "pref_mem": [],
         }
         if install_cube_ids is None:
             install_cube_ids = user_cube_ids
@@ -600,33 +602,79 @@ class MOSCore:
         )
 
         for mem_cube_id, mem_cube in tmp_mem_cubes.items():
-            if (
-                (mem_cube_id in install_cube_ids)
-                and (mem_cube.text_mem is not None)
-                and self.config.enable_textual_memory
-            ):
-                time_start = time.time()
-                memories = mem_cube.text_mem.search(
-                    query,
-                    top_k=top_k if top_k else self.config.top_k,
-                    mode=mode,
-                    manual_close_internet=not internet_search,
-                    info={
-                        "user_id": target_user_id,
-                        "session_id": target_session_id,
-                        "chat_history": chat_history.chat_history,
-                    },
-                    moscube=moscube,
-                    search_filter=search_filter,
-                )
-                result["text_mem"].append({"cube_id": mem_cube_id, "memories": memories})
-                logger.info(
-                    f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
-                )
-                search_time_end = time.time()
-                logger.info(
-                    f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
-                )
+            # Define internal functions for parallel search execution
+            def search_textual_memory():
+                if (
+                    (mem_cube_id in install_cube_ids)
+                    and (mem_cube.text_mem is not None)
+                    and self.config.enable_textual_memory
+                ):
+                    time_start = time.time()
+                    memories = mem_cube.text_mem.search(
+                        query,
+                        top_k=top_k if top_k else self.config.top_k,
+                        mode=mode,
+                        manual_close_internet=not internet_search,
+                        info={
+                            "user_id": target_user_id,
+                            "session_id": target_session_id,
+                            "chat_history": chat_history.chat_history,
+                        },
+                        moscube=moscube,
+                        search_filter=search_filter,
+                    )
+                    search_time_end = time.time()
+                    logger.info(
+                        f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                    )
+                    logger.info(
+                        f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
+                    )
+                    return {"cube_id": mem_cube_id, "memories": memories}
+                return None
+
+            def search_preference_memory():
+                if (
+                    (mem_cube_id in install_cube_ids)
+                    and (mem_cube.pref_mem is not None)
+                    and self.config.enable_preference_memory
+                ):
+                    time_start = time.time()
+                    memories = mem_cube.pref_mem.search(
+                        query,
+                        top_k=top_k if top_k else self.config.top_k,
+                        mode=mode,
+                        info={
+                            "user_id": target_user_id,
+                            "session_id": self.session_id,
+                            "chat_history": chat_history.chat_history,
+                        },
+                    )
+                    search_time_end = time.time()
+                    logger.info(
+                        f"🧠 [Memory] Searched preferences from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                    )
+                    logger.info(
+                        f"time search pref: search pref time user_id: {target_user_id} time is: {search_time_end - time_start}"
+                    )
+                    return {"cube_id": mem_cube_id, "memories": memories}
+                return None
+
+            # Execute both search functions in parallel
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                text_future = executor.submit(search_textual_memory)
+                pref_future = executor.submit(search_preference_memory)
+
+                # Wait for both tasks to complete and collect results
+                text_result = text_future.result()
+                pref_result = pref_future.result()
+
+                # Add results to the main result dictionary
+                if text_result is not None:
+                    result["text_mem"].append(text_result)
+                if pref_result is not None:
+                    result["pref_mem"].append(pref_result)
+
         return result
 
     def add(
@@ -675,62 +723,78 @@ class MOSCore:
             f"time add: get mem_cube_id time user_id: {target_user_id} time is: {time.time() - time_start}"
         )
 
-        time_start_0 = time.time()
         if mem_cube_id not in self.mem_cubes:
             raise ValueError(f"MemCube '{mem_cube_id}' is not loaded. Please register.")
-        logger.info(
-            f"time add: get mem_cube_id check in mem_cubes time user_id: {target_user_id} time is: {time.time() - time_start_0}"
-        )
-        time_start_1 = time.time()
-        if (
-            (messages is not None)
-            and self.config.enable_textual_memory
-            and self.mem_cubes[mem_cube_id].text_mem
-        ):
-            logger.info(
-                f"time add: messages is not None and enable_textual_memory and text_mem is not None time user_id: {target_user_id} time is: {time.time() - time_start_1}"
-            )
-            if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
-                add_memory = []
-                metadata = TextualMemoryMetadata(
-                    user_id=target_user_id, session_id=target_session_id, source="conversation"
-                )
-                for message in messages:
-                    add_memory.append(
-                        TextualMemoryItem(memory=message["content"], metadata=metadata)
+
+        def process_textual_memory():
+            if (
+                (messages is not None)
+                and self.config.enable_textual_memory
+                and self.mem_cubes[mem_cube_id].text_mem
+            ):
+                if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
+                    add_memory = []
+                    metadata = TextualMemoryMetadata(
+                        user_id=target_user_id, session_id=target_session_id, source="conversation"
                     )
-                self.mem_cubes[mem_cube_id].text_mem.add(add_memory)
-            else:
-                messages_list = [messages]
-                time_start_2 = time.time()
-                memories = self.mem_reader.get_memory(
-                    messages_list,
-                    type="chat",
-                    info={"user_id": target_user_id, "session_id": target_session_id},
-                )
-                logger.info(
-                    f"time add: get mem_reader time user_id: {target_user_id} time is: {time.time() - time_start_2}"
-                )
-                mem_ids = []
-                for mem in memories:
-                    mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
-                    mem_ids.extend(mem_id_list)
-                    logger.info(
-                        f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
+                    for message in messages:
+                        add_memory.append(
+                            TextualMemoryItem(memory=message["content"], metadata=metadata)
+                        )
+                    self.mem_cubes[mem_cube_id].text_mem.add(add_memory)
+                else:
+                    messages_list = [messages]
+                    memories = self.mem_reader.get_memory(
+                        messages_list,
+                        type="chat",
+                        info={"user_id": target_user_id, "session_id": target_session_id},
                     )
 
-                # submit messages for scheduler
-                if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                    mem_cube = self.mem_cubes[mem_cube_id]
-                    message_item = ScheduleMessageItem(
-                        user_id=target_user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                        label=ADD_LABEL,
-                        content=json.dumps(mem_ids),
-                        timestamp=datetime.utcnow(),
-                    )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
+                    mem_ids = []
+                    for mem in memories:
+                        mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
+                        mem_ids.extend(mem_id_list)
+                        logger.info(
+                            f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
+                        )
+
+                    # submit messages for scheduler
+                    if self.enable_mem_scheduler and self.mem_scheduler is not None:
+                        mem_cube = self.mem_cubes[mem_cube_id]
+                        message_item = ScheduleMessageItem(
+                            user_id=target_user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=ADD_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
+
+        def process_preference_memory():
+            if (
+                (messages is not None)
+                and self.config.enable_preference_memory
+                and self.mem_cubes[mem_cube_id].pref_mem
+            ):
+                messages_list = [messages]
+                pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
+                    messages_list,
+                    type="chat",
+                    info={"user_id": target_user_id, "session_id": self.session_id})
+                preferences = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
+                logger.info(
+                    f"Added preferences user {target_user_id} to memcube {mem_cube_id}: {preferences}"
+                )
+
+        # Execute both memory processing functions in parallel
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            text_future = executor.submit(process_textual_memory)
+            pref_future = executor.submit(process_preference_memory)
+
+            # Wait for both tasks to complete
+            text_future.result()
+            pref_future.result()
 
         # user profile
         if (
@@ -998,7 +1062,7 @@ class MOSCore:
         load_dir: str,
         user_id: str | None = None,
         mem_cube_id: str | None = None,
-        memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Dump the MemCube to a dictionary.
         Args:
