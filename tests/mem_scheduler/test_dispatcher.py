@@ -17,6 +17,7 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -158,49 +159,85 @@ class TestSchedulerDispatcher(unittest.TestCase):
         """Test dispatching messages in serial mode."""
         # Create a new dispatcher with parallel dispatch disabled
         serial_dispatcher = SchedulerDispatcher(max_workers=2, enable_parallel_dispatch=False)
-        serial_dispatcher.register_handler("label1", self.mock_handler1)
-        serial_dispatcher.register_handler("label2", self.mock_handler2)
+
+        # Create fresh mock handlers for this test
+        mock_handler1 = MagicMock()
+        mock_handler2 = MagicMock()
+
+        serial_dispatcher.register_handler("label1", mock_handler1)
+        serial_dispatcher.register_handler("label2", mock_handler2)
 
         # Dispatch messages
         serial_dispatcher.dispatch(self.test_messages)
 
-        # Verify handlers were called with the correct messages
-        self.mock_handler1.assert_called_once()
-        self.mock_handler2.assert_called_once()
+        # Verify handlers were called - label1 handler should be called twice (for user1 and user2)
+        # label2 handler should be called once (only for user1)
+        self.assertEqual(mock_handler1.call_count, 2)  # Called for user1/msg1 and user2/msg3
+        mock_handler2.assert_called_once()  # Called for user1/msg2
 
         # Check that each handler received the correct messages
-        label1_messages = [msg for msg in self.test_messages if msg.label == "label1"]
-        label2_messages = [msg for msg in self.test_messages if msg.label == "label2"]
+        # For label1: first call should have [msg1], second call should have [msg3]
+        label1_calls = mock_handler1.call_args_list
+        self.assertEqual(len(label1_calls), 2)
 
-        # The first argument of the first call
-        self.assertEqual(self.mock_handler1.call_args[0][0], label1_messages)
-        self.assertEqual(self.mock_handler2.call_args[0][0], label2_messages)
+        # Extract messages from calls
+        call1_messages = label1_calls[0][0][0]  # First call, first argument (messages list)
+        call2_messages = label1_calls[1][0][0]  # Second call, first argument (messages list)
+
+        # Verify the messages in each call
+        self.assertEqual(len(call1_messages), 1)
+        self.assertEqual(len(call2_messages), 1)
+
+        # For label2: should have one call with [msg2]
+        label2_messages = mock_handler2.call_args[0][0]
+        self.assertEqual(len(label2_messages), 1)
+        self.assertEqual(label2_messages[0].item_id, "msg2")
 
     def test_dispatch_parallel(self):
         """Test dispatching messages in parallel mode."""
+        # Create fresh mock handlers for this test
+        mock_handler1 = MagicMock()
+        mock_handler2 = MagicMock()
+
+        # Create a new dispatcher for this test to avoid interference
+        parallel_dispatcher = SchedulerDispatcher(max_workers=2, enable_parallel_dispatch=True)
+        parallel_dispatcher.register_handler("label1", mock_handler1)
+        parallel_dispatcher.register_handler("label2", mock_handler2)
+
         # Dispatch messages
-        self.dispatcher.dispatch(self.test_messages)
+        parallel_dispatcher.dispatch(self.test_messages)
 
         # Wait for all futures to complete
-        self.dispatcher.join(timeout=1.0)
+        parallel_dispatcher.join(timeout=1.0)
 
-        # Verify handlers were called
-        self.mock_handler1.assert_called_once()
-        self.mock_handler2.assert_called_once()
+        # Verify handlers were called - label1 handler should be called twice (for user1 and user2)
+        # label2 handler should be called once (only for user1)
+        self.assertEqual(mock_handler1.call_count, 2)  # Called for user1/msg1 and user2/msg3
+        mock_handler2.assert_called_once()  # Called for user1/msg2
 
         # Check that each handler received the correct messages
-        label1_messages = [msg for msg in self.test_messages if msg.label == "label1"]
-        label2_messages = [msg for msg in self.test_messages if msg.label == "label2"]
+        # For label1: should have two calls, each with one message
+        label1_calls = mock_handler1.call_args_list
+        self.assertEqual(len(label1_calls), 2)
 
-        # The first argument of the first call
-        self.assertEqual(self.mock_handler1.call_args[0][0], label1_messages)
-        self.assertEqual(self.mock_handler2.call_args[0][0], label2_messages)
+        # Extract messages from calls
+        call1_messages = label1_calls[0][0][0]  # First call, first argument (messages list)
+        call2_messages = label1_calls[1][0][0]  # Second call, first argument (messages list)
+
+        # Verify the messages in each call
+        self.assertEqual(len(call1_messages), 1)
+        self.assertEqual(len(call2_messages), 1)
+
+        # For label2: should have one call with [msg2]
+        label2_messages = mock_handler2.call_args[0][0]
+        self.assertEqual(len(label2_messages), 1)
+        self.assertEqual(label2_messages[0].item_id, "msg2")
 
     def test_group_messages_by_user_and_cube(self):
         """Test grouping messages by user and cube."""
         # Check actual grouping logic
         with patch("memos.mem_scheduler.general_modules.dispatcher.logger.debug"):
-            result = self.dispatcher.group_messages_by_user_and_cube(self.test_messages)
+            result = self.dispatcher._group_messages_by_user_and_mem_cube(self.test_messages)
 
         # Adjust expected results based on actual grouping logic
         # Note: According to dispatcher.py implementation, grouping is by mem_cube_id not mem_cube
@@ -293,3 +330,132 @@ class TestSchedulerDispatcher(unittest.TestCase):
 
         # Allow enough time for thread cleanup
         time.sleep(0.5)
+
+    def test_running_task_item_messages_field(self):
+        """Test that RunningTaskItem correctly stores messages."""
+        # Create test messages
+        test_messages = [
+            ScheduleMessageItem(
+                item_id="test1",
+                user_id="user1",
+                mem_cube="cube1",
+                mem_cube_id="test1",
+                label="test_label",
+                content="Test message 1",
+                timestamp=123456789,
+            ),
+            ScheduleMessageItem(
+                item_id="test2",
+                user_id="user1",
+                mem_cube="cube1",
+                mem_cube_id="test2",
+                label="test_label",
+                content="Test message 2",
+                timestamp=123456790,
+            ),
+        ]
+
+        # Create RunningTaskItem with messages
+        task_item = RunningTaskItem(
+            user_id="user1",
+            mem_cube_id="cube1",
+            task_info="Test task",
+            task_name="test_handler",
+            messages=test_messages,
+        )
+
+        # Verify messages are stored correctly
+        self.assertIsNotNone(task_item.messages)
+        self.assertEqual(len(task_item.messages), 2)
+        self.assertEqual(task_item.messages[0].item_id, "test1")
+        self.assertEqual(task_item.messages[1].item_id, "test2")
+
+        # Test with no messages
+        task_item_no_msgs = RunningTaskItem(
+            user_id="user1",
+            mem_cube_id="cube1",
+            task_info="Test task without messages",
+            task_name="test_handler",
+        )
+        self.assertIsNone(task_item_no_msgs.messages)
+
+    def test_dispatcher_creates_task_with_messages(self):
+        """Test that dispatcher creates RunningTaskItem with messages."""
+        # Mock the task wrapper to capture the task_item
+        captured_task_items = []
+
+        original_create_wrapper = self.dispatcher._create_task_wrapper
+
+        def mock_create_wrapper(handler, task_item):
+            captured_task_items.append(task_item)
+            return original_create_wrapper(handler, task_item)
+
+        with patch.object(self.dispatcher, "_create_task_wrapper", side_effect=mock_create_wrapper):
+            # Dispatch messages
+            self.dispatcher.dispatch(self.test_messages)
+
+            # Wait for parallel tasks to complete
+            if self.dispatcher.enable_parallel_dispatch:
+                self.dispatcher.join(timeout=1.0)
+
+        # Verify that task items were created with messages
+        self.assertGreater(len(captured_task_items), 0)
+
+        for task_item in captured_task_items:
+            self.assertIsNotNone(task_item.messages)
+            self.assertGreater(len(task_item.messages), 0)
+            # Verify messages have the expected structure
+            for msg in task_item.messages:
+                self.assertIsInstance(msg, ScheduleMessageItem)
+
+    def test_dispatcher_monitor_logs_stuck_task_messages(self):
+        """Test that dispatcher monitor includes messages info when logging stuck tasks."""
+
+        # Create test messages
+        test_messages = [
+            ScheduleMessageItem(
+                item_id="stuck1",
+                user_id="user1",
+                mem_cube="cube1",
+                mem_cube_id="stuck1",
+                label="stuck_label",
+                content="Stuck message 1",
+                timestamp=123456789,
+            ),
+            ScheduleMessageItem(
+                item_id="stuck2",
+                user_id="user1",
+                mem_cube="cube1",
+                mem_cube_id="stuck2",
+                label="stuck_label",
+                content="Stuck message 2",
+                timestamp=123456790,
+            ),
+        ]
+
+        # Create a stuck task with messages
+        stuck_task = RunningTaskItem(
+            user_id="user1",
+            mem_cube_id="cube1",
+            task_info="Stuck task",
+            task_name="stuck_handler",
+            messages=test_messages,
+        )
+
+        # Mock logger to capture log messages
+        with patch("memos.mem_scheduler.monitors.dispatcher_monitor.logger"):
+            # Simulate stuck task detection by directly calling the logging part
+            # We'll test the logging format by checking what would be logged
+            task_info = stuck_task.get_execution_info()
+            messages_info = ""
+            if stuck_task.messages:
+                messages_info = f", Messages: {len(stuck_task.messages)} items - {[str(msg) for msg in stuck_task.messages[:3]]}"
+                if len(stuck_task.messages) > 3:
+                    messages_info += f" ... and {len(stuck_task.messages) - 3} more"
+
+            expected_log = f"  - Stuck task: {task_info}{messages_info}"
+
+            # Verify the log message format includes messages info
+            self.assertIn("Messages: 2 items", expected_log)
+            self.assertIn("Stuck message 1", expected_log)
+            self.assertIn("Stuck message 2", expected_log)

@@ -98,7 +98,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         )
         return log_message
 
-    # TODO: 日志打出来数量不对
+    # TODO: Log output count is incorrect
     @log_exceptions(logger=logger)
     def log_working_memory_replacement(
         self,

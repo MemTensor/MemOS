@@ -146,9 +146,14 @@ class EvalModuleWithClientManager(BaseEvalModule):
                 scheduler_for_eval.current_mem_cube_id = user_id
                 scheduler_for_eval.current_user_id = user_id
 
+                # set llms to openai api
+                mos.chat_llm = mos.mem_reader.llm
+                for cube in mos.mem_cubes.values():
+                    cube.text_mem.dispatcher_llm = mos.mem_reader.llm
+                    cube.text_mem.extractor_llm = mos.mem_reader.llm
+
                 # Replace the original scheduler
                 mos.mem_scheduler = scheduler_for_eval
-
             return mos
 
     def locomo_response(self, frame, llm_client, context: str, question: str) -> str:

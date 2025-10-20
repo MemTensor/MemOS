@@ -13,8 +13,11 @@ from memos.log import get_logger
 
 from .client_manager import EvalModuleWithClientManager
 from .constants import (
+    MEM0_GRAPH_MODEL,
+    MEM0_MODEL,
     MEMOS_MODEL,
     MEMOS_SCHEDULER_MODEL,
+    ZEP_MODEL,
 )
 from .prompts import (
     CONTEXT_ANSWERABILITY_PROMPT,
@@ -141,7 +144,9 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         duration_ms = (time.time() - start) * 1000
         return context, duration_ms
 
-    def memos_search(self, client, query, conv_id, speaker_a, speaker_b, reversed_client=None):
+    def memos_search(
+        self, client, query, conv_id, speaker_a, speaker_b, reversed_client=None, top_k=20
+    ):
         """
         Search memories using the memos framework.
 
@@ -158,13 +163,10 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         """
         start = time.time()
         # Search memories for speaker A
-        search_a_results = client.search(
-            query=query,
-            user_id=conv_id + "_speaker_a",
-        )
+        search_a_results = client.search(query=query, user_id=conv_id + "_speaker_a")
         filtered_search_a_results = filter_memory_data(search_a_results)["text_mem"][0]["memories"]
         speaker_a_context = ""
-        for item in filtered_search_a_results:
+        for item in filtered_search_a_results[:top_k]:
             speaker_a_context += f"{item['memory']}\n"
 
         # Search memories for speaker B
@@ -174,7 +176,7 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         )
         filtered_search_b_results = filter_memory_data(search_b_results)["text_mem"][0]["memories"]
         speaker_b_context = ""
-        for item in filtered_search_b_results:
+        for item in filtered_search_b_results[:top_k]:
             speaker_b_context += f"{item['memory']}\n"
 
         # Create context using template
@@ -189,20 +191,20 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         return context, duration_ms
 
     def memos_scheduler_search(
-        self, client, query, conv_id, speaker_a, speaker_b, reversed_client=None
+        self, client, query, conv_id, speaker_a, speaker_b, reversed_client=None, top_k=20
     ):
         start = time.time()
         client: MOS = client
 
         if not self.scheduler_flag:
             # if not scheduler_flag, search to update working memory
-            self.memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client)
+            self.memos_search(client, query, conv_id, speaker_a, speaker_b, reversed_client, top_k)
 
         # Search for speaker A
         search_a_results = client.mem_scheduler.search_for_eval(
             query=query,
             user_id=conv_id + "_speaker_a",
-            top_k=client.config.top_k,
+            top_k=top_k,
             scheduler_flag=self.scheduler_flag,
         )
 
@@ -210,7 +212,7 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         search_b_results = reversed_client.mem_scheduler.search_for_eval(
             query=query,
             user_id=conv_id + "_speaker_b",
-            top_k=client.config.top_k,
+            top_k=top_k,
             scheduler_flag=self.scheduler_flag,
         )
 
@@ -346,23 +348,23 @@ class LocomoEvalModelModules(EvalModuleWithClientManager):
         speaker_a_user_id = metadata.get("speaker_a_user_id")
         speaker_b_user_id = metadata.get("speaker_b_user_id")
 
-        if frame == "zep":
+        if frame == ZEP_MODEL:
             context, duration_ms = self.zep_search(client, query, conv_id, top_k)
-        elif frame == "mem0":
+        elif frame == MEM0_MODEL:
             context, duration_ms = self.mem0_search(
                 client, query, speaker_a_user_id, speaker_b_user_id, top_k
             )
-        elif frame == "mem0_graph":
+        elif frame == MEM0_GRAPH_MODEL:
             context, duration_ms = self.mem0_graph_search(
                 client, query, speaker_a_user_id, speaker_b_user_id, top_k
             )
-        elif frame == "memos":
+        elif frame == MEMOS_MODEL:
             context, duration_ms = self.memos_search(
-                client, query, conv_id, speaker_a, speaker_b, reversed_client
+                client, query, conv_id, speaker_a, speaker_b, reversed_client, top_k
             )
-        elif frame == "memos_scheduler":
+        elif frame == MEMOS_SCHEDULER_MODEL:
             context, duration_ms = self.memos_scheduler_search(
-                client, query, conv_id, speaker_a, speaker_b, reversed_client
+                client, query, conv_id, speaker_a, speaker_b, reversed_client, top_k
             )
         else:
             raise NotImplementedError()

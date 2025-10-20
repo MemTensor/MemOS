@@ -1,7 +1,9 @@
+import multiprocessing
 import queue
 import threading
 import time
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -20,7 +22,9 @@ from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
+    DEFAULT_STARTUP_MODE,
     DEFAULT_THREAD_POOL_MAX_WORKERS,
+    STARTUP_BY_PROCESS,
     MemCubeID,
     TreeTextMemory_SEARCH_METHOD,
     UserID,
@@ -58,9 +62,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.enable_activation_memory = self.config.get("enable_activation_memory", False)
         self.act_mem_dump_path = self.config.get("act_mem_dump_path", DEFAULT_ACT_MEM_DUMP_PATH)
         self.search_method = TreeTextMemory_SEARCH_METHOD
-        self.enable_parallel_dispatch = self.config.get("enable_parallel_dispatch", False)
+        self.enable_parallel_dispatch = self.config.get("enable_parallel_dispatch", True)
         self.thread_pool_max_workers = self.config.get(
             "thread_pool_max_workers", DEFAULT_THREAD_POOL_MAX_WORKERS
+        )
+
+        # startup mode configuration
+        self.scheduler_startup_mode = self.config.get(
+            "scheduler_startup_mode", DEFAULT_STARTUP_MODE
         )
 
         self.retriever: SchedulerRetriever | None = None
@@ -68,9 +77,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.dispatcher = SchedulerDispatcher(
+            config=self.config,
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
         )
+
+        # optional configs
+        self.disable_handlers: list | None = self.config.get("disable_handlers", None)
 
         # internal message queue
         self.max_internal_message_queue_size = self.config.get(
@@ -83,7 +96,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._web_log_message_queue: Queue[ScheduleLogForWebItem] = Queue(
             maxsize=self.max_web_log_queue_size
         )
-        self._consumer_thread = None  # Reference to our consumer thread
+        self._consumer_thread = None  # Reference to our consumer thread/process
+        self._consumer_process = None  # Reference to our consumer process
         self._running = False
         self._consume_interval = self.config.get(
             "consume_interval_seconds", DEFAULT_CONSUME_INTERVAL_SECONDS
@@ -133,7 +147,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             if self.auth_config is not None:
                 self.rabbitmq_config = self.auth_config.rabbitmq
-                self.initialize_rabbitmq(config=self.rabbitmq_config)
+                if self.rabbitmq_config is not None:
+                    self.initialize_rabbitmq(config=self.rabbitmq_config)
 
             logger.debug("GeneralScheduler has been initialized")
         except Exception as e:
@@ -476,6 +491,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.error(error_msg)
                 raise TypeError(error_msg)
 
+            # Check if this handler is disabled
+            if self.disable_handlers and message.label in self.disable_handlers:
+                logger.info(f"Skipping disabled handler: {message.label} - {message.content}")
+                continue
+
             self.memos_message_queue.put(message)
             logger.info(f"Submitted message: {message.label} - {message.content}")
 
@@ -487,6 +507,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Args:
             messages: Single log message or list of log messages
         """
+        if self.rabbitmq_config is None:
+            return
+
         if isinstance(messages, ScheduleLogForWebItem):
             messages = [messages]  # transform single message to list
 
@@ -516,7 +539,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         messages = []
         while True:
             try:
-                item = self._web_log_message_queue.get_nowait()  # 线程安全的 get
+                item = self._web_log_message_queue.get_nowait()  # Thread-safe get
                 messages.append(item.to_dict())
             except queue.Empty:
                 break
@@ -560,10 +583,10 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
     def start(self) -> None:
         """
-        Start the message consumer thread and initialize dispatcher resources.
+        Start the message consumer thread/process and initialize dispatcher resources.
 
         Initializes and starts:
-        1. Message consumer thread
+        1. Message consumer thread or process (based on startup_mode)
         2. Dispatcher thread pool (if parallel dispatch enabled)
         """
         if self._running:
@@ -576,20 +599,32 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 f"Initializing dispatcher thread pool with {self.thread_pool_max_workers} workers"
             )
 
-        # Start consumer thread
+        # Start consumer based on startup mode
         self._running = True
-        self._consumer_thread = threading.Thread(
-            target=self._message_consumer,
-            daemon=True,
-            name="MessageConsumerThread",
-        )
-        self._consumer_thread.start()
-        logger.info("Message consumer thread started")
+
+        if self.scheduler_startup_mode == STARTUP_BY_PROCESS:
+            # Start consumer process
+            self._consumer_process = multiprocessing.Process(
+                target=self._message_consumer,
+                daemon=True,
+                name="MessageConsumerProcess",
+            )
+            self._consumer_process.start()
+            logger.info("Message consumer process started")
+        else:
+            # Default to thread mode
+            self._consumer_thread = threading.Thread(
+                target=self._message_consumer,
+                daemon=True,
+                name="MessageConsumerThread",
+            )
+            self._consumer_thread.start()
+            logger.info("Message consumer thread started")
 
     def stop(self) -> None:
         """Stop all scheduler components gracefully.
 
-        1. Stops message consumer thread
+        1. Stops message consumer thread/process
         2. Shuts down dispatcher thread pool
         3. Cleans up resources
         """
@@ -597,11 +632,24 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.warning("Memory Scheduler is not running")
             return
 
-        # Signal consumer thread to stop
+        # Signal consumer thread/process to stop
         self._running = False
 
-        # Wait for consumer thread
-        if self._consumer_thread and self._consumer_thread.is_alive():
+        # Wait for consumer thread or process
+        if self.scheduler_startup_mode == STARTUP_BY_PROCESS and self._consumer_process:
+            if self._consumer_process.is_alive():
+                self._consumer_process.join(timeout=5.0)
+                if self._consumer_process.is_alive():
+                    logger.warning("Consumer process did not stop gracefully, terminating...")
+                    self._consumer_process.terminate()
+                    self._consumer_process.join(timeout=2.0)
+                    if self._consumer_process.is_alive():
+                        logger.error("Consumer process could not be terminated")
+                    else:
+                        logger.info("Consumer process terminated")
+                else:
+                    logger.info("Consumer process stopped")
+        elif self._consumer_thread and self._consumer_thread.is_alive():
             self._consumer_thread.join(timeout=5.0)
             if self._consumer_thread.is_alive():
                 logger.warning("Consumer thread did not stop gracefully")
@@ -621,6 +669,52 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Clean up queues
         self._cleanup_queues()
         logger.info("Memory Scheduler stopped completely")
+
+    @property
+    def handlers(self) -> dict[str, Callable]:
+        """
+        Access the dispatcher's handlers dictionary.
+
+        Returns:
+            dict[str, Callable]: Dictionary mapping labels to handler functions
+        """
+        if not self.dispatcher:
+            logger.warning("Dispatcher is not initialized, returning empty handlers dict")
+            return {}
+
+        return self.dispatcher.handlers
+
+    def register_handlers(
+        self, handlers: dict[str, Callable[[list[ScheduleMessageItem]], None]]
+    ) -> None:
+        """
+        Bulk register multiple handlers from a dictionary.
+
+        Args:
+            handlers: Dictionary mapping labels to handler functions
+                      Format: {label: handler_callable}
+        """
+        if not self.dispatcher:
+            logger.warning("Dispatcher is not initialized, cannot register handlers")
+            return
+
+        self.dispatcher.register_handlers(handlers)
+
+    def unregister_handlers(self, labels: list[str]) -> dict[str, bool]:
+        """
+        Unregister handlers from the dispatcher by their labels.
+
+        Args:
+            labels: List of labels to unregister handlers for
+
+        Returns:
+            dict[str, bool]: Dictionary mapping each label to whether it was successfully unregistered
+        """
+        if not self.dispatcher:
+            logger.warning("Dispatcher is not initialized, cannot unregister handlers")
+            return dict.fromkeys(labels, False)
+
+        return self.dispatcher.unregister_handlers(labels)
 
     def _cleanup_queues(self) -> None:
         """Ensure all queues are emptied and marked as closed."""

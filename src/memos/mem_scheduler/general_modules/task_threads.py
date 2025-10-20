@@ -1,6 +1,8 @@
 import threading
+import time
 
 from collections.abc import Callable
+from concurrent.futures import as_completed
 from typing import Any, TypeVar
 
 from memos.log import get_logger
@@ -12,7 +14,7 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 
-class ThreadRace(BaseSchedulerModule):
+class ThreadManager(BaseSchedulerModule):
     """
     Thread race implementation that runs multiple tasks concurrently and returns
     the result of the first task to complete successfully.
@@ -24,7 +26,7 @@ class ThreadRace(BaseSchedulerModule):
     - Thread-safe result handling
     """
 
-    def __init__(self):
+    def __init__(self, thread_pool_executor=None):
         super().__init__()
         # Variable to store the result
         self.result: tuple[str, Any] | None = None
@@ -36,6 +38,8 @@ class ThreadRace(BaseSchedulerModule):
         self.threads: dict[str, threading.Thread] = {}
         # Stop flags for each thread
         self.stop_flags: dict[str, threading.Event] = {}
+        # attributes
+        self.thread_pool_executor = thread_pool_executor
 
     def worker(
         self, task_func: Callable[[threading.Event], T], task_name: str
@@ -82,6 +86,157 @@ class ThreadRace(BaseSchedulerModule):
             logger.error(f"Task '{task_name}' encountered an error: {e}")
 
         return None
+
+    def run_multiple_tasks(
+        self,
+        tasks: dict[str, tuple[Callable, tuple, dict]],
+        use_thread_pool: bool = False,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Run multiple tasks concurrently and return all results.
+
+        Args:
+            tasks: Dictionary mapping task names to (function, args, kwargs) tuples
+            use_thread_pool: Whether to use ThreadPoolExecutor (True) or regular threads (False)
+            timeout: Maximum time to wait for all tasks to complete (in seconds). None for infinite timeout.
+
+        Returns:
+            Dictionary mapping task names to their results
+
+        Raises:
+            TimeoutError: If tasks don't complete within the specified timeout
+        """
+        if not tasks:
+            logger.warning("No tasks provided to run_multiple_tasks")
+            return {}
+
+        results = {}
+        start_time = time.time()
+
+        if use_thread_pool:
+            return self.run_with_thread_pool(tasks, timeout)
+        else:
+            # Use regular threads
+            threads = {}
+            thread_results = {}
+            exceptions = {}
+
+            def worker(task_name: str, func: Callable, args: tuple, kwargs: dict):
+                """Worker function for regular threads"""
+                try:
+                    result = func(*args, **kwargs)
+                    thread_results[task_name] = result
+                    logger.debug(f"Task '{task_name}' completed successfully")
+                except Exception as e:
+                    exceptions[task_name] = e
+                    logger.error(f"Task '{task_name}' failed with error: {e}")
+
+            # Start all threads
+            for task_name, (func, args, kwargs) in tasks.items():
+                thread = threading.Thread(
+                    target=worker, args=(task_name, func, args, kwargs), name=f"task-{task_name}"
+                )
+                threads[task_name] = thread
+                thread.start()
+                logger.debug(f"Started thread for task '{task_name}'")
+
+            # Wait for all threads to complete with timeout
+            for task_name, thread in threads.items():
+                if timeout is None:
+                    # Infinite timeout - wait indefinitely
+                    thread.join()
+                else:
+                    # Finite timeout - calculate remaining time
+                    remaining_time = timeout - (time.time() - start_time)
+                    if remaining_time <= 0:
+                        logger.error(f"Task '{task_name}' timed out after {timeout} seconds")
+                        results[task_name] = None
+                        continue
+
+                    thread.join(timeout=remaining_time)
+                    if thread.is_alive():
+                        logger.error(f"Task '{task_name}' timed out after {timeout} seconds")
+                        results[task_name] = None
+                        continue
+
+                # Get result or exception (for both infinite and finite timeout cases)
+                if task_name in thread_results:
+                    results[task_name] = thread_results[task_name]
+                elif task_name in exceptions:
+                    results[task_name] = None
+                else:
+                    results[task_name] = None
+
+        elapsed_time = time.time() - start_time
+        completed_tasks = sum(1 for result in results.values() if result is not None)
+        logger.info(f"Completed {completed_tasks}/{len(tasks)} tasks in {elapsed_time:.2f} seconds")
+
+        return results
+
+    def run_with_thread_pool(
+        self, tasks: dict[str, tuple[callable, tuple, dict]], timeout: float | None = None
+    ) -> dict[str, Any]:
+        """
+        Execute multiple tasks using ThreadPoolExecutor.
+
+        Args:
+            tasks: Dictionary mapping task names to (function, args, kwargs) tuples
+            timeout: Maximum time to wait for all tasks to complete (None for infinite timeout)
+
+        Returns:
+            Dictionary mapping task names to their results
+
+        Raises:
+            TimeoutError: If tasks don't complete within the specified timeout
+        """
+        if self.thread_pool_executor is None:
+            logger.error("thread_pool_executor is None")
+            raise ValueError("ThreadPoolExecutor is not initialized")
+
+        results = {}
+        start_time = time.time()
+
+        # Use ThreadPoolExecutor for better resource management
+        with self.thread_pool_executor as executor:
+            # Submit all tasks
+            future_to_name = {}
+            for task_name, (func, args, kwargs) in tasks.items():
+                future = executor.submit(func, *args, **kwargs)
+                future_to_name[future] = task_name
+                logger.debug(f"Submitted task '{task_name}' to thread pool")
+
+            # Collect results as they complete
+            try:
+                # Handle infinite timeout case
+                timeout_param = None if timeout is None else timeout
+                for future in as_completed(future_to_name, timeout=timeout_param):
+                    task_name = future_to_name[future]
+                    try:
+                        result = future.result()
+                        results[task_name] = result
+                        logger.debug(f"Task '{task_name}' completed successfully")
+                    except Exception as e:
+                        logger.error(f"Task '{task_name}' failed with error: {e}")
+                        results[task_name] = None
+
+            except Exception:
+                elapsed_time = time.time() - start_time
+                timeout_msg = "infinite" if timeout is None else f"{timeout}s"
+                logger.error(
+                    f"Tasks execution timed out after {elapsed_time:.2f} seconds (timeout: {timeout_msg})"
+                )
+                # Cancel remaining futures
+                for future in future_to_name:
+                    if not future.done():
+                        future.cancel()
+                        task_name = future_to_name[future]
+                        logger.warning(f"Cancelled task '{task_name}' due to timeout")
+                        results[task_name] = None
+                timeout_seconds = "infinite" if timeout is None else timeout
+                logger.error(f"Tasks execution timed out after {timeout_seconds} seconds")
+
+        return results
 
     def run_race(
         self, tasks: dict[str, Callable[[threading.Event], T]], timeout: float = 10.0

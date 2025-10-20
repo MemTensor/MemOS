@@ -133,3 +133,29 @@ class RecordingCase(BaseModel):
         extra = "allow"  # Allow additional fields not defined in the schema
         validate_assignment = True  # Validate on assignment
         use_enum_values = True  # Use enum values instead of enum names
+
+
+class TimeEvalRecordingCase(BaseModel):
+    memos_search_duration_ms: float | None = Field(
+        default=None, description="Time taken for memory search in milliseconds"
+    )
+
+    memos_response_duration_ms: float | None = Field(
+        default=None, description="Time taken for response generation in milliseconds"
+    )
+
+    memos_can_answer_duration_ms: float | None = Field(
+        default=None, description="Time taken for answerability analysis in milliseconds"
+    )
+
+    scheduler_search_duration_ms: float | None = Field(
+        default=None, description="Time taken for memory search in milliseconds"
+    )
+
+    scheduler_response_duration_ms: float | None = Field(
+        default=None, description="Time taken for response generation in milliseconds"
+    )
+
+    scheduler_can_answer_duration_ms: float | None = Field(
+        default=None, description="Time taken for answerability analysis in milliseconds"
+    )
