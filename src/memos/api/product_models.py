@@ -241,7 +241,7 @@ class GetMessagesData(BaseModel):
     """Data model for get messages response based on actual API."""
 
     message_detail_list: list[MessageDetail] = Field(
-        default_factory=list, alias="memory_detail_list", description="List of message details"
+        default_factory=list, alias="message_detail_list", description="List of message details"
     )
 
 

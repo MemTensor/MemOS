@@ -50,6 +50,7 @@ class MemOSClient:
                 )
                 response.raise_for_status()
                 response_data = response.json()
+
                 return MemOSGetMessagesResponse(**response_data)
             except Exception as e:
                 logger.error(f"Failed to get messages (retry {retry + 1}/3): {e}")
@@ -74,6 +75,7 @@ class MemOSClient:
                 )
                 response.raise_for_status()
                 response_data = response.json()
+
                 return MemOSAddResponse(**response_data)
             except Exception as e:
                 logger.error(f"Failed to add memory (retry {retry + 1}/3): {e}")
@@ -102,6 +104,7 @@ class MemOSClient:
                 )
                 response.raise_for_status()
                 response_data = response.json()
+
                 return MemOSSearchResponse(**response_data)
             except Exception as e:
                 logger.error(f"Failed to search memory (retry {retry + 1}/3): {e}")

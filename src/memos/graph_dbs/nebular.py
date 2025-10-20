@@ -187,6 +187,19 @@ class NebulaGraphDB(BaseGraphDB):
             client = cls._CLIENT_CACHE.get(key)
             if client is None:
                 # Connection setting
+
+                tmp_client = NebulaClient(
+                    hosts=cfg.uri,
+                    username=cfg.user,
+                    password=cfg.password,
+                    session_config=SessionConfig(graph=None),
+                    session_pool_config=SessionPoolConfig(size=1, wait_timeout=3000),
+                )
+                try:
+                    cls._ensure_space_exists(tmp_client, cfg)
+                finally:
+                    tmp_client.close()
+
                 conn_conf: ConnectionConfig | None = getattr(cfg, "conn_config", None)
                 if conn_conf is None:
                     conn_conf = ConnectionConfig.from_defults(
@@ -317,6 +330,7 @@ class NebulaGraphDB(BaseGraphDB):
             }
         """
 
+        assert config.use_multi_db is False, "Multi-DB MODE IS NOT SUPPORTED"
         self.config = config
         self.db_name = config.space
         self.user_name = config.user_name
@@ -349,7 +363,7 @@ class NebulaGraphDB(BaseGraphDB):
             if (str(self.embedding_dimension) != str(self.default_memory_dimension))
             else "embedding"
         )
-        self.system_db_name = "system" if config.use_multi_db else config.space
+        self.system_db_name = config.space
 
         # ---- NEW: pool acquisition strategy
         # Get or create a shared pool from the class-level cache
@@ -436,7 +450,7 @@ class NebulaGraphDB(BaseGraphDB):
             WHERE n.memory_type = '{memory_type}'
             {optional_condition}
             ORDER BY n.updated_at DESC
-            OFFSET {keep_latest}
+            OFFSET {int(keep_latest)}
             DETACH DELETE n
         """
         self.execute_query(query)
@@ -481,7 +495,7 @@ class NebulaGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self.config.user_name
         filter_clause = f'n.memory_type = "{scope}" AND n.user_name = "{user_name}"'
         query = f"""
-        MATCH (n@Memory)
+        MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
         WHERE {filter_clause}
         RETURN n.id AS id
         LIMIT 1
@@ -838,7 +852,7 @@ class NebulaGraphDB(BaseGraphDB):
         query = f"""
             LET tag_list = {tag_list_literal}
 
-            MATCH (n@Memory)
+            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             WHERE {where_clause}
             RETURN {return_fields},
                size( filter( n.tags, t -> t IN tag_list ) ) AS overlap_count
@@ -1393,6 +1407,17 @@ class NebulaGraphDB(BaseGraphDB):
         return candidates
 
     @timed
+    def drop_database(self) -> None:
+        """
+        Permanently delete the entire database this instance is using.
+        WARNING: This operation is destructive and cannot be undone.
+        """
+        raise ValueError(
+            f"Refusing to drop protected database: `{self.db_name}` in "
+            f"Shared Database Multi-Tenant mode"
+        )
+
+    @timed
     def detect_conflicts(self) -> list[tuple[str, str]]:
         """
         Detect conflicting nodes based on logical or semantic inconsistency.
@@ -1461,6 +1486,25 @@ class NebulaGraphDB(BaseGraphDB):
             ID of the resulting merged node.
         """
         raise NotImplementedError
+
+    @classmethod
+    def _ensure_space_exists(cls, tmp_client, cfg):
+        """Lightweight check to ensure target graph (space) exists."""
+        db_name = getattr(cfg, "space", None)
+        if not db_name:
+            logger.warning("[NebulaGraphDBSync] No `space` specified in cfg.")
+            return
+
+        try:
+            res = tmp_client.execute("SHOW GRAPHS;")
+            existing = {row.values()[0].as_string() for row in res}
+            if db_name not in existing:
+                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type;")
+                logger.info(f"✅ Graph `{db_name}` created before session binding.")
+            else:
+                logger.debug(f"Graph `{db_name}` already exists.")
+        except Exception:
+            logger.exception("[NebulaGraphDBSync] Failed to ensure space exists")
 
     @timed
     def _ensure_database_exists(self):

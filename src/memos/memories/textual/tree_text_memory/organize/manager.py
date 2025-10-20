@@ -44,6 +44,7 @@ class MemoryManager:
                 "LongTermMemory": 1500,
                 "UserMemory": 480,
             }
+        logger.info(f"MemorySize is {self.memory_size}")
         self._threshold = threshold
         self.is_reorganize = is_reorganize
         self.reorganizer = GraphStructureReorganizer(

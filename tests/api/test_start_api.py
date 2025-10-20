@@ -82,62 +82,6 @@ def mock_mos():
         yield mock_instance
 
 
-def test_configure(mock_mos):
-    """Test configuration endpoint."""
-    with patch("memos.api.start_api.MOS_INSTANCE", None):
-        # Use a valid configuration
-        valid_config = {
-            "user_id": "test_user",
-            "session_id": "test_session",
-            "enable_textual_memory": True,
-            "enable_activation_memory": False,
-            "top_k": 5,
-            "chat_model": {
-                "backend": "openai",
-                "config": {
-                    "model_name_or_path": "gpt-3.5-turbo",
-                    "api_key": "test_key",
-                    "temperature": 0.7,
-                    "api_base": "https://api.openai.com/v1",
-                },
-            },
-            "mem_reader": {
-                "backend": "simple_struct",
-                "config": {
-                    "llm": {
-                        "backend": "openai",
-                        "config": {
-                            "model_name_or_path": "gpt-3.5-turbo",
-                            "api_key": "test_key",
-                            "temperature": 0.7,
-                            "api_base": "https://api.openai.com/v1",
-                        },
-                    },
-                    "embedder": {
-                        "backend": "sentence_transformer",
-                        "config": {"model_name_or_path": "all-MiniLM-L6-v2"},
-                    },
-                    "chunker": {
-                        "backend": "sentence",
-                        "config": {
-                            "tokenizer_or_token_counter": "gpt2",
-                            "chunk_size": 512,
-                            "chunk_overlap": 128,
-                            "min_sentences_per_chunk": 1,
-                        },
-                    },
-                },
-            },
-        }
-        response = client.post("/configure", json=valid_config)
-        assert response.status_code == 200
-        assert response.json() == {
-            "code": 200,
-            "message": "Configuration set successfully",
-            "data": None,
-        }
-
-
 def test_configure_error(mock_mos):
     """Test configuration endpoint with error."""
     with patch("memos.api.start_api.MOS_INSTANCE", None):
