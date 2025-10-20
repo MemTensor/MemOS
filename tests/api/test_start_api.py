@@ -82,7 +82,6 @@ def mock_mos():
         yield mock_instance
 
 
-
 def test_configure_error(mock_mos):
     """Test configuration endpoint with error."""
     with patch("memos.api.start_api.MOS_INSTANCE", None):
