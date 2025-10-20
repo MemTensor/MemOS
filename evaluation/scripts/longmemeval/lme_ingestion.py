@@ -60,11 +60,11 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     elif frame == "memobase":
         from utils.client import memobase_client
         client = memobase_client()
-        all_users = client.get_all_users(limit=5000)
+        all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
             try:
                 if user["additional_fields"]["user_id"] == user_id:
-                    client.delete_user(user["id"])
+                    client.client.delete_user(user["id"])
             except:
                 pass
         user_id = client.client.add_user({"user_id": user_id})

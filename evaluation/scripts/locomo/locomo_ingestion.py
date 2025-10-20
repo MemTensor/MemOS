@@ -107,11 +107,11 @@ def process_user(conv_idx, frame, locomo_df, version):
     elif frame == "memobase":
         from utils.client import memobase_client
         client = memobase_client()
-        all_users = client.get_all_users(limit=5000)
+        all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
             try:
                 if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
-                    client.delete_user(user["id"])
+                    client.client.delete_user(user["id"])
             except:
                 pass
         speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
@@ -186,7 +186,7 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
-        default="supermemory",
+        default="memobase",
     )
     parser.add_argument(
         "--version",
