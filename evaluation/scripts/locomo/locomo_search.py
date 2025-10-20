@@ -71,8 +71,8 @@ def memos_api_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k,
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
-    speaker_a_context = "\n".join([i['memory'] for i in search_a_results["d"]])
-    speaker_b_context = "\n".join([i['memory'] for i in search_b_results["d"]])
+    speaker_a_context = "\n".join([i['memory'] for i in search_a_results["text_mem"][0]['memories']])
+    speaker_b_context = "\n".join([i['memory'] for i in search_b_results["text_mem"][0]['memories']])
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,
