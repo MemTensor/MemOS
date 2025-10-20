@@ -450,7 +450,7 @@ class NebulaGraphDB(BaseGraphDB):
             WHERE n.memory_type = '{memory_type}'
             {optional_condition}
             ORDER BY n.updated_at DESC
-            OFFSET {keep_latest}
+            OFFSET {int(keep_latest)}
             DETACH DELETE n
         """
         self.execute_query(query)
