@@ -8,12 +8,15 @@ from collections import Counter
 from tqdm.asyncio import tqdm
 import os
 import pandas as pd  
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_URL = os.getenv("OPENAI_BASE_URL")
 
-INPUT_FILE = "./results/prefeval/pref_memos_add.jsonl"
-OUTPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
+INPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
+OUTPUT_FILE = "./results/prefeval/eval_pref_memos.jsonl"
 OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
 
 
