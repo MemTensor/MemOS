@@ -126,11 +126,6 @@ class MOSCore:
                     f"Memory reader of type {type(self.mem_reader).__name__} "
                     "missing required 'llm' attribute"
                 )
-                self._mem_scheduler.initialize_modules(
-                    chat_llm=self.chat_llm,
-                    process_llm=self.chat_llm,
-                    db_engine=self.user_manager.engine,
-                )
             else:
                 # Configure scheduler general_modules
                 self._mem_scheduler.initialize_modules(

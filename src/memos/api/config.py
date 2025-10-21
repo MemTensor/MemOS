@@ -77,6 +77,24 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_memreader_config() -> dict[str, Any]:
+        """Get MemReader configuration."""
+        return {
+            "backend": "openai",
+            "config": {
+                "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
+                "temperature": 0.6,
+                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "5000")),
+                "top_p": 0.95,
+                "top_k": 20,
+                "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
+                "api_base": os.getenv("MEMRADER_API_BASE"),
+                "remove_think_prefix": True,
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+            },
+        }
+
+    @staticmethod
     def get_activation_vllm_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
@@ -351,10 +369,7 @@ class APIConfig:
             "mem_reader": {
                 "backend": "simple_struct",
                 "config": {
-                    "llm": {
-                        "backend": "openai",
-                        "config": openai_config,
-                    },
+                    "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
@@ -447,10 +462,7 @@ class APIConfig:
             "mem_reader": {
                 "backend": "simple_struct",
                 "config": {
-                    "llm": {
-                        "backend": "openai",
-                        "config": openai_config,
-                    },
+                    "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",

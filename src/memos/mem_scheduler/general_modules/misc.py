@@ -6,6 +6,7 @@ from datetime import datetime
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from dotenv import load_dotenv
 from pydantic import field_serializer
 
 
@@ -32,7 +33,7 @@ class EnvConfigMixin(Generic[T]):
         Examples:
             RabbitMQConfig -> "RABBITMQ_"
             OpenAIConfig -> "OPENAI_"
-            GraphDBAuthConfig -> "GRAPH_DB_AUTH_"
+            GraphDBAuthConfig -> "GRAPHDBAUTH_"
         """
         class_name = cls.__name__
         # Remove 'Config' suffix if present
@@ -55,6 +56,8 @@ class EnvConfigMixin(Generic[T]):
         Raises:
             ValueError: If required environment variables are missing.
         """
+        load_dotenv()
+
         prefix = cls.get_env_prefix()
         field_values = {}
 
@@ -84,6 +87,35 @@ class EnvConfigMixin(Generic[T]):
         if target_type is float:
             return float(value)
         return value
+
+    @classmethod
+    def print_env_mapping(cls) -> None:
+        """Print the mapping between class fields and their corresponding environment variable names.
+
+        Displays each field's name, type, whether it's required, default value, and corresponding environment variable name.
+        """
+        prefix = cls.get_env_prefix()
+        print(f"\n=== {cls.__name__} Environment Variable Mapping ===")
+        print(f"Environment Variable Prefix: {prefix}")
+        print("-" * 60)
+
+        if not hasattr(cls, "model_fields"):
+            print("This class does not define model_fields, may not be a Pydantic model")
+            return
+
+        for field_name, field_info in cls.model_fields.items():
+            env_var = f"{prefix}{field_name.upper()}"
+            field_type = field_info.annotation
+            is_required = field_info.is_required()
+            default_value = field_info.default if field_info.default is not None else "None"
+
+            print(f"Field Name: {field_name}")
+            print(f"  Environment Variable: {env_var}")
+            print(f"  Type: {field_type}")
+            print(f"  Required: {'Yes' if is_required else 'No'}")
+            print(f"  Default Value: {default_value}")
+            print(f"  Current Environment Value: {os.environ.get(env_var, 'Not Set')}")
+            print("-" * 40)
 
 
 class DictConversionMixin:

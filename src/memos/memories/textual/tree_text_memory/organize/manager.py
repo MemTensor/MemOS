@@ -52,30 +52,46 @@ class MemoryManager:
         )
         self._merged_threshold = merged_threshold
 
-    def add(self, memories: list[TextualMemoryItem]) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem], user_name: str | None = None) -> list[str]:
         """
         Add new memories in parallel to different memory types.
         """
         added_ids: list[str] = []
 
         with ContextThreadPoolExecutor(max_workers=20) as executor:
-            futures = {executor.submit(self._process_memory, m): m for m in memories}
+            futures = {executor.submit(self._process_memory, m, user_name): m for m in memories}
             for future in as_completed(futures, timeout=60):
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
+
+        for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+            try:
+                self.graph_store.remove_oldest_memory(
+                    memory_type="WorkingMemory",
+                    keep_latest=self.memory_size[mem_type],
+                    user_name=user_name,
+                )
+            except Exception:
+                logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
+
+        self._refresh_memory_size(user_name=user_name)
         return added_ids
 
-    def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
+    def replace_working_memory(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
+    ) -> None:
         """
         Replace WorkingMemory
         """
         working_memory_top_k = memories[: self.memory_size["WorkingMemory"]]
         with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
-                executor.submit(self._add_memory_to_db, memory, "WorkingMemory")
+                executor.submit(
+                    self._add_memory_to_db, memory, "WorkingMemory", user_name=user_name
+                )
                 for memory in working_memory_top_k
             ]
             for future in as_completed(futures, timeout=60):
@@ -85,26 +101,30 @@ class MemoryManager:
                     logger.exception("Memory processing error: ", exc_info=e)
 
         self.graph_store.remove_oldest_memory(
-            memory_type="WorkingMemory", keep_latest=self.memory_size["WorkingMemory"]
+            memory_type="WorkingMemory",
+            keep_latest=self.memory_size["WorkingMemory"],
+            user_name=user_name,
         )
-        self._refresh_memory_size()
+        self._refresh_memory_size(user_name=user_name)
 
-    def get_current_memory_size(self) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: str | None = None) -> dict[str, int]:
         """
         Return the cached memory type counts.
         """
-        self._refresh_memory_size()
+        self._refresh_memory_size(user_name=user_name)
         return self.current_memory_size
 
-    def _refresh_memory_size(self) -> None:
+    def _refresh_memory_size(self, user_name: str | None = None) -> None:
         """
         Query the latest counts from the graph store and update internal state.
         """
-        results = self.graph_store.get_grouped_counts(group_fields=["memory_type"])
+        results = self.graph_store.get_grouped_counts(
+            group_fields=["memory_type"], user_name=user_name
+        )
         self.current_memory_size = {record["memory_type"]: record["count"] for record in results}
         logger.info(f"[MemoryManager] Refreshed memory sizes: {self.current_memory_size}")
 
-    def _process_memory(self, memory: TextualMemoryItem):
+    def _process_memory(self, memory: TextualMemoryItem, user_name: str | None = None):
         """
         Process and add memory to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         This method runs asynchronously to process each memory item.
@@ -113,7 +133,7 @@ class MemoryManager:
         futures = []
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory")
+            f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory", user_name)
             futures.append(f_working)
 
             if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
@@ -121,6 +141,7 @@ class MemoryManager:
                     self._add_to_graph_memory,
                     memory=memory,
                     memory_type=memory.metadata.memory_type,
+                    user_name=user_name,
                 )
                 futures.append(f_graph)
 
@@ -134,7 +155,9 @@ class MemoryManager:
 
         return ids
 
-    def _add_memory_to_db(self, memory: TextualMemoryItem, memory_type: str) -> str:
+    def _add_memory_to_db(
+        self, memory: TextualMemoryItem, memory_type: str, user_name: str | None = None
+    ) -> str:
         """
         Add a single memory item to the graph store, with FIFO logic for WorkingMemory.
         """
@@ -145,9 +168,11 @@ class MemoryManager:
         working_memory = TextualMemoryItem(memory=memory.memory, metadata=metadata)
 
         # Insert node into graph
-        self.graph_store.add_node(working_memory.id, working_memory.memory, metadata)
+        self.graph_store.add_node(working_memory.id, working_memory.memory, metadata, user_name)
 
-    def _add_to_graph_memory(self, memory: TextualMemoryItem, memory_type: str):
+    def _add_to_graph_memory(
+        self, memory: TextualMemoryItem, memory_type: str, user_name: str | None = None
+    ):
         """
         Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
 
@@ -161,7 +186,10 @@ class MemoryManager:
         node_id = str(uuid.uuid4())
         # Step 2: Add new node to graph
         self.graph_store.add_node(
-            node_id, memory.memory, memory.metadata.model_dump(exclude_none=True)
+            node_id,
+            memory.memory,
+            memory.metadata.model_dump(exclude_none=True),
+            user_name=user_name,
         )
         self.reorganizer.add_message(
             QueueMessage(

@@ -179,14 +179,14 @@ class MOSProduct(MOSCore):
         """
         try:
             # Get all user configurations from persistent storage
-            user_configs = self.user_manager.list_user_configs()
+            user_configs = self.user_manager.list_user_configs(self.max_user_instances)
 
             # Get the raw database records for sorting by updated_at
             session = self.user_manager._get_session()
             try:
                 from memos.mem_user.persistent_user_manager import UserConfig
 
-                db_configs = session.query(UserConfig).all()
+                db_configs = session.query(UserConfig).limit(self.max_user_instances).all()
                 # Create a mapping of user_id to updated_at timestamp
                 updated_at_map = {config.user_id: config.updated_at for config in db_configs}
 
@@ -216,6 +216,26 @@ class MOSProduct(MOSCore):
 
         except Exception as e:
             logger.error(f"Error during user instance restoration: {e}")
+
+    def _initialize_cube_from_default_config(
+        self, cube_id: str, user_id: str, default_config: GeneralMemCubeConfig
+    ) -> GeneralMemCube | None:
+        """
+        Initialize a cube from default configuration when cube path doesn't exist.
+
+        Args:
+            cube_id (str): The cube ID to initialize.
+            user_id (str): The user ID for the cube.
+            default_config (GeneralMemCubeConfig): The default configuration to use.
+        """
+        cube_config = default_config.model_copy(deep=True)
+        # Safely modify the graph_db user_name if it exists
+        if cube_config.text_mem.config.graph_db.config:
+            cube_config.text_mem.config.graph_db.config.user_name = (
+                f"memos{user_id.replace('-', '')}"
+            )
+        mem_cube = GeneralMemCube(config=cube_config)
+        return mem_cube
 
     def _preload_user_cubes(
         self, user_id: str, default_cube_config: GeneralMemCubeConfig | None = None
@@ -286,8 +306,24 @@ class MOSProduct(MOSCore):
                         )
                     else:
                         logger.warning(
-                            f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}"
+                            f"Cube path {cube.cube_path} does not exist for cube {cube.cube_id}, now init by default config"
                         )
+                        cube_obj = self._initialize_cube_from_default_config(
+                            cube_id=cube.cube_id,
+                            user_id=user_id,
+                            default_config=default_cube_config,
+                        )
+                        if cube_obj:
+                            self.register_mem_cube(
+                                cube_obj,
+                                cube.cube_id,
+                                user_id,
+                                memory_types=[],
+                            )
+                        else:
+                            raise ValueError(
+                                f"Failed to initialize default cube {cube.cube_id} for user {user_id}"
+                            )
                 except Exception as e:
                     logger.error(f"Failed to load cube {cube.cube_id} for user {user_id}: {e}")
         logger.info(f"load user {user_id} cubes successfully")
@@ -427,6 +463,47 @@ class MOSProduct(MOSCore):
             + mem_block
         )
 
+    def _build_base_system_prompt(
+        self,
+        base_prompt: str | None = None,
+        tone: str = "friendly",
+        verbosity: str = "mid",
+        mode: str = "enhance",
+    ) -> str:
+        """
+        Build base system prompt without memory references.
+        """
+        now = datetime.now()
+        formatted_date = now.strftime("%Y-%m-%d (%A)")
+        sys_body = get_memos_prompt(date=formatted_date, tone=tone, verbosity=verbosity, mode=mode)
+        prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
+        return prefix + sys_body
+
+    def _build_memory_context(
+        self,
+        memories_all: list[TextualMemoryItem],
+        mode: str = "enhance",
+    ) -> str:
+        """
+        Build memory context to be included in user message.
+        """
+        if not memories_all:
+            return ""
+
+        mem_block_o, mem_block_p = _format_mem_block(memories_all)
+
+        if mode == "enhance":
+            return (
+                "# Memories\n## PersonalMemory (ordered)\n"
+                + mem_block_p
+                + "\n## OuterMemory (ordered)\n"
+                + mem_block_o
+                + "\n\n"
+            )
+        else:
+            mem_block = mem_block_o + "\n" + mem_block_p
+            return "# Memories\n## PersonalMemory & OuterMemory (ordered)\n" + mem_block + "\n\n"
+
     def _build_enhance_system_prompt(
         self,
         user_id: str,
@@ -436,6 +513,7 @@ class MOSProduct(MOSCore):
     ) -> str:
         """
         Build enhance prompt for the user with memory references.
+        [DEPRECATED] Use _build_base_system_prompt and _build_memory_context instead.
         """
         now = datetime.now()
         formatted_date = now.strftime("%Y-%m-%d (%A)")
@@ -966,14 +1044,22 @@ class MOSProduct(MOSCore):
                 m.metadata.embedding = []
                 new_memories_list.append(m)
             memories_list = new_memories_list
-        system_prompt = super()._build_system_prompt(memories_list, base_prompt)
+        # Build base system prompt without memory
+        system_prompt = self._build_base_system_prompt(base_prompt, mode="base")
+
+        # Build memory context to be included in user message
+        memory_context = self._build_memory_context(memories_list, mode="base")
+
+        # Combine memory context with user query
+        user_content = memory_context + query if memory_context else query
+
         history_info = []
         if history:
             history_info = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *history_info,
-            {"role": "user", "content": query},
+            {"role": "user", "content": user_content},
         ]
         response = self.chat_llm.generate(current_messages)
         time_end = time.time()
@@ -1043,8 +1129,16 @@ class MOSProduct(MOSCore):
 
         reference = prepare_reference_data(memories_list)
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
-        # Build custom system prompt with relevant memories)
-        system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
+
+        # Build base system prompt without memory
+        system_prompt = self._build_base_system_prompt(mode="enhance")
+
+        # Build memory context to be included in user message
+        memory_context = self._build_memory_context(memories_list, mode="enhance")
+
+        # Combine memory context with user query
+        user_content = memory_context + query if memory_context else query
+
         # Get chat history
         if user_id not in self.chat_history_manager:
             self._register_chat_history(user_id, session_id)
@@ -1055,7 +1149,7 @@ class MOSProduct(MOSCore):
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
-            {"role": "user", "content": query},
+            {"role": "user", "content": user_content},
         ]
         logger.info(
             f"user_id: {user_id}, cube_id: {cube_id}, current_system_prompt: {system_prompt}"

@@ -27,7 +27,7 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
         """Add memories.
 
         Args:

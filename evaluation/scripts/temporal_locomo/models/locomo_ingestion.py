@@ -6,16 +6,16 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from modules.constants import (
+from tqdm import tqdm
+
+from evaluation.scripts.temporal_locomo.modules.constants import (
     MEM0_GRAPH_MODEL,
     MEM0_MODEL,
     MEMOS_MODEL,
     MEMOS_SCHEDULER_MODEL,
     ZEP_MODEL,
 )
-from modules.locomo_eval_module import LocomoEvalModelModules
-from tqdm import tqdm
-
+from evaluation.scripts.temporal_locomo.modules.locomo_eval_module import LocomoEvalModelModules
 from memos.log import get_logger
 
 
