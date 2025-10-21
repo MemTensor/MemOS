@@ -131,7 +131,7 @@ class supermemory_client:
         max_retries = 10
         for attempt in range(max_retries):
             try:
-                results = self.client.search.memories(q=query, container_tag=user_id, threshold=0.2,
+                results = self.client.search.memories(q=query, container_tag=user_id, threshold=0,
                                                       rerank=True, rewrite_query=True, limit=top_k)
                 context = '\n\n'.join([r.memory for r in results.results])
                 return context
@@ -182,6 +182,7 @@ if __name__ == "__main__":
                 {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"}]
     user_id = 'test_user'
     iso_date = "2023-05-01T00:00:00.000Z"
+    timestamp = 1682899200
     query = "杭州西湖有什么"
     top_k = 5
 
@@ -190,6 +191,15 @@ if __name__ == "__main__":
     # memu_client.add(messages, user_id, iso_date)
     # res = memu_client.search(query, user_id, top_k)
 
-    # supermemory
-    supermemory_client = supermemory_client()
-    supermemory_client.delete('locomo_exp_user_5_speaker_b_default')
+    # # supermemory
+    # supermemory_client = supermemory_client()
+    # supermemory_client.delete('locomo_exp_user_5_speaker_b_default')
+
+    # # mem0
+    # mem0_client = mem0_client(enable_graph=False)
+    # mem0_client.add(messages, user_id, timestamp)
+    # s = mem0_client.search(query, user_id, top_k)
+
+    # zep
+    zep_client = zep_client()
+

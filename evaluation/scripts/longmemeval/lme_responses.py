@@ -12,11 +12,11 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.prompts import ANSWER_PROMPT
+from utils.prompts import LME_ANSWER_PROMPT
 
 
 def lme_response(llm_client, context, question, question_date):
-    prompt = ANSWER_PROMPT.format(
+    prompt = LME_ANSWER_PROMPT.format(
         question=question,
         question_date=question_date,
         context=context,
