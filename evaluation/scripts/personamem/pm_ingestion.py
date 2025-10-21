@@ -35,10 +35,14 @@ def ingest_session(session, user_id, session_id, frame, client):
                        version="v2", )
         print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
     elif frame == "memos-local" or frame == "memos-api":
-        for i in range(0, len(session), 10):
-            messages = session[i: i + 10]
-            client.add(messages=messages, user_id=user_id, conv_id=session_id)
-        print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
+        if os.getenv("PRE_SPLIT_CHUNK")=="true":
+            for i in range(0, len(session), 10):
+                messages = session[i: i + 10]
+                client.add(messages=messages, user_id=user_id, conv_id=session_id)
+                print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
+        else:
+            client.add(messages=session, user_id=user_id, conv_id=session_id)
+            print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
 
 
 def build_jsonl_index(jsonl_path):
@@ -143,8 +147,7 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
     elif frame == "memos-api":
         client = memos_api_client()
 
-    for idx, session in enumerate(sessions):
-        ingest_session(session=context, user_id=user_id, session_id=idx, frame=frame, client=client, )
+    ingest_session(session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client)
     print(f"✅ Ingestion of conversation {conv_idx} completed")
     print("=" * 80)
 

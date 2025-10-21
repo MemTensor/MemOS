@@ -50,14 +50,21 @@ def add_memory_for_line(
             conversation = conversation + irre_300
 
         turns_add = 5
+        start_time_add = time.monotonic()
         if conversation:
-            for chunk_start in range(0, len(conversation), turns_add * 2):
-                chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                mem_client.add(
-                    messages=chunk, user_id=user_id, mem_cube_id=user_id, conversation_id=None
-                )
-
+            if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
+                for chunk_start in range(0, len(conversation), turns_add * 2):
+                    chunk = conversation[chunk_start : chunk_start + turns_add * 2]
+                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
+            else:
+                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+        end_time_add = time.monotonic()
+        add_duration = end_time_add - start_time_add
+        
         original_data["user_id"] = user_id
+        original_data["metrics"] = {
+            "add_memories_duration_seconds": add_duration
+        }
         return original_data
 
     except Exception as e:
@@ -77,6 +84,7 @@ def process_line_with_id(
 
         user_id = original_data.get("user_id")
         question = original_data.get("question")
+        metrics_dict = original_data.get("metrics", {})
 
         if not user_id:
             original_data["response"] = (
@@ -90,10 +98,7 @@ def process_line_with_id(
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        # print(relevant_memories)
-        memories_str = "\n".join(
-            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
-        )
+        memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]['memories'])
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -106,12 +111,14 @@ def process_line_with_id(
         response = openai_client.chat.completions.create(model=MODEL_NAME, messages=messages)
         assistant_response = response.choices[0].message.content
         original_data["response"] = assistant_response
-
-        original_data["metrics"] = {
+        
+        metrics_dict.update({
             "search_memories_duration_seconds": search_memories_duration,
             "memory_tokens_used": memory_tokens_used,
-            "retrieved_memories_text": memories_str,
-        }
+            "retrieved_memories_text": memories_str
+        })
+        original_data["metrics"] = metrics_dict
+
         return original_data
 
     except Exception as e:
@@ -168,8 +175,8 @@ def main():
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
         print(f"Adding {args.add_turn} irrelevant turns.")
         print(f"Using {args.max_workers} workers.")
-        with open(args.output, "w", encoding="utf-8") as outfile:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        with open(args.output, "w", encoding="utf-8") as outfile, \
+             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
                 futures = [
                     executor.submit(
                         add_memory_for_line,
@@ -198,20 +205,10 @@ def main():
         print(f"Retrieving top {args.top_k} memories for each query.")
         print(f"Using {args.max_workers} workers.")
         openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
-        with open(args.output, "w", encoding="utf-8") as outfile:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-                futures = [
-                    executor.submit(
-                        process_line_with_id,
-                        (i, line),
-                        mem_client,
-                        openai_client,
-                        args.top_k,
-                        args.lib,
-                        args.version,
-                    )
-                    for i, line in enumerate(lines)
-                ]
+        with open(args.output, "w", encoding="utf-8") as outfile, \
+             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+
+                futures = [executor.submit(process_line_with_id, (i, line), mem_client, openai_client, args.top_k, args.lib, args.version) for i, line in enumerate(lines)]
 
                 pbar = tqdm(
                     concurrent.futures.as_completed(futures),
