@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import pandas as pd
 from tqdm import tqdm
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -67,31 +68,31 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     print("=" * 80)
 
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import mem0_client
+        from utils.client import mem0Client
 
-        client = mem0_client(enable_graph="graph" in frame)
+        client = mem0Client(enable_graph="graph" in frame)
         client.client.delete_all(user_id=user_id)
     elif frame == "memos-api":
-        from utils.client import memos_api_client
+        from utils.client import memosApiClient
 
-        client = memos_api_client()
+        client = memosApiClient()
     elif frame == "memobase":
-        from utils.client import memobase_client
+        from utils.client import memobaseClient
 
-        client = memobase_client()
+        client = memobaseClient()
         all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
             if user["additional_fields"]["user_id"] == user_id:
                 client.client.delete_user(user["id"])
         user_id = client.client.add_user({"user_id": user_id})
     elif frame == "memu":
-        from utils.client import memu_client
+        from utils.client import memuClient
 
-        client = memu_client()
+        client = memuClient()
     elif frame == "supermemory":
-        from utils.client import supermemory_client
+        from utils.client import supermemoryClient
 
-        client = supermemory_client()
+        client = supermemoryClient()
 
     for idx, session in enumerate(sessions):
         if f"{conv_idx}_{idx}" not in success_records:
