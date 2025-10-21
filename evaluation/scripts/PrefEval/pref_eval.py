@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
-API_URL = os.getenv("OPENAI_BASE_URL")
+API_URL = os.getenv("OPENAI_CHAT_ENDPOINT")
 
 INPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
 OUTPUT_FILE = "./results/prefeval/eval_pref_memos.jsonl"
@@ -259,6 +259,7 @@ def generate_excel_summary(
     summary_results: Dict[str, Dict[str, float]],
     avg_search_time: float,
     avg_context_tokens: float,
+    avg_add_time: float,
     model_name: str = "gpt-4o-mini", 
 ):
     """
@@ -283,13 +284,13 @@ def generate_excel_summary(
         "Unhelpful Response\n没帮助的回答": [unhelpful_pct / 100],
         "Personalized Response\n个性化回答": [personalized_pct / 100],
         "context token": [avg_context_tokens],
-        "Time添加": ["N/A"],  
-        "Time搜索": [f"{avg_search_time:.2f}s /chat"] 
+        "Time添加": [f"{avg_add_time:.2f}s"],  
+        "Time搜索": [f"{avg_search_time:.2f}s"] 
     }
 
     df = pd.DataFrame(data)
 
-    with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine="openpyxl") as writer:
+    with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Summary")
         
         workbook = writer.book
@@ -323,6 +324,7 @@ async def main(concurrency_limit: int):
     total_search_time = 0
     total_context_tokens = 0
     valid_metric_samples = 0
+    total_add_time = 0
 
     print(f"Starting evaluation with a concurrency limit of {concurrency_limit}...")
     print(f"Input file: {INPUT_FILE}")
@@ -361,10 +363,17 @@ async def main(concurrency_limit: int):
                     metrics = result.get("metrics", {})
                     search_time = metrics.get("search_memories_duration_seconds")
                     context_tokens = metrics.get("memory_tokens_used")
+                    add_time = metrics.get("add_memories_duration_seconds")
+                    print("add_time: ", add_time)
 
-                    if search_time is not None and context_tokens is not None:
+                    all_metrics_valid = (search_time is not None and 
+                                        add_time is not None and 
+                                        context_tokens is not None)
+
+                    if all_metrics_valid:
                         total_search_time += float(search_time)
                         total_context_tokens += int(context_tokens)
+                        total_add_time += float(add_time)
                         valid_metric_samples += 1
 
                     pbar.set_postfix({"Latest Type": error_type})
@@ -377,13 +386,15 @@ async def main(concurrency_limit: int):
     summary_results = log_summary(error_counter, total_samples)
     
     avg_search_time = (total_search_time / valid_metric_samples) if valid_metric_samples > 0 else 0
+    avg_add_time = (total_add_time / valid_metric_samples) if valid_metric_samples > 0 else 0
     avg_context_tokens = (total_context_tokens / valid_metric_samples) if valid_metric_samples > 0 else 0
 
     try:
         generate_excel_summary(
             summary_results,
             avg_search_time,
-            avg_context_tokens
+            avg_context_tokens,
+            avg_add_time,
         )
     except Exception as e:
         print(f"\nFailed to generate Excel file: {e}")

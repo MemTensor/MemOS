@@ -12,7 +12,7 @@ WORKERS=10
 TOP_K=10
 ADD_TURN=0  # Options: 0, 10, or 300
 LIB="memos-api" 
-VERSION="0929-1"  
+VERSION="1021-5"  
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
