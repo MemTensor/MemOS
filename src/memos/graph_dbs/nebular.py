@@ -446,7 +446,7 @@ class NebulaGraphDB(BaseGraphDB):
             count = self.count_nodes(memory_type, user_name)
             if count > keep_latest:
                 delete_query = f"""
-                    MATCH (n@Memory /*+ INDEX(idx_memory_user_name_memory_type) */)
+                    MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
                     WHERE n.memory_type = '{memory_type}'
                     {optional_condition}
                     ORDER BY n.updated_at DESC
@@ -1627,7 +1627,6 @@ class NebulaGraphDB(BaseGraphDB):
             "created_at",
             "updated_at",
             "user_name",
-            "user_name_memory_type",
         ]
 
         for field in fields:

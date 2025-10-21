@@ -52,7 +52,9 @@ class MemoryManager:
         )
         self._merged_threshold = merged_threshold
 
-    def add(self, memories: list[TextualMemoryItem], user_name: str | None = None) -> list[str]:
+    def add(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None, mode: str = "sync"
+    ) -> list[str]:
         """
         Add new memories in parallel to different memory types.
         """
@@ -67,17 +69,18 @@ class MemoryManager:
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
 
-        for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
-            try:
-                self.graph_store.remove_oldest_memory(
-                    memory_type="WorkingMemory",
-                    keep_latest=self.memory_size[mem_type],
-                    user_name=user_name,
-                )
-            except Exception:
-                logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
+        if mode == "sync":
+            for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+                try:
+                    self.graph_store.remove_oldest_memory(
+                        memory_type="WorkingMemory",
+                        keep_latest=self.memory_size[mem_type],
+                        user_name=user_name,
+                    )
+                except Exception:
+                    logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
 
-        self._refresh_memory_size(user_name=user_name)
+            self._refresh_memory_size(user_name=user_name)
         return added_ids
 
     def replace_working_memory(

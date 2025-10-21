@@ -575,6 +575,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         try:
             return json.loads(t)
         except json.JSONDecodeError as e:
+            if "Invalid \\escape" in str(e):
+                s = s.replace("\\", "\\\\")
+                return json.loads(s)
             logger.error(
                 f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
                 json: {s}"

@@ -184,7 +184,7 @@ class GeneralScheduler(BaseScheduler):
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
-        grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
         try:
@@ -364,6 +364,7 @@ class GeneralScheduler(BaseScheduler):
             logger.info("Delete raw mem_ids")
             text_mem.memory_manager.remove_and_refresh_memory()
             logger.info("Remove and Refresh Memories")
+            logger.debug(f"Finished add {user_id} memory: {mem_ids}")
 
         except Exception:
             logger.error(
@@ -384,25 +385,6 @@ class GeneralScheduler(BaseScheduler):
             user_id: User ID
             mem_cube_id: Memory cube ID
         """
-        try:
-            # Check if reorganization is enabled
-            if hasattr(text_mem, "is_reorganize") and text_mem.is_reorganize:
-                logger.info(
-                    f"Triggering memory reorganization for user_id={user_id}, mem_cube_id={mem_cube_id}"
-                )
-
-                # Get current working memory size
-                current_sizes = text_mem.get_current_memory_size()
-                logger.info(f"Current memory sizes: {current_sizes}")
-
-                # The reorganization will be handled by the memory manager
-                # This is just a trigger point for logging and monitoring
-                logger.info("Memory reorganization triggered successfully")
-            else:
-                logger.info("Memory reorganization is disabled, skipping reorganization trigger")
-
-        except Exception as e:
-            logger.error(f"Error in _trigger_memory_reorganization: {e}", exc_info=True)
 
     def process_session_turn(
         self,

@@ -89,7 +89,7 @@ class TreeTextMemory(BaseTextMemory):
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
         """
-        return self.memory_manager.add(memories)
+        return self.memory_manager.add(memories, mode=self.mode)
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         self.memory_manager.replace_working_memory(memories)
