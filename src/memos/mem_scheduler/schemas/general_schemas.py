@@ -9,6 +9,7 @@ QUERY_LABEL = "query"
 ANSWER_LABEL = "answer"
 ADD_LABEL = "add"
 MEM_READ_LABEL = "mem_read"
+MEM_ORGANIZE_LABEL = "mem_organize"
 
 TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
 TreeTextMemory_FINE_SEARCH_METHOD = "tree_text_memory_fine_search"
