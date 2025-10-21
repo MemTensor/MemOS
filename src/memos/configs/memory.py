@@ -180,6 +180,10 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
     )
 
 
+class SimpleTreeTextMemoryConfig(TreeTextMemoryConfig):
+    """Simple tree text memory configuration class."""
+
+
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 
 
@@ -192,6 +196,7 @@ class MemoryConfigFactory(BaseConfig):
     backend_to_class: ClassVar[dict[str, Any]] = {
         "naive_text": NaiveTextMemoryConfig,
         "general_text": GeneralTextMemoryConfig,
+        "simple_tree_text": SimpleTreeTextMemoryConfig,
         "tree_text": TreeTextMemoryConfig,
         "kv_cache": KVCacheMemoryConfig,
         "vllm_kv_cache": KVCacheMemoryConfig,  # Use same config as kv_cache

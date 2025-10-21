@@ -73,7 +73,7 @@ def test_searcher_fast_path(mock_searcher):
     for item in result:
         assert len(item.metadata.usage) > 0
         mock_searcher.graph_store.update_node.assert_any_call(
-            item.id, {"usage": item.metadata.usage}
+            item.id, {"usage": item.metadata.usage}, user_name=None
         )
 
 

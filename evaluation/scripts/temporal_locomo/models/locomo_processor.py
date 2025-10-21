@@ -7,20 +7,19 @@ from pathlib import Path
 from time import time
 
 from dotenv import load_dotenv
-from modules.constants import (
-    MEMOS_MODEL,
+
+from evaluation.scripts.temporal_locomo.modules.constants import (
     MEMOS_SCHEDULER_MODEL,
 )
-from modules.locomo_eval_module import LocomoEvalModelModules
-from modules.prompts import (
+from evaluation.scripts.temporal_locomo.modules.locomo_eval_module import LocomoEvalModelModules
+from evaluation.scripts.temporal_locomo.modules.prompts import (
     SEARCH_PROMPT_MEM0,
     SEARCH_PROMPT_MEM0_GRAPH,
     SEARCH_PROMPT_MEMOS,
     SEARCH_PROMPT_ZEP,
 )
-from modules.schemas import ContextUpdateMethod, RecordingCase
-from modules.utils import save_evaluation_cases
-
+from evaluation.scripts.temporal_locomo.modules.schemas import ContextUpdateMethod, RecordingCase
+from evaluation.scripts.temporal_locomo.modules.utils import save_evaluation_cases
 from memos.log import get_logger
 
 
@@ -54,23 +53,107 @@ class LocomoProcessor(LocomoEvalModelModules):
         self.processed_data_dir = self.result_dir / "processed_data"
 
     def update_context(self, conv_id, method, **kwargs):
-        if method == ContextUpdateMethod.DIRECT:
+        if method == ContextUpdateMethod.CHAT_HISTORY:
+            if "query" not in kwargs or "answer" not in kwargs:
+                raise ValueError("query and answer are required for TEMPLATE update method")
+            new_context = f"User: {kwargs['query']}\nAssistant: {kwargs['answer']}\n\n"
+            if self.pre_context_cache[conv_id] is None:
+                self.pre_context_cache[conv_id] = ""
+            self.pre_context_cache[conv_id] += new_context
+        else:
             if "cur_context" not in kwargs:
                 raise ValueError("cur_context is required for DIRECT update method")
             cur_context = kwargs["cur_context"]
             self.pre_context_cache[conv_id] = cur_context
-        elif method == ContextUpdateMethod.TEMPLATE:
-            if "query" not in kwargs or "answer" not in kwargs:
-                raise ValueError("query and answer are required for TEMPLATE update method")
-            self._update_context_template(conv_id, kwargs["query"], kwargs["answer"])
-        else:
-            raise ValueError(f"Unsupported update method: {method}")
 
-    def _update_context_template(self, conv_id, query, answer):
-        new_context = f"User: {query}\nAssistant: {answer}\n\n"
-        if self.pre_context_cache[conv_id] is None:
-            self.pre_context_cache[conv_id] = ""
-        self.pre_context_cache[conv_id] += new_context
+    def eval_context(self, context, query, gold_answer, oai_client):
+        can_answer_start = time()
+        can_answer = self.analyze_context_answerability(context, query, gold_answer, oai_client)
+        can_answer_duration_ms = (time() - can_answer_start) * 1000
+        # Update global stats
+        with self.stats_lock:
+            self.stats[self.frame][self.version]["memory_stats"]["total_queries"] += 1
+            if can_answer:
+                self.stats[self.frame][self.version]["memory_stats"]["can_answer_count"] += 1
+            else:
+                self.stats[self.frame][self.version]["memory_stats"]["cannot_answer_count"] += 1
+            total_queries = self.stats[self.frame][self.version]["memory_stats"]["total_queries"]
+            can_answer_count = self.stats[self.frame][self.version]["memory_stats"][
+                "can_answer_count"
+            ]
+            hit_rate = (can_answer_count / total_queries * 100) if total_queries > 0 else 0
+            self.stats[self.frame][self.version]["memory_stats"]["answer_hit_rate"] = hit_rate
+            self.stats[self.frame][self.version]["memory_stats"]["can_answer_duration_ms"] = (
+                can_answer_duration_ms
+            )
+            self.save_stats()
+        return can_answer, can_answer_duration_ms
+
+    def _update_stats_and_context(
+        self,
+        *,
+        conv_id,
+        frame,
+        version,
+        conv_stats,
+        conv_stats_path,
+        query,
+        answer,
+        gold_answer,
+        cur_context,
+        can_answer,
+    ):
+        """
+        Update conversation statistics and context.
+
+        Args:
+            conv_id: Conversation ID
+            frame: Model frame
+            version: Model version
+            conv_stats: Conversation statistics dictionary
+            conv_stats_path: Path to save conversation statistics
+            query: User query
+            answer: Generated answer
+            gold_answer: Golden answer
+            cur_context: Current context
+            can_answer: Whether the context can answer the query
+        """
+        # Update conversation stats
+        conv_stats["total_queries"] += 1
+        conv_stats["response_count"] += 1
+        if frame == MEMOS_SCHEDULER_MODEL:
+            if can_answer:
+                conv_stats["can_answer_count"] += 1
+            else:
+                conv_stats["cannot_answer_count"] += 1
+        if conv_stats["total_queries"] > 0:
+            conv_stats["answer_hit_rate"] = (
+                conv_stats["can_answer_count"] / conv_stats["total_queries"]
+            ) * 100
+
+        # Persist conversation stats snapshot
+        self._save_conv_stats(conv_id, frame, version, conv_stats, conv_stats_path)
+
+        logger.info(f"Processed question: {query[:100]}")
+        logger.info(f"Answer: {answer[:100]}")
+
+        # Update pre-context cache with current context
+        with self.stats_lock:
+            if self.context_update_method == ContextUpdateMethod.CHAT_HISTORY:
+                self.update_context(
+                    conv_id=conv_id,
+                    method=self.context_update_method,
+                    query=query,
+                    answer=answer,
+                )
+            else:
+                self.update_context(
+                    conv_id=conv_id,
+                    method=self.context_update_method,
+                    cur_context=cur_context,
+                )
+
+        self.print_eval_info()
 
     def _process_single_qa(
         self,
@@ -101,128 +184,91 @@ class LocomoProcessor(LocomoEvalModelModules):
             logger.warning(f"No context found for query: {query[:100]}")
             cur_context = ""
 
-        # Context answerability analysis (for memos_scheduler only)
-        if self.pre_context_cache[conv_id] is None:
-            # Update pre-context cache with current context
-            if self.frame in [MEMOS_MODEL, MEMOS_SCHEDULER_MODEL]:
-                self.update_context(
-                    conv_id=conv_id,
-                    method=self.context_update_method,
-                    cur_context=cur_context,
-                )
+        if self.context_update_method == ContextUpdateMethod.CURRENT_CONTEXT:
+            context = cur_context
+        else:
+            # Context answer ability analysis (for memos_scheduler only)
+            if self.pre_context_cache[conv_id] is None:
+                # Update pre-context cache with current context and return
+                if self.context_update_method == ContextUpdateMethod.CHAT_HISTORY:
+                    answer_from_cur_context = self.locomo_response(
+                        frame, oai_client, cur_context, query
+                    )
+                    self.update_context(
+                        conv_id=conv_id,
+                        method=self.context_update_method,
+                        query=query,
+                        answer=answer_from_cur_context,
+                    )
+                else:
+                    self.update_context(
+                        conv_id=conv_id,
+                        method=self.context_update_method,
+                        cur_context=cur_context,
+                    )
+                return None
             else:
-                self.update_context(
-                    conv_id=conv_id,
-                    method=self.context_update_method,
-                    query=query,
-                    answer=gold_answer,
-                )
-            return None
-
-        can_answer = False
-        can_answer_duration_ms = 0.0
-        can_answer_start = time()
-        can_answer = self.analyze_context_answerability(
-            self.pre_context_cache[conv_id], query, gold_answer, oai_client
-        )
-        can_answer_duration_ms = (time() - can_answer_start) * 1000
-        # Update global stats
-        with self.stats_lock:
-            self.stats[self.frame][self.version]["memory_stats"]["total_queries"] += 1
-            if can_answer:
-                self.stats[self.frame][self.version]["memory_stats"]["can_answer_count"] += 1
-            else:
-                self.stats[self.frame][self.version]["memory_stats"]["cannot_answer_count"] += 1
-            total_queries = self.stats[self.frame][self.version]["memory_stats"]["total_queries"]
-            can_answer_count = self.stats[self.frame][self.version]["memory_stats"][
-                "can_answer_count"
-            ]
-            hit_rate = (can_answer_count / total_queries * 100) if total_queries > 0 else 0
-            self.stats[self.frame][self.version]["memory_stats"]["answer_hit_rate"] = hit_rate
-            self.stats[self.frame][self.version]["memory_stats"]["can_answer_duration_ms"] = (
-                can_answer_duration_ms
-            )
-            self.save_stats()
+                context = self.pre_context_cache[conv_id]
 
         # Generate answer
         answer_start = time()
-        answer = self.locomo_response(frame, oai_client, self.pre_context_cache[conv_id], query)
+        answer = self.locomo_response(frame, oai_client, context, query)
         response_duration_ms = (time() - answer_start) * 1000
 
+        can_answer, can_answer_duration_ms = self.eval_context(
+            context=context, query=query, gold_answer=gold_answer, oai_client=oai_client
+        )
+
         # Record case for memos_scheduler
-        if frame == "memos_scheduler":
-            try:
-                recording_case = RecordingCase(
-                    conv_id=conv_id,
-                    query=query,
-                    answer=answer,
-                    context=cur_context,
-                    pre_context=self.pre_context_cache[conv_id],
-                    can_answer=can_answer,
-                    can_answer_reason=f"Context analysis result: {'can answer' if can_answer else 'cannot answer'}",
-                    search_duration_ms=search_duration_ms,
-                    can_answer_duration_ms=can_answer_duration_ms,
-                    response_duration_ms=response_duration_ms,
-                    category=int(qa_category) if qa_category is not None else None,
-                    golden_answer=str(qa.get("answer", "")),
-                    memories=[],
-                    pre_memories=[],
-                    history_queries=[],
-                )
-                if can_answer:
-                    self.can_answer_cases.append(recording_case)
-                else:
-                    self.cannot_answer_cases.append(recording_case)
-            except Exception as e:
-                logger.error(f"Error creating RecordingCase: {e}")
-                print(f"Error creating RecordingCase: {e}")
-                logger.error(f"QA data: {qa}")
-                print(f"QA data: {qa}")
-                logger.error(f"Query: {query}")
-                logger.error(f"Answer: {answer}")
-                logger.error(
-                    f"Golden answer (raw): {qa.get('answer')} (type: {type(qa.get('answer'))})"
-                )
-                logger.error(f"Category: {qa_category} (type: {type(qa_category)})")
-                logger.error(f"Can answer: {can_answer}")
-                raise e
-
-        # Update conversation stats
-        conv_stats["total_queries"] += 1
-        conv_stats["response_count"] += 1
-        if frame == "memos_scheduler":
+        try:
+            recording_case = RecordingCase(
+                conv_id=conv_id,
+                query=query,
+                answer=answer,
+                context=cur_context,
+                pre_context=self.pre_context_cache[conv_id],
+                can_answer=can_answer,
+                can_answer_reason=f"Context analysis result: {'can answer' if can_answer else 'cannot answer'}",
+                search_duration_ms=search_duration_ms,
+                can_answer_duration_ms=can_answer_duration_ms,
+                response_duration_ms=response_duration_ms,
+                category=int(qa_category) if qa_category is not None else None,
+                golden_answer=str(qa.get("answer", "")),
+            )
             if can_answer:
-                conv_stats["can_answer_count"] += 1
+                self.can_answer_cases.append(recording_case)
             else:
-                conv_stats["cannot_answer_count"] += 1
-        if conv_stats["total_queries"] > 0:
-            conv_stats["answer_hit_rate"] = (
-                conv_stats["can_answer_count"] / conv_stats["total_queries"]
-            ) * 100
+                self.cannot_answer_cases.append(recording_case)
+        except Exception as e:
+            logger.error(f"Error creating RecordingCase: {e}")
+            print(f"Error creating RecordingCase: {e}")
+            logger.error(f"QA data: {qa}")
+            print(f"QA data: {qa}")
+            logger.error(f"Query: {query}")
+            logger.error(f"Answer: {answer}")
+            logger.error(
+                f"Golden answer (raw): {qa.get('answer')} (type: {type(qa.get('answer'))})"
+            )
+            logger.error(f"Category: {qa_category} (type: {type(qa_category)})")
+            logger.error(f"Can answer: {can_answer}")
+            raise e
 
-        # Persist conversation stats snapshot
-        self._save_conv_stats(conv_id, frame, version, conv_stats, conv_stats_path)
-
-        logger.info(f"Processed question: {query[:100]}")
-        logger.info(f"Answer: {answer[:100]}")
-
-        # Update pre-context cache with current context
-        with self.stats_lock:
-            if self.frame in [MEMOS_MODEL, MEMOS_SCHEDULER_MODEL]:
-                self.update_context(
-                    conv_id=conv_id,
-                    method=self.context_update_method,
-                    cur_context=cur_context,
-                )
-            else:
-                self.update_context(
-                    conv_id=conv_id,
-                    method=self.context_update_method,
-                    query=query,
-                    answer=gold_answer,
-                )
-
-        self.print_eval_info()
+        if self.context_update_method == ContextUpdateMethod.CHAT_HISTORY:
+            answer_from_cur_context = self.locomo_response(frame, oai_client, cur_context, query)
+            answer = answer_from_cur_context
+        # Update conversation stats and context
+        self._update_stats_and_context(
+            conv_id=conv_id,
+            frame=frame,
+            version=version,
+            conv_stats=conv_stats,
+            conv_stats_path=conv_stats_path,
+            query=query,
+            answer=answer,
+            gold_answer=gold_answer,
+            cur_context=cur_context,
+            can_answer=can_answer,
+        )
 
         return {
             "question": query,
@@ -233,7 +279,7 @@ class LocomoProcessor(LocomoEvalModelModules):
             "response_duration_ms": response_duration_ms,
             "search_duration_ms": search_duration_ms,
             "can_answer_duration_ms": can_answer_duration_ms,
-            "can_answer": can_answer if frame == "memos_scheduler" else None,
+            "can_answer": can_answer if frame == MEMOS_SCHEDULER_MODEL else None,
         }
 
     def run_locomo_processing(self, num_users=10):
