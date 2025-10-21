@@ -20,7 +20,7 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
-from utils.memos_api import MemOSAPI
+from utils.client import memos_api_client
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 
-def add_memory_for_line(line_data: tuple, mem_client: MemOSAPI, num_irrelevant_turns: int, lib: str, version: str) -> dict:
+def add_memory_for_line(line_data: tuple, mem_client, num_irrelevant_turns: int, lib: str, version: str) -> dict:
     """
     Adds conversation memory for a single line of data to MemOS and returns the data with a persistent user_id.
     """
@@ -51,7 +51,7 @@ def add_memory_for_line(line_data: tuple, mem_client: MemOSAPI, num_irrelevant_t
         if conversation:
             for chunk_start in range(0, len(conversation), turns_add * 2):
                 chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                mem_client.add(messages=chunk, user_id=user_id)
+                mem_client.add(messages=chunk, user_id=user_id, mem_cube_id=user_id, conversation_id=None)
         
         original_data["user_id"] = user_id
         return original_data
@@ -61,7 +61,7 @@ def add_memory_for_line(line_data: tuple, mem_client: MemOSAPI, num_irrelevant_t
         return None
 
 
-def process_line_with_id(line_data: tuple, mem_client: MemOSAPI, openai_client: OpenAI, top_k_value: int, lib: str, version: str) -> dict:
+def process_line_with_id(line_data: tuple, mem_client, openai_client: OpenAI, top_k_value: int, lib: str, version: str) -> dict:
     """
     Processes a single line of data using a pre-existing user_id, searching memory and generating a response.
     """
@@ -83,11 +83,8 @@ def process_line_with_id(line_data: tuple, mem_client: MemOSAPI, openai_client: 
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        
-        if lib == "memos-local":
-            memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories.get('d', []))
-        elif lib == "memos-api":
-            memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]['memories'])
+        # print(relevant_memories)
+        memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]['memories'])
 
         
         memory_tokens_used = len(tokenizer.encode(memories_str))
@@ -122,7 +119,8 @@ def main():
     parser.add_argument("--output", required=True, help="Path to the output JSONL file.")
     parser.add_argument("--top-k", type=int, default=10, help="Number of memories to retrieve.")
     parser.add_argument("--add-turn", type=int, choices=[0, 10, 300], default=0, help="Number of irrelevant turns to add (0, 10, or 300).")
-    
+    parser.add_argument("--lib", type=str, choices=["memos-api", "memos-local"], default="memos-api", help="Which MemOS library to use.")
+    parser.add_argument("--version", type=str, default="0929-1", help="Version identifier for user_id generation.")
     parser.add_argument("--max-workers", type=int, default=20, help="Maximum number of concurrent workers.")
     
     args = parser.parse_args()
@@ -134,7 +132,7 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    mem_client = MemOSAPI()
+    mem_client = memos_api_client()
     
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
@@ -159,8 +157,8 @@ def main():
         openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
         with open(args.output, 'w', encoding='utf-8') as outfile:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
- 
-                futures = [executor.submit(process_line_with_id, (i, line), mem_client, openai_client, args.top_k) for i, line in enumerate(lines)]
+
+                futures = [executor.submit(process_line_with_id, (i, line), mem_client, openai_client, args.top_k, args.lib, args.version) for i, line in enumerate(lines)]
 
                 pbar = tqdm(concurrent.futures.as_completed(futures), total=len(lines), desc="Processing questions...")
                 for future in pbar:
