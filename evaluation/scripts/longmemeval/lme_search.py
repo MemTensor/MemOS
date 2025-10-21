@@ -106,33 +106,33 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         return existing_results
 
     if "mem0" in frame:
-        from utils.client import mem0_client
+        from utils.client import Mem0Client
 
-        client = mem0_client(enable_graph="graph" in frame)
+        client = Mem0Client(enable_graph="graph" in frame)
         context, duration_ms = mem0_search(client, question, user_id, top_k)
     elif frame == "memobase":
-        from utils.client import memobase_client
+        from utils.client import MemobaseClient
 
-        client = memobase_client()
+        client = MemobaseClient()
         users = client.client.get_all_users(limit=5000)
         for u in users:
             if u["additional_fields"]["user_id"] == user_id:
                 user_id = u["id"]
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api":
-        from utils.client import memos_api_client
+        from utils.client import MemosApiClient
 
-        client = memos_api_client()
+        client = MemosApiClient()
         context, duration_ms = memos_search(client, question, user_id, top_k)
     elif frame == "memu":
-        from utils.client import memu_client
+        from utils.client import MemuClient
 
-        client = memu_client()
+        client = MemuClient()
         context, duration_ms = memu_search(client, question, user_id, top_k)
     elif frame == "supermemory":
-        from utils.client import supermemory_client
+        from utils.client import SupermemoryClient
 
-        client = supermemory_client()
+        client = SupermemoryClient()
         context, duration_ms = supermemory_search(client, question, user_id, top_k)
 
     search_results[user_id].append(

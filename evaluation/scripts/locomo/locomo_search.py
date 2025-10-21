@@ -233,17 +233,17 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
 
     client = None
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import mem0_client
+        from utils.client import Mem0Client
 
-        client = mem0_client(enable_graph="graph" in frame)
+        client = Mem0Client(enable_graph="graph" in frame)
     elif frame == "memos-api":
-        from utils.client import memos_api_client
+        from utils.client import MemosApiClient
 
-        client = memos_api_client()
+        client = MemosApiClient()
     elif frame == "memobase":
-        from utils.client import memobase_client
+        from utils.client import MemobaseClient
 
-        client = memobase_client()
+        client = MemobaseClient()
         users = client.client.get_all_users(limit=5000)
         for u in users:
             if u["additional_fields"]["user_id"] == speaker_a_user_id:
@@ -251,13 +251,13 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
             if u["additional_fields"]["user_id"] == speaker_b_user_id:
                 speaker_b_user_id = u["id"]
     elif frame == "memu":
-        from utils.client import memu_client
+        from utils.client import MemuClient
 
-        client = memu_client()
+        client = MemuClient()
     elif frame == "supermemory":
-        from utils.client import supermemory_client
+        from utils.client import SupermemoryClient
 
-        client = supermemory_client()
+        client = SupermemoryClient()
 
     metadata = {
         "speaker_a": speaker_a,

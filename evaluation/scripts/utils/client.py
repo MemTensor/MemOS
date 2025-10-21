@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
 
-class zep_client:
+class ZepClient:
     def __init__(self):
         from zep_cloud.client import Zep
 
@@ -42,7 +42,7 @@ class zep_client:
         return nodes, edges
 
 
-class mem0_client:
+class Mem0Client:
     def __init__(self, enable_graph=False):
         from mem0 import MemoryClient
 
@@ -85,7 +85,7 @@ class mem0_client:
         return res
 
 
-class memobase_client:
+class MemobaseClient:
     def __init__(self):
         from memobase import MemoBaseClient
 
@@ -114,7 +114,7 @@ class memobase_client:
         return memories
 
 
-class memos_api_client:
+class MemosApiClient:
     def __init__(self):
         self.memos_url = os.getenv("MEMOS_URL")
         self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
@@ -155,7 +155,7 @@ class memos_api_client:
         return json.loads(response.text)["data"]
 
 
-class supermemory_client:
+class SupermemoryClient:
     def __init__(self):
         from supermemory import Supermemory
 
@@ -197,7 +197,7 @@ class supermemory_client:
                     raise e
 
 
-class memu_client:
+class MemuClient:
     def __init__(self):
         from memu import MemuClient
 
@@ -245,20 +245,3 @@ if __name__ == "__main__":
     timestamp = 1682899200
     query = "杭州西湖有什么"
     top_k = 5
-
-    # # memu
-    # memu_client = memu_client()
-    # memu_client.add(messages, user_id, iso_date)
-    # res = memu_client.search(query, user_id, top_k)
-
-    # # supermemory
-    # supermemory_client = supermemory_client()
-    # supermemory_client.delete('locomo_exp_user_5_speaker_b_default')
-
-    # # mem0
-    # mem0_client = mem0_client(enable_graph=False)
-    # mem0_client.add(messages, user_id, timestamp)
-    # s = mem0_client.search(query, user_id, top_k)
-
-    # zep
-    zep_client = zep_client()
