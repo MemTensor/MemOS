@@ -643,7 +643,6 @@ class MOSCore:
                     memories = mem_cube.pref_mem.search(
                         query,
                         top_k=top_k if top_k else self.config.top_k,
-                        mode=mode,
                         info={
                             "user_id": target_user_id,
                             "session_id": self.session_id,

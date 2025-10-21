@@ -117,17 +117,7 @@ class APIConfig:
                 "extractor_llm": {"backend": "openai", "config": APIConfig.get_openai_config()},
                 "vector_db": {
                     "backend": "milvus",
-                    "config": {
-                        "collection_name": [
-                            "explicit_preference",
-                            "implicit_preference",
-                        ],
-                        "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
-                        "distance_metric": "cosine",
-                        "uri": os.getenv("MILVUS_URI", "http://localhost:19530"),
-                        "user_name": os.getenv("MILVUS_USER_NAME", "root"),
-                        "password": os.getenv("MILVUS_PASSWORD", "12345678")
-                    }
+                    "config": APIConfig.get_milvus_config(),
                 },
                 "embedder": APIConfig.get_embedder_config(),
                 "reranker": APIConfig.get_reranker_config(),
@@ -311,6 +301,20 @@ class APIConfig:
             "use_multi_db": False,
             "auto_create": True,
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 3072)),
+        }
+
+    @staticmethod
+    def get_milvus_config():
+        return {
+            "collection_name": [
+                "explicit_preference",
+                "implicit_preference",
+            ],
+            "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+            "distance_metric": "cosine",
+            "uri": os.getenv("MILVUS_URI", "http://localhost:19530"),
+            "user_name": os.getenv("MILVUS_USER_NAME", "root"),
+            "password": os.getenv("MILVUS_PASSWORD", "12345678")
         }
 
     @staticmethod
