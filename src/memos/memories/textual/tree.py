@@ -30,13 +30,10 @@ logger = get_logger(__name__)
 class TreeTextMemory(BaseTextMemory):
     """General textual memory implementation for storing and retrieving memories."""
 
-    # Override the default mode to async for TreeTextMemory
-    mode: str = "async"
-
     def __init__(self, config: TreeTextMemoryConfig):
         """Initialize memory with the given configuration."""
         # Set mode from class default or override if needed
-        self.mode = getattr(self.__class__, "mode", "async")
+        self.mode = config.mode
         self.config: TreeTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm

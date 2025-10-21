@@ -88,7 +88,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         # internal message queue
         self.max_internal_message_queue_size = self.config.get(
-            "max_internal_message_queue_size", 100
+            "max_internal_message_queue_size", 10000
         )
         self.memos_message_queue: Queue[ScheduleMessageItem] = Queue(
             maxsize=self.max_internal_message_queue_size
