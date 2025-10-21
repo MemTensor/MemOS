@@ -26,9 +26,15 @@ def mem0_search(client, query, user_id, top_k):
     memory = [f"{memory['created_at']}: {memory['memory']}" for memory in results["results"]]
     if client.enable_graph:
         graph = "\n".join(
-            [f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} "
-             f"(relationship: {item.get('relationship', '?')})" for item in results.get("relations", [])])
-        context = MEM0_GRAPH_CONTEXT_TEMPLATE.format(user_id=user_id, memories=memory, relations=graph)
+            [
+                f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} "
+                f"(relationship: {item.get('relationship', '?')})"
+                for item in results.get("relations", [])
+            ]
+        )
+        context = MEM0_GRAPH_CONTEXT_TEMPLATE.format(
+            user_id=user_id, memories=memory, relations=graph
+        )
     else:
         context = MEM0_CONTEXT_TEMPLATE.format(user_id=user_id, memories=memory)
     duration_ms = (time() - start) * 1000
@@ -38,7 +44,7 @@ def mem0_search(client, query, user_id, top_k):
 def memos_search(client, query, user_id, top_k):
     start = time()
     results = client.search(query=query, user_id=user_id, top_k=top_k)
-    context = "\n".join([i['memory'] for i in results["text_mem"][0]['memories']])
+    context = "\n".join([i["memory"] for i in results["text_mem"][0]["memories"]])
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
@@ -54,7 +60,7 @@ def memobase_search(client, query, user_id, top_k):
 def memu_search(client, query, user_id, top_k):
     start = time()
     results = client.search(query, user_id, top_k)
-    context = '\n'.join(results)
+    context = "\n".join(results)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -101,29 +107,31 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
 
     if "mem0" in frame:
         from utils.client import mem0_client
-        client = mem0_client(enable_graph='graph' in frame)
+
+        client = mem0_client(enable_graph="graph" in frame)
         context, duration_ms = mem0_search(client, question, user_id, top_k)
     elif frame == "memobase":
         from utils.client import memobase_client
+
         client = memobase_client()
         users = client.client.get_all_users(limit=5000)
         for u in users:
-            try:
-                if u["additional_fields"]["user_id"] == user_id:
-                    user_id = u["id"]
-            except:
-                pass
+            if u["additional_fields"]["user_id"] == user_id:
+                user_id = u["id"]
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api":
-        from utils.client import memos_client
-        client = memos_client()
+        from utils.client import memos_api_client
+
+        client = memos_api_client()
         context, duration_ms = memos_search(client, question, user_id, top_k)
     elif frame == "memu":
         from utils.client import memu_client
+
         client = memu_client()
         context, duration_ms = memu_search(client, question, user_id, top_k)
     elif frame == "supermemory":
         from utils.client import supermemory_client
+
         client = supermemory_client()
         context, duration_ms = supermemory_search(client, question, user_id, top_k)
 
@@ -140,7 +148,9 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
     )
 
     os.makedirs(f"results/lme/{frame}-{version}/tmp", exist_ok=True)
-    with open(f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{conv_idx}.json", "w") as f:
+    with open(
+        f"results/lme/{frame}-{version}/tmp/{frame}_lme_search_results_{conv_idx}.json", "w"
+    ) as f:
         json.dump(search_results, f, indent=4)
     print(f"💾 Search results for conversation {conv_idx} saved...")
     print("-" * 80)
@@ -180,8 +190,10 @@ def main(frame, version, top_k=20, num_workers=2):
             for idx in range(num_multi_sessions)
         }
 
-        for future in tqdm(as_completed(future_to_idx), total=num_multi_sessions, desc="📊 Processing users"):
-            idx = future_to_idx[future]
+        for future in tqdm(
+            as_completed(future_to_idx), total=num_multi_sessions, desc="📊 Processing users"
+        ):
+            _idx = future_to_idx[future]
             search_results = future.result()
             for user_id, results in search_results.items():
                 all_search_results[user_id].extend(results)
@@ -210,9 +222,15 @@ if __name__ == "__main__":
         choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
         default="memos-api",
     )
-    parser.add_argument("--version", type=str, default="default", help="Version of the evaluation framework.")
-    parser.add_argument("--top_k", type=int, default=30, help="Number of top results to retrieve from the search.")
-    parser.add_argument("--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation.")
+    parser.add_argument(
+        "--version", type=str, default="default", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--top_k", type=int, default=30, help="Number of top results to retrieve from the search."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation."
+    )
 
     args = parser.parse_args()
 

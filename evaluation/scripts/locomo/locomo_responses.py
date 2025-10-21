@@ -112,8 +112,6 @@ async def main(frame, version="default"):
 
     os.makedirs("data", exist_ok=True)
 
-    # print(all_responses)
-
     with open(response_path, "w") as f:
         json.dump(all_responses, f, indent=2)
         print("Save response results")

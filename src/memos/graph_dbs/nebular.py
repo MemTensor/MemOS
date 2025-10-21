@@ -927,7 +927,7 @@ class NebulaGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self.config.user_name
 
         gql = f"""
-             MATCH (center@Memory)
+             MATCH (center@Memory /*+ INDEX(idx_memory_user_name) */)
             WHERE center.id = '{center_id}'
               AND center.status = '{center_status}'
               AND center.user_name = '{user_name}'
@@ -1383,7 +1383,7 @@ class NebulaGraphDB(BaseGraphDB):
         return_fields += f", n.{self.dim_field} AS {self.dim_field}"
 
         query = f"""
-            MATCH (n@Memory)
+            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             WHERE {where_clause}
             OPTIONAL MATCH (n)-[@PARENT]->(c@Memory)
             OPTIONAL MATCH (p@Memory)-[@PARENT]->(n)
