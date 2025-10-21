@@ -12,9 +12,7 @@ from time import time
 import csv
 
 from tqdm import tqdm
-from utils.client import mem0_client, memos_client, zep_client
-from utils.memos_api import MemOSAPI
-from utils.memos_filters import filter_memory_data
+from utils.client import mem0_client,zep_client,memos_api_client
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
@@ -247,7 +245,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         print("🔌 Using Memos Local client for search...")
         context, duration_ms = memos_search(client, user_id, question, frame=frame)
     elif frame == "memos-api":
-        client = MemOSAPI()
+        client = memos_api_client()
         print("🔌 Using Memos API client for search...")
         context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
 
