@@ -66,11 +66,11 @@ class PreferenceTextMemory(BaseTextMemory):
         )
 
     def get_memory(
-        self, messages: MessageList, type: str, info: dict[str, Any]
+        self, messages: list[MessageList], type: str, info: dict[str, Any]
     ) -> list[TextualMemoryItem]:
         """Get memory based on the messages.
         Args:
-            messages (MessageList): The messages to get memory from.
+            messages (list[MessageList]): The messages to get memory from.
             type (str): The type of memory to get.
             info (dict[str, Any]): The info to get memory.
         """

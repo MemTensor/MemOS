@@ -19,6 +19,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
     QUERY_LABEL,
+    PREF_ADD_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_user.user_manager import UserManager, UserRole
@@ -777,14 +778,31 @@ class MOSCore:
                 and self.mem_cubes[mem_cube_id].pref_mem
             ):
                 messages_list = [messages]
-                pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
-                    messages_list,
-                    type="chat",
-                    info={"user_id": target_user_id, "session_id": self.session_id})
-                preferences = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
-                logger.info(
-                    f"Added preferences user {target_user_id} to memcube {mem_cube_id}: {preferences}"
-                )
+                mem_cube = self.mem_cubes[mem_cube_id]
+                sync_mode = "async"
+                if sync_mode == "sync":
+                    pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
+                        messages_list,
+                        type="chat",
+                        info={"user_id": target_user_id, "session_id": self.session_id})
+                    pref_ids = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
+                    logger.info(
+                        f"Added preferences user {target_user_id} to memcube {mem_cube_id}: {pref_ids}"
+                    )
+                elif sync_mode == "async":
+                    assert self.mem_scheduler is not None, (
+                        "Mem-Scheduler must be working when use asynchronous memory adding."
+                    )
+                    message_item = ScheduleMessageItem(
+                        user_id=target_user_id,
+                        session_id=target_session_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        label=PREF_ADD_LABEL,
+                        content=json.dumps(messages_list),
+                        timestamp=datetime.utcnow(),
+                    )
+                    self.mem_scheduler.submit_messages(messages=[message_item])
 
         # Execute both memory processing functions in parallel
         with ThreadPoolExecutor(max_workers=2) as executor:
