@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
 
-class zepClient:
+class ZepClient:
     def __init__(self):
         from zep_cloud.client import Zep
 
@@ -42,7 +42,7 @@ class zepClient:
         return nodes, edges
 
 
-class mem0Client:
+class Mem0Client:
     def __init__(self, enable_graph=False):
         from mem0 import MemoryClient
 
@@ -85,7 +85,7 @@ class mem0Client:
         return res
 
 
-class memobaseClient:
+class MemobaseClient:
     def __init__(self):
         from memobase import MemoBaseClient
 
@@ -114,7 +114,7 @@ class memobaseClient:
         return memories
 
 
-class memosApiClient:
+class MemosApiClient:
     def __init__(self):
         self.memos_url = os.getenv("MEMOS_URL")
         self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
@@ -155,7 +155,7 @@ class memosApiClient:
         return json.loads(response.text)["data"]
 
 
-class supermemoryClient:
+class SupermemoryClient:
     def __init__(self):
         from supermemory import Supermemory
 
@@ -197,7 +197,7 @@ class supermemoryClient:
                     raise e
 
 
-class memuClient:
+class MemuClient:
     def __init__(self):
         from memu import MemuClient
 

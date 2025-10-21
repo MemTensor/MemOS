@@ -68,31 +68,31 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
     print("=" * 80)
 
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import mem0Client
+        from utils.client import Mem0Client
 
-        client = mem0Client(enable_graph="graph" in frame)
+        client = Mem0Client(enable_graph="graph" in frame)
         client.client.delete_all(user_id=user_id)
     elif frame == "memos-api":
-        from utils.client import memosApiClient
+        from utils.client import MemosApiClient
 
-        client = memosApiClient()
+        client = MemosApiClient()
     elif frame == "memobase":
-        from utils.client import memobaseClient
+        from utils.client import MemobaseClient
 
-        client = memobaseClient()
+        client = MemobaseClient()
         all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
             if user["additional_fields"]["user_id"] == user_id:
                 client.client.delete_user(user["id"])
         user_id = client.client.add_user({"user_id": user_id})
     elif frame == "memu":
-        from utils.client import memuClient
+        from utils.client import MemuClient
 
-        client = memuClient()
+        client = MemuClient()
     elif frame == "supermemory":
-        from utils.client import supermemoryClient
+        from utils.client import SupermemoryClient
 
-        client = supermemoryClient()
+        client = SupermemoryClient()
 
     for idx, session in enumerate(sessions):
         if f"{conv_idx}_{idx}" not in success_records:

@@ -89,20 +89,20 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     client = None
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import mem0Client
+        from utils.client import Mem0Client
 
-        client = mem0Client(enable_graph="graph" in frame)
+        client = Mem0Client(enable_graph="graph" in frame)
         client.client.update_project(custom_instructions=custom_instructions)
         client.client.delete_all(user_id=speaker_a_user_id)
         client.client.delete_all(user_id=speaker_b_user_id)
     elif frame == "memos-api":
-        from utils.client import memosApiClient
+        from utils.client import MemosApiClient
 
-        client = memosApiClient()
+        client = MemosApiClient()
     elif frame == "memobase":
-        from utils.client import memobaseClient
+        from utils.client import MemobaseClient
 
-        client = memobaseClient()
+        client = MemobaseClient()
         all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
             if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
@@ -110,13 +110,13 @@ def process_user(conv_idx, frame, locomo_df, version):
         speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
         speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
     elif frame == "memu":
-        from utils.client import memuClient
+        from utils.client import MemuClient
 
-        client = memuClient()
+        client = MemuClient()
     elif frame == "supermemory":
-        from utils.client import supermemoryClient
+        from utils.client import SupermemoryClient
 
-        client = supermemoryClient()
+        client = SupermemoryClient()
     sessions_to_process = []
     for session_idx in range(max_session_count):
         session_key = f"session_{session_idx}"
