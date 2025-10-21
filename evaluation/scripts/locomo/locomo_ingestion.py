@@ -2,7 +2,9 @@ import asyncio
 import os
 import sys
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
@@ -30,8 +32,8 @@ def ingest_session(client, session, frame, version, metadata):
 
     speaker_a_messages = []
     speaker_b_messages = []
-    speaker_a_user_id = metadata['speaker_a_user_id']
-    speaker_b_user_id = metadata['speaker_b_user_id']
+    speaker_a_user_id = metadata["speaker_a_user_id"]
+    speaker_b_user_id = metadata["speaker_b_user_id"]
     for chat in session:
         data = chat.get("speaker") + ": " + chat.get("text")
         if chat.get("speaker") == metadata["speaker_a"]:
@@ -43,22 +45,22 @@ def ingest_session(client, session, frame, version, metadata):
 
     if frame == "memos-api":
         for m in speaker_a_messages:
-            m['chat_time'] = iso_date
+            m["chat_time"] = iso_date
         for m in speaker_b_messages:
-            m['chat_time'] = iso_date
+            m["chat_time"] = iso_date
         client.add(speaker_a_messages, speaker_a_user_id, f"{conv_id}_{metadata['session_key']}")
         client.add(speaker_b_messages, speaker_b_user_id, f"{conv_id}_{metadata['session_key']}")
     elif "mem0" in frame:
         for i in range(0, len(speaker_a_messages), 2):
-            batch_messages_a = speaker_a_messages[i: i + 2]
-            batch_messages_b = speaker_b_messages[i: i + 2]
+            batch_messages_a = speaker_a_messages[i : i + 2]
+            batch_messages_b = speaker_b_messages[i : i + 2]
             client.add(batch_messages_a, speaker_a_user_id, timestamp)
             client.add(batch_messages_b, speaker_b_user_id, timestamp)
     elif frame == "memobase":
         for m in speaker_a_messages:
-            m['created_at'] = iso_date
+            m["created_at"] = iso_date
         for m in speaker_b_messages:
-            m['created_at'] = iso_date
+            m["created_at"] = iso_date
         client.add(speaker_a_messages, speaker_a_user_id)
         client.add(speaker_b_messages, speaker_b_user_id)
     elif frame == "memu":
@@ -70,9 +72,9 @@ def ingest_session(client, session, frame, version, metadata):
         client.add(speaker_b_messages, speaker_b_user_id, iso_date)
     elif frame == "supermemory":
         for m in speaker_a_messages:
-            m['chat_time'] = iso_date
+            m["chat_time"] = iso_date
         for m in speaker_b_messages:
-            m['chat_time'] = iso_date
+            m["chat_time"] = iso_date
         # seems like user_id can not be too long
         speaker_a_user_id = f"lcm{conv_idx}a_{version}"
         speaker_b_user_id = f"lcm{conv_idx}b_{version}"
@@ -97,15 +99,18 @@ def process_user(conv_idx, frame, locomo_df, version):
     client = None
     if frame == "mem0" or frame == "mem0_graph":
         from utils.client import mem0_client
-        client = mem0_client(enable_graph='graph' in frame)
+
+        client = mem0_client(enable_graph="graph" in frame)
         client.client.update_project(custom_instructions=custom_instructions)
         client.client.delete_all(user_id=speaker_a_user_id)
         client.client.delete_all(user_id=speaker_b_user_id)
     elif frame == "memos-api":
         from utils.client import memos_api_client
+
         client = memos_api_client()
     elif frame == "memobase":
         from utils.client import memobase_client
+
         client = memobase_client()
         all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
@@ -118,9 +123,11 @@ def process_user(conv_idx, frame, locomo_df, version):
         speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
     elif frame == "memu":
         from utils.client import memu_client
+
         client = memu_client()
     elif frame == "supermemory":
         from utils.client import supermemory_client
+
         client = supermemory_client()
 
     sessions_to_process = []
@@ -130,13 +137,15 @@ def process_user(conv_idx, frame, locomo_df, version):
         if session is None:
             continue
 
-        metadata = {"session_date": conversation.get(f"session_{session_idx}_date_time") + " UTC",
-                    "speaker_a": conversation.get("speaker_a"),
-                    "speaker_b": conversation.get("speaker_b"),
-                    "speaker_a_user_id": speaker_a_user_id,
-                    "speaker_b_user_id": speaker_b_user_id,
-                    "conv_idx": conv_idx,
-                    "session_key": session_key}
+        metadata = {
+            "session_date": conversation.get(f"session_{session_idx}_date_time") + " UTC",
+            "speaker_a": conversation.get("speaker_a"),
+            "speaker_b": conversation.get("speaker_b"),
+            "speaker_a_user_id": speaker_a_user_id,
+            "speaker_b_user_id": speaker_b_user_id,
+            "conv_idx": conv_idx,
+            "session_key": session_key,
+        }
         sessions_to_process.append((session, metadata))
         valid_sessions += 1
 
@@ -161,9 +170,13 @@ def main(frame, version="default", num_workers=4):
     start_time = time.time()
     total_time = 0
     print(
-        f"Starting processing for {num_users} users in serial mode, each user using {num_workers} workers for sessions...")
+        f"Starting processing for {num_users} users in serial mode, each user using {num_workers} workers for sessions..."
+    )
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = [executor.submit(process_user, user_id, frame, locomo_df, version) for user_id in range(num_users)]
+        futures = [
+            executor.submit(process_user, user_id, frame, locomo_df, version)
+            for user_id in range(num_users)
+        ]
         for future in concurrent.futures.as_completed(futures):
             session_time = future.result()
             total_time += session_time
@@ -171,7 +184,9 @@ def main(frame, version="default", num_workers=4):
     minutes = int(average_time // 60)
     seconds = int(average_time % 60)
     average_time_formatted = f"{minutes} minutes and {seconds} seconds"
-    print(f"The frame {frame} processed {num_users} users in average of {average_time_formatted} per user.")
+    print(
+        f"The frame {frame} processed {num_users} users in average of {average_time_formatted} per user."
+    )
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
     minutes = int(elapsed_time // 60)

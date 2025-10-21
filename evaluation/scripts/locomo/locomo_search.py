@@ -2,7 +2,9 @@ import os
 import sys
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
 EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
@@ -24,37 +26,58 @@ def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, spea
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
 
-    search_speaker_a_memory = [f"{memory['created_at']}: {memory['memory']}"
-                               for memory in search_speaker_a_results["results"]]
-    search_speaker_b_memory = [f"{memory['created_at']}: {memory['memory']}"
-                               for memory in search_speaker_b_results["results"]]
+    search_speaker_a_memory = [
+        f"{memory['created_at']}: {memory['memory']}"
+        for memory in search_speaker_a_results["results"]
+    ]
+    search_speaker_b_memory = [
+        f"{memory['created_at']}: {memory['memory']}"
+        for memory in search_speaker_b_results["results"]
+    ]
 
     context = TEMPLATE_MEM0.format(
         speaker_1_user_id=speaker_a,
         speaker_1_memories=json.dumps(search_speaker_a_memory, indent=4),
         speaker_2_user_id=speaker_b,
-        speaker_2_memories=json.dumps(search_speaker_b_memory, indent=4))
+        speaker_2_memories=json.dumps(search_speaker_b_memory, indent=4),
+    )
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
 
-def mem0_graph_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+def mem0_graph_search(
+    client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+):
     start = time()
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
 
-    search_speaker_a_memory = [f"{memory['created_at']}: {memory['memory']}"
-                               for memory in search_speaker_a_results["results"]]
-    search_speaker_b_memory = [f"{memory['created_at']}: {memory['memory']}"
-                               for memory in search_speaker_b_results["results"]]
+    search_speaker_a_memory = [
+        f"{memory['created_at']}: {memory['memory']}"
+        for memory in search_speaker_a_results["results"]
+    ]
+    search_speaker_b_memory = [
+        f"{memory['created_at']}: {memory['memory']}"
+        for memory in search_speaker_b_results["results"]
+    ]
 
-    search_speaker_a_graph = [{"source": relation["source"],
-                               "relationship": relation["relationship"],
-                               "target": relation["target"]} for relation in search_speaker_a_results["relations"]]
+    search_speaker_a_graph = [
+        {
+            "source": relation["source"],
+            "relationship": relation["relationship"],
+            "target": relation["target"],
+        }
+        for relation in search_speaker_a_results["relations"]
+    ]
 
-    search_speaker_b_graph = [{"source": relation["source"],
-                               "relationship": relation["relationship"],
-                               "target": relation["target"]} for relation in search_speaker_b_results["relations"]]
+    search_speaker_b_graph = [
+        {
+            "source": relation["source"],
+            "relationship": relation["relationship"],
+            "target": relation["target"],
+        }
+        for relation in search_speaker_b_results["relations"]
+    ]
 
     context = TEMPLATE_MEM0_GRAPH.format(
         speaker_1_user_id=speaker_a,
@@ -62,17 +85,24 @@ def mem0_graph_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k
         speaker_1_graph_memories=json.dumps(search_speaker_a_graph, indent=4),
         speaker_2_user_id=speaker_b,
         speaker_2_memories=json.dumps(search_speaker_b_memory, indent=4),
-        speaker_2_graph_memories=json.dumps(search_speaker_b_graph, indent=4))
+        speaker_2_graph_memories=json.dumps(search_speaker_b_graph, indent=4),
+    )
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
 
-def memos_api_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+def memos_api_search(
+    client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+):
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
-    speaker_a_context = "\n".join([i['memory'] for i in search_a_results["text_mem"][0]['memories']])
-    speaker_b_context = "\n".join([i['memory'] for i in search_b_results["text_mem"][0]['memories']])
+    speaker_a_context = "\n".join(
+        [i["memory"] for i in search_a_results["text_mem"][0]["memories"]]
+    )
+    speaker_b_context = "\n".join(
+        [i["memory"] for i in search_b_results["text_mem"][0]["memories"]]
+    )
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,
@@ -85,7 +115,9 @@ def memos_api_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k,
     return context, duration_ms
 
 
-def memobase_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+def memobase_search(
+    client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+):
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
@@ -105,19 +137,22 @@ def memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, spea
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
 
-    search_speaker_a_memory = '\n'.join(search_speaker_a_results)
-    search_speaker_b_memory = '\n'.join(search_speaker_b_results)
+    search_speaker_a_memory = "\n".join(search_speaker_a_results)
+    search_speaker_b_memory = "\n".join(search_speaker_b_results)
 
     context = TEMPLATE_MEM0.format(
         speaker_1_user_id=speaker_a,
         speaker_1_memories=search_speaker_a_memory,
         speaker_2_user_id=speaker_b,
-        speaker_2_memories=search_speaker_b_memory)
+        speaker_2_memories=search_speaker_b_memory,
+    )
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
 
-def supermemory_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+def supermemory_search(
+    client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+):
     start = time()
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
@@ -126,7 +161,8 @@ def supermemory_search(client, query, speaker_a_user_id, speaker_b_user_id, top_
         speaker_1_user_id=speaker_a,
         speaker_1_memories=search_speaker_a_results,
         speaker_2_user_id=speaker_b,
-        speaker_2_memories=search_speaker_b_results)
+        speaker_2_memories=search_speaker_b_results,
+    )
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -139,20 +175,32 @@ def search_query(client, query, metadata, frame, version, top_k=20):
     speaker_b_user_id = metadata.get("speaker_b_user_id")
 
     if frame == "mem0":
-        context, duration_ms = mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+        context, duration_ms = mem0_search(
+            client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+        )
     elif frame == "mem0_graph":
-        context, duration_ms = mem0_graph_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+        context, duration_ms = mem0_graph_search(
+            client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+        )
     elif frame == "memos-api":
-        context, duration_ms = memos_api_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+        context, duration_ms = memos_api_search(
+            client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+        )
     elif frame == "memobase":
-        context, duration_ms = memobase_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+        context, duration_ms = memobase_search(
+            client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+        )
     elif frame == "memu":
-        context, duration_ms = memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+        context, duration_ms = memu_search(
+            client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+        )
     elif frame == "supermemory":
         conv_idx = metadata["conv_idx"]
         speaker_a_user_id = f"lcm{conv_idx}a_{version}"
         speaker_b_user_id = f"lcm{conv_idx}b_{version}"
-        context, duration_ms = supermemory_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b)
+        context, duration_ms = supermemory_search(
+            client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
+        )
     return context, duration_ms
 
 
@@ -187,12 +235,15 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
     client = None
     if frame == "mem0" or frame == "mem0_graph":
         from utils.client import mem0_client
-        client = mem0_client(enable_graph='graph' in frame)
+
+        client = mem0_client(enable_graph="graph" in frame)
     elif frame == "memos-api":
         from utils.client import memos_api_client
+
         client = memos_api_client()
     elif frame == "memobase":
         from utils.client import memobase_client
+
         client = memobase_client()
         users = client.client.get_all_users(limit=5000)
         for u in users:
@@ -205,17 +256,21 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
                 pass
     elif frame == "memu":
         from utils.client import memu_client
+
         client = memu_client()
     elif frame == "supermemory":
         from utils.client import supermemory_client
+
         client = supermemory_client()
 
-    metadata = {"speaker_a": speaker_a,
-                "speaker_b": speaker_b,
-                "speaker_a_user_id": speaker_a_user_id,
-                "speaker_b_user_id": speaker_b_user_id,
-                "conv_idx": conv_idx,
-                "conv_id": conv_id, }
+    metadata = {
+        "speaker_a": speaker_a,
+        "speaker_b": speaker_b,
+        "speaker_a_user_id": speaker_a_user_id,
+        "speaker_b_user_id": speaker_b_user_id,
+        "conv_idx": conv_idx,
+        "conv_id": conv_id,
+    }
 
     def process_qa(qa):
         query = qa.get("question")
@@ -233,13 +288,17 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         for qa in qa_set:
             futures.append(executor.submit(process_qa, qa))
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc=f"Processing user {conv_idx}"):
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc=f"Processing user {conv_idx}"
+        ):
             result = future.result()
             if result:
                 search_results[conv_id].append(result)
 
     os.makedirs(f"results/locomo/{frame}-{version}/tmp/", exist_ok=True)
-    with open(f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{conv_idx}.json", "w") as f:
+    with open(
+        f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{conv_idx}.json", "w"
+    ) as f:
         json.dump(dict(search_results), f, indent=2)
         print(f"Save search results {conv_idx}")
 

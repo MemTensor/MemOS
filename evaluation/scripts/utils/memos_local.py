@@ -58,14 +58,14 @@ def filter_memory_data(memories_data):
 
 
 def memos_client(
-        mode="local",
-        db_name=None,
-        user_id=None,
-        top_k=20,
-        mem_cube_path="./",
-        mem_cube_config_path="configs/lme_mem_cube_config.json",
-        mem_os_config_path="configs/mos_memos_config.json",
-        addorsearch="add",
+    mode="local",
+    db_name=None,
+    user_id=None,
+    top_k=20,
+    mem_cube_path="./",
+    mem_cube_config_path="configs/lme_mem_cube_config.json",
+    mem_os_config_path="configs/mos_memos_config.json",
+    addorsearch="add",
 ):
     """Initialize and return a Memos client instance."""
 
@@ -100,4 +100,3 @@ def memos_client(
     )
 
     return memos
-

@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 memos_key = os.getenv("MEMOS_KEY")
-memos_url = 'http://127.0.0.1:8001'
+memos_url = "http://127.0.0.1:8001"
 
 
 class MemOSAPI:
@@ -27,7 +27,9 @@ class MemOSAPI:
                 )
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
-                assert json.loads(response.text)["message"] == 'Memory added successfully', response.text
+                assert json.loads(response.text)["message"] == "Memory added successfully", (
+                    response.text
+                )
                 return response.text
             except Exception as e:
                 print(f"call memos api add failed {e} retry time {retry}")
@@ -55,7 +57,9 @@ class MemOSAPI:
 
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
-                assert json.loads(response.text)["message"] == "Search completed successfully", response.text
+                assert json.loads(response.text)["message"] == "Search completed successfully", (
+                    response.text
+                )
                 return json.loads(response.text)["data"]
             except Exception as e:
                 print(f"call memos api search failed {e} retry time {retry}")

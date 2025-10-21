@@ -7,7 +7,7 @@ from typing import Dict, Any
 from collections import Counter
 from tqdm.asyncio import tqdm
 import os
-import pandas as pd  
+import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -227,7 +227,7 @@ async def process_line(
             "original_data": data,
             "evaluations": evaluations,
             "error_type": classify_error_type(evaluations),
-            "metrics": data.get("metrics", {}) 
+            "metrics": data.get("metrics", {}),
         }
         return result
 
@@ -259,7 +259,7 @@ def generate_excel_summary(
     summary_results: Dict[str, Dict[str, float]],
     avg_search_time: float,
     avg_context_tokens: float,
-    model_name: str = "gpt-4o-mini", 
+    model_name: str = "gpt-4o-mini",
 ):
     """
     Generates an Excel summary file based on the evaluation results.
@@ -273,7 +273,7 @@ def generate_excel_summary(
     hallucination_pct = get_pct("Preference Hallucination Violation")
     inconsistency_pct = get_pct("Inconsistency Violation")
     unhelpful_pct = get_pct("Unhelpful Response")
-    personalized_pct = get_pct("Personalized Response") 
+    personalized_pct = get_pct("Personalized Response")
 
     data = {
         "Model": [model_name],
@@ -283,35 +283,33 @@ def generate_excel_summary(
         "Unhelpful Response\n没帮助的回答": [unhelpful_pct / 100],
         "Personalized Response\n个性化回答": [personalized_pct / 100],
         "context token": [avg_context_tokens],
-        "Time添加": ["N/A"],  
-        "Time搜索": [f"{avg_search_time:.2f}s /chat"] 
+        "Time添加": ["N/A"],
+        "Time搜索": [f"{avg_search_time:.2f}s /chat"],
     }
 
     df = pd.DataFrame(data)
 
     with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Summary")
-        
+
         workbook = writer.book
         worksheet = writer.sheets["Summary"]
 
-  
-        pct_format = workbook.add_format({'num_format': '0.0%'})
+        pct_format = workbook.add_format({"num_format": "0.0%"})
 
-        float_format = workbook.add_format({'num_format': '0.00'})
-        
-        wrap_format = workbook.add_format({'text_wrap': True, 'align': 'center', 'valign': 'top'})
-        
-        worksheet.set_column("B:F", 18, pct_format) 
+        float_format = workbook.add_format({"num_format": "0.00"})
+
+        wrap_format = workbook.add_format({"text_wrap": True, "align": "center", "valign": "top"})
+
+        worksheet.set_column("B:F", 18, pct_format)
         worksheet.set_column("G:G", 12, float_format)
-        worksheet.set_column("H:I", 15) 
-        worksheet.set_column("A:I", None, wrap_format) 
-        
-        worksheet.set_row(0, 45) 
-        
-        bold_pct_format = workbook.add_format({'num_format': '0.0%', 'bold': True})
-        worksheet.set_column("F:F", 18, bold_pct_format)
+        worksheet.set_column("H:I", 15)
+        worksheet.set_column("A:I", None, wrap_format)
 
+        worksheet.set_row(0, 45)
+
+        bold_pct_format = workbook.add_format({"num_format": "0.0%", "bold": True})
+        worksheet.set_column("F:F", 18, bold_pct_format)
 
     print(f"Successfully saved summary to {OUTPUT_EXCEL_FILE}")
 
@@ -336,7 +334,7 @@ async def main(concurrency_limit: int):
         except FileNotFoundError:
             print(f"Error: Input file not found at '{INPUT_FILE}'")
             return
-        
+
         if not lines:
             print("Error: Input file is empty.")
             return
@@ -357,7 +355,7 @@ async def main(concurrency_limit: int):
 
                     error_type = result["error_type"]
                     error_counter[error_type] += 1
-                    
+
                     metrics = result.get("metrics", {})
                     search_time = metrics.get("search_memories_duration_seconds")
                     context_tokens = metrics.get("memory_tokens_used")
@@ -372,19 +370,16 @@ async def main(concurrency_limit: int):
                 except Exception as e:
                     print(f"An error occurred while processing a line: {e}")
 
-    
     total_samples = len(lines)
     summary_results = log_summary(error_counter, total_samples)
-    
+
     avg_search_time = (total_search_time / valid_metric_samples) if valid_metric_samples > 0 else 0
-    avg_context_tokens = (total_context_tokens / valid_metric_samples) if valid_metric_samples > 0 else 0
+    avg_context_tokens = (
+        (total_context_tokens / valid_metric_samples) if valid_metric_samples > 0 else 0
+    )
 
     try:
-        generate_excel_summary(
-            summary_results,
-            avg_search_time,
-            avg_context_tokens
-        )
+        generate_excel_summary(summary_results, avg_search_time, avg_context_tokens)
     except Exception as e:
         print(f"\nFailed to generate Excel file: {e}")
 
