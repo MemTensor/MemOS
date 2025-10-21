@@ -164,7 +164,7 @@ def main():
 
     try:
         with open(args.input, "r", encoding="utf-8") as infile:
-            lines = infile.readlines()
+            lines = infile.readlines()[:20]
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")
         return
@@ -175,8 +175,8 @@ def main():
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
         print(f"Adding {args.add_turn} irrelevant turns.")
         print(f"Using {args.max_workers} workers.")
-        with open(args.output, "w", encoding="utf-8") as outfile:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        with open(args.output, "w", encoding="utf-8") as outfile, \
+             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
                 futures = [
                     executor.submit(
                         add_memory_for_line,
@@ -207,6 +207,8 @@ def main():
         openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
         with open(args.output, "w", encoding="utf-8") as outfile, \
              concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+
+                futures = [executor.submit(process_line_with_id, (i, line), mem_client, openai_client, args.top_k, args.lib, args.version) for i, line in enumerate(lines)]
 
                 pbar = tqdm(
                     concurrent.futures.as_completed(futures),

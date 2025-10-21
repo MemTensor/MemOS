@@ -1,5 +1,4 @@
 import asyncio
-import aiohttp
 import json
 import re
 import argparse
@@ -9,31 +8,33 @@ from tqdm.asyncio import tqdm
 import os
 import pandas as pd
 from dotenv import load_dotenv
+from openai import OpenAI 
 
 load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
-API_URL = os.getenv("OPENAI_CHAT_ENDPOINT")
+API_URL = os.getenv("OPENAI_BASE_URL")
 
 INPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
 OUTPUT_FILE = "./results/prefeval/eval_pref_memos.jsonl"
 OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
 
 
-async def call_gpt4o_mini_async(session: aiohttp.ClientSession, prompt: str) -> str:
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
-    payload = {
-        "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-        "max_tokens": 500,
-    }
+# --- 重写 API 调用函数 ---
+async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
+
+    messages = [{"role": "user", "content": prompt}]
 
     try:
-        async with session.post(API_URL, headers=headers, json=payload, timeout=30) as response:
-            response.raise_for_status()
-            data = await response.json()
-            return data["choices"][0]["message"]["content"]
+        response = await asyncio.to_thread(
+            client.chat.completions.create, 
+            model="gpt-4o-mini",          
+            messages=messages,
+            temperature=0,
+            max_tokens=500,
+            timeout=30.0
+        )
+        return response.choices[0].message.content
     except Exception as e:
         print(f"API call failed: {str(e)}")
         return ""
@@ -45,7 +46,7 @@ def parse_xml_response(response: str, tag: str) -> str:
 
 
 async def evaluate_violate_preference_async(
-    session: aiohttp.ClientSession, preference: str, question: str, response: str
+    client: OpenAI, preference: str, question: str, response: str 
 ) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's response violates the user's stated preference.
 Evaluate the response based on these criteria:
@@ -69,7 +70,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 <explanation>[1 very short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
-    api_response = await call_gpt4o_mini_async(session, prompt)
+    api_response = await call_gpt4o_mini_async(client, prompt) 
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -77,7 +78,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 
 
 async def evaluate_acknowledge_preference_async(
-    session: aiohttp.ClientSession, question: str, response: str
+    client: OpenAI, question: str, response: str 
 ) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query. 
 
@@ -99,8 +100,7 @@ Assistant response: {response}
 Examine the response meticulously and answer. Please answer in this exact XML format without any additional text:
 <preference>[quote of the sentence that acknowledges/mentions what the preference is; leave it blank if there is none]</preference>
 <answer>[Yes/No]</answer>"""
-
-    api_response = await call_gpt4o_mini_async(session, prompt)
+    api_response = await call_gpt4o_mini_async(client, prompt) 
     return {
         "preference_mention": parse_xml_response(api_response, "preference"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -108,11 +108,10 @@ Examine the response meticulously and answer. Please answer in this exact XML fo
 
 
 async def evaluate_hallucinate_preference_async(
-    session: aiohttp.ClientSession, preference: str, restatement: str
+    client: OpenAI, preference: str, restatement: str 
 ) -> Dict[str, str]:
     if not restatement.strip():
         return {"explanation": "No restatement provided by assistant", "answer": "No"}
-
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's restatement of the user's stated preference is the same preference. Evaluate the response based on these stringent criteria to answer if the assistant has hallucinated the preference or not:
 
 Answer "Yes" if:
@@ -134,7 +133,7 @@ Examine the original preference and the assistant's restatement meticulously and
 <explanation>[1 short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
-    api_response = await call_gpt4o_mini_async(session, prompt)
+    api_response = await call_gpt4o_mini_async(client, prompt) 
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -142,7 +141,7 @@ Examine the original preference and the assistant's restatement meticulously and
 
 
 async def evaluate_helpful_response_async(
-    session: aiohttp.ClientSession, question: str, response: str
+    client: OpenAI, question: str, response: str 
 ) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant provides any substantive response to the user's query.
 Evaluate the response based on these stringent criteria:
@@ -174,7 +173,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 <explanation>[1 very short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
-    api_response = await call_gpt4o_mini_async(session, prompt)
+    api_response = await call_gpt4o_mini_async(client, prompt) 
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -200,19 +199,19 @@ def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
 
 
 async def process_line(
-    line: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore
+    line: str, client: OpenAI, semaphore: asyncio.Semaphore
 ) -> Dict[str, Any]:
     async with semaphore:
         data = json.loads(line.strip())
         preference = data["preference"]
         response = data["response"]
         question = data["question"]
-        eval2 = await evaluate_acknowledge_preference_async(session, question, response)
+        eval2 = await evaluate_acknowledge_preference_async(client, question, response)
 
         tasks = [
-            evaluate_violate_preference_async(session, preference, question, response),
-            evaluate_hallucinate_preference_async(session, preference, eval2["preference_mention"]),
-            evaluate_helpful_response_async(session, question, response),
+            evaluate_violate_preference_async(client, preference, question, response),
+            evaluate_hallucinate_preference_async(client, preference, eval2["preference_mention"]),
+            evaluate_helpful_response_async(client, question, response),
         ]
         eval1, eval3, eval4 = await asyncio.gather(*tasks)
 
@@ -262,9 +261,6 @@ def generate_excel_summary(
     avg_add_time: float,
     model_name: str = "gpt-4o-mini", 
 ):
-    """
-    Generates an Excel summary file based on the evaluation results.
-    """
     print(f"Generating Excel summary at {OUTPUT_EXCEL_FILE}...")
 
     def get_pct(key):
@@ -284,8 +280,8 @@ def generate_excel_summary(
         "Unhelpful Response\n没帮助的回答": [unhelpful_pct / 100],
         "Personalized Response\n个性化回答": [personalized_pct / 100],
         "context token": [avg_context_tokens],
-        "Time添加": [f"{avg_add_time:.2f}s"],  
-        "Time搜索": [f"{avg_search_time:.2f}s"] 
+        "Time添加": [f"{avg_add_time:.2f}s"],
+        "Time搜索": [f"{avg_search_time:.2f}s"]
     }
 
     df = pd.DataFrame(data)
@@ -297,18 +293,14 @@ def generate_excel_summary(
         worksheet = writer.sheets["Summary"]
 
         pct_format = workbook.add_format({"num_format": "0.0%"})
-
         float_format = workbook.add_format({"num_format": "0.00"})
-
         wrap_format = workbook.add_format({"text_wrap": True, "align": "center", "valign": "top"})
 
         worksheet.set_column("B:F", 18, pct_format)
         worksheet.set_column("G:G", 12, float_format)
         worksheet.set_column("H:I", 15)
         worksheet.set_column("A:I", None, wrap_format)
-
         worksheet.set_row(0, 45)
-
         bold_pct_format = workbook.add_format({"num_format": "0.0%", "bold": True})
         worksheet.set_column("F:F", 18, bold_pct_format)
 
@@ -329,55 +321,55 @@ async def main(concurrency_limit: int):
     print(f"Output JSONL: {OUTPUT_FILE}")
     print(f"Output Excel: {OUTPUT_EXCEL_FILE}")
 
-    async with aiohttp.ClientSession() as session:
-        try:
-            with open(INPUT_FILE, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-        except FileNotFoundError:
-            print(f"Error: Input file not found at '{INPUT_FILE}'")
-            return
+    client = OpenAI(api_key=API_KEY, base_url=API_URL)
 
-        if not lines:
-            print("Error: Input file is empty.")
-            return
+    try:
+        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        print(f"Error: Input file not found at '{INPUT_FILE}'")
+        return
 
-        tasks = [process_line(line, session, semaphore) for line in lines]
+    if not lines:
+        print("Error: Input file is empty.")
+        return
 
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as outfile:
-            pbar = tqdm(
-                asyncio.as_completed(tasks),
-                total=len(tasks),
-                desc="Processing samples concurrently",
-                unit="sample",
-            )
-            for future in pbar:
-                try:
-                    result = await future
-                    outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
+    tasks = [process_line(line, client, semaphore) for line in lines]
 
-                    error_type = result["error_type"]
-                    error_counter[error_type] += 1
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as outfile:
+        pbar = tqdm(
+            asyncio.as_completed(tasks),
+            total=len(tasks),
+            desc="Processing samples concurrently",
+            unit="sample",
+        )
+        for future in pbar:
+            try:
+                result = await future
+                outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
 
-                    metrics = result.get("metrics", {})
-                    search_time = metrics.get("search_memories_duration_seconds")
-                    context_tokens = metrics.get("memory_tokens_used")
-                    add_time = metrics.get("add_memories_duration_seconds")
-                    print("add_time: ", add_time)
+                error_type = result["error_type"]
+                error_counter[error_type] += 1
 
-                    all_metrics_valid = (search_time is not None and 
-                                        add_time is not None and 
-                                        context_tokens is not None)
+                metrics = result.get("metrics", {})
+                search_time = metrics.get("search_memories_duration_seconds")
+                context_tokens = metrics.get("memory_tokens_used")
+                add_time = metrics.get("add_memories_duration_seconds")
 
-                    if all_metrics_valid:
-                        total_search_time += float(search_time)
-                        total_context_tokens += int(context_tokens)
-                        total_add_time += float(add_time)
-                        valid_metric_samples += 1
+                all_metrics_valid = (search_time is not None and
+                                     add_time is not None and
+                                     context_tokens is not None)
 
-                    pbar.set_postfix({"Latest Type": error_type})
+                if all_metrics_valid:
+                    total_search_time += float(search_time)
+                    total_context_tokens += int(context_tokens)
+                    total_add_time += float(add_time)
+                    valid_metric_samples += 1
 
-                except Exception as e:
-                    print(f"An error occurred while processing a line: {e}")
+                pbar.set_postfix({"Latest Type": error_type})
+
+            except Exception as e:
+                print(f"An error occurred while processing a line: {e}")
 
     total_samples = len(lines)
     summary_results = log_summary(error_counter, total_samples)
@@ -392,7 +384,7 @@ async def main(concurrency_limit: int):
             avg_search_time,
             avg_context_tokens,
             avg_add_time,
-        )  
+        )
     except Exception as e:
         print(f"\nFailed to generate Excel file: {e}")
 
