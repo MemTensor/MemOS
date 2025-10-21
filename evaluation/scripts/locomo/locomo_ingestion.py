@@ -1,6 +1,11 @@
-import asyncio
 import os
 import sys
+import argparse
+import concurrent.futures
+import time
+from datetime import datetime, timezone
+import pandas as pd
+from dotenv import load_dotenv
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -8,13 +13,6 @@ ROOT_DIR = os.path.dirname(
 EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
-
-import argparse
-import concurrent.futures
-import time
-from datetime import datetime, timezone
-import pandas as pd
-from dotenv import load_dotenv
 from prompts import custom_instructions
 
 
@@ -64,20 +62,13 @@ def ingest_session(client, session, frame, version, metadata):
         client.add(speaker_a_messages, speaker_a_user_id)
         client.add(speaker_b_messages, speaker_b_user_id)
     elif frame == "memu":
-        # speaker_a_user_id = metadata['speaker_a']
-        # speaker_b_user_id = metadata['speaker_b']
-        # client.agent_id = speaker_b_user_id
         client.add(speaker_a_messages, speaker_a_user_id, iso_date)
-        # client.agent_id = speaker_a_user_id
         client.add(speaker_b_messages, speaker_b_user_id, iso_date)
     elif frame == "supermemory":
         for m in speaker_a_messages:
             m["chat_time"] = iso_date
         for m in speaker_b_messages:
             m["chat_time"] = iso_date
-        # seems like user_id can not be too long
-        speaker_a_user_id = f"lcm{conv_idx}a_{version}"
-        speaker_b_user_id = f"lcm{conv_idx}b_{version}"
         client.add(speaker_a_messages, speaker_a_user_id)
         client.add(speaker_b_messages, speaker_b_user_id)
 
@@ -114,11 +105,8 @@ def process_user(conv_idx, frame, locomo_df, version):
         client = memobase_client()
         all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
-            try:
-                if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
-                    client.client.delete_user(user["id"])
-            except:
-                pass
+            if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
+                client.client.delete_user(user["id"])
         speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
         speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
     elif frame == "memu":
@@ -129,7 +117,6 @@ def process_user(conv_idx, frame, locomo_df, version):
         from utils.client import supermemory_client
 
         client = supermemory_client()
-
     sessions_to_process = []
     for session_idx in range(max_session_count):
         session_key = f"session_{session_idx}"

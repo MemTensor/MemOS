@@ -1,16 +1,5 @@
 import os
 import sys
-
-
-ROOT_DIR = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
-EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
-
-sys.path.insert(0, ROOT_DIR)
-sys.path.insert(0, EVAL_SCRIPTS_DIR)
-from prompts import TEMPLATE_MEM0, TEMPLATE_MEMOBASE, TEMPLATE_MEMOS, TEMPLATE_MEM0_GRAPH
-
 import argparse
 import json
 from collections import defaultdict
@@ -19,6 +8,16 @@ from time import time
 import pandas as pd
 from dotenv import load_dotenv
 from tqdm import tqdm
+
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
+
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
+
+from prompts import TEMPLATE_MEM0, TEMPLATE_MEMOBASE, TEMPLATE_MEMOS, TEMPLATE_MEM0_GRAPH
 
 
 def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
@@ -168,7 +167,7 @@ def supermemory_search(
 
 
 def search_query(client, query, metadata, frame, version, top_k=20):
-    conv_id = metadata.get("conv_id")
+    _conv_id = metadata.get("conv_id")
     speaker_a = metadata.get("speaker_a")
     speaker_b = metadata.get("speaker_b")
     speaker_a_user_id = metadata.get("speaker_a_user_id")
@@ -247,13 +246,10 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         client = memobase_client()
         users = client.client.get_all_users(limit=5000)
         for u in users:
-            try:
-                if u["additional_fields"]["user_id"] == speaker_a_user_id:
-                    speaker_a_user_id = u["id"]
-                if u["additional_fields"]["user_id"] == speaker_b_user_id:
-                    speaker_b_user_id = u["id"]
-            except:
-                pass
+            if u["additional_fields"]["user_id"] == speaker_a_user_id:
+                speaker_a_user_id = u["id"]
+            if u["additional_fields"]["user_id"] == speaker_b_user_id:
+                speaker_b_user_id = u["id"]
     elif frame == "memu":
         from utils.client import memu_client
 

@@ -116,11 +116,8 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         client = memobase_client()
         users = client.client.get_all_users(limit=5000)
         for u in users:
-            try:
-                if u["additional_fields"]["user_id"] == user_id:
-                    user_id = u["id"]
-            except:
-                pass
+            if u["additional_fields"]["user_id"] == user_id:
+                user_id = u["id"]
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api":
         from utils.client import memos_api_client
@@ -196,7 +193,7 @@ def main(frame, version, top_k=20, num_workers=2):
         for future in tqdm(
             as_completed(future_to_idx), total=num_multi_sessions, desc="📊 Processing users"
         ):
-            idx = future_to_idx[future]
+            _idx = future_to_idx[future]
             search_results = future.result()
             for user_id, results in search_results.items():
                 all_search_results[user_id].extend(results)

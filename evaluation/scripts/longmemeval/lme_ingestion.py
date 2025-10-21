@@ -1,14 +1,11 @@
 import argparse
 import os
 import sys
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-
 import pandas as pd
-
 from tqdm import tqdm
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def ingest_session(session, date, user_id, session_id, frame, client):
@@ -18,7 +15,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
             client.add(messages, user_id, int(date.timestamp()))
     elif frame == "memobase":
-        for idx, msg in enumerate(session):
+        for _idx, msg in enumerate(session):
             messages.append(
                 {
                     "role": msg["role"],
@@ -39,11 +36,11 @@ def ingest_session(session, date, user_id, session_id, frame, client):
         if messages:
             client.add(messages=messages, user_id=user_id, conv_id=session_id)
     elif frame == "memu":
-        for idx, msg in enumerate(session):
+        for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
         client.add(messages, user_id, date.isoformat())
     elif frame == "supermemory":
-        for idx, msg in enumerate(session):
+        for _idx, msg in enumerate(session):
             messages.append(
                 {
                     "role": msg["role"],
@@ -84,11 +81,8 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
         client = memobase_client()
         all_users = client.client.get_all_users(limit=5000)
         for user in all_users:
-            try:
-                if user["additional_fields"]["user_id"] == user_id:
-                    client.client.delete_user(user["id"])
-            except:
-                pass
+            if user["additional_fields"]["user_id"] == user_id:
+                client.client.delete_user(user["id"])
         user_id = client.client.add_user({"user_id": user_id})
     elif frame == "memu":
         from utils.client import memu_client
@@ -135,8 +129,9 @@ def main(frame, version, num_workers=2):
     success_records = []
     record_file = f"results/lme/{frame}-{version}/success_records.txt"
     if os.path.exists(record_file):
-        for i in open(record_file, "r").readlines():
-            success_records.append(i.strip())
+        with open(record_file, "r") as f:
+            for i in f.readlines():
+                success_records.append(i.strip())
 
     f = open(record_file, "a+")
 
