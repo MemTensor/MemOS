@@ -8,7 +8,7 @@ from tqdm.asyncio import tqdm
 import os
 import pandas as pd
 from dotenv import load_dotenv
-from openai import OpenAI 
+from openai import OpenAI
 
 load_dotenv()
 
@@ -21,17 +21,16 @@ OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
 
 
 async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
-
     messages = [{"role": "user", "content": prompt}]
 
     try:
         response = await asyncio.to_thread(
-            client.chat.completions.create, 
-            model="gpt-4o-mini",          
+            client.chat.completions.create,
+            model="gpt-4o-mini",
             messages=messages,
             temperature=0,
             max_tokens=500,
-            timeout=30.0
+            timeout=30.0,
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -45,7 +44,7 @@ def parse_xml_response(response: str, tag: str) -> str:
 
 
 async def evaluate_violate_preference_async(
-    client: OpenAI, preference: str, question: str, response: str 
+    client: OpenAI, preference: str, question: str, response: str
 ) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's response violates the user's stated preference.
 Evaluate the response based on these criteria:
@@ -69,7 +68,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 <explanation>[1 very short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
-    api_response = await call_gpt4o_mini_async(client, prompt) 
+    api_response = await call_gpt4o_mini_async(client, prompt)
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -77,7 +76,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 
 
 async def evaluate_acknowledge_preference_async(
-    client: OpenAI, question: str, response: str 
+    client: OpenAI, question: str, response: str
 ) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query. 
 
@@ -99,7 +98,7 @@ Assistant response: {response}
 Examine the response meticulously and answer. Please answer in this exact XML format without any additional text:
 <preference>[quote of the sentence that acknowledges/mentions what the preference is; leave it blank if there is none]</preference>
 <answer>[Yes/No]</answer>"""
-    api_response = await call_gpt4o_mini_async(client, prompt) 
+    api_response = await call_gpt4o_mini_async(client, prompt)
     return {
         "preference_mention": parse_xml_response(api_response, "preference"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -107,7 +106,7 @@ Examine the response meticulously and answer. Please answer in this exact XML fo
 
 
 async def evaluate_hallucinate_preference_async(
-    client: OpenAI, preference: str, restatement: str 
+    client: OpenAI, preference: str, restatement: str
 ) -> Dict[str, str]:
     if not restatement.strip():
         return {"explanation": "No restatement provided by assistant", "answer": "No"}
@@ -132,7 +131,7 @@ Examine the original preference and the assistant's restatement meticulously and
 <explanation>[1 short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
-    api_response = await call_gpt4o_mini_async(client, prompt) 
+    api_response = await call_gpt4o_mini_async(client, prompt)
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -140,7 +139,7 @@ Examine the original preference and the assistant's restatement meticulously and
 
 
 async def evaluate_helpful_response_async(
-    client: OpenAI, question: str, response: str 
+    client: OpenAI, question: str, response: str
 ) -> Dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant provides any substantive response to the user's query.
 Evaluate the response based on these stringent criteria:
@@ -172,7 +171,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 <explanation>[1 very short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
-    api_response = await call_gpt4o_mini_async(client, prompt) 
+    api_response = await call_gpt4o_mini_async(client, prompt)
     return {
         "explanation": parse_xml_response(api_response, "explanation"),
         "answer": parse_xml_response(api_response, "answer"),
@@ -197,9 +196,7 @@ def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
         return "Personalized Response"
 
 
-async def process_line(
-    line: str, client: OpenAI, semaphore: asyncio.Semaphore
-) -> Dict[str, Any]:
+async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
     async with semaphore:
         data = json.loads(line.strip())
         preference = data["preference"]
@@ -258,7 +255,7 @@ def generate_excel_summary(
     avg_search_time: float,
     avg_context_tokens: float,
     avg_add_time: float,
-    model_name: str = "gpt-4o-mini", 
+    model_name: str = "gpt-4o-mini",
 ):
     print(f"Generating Excel summary at {OUTPUT_EXCEL_FILE}...")
 
@@ -280,7 +277,7 @@ def generate_excel_summary(
         "Personalized Response\n个性化回答": [personalized_pct / 100],
         "context token": [avg_context_tokens],
         "Time添加": [f"{avg_add_time:.2f}s"],
-        "Time搜索": [f"{avg_search_time:.2f}s"]
+        "Time搜索": [f"{avg_search_time:.2f}s"],
     }
 
     df = pd.DataFrame(data)
@@ -355,9 +352,9 @@ async def main(concurrency_limit: int):
                 context_tokens = metrics.get("memory_tokens_used")
                 add_time = metrics.get("add_memories_duration_seconds")
 
-                all_metrics_valid = (search_time is not None and
-                                     add_time is not None and
-                                     context_tokens is not None)
+                all_metrics_valid = (
+                    search_time is not None and add_time is not None and context_tokens is not None
+                )
 
                 if all_metrics_valid:
                     total_search_time += float(search_time)
@@ -375,7 +372,9 @@ async def main(concurrency_limit: int):
 
     avg_search_time = (total_search_time / valid_metric_samples) if valid_metric_samples > 0 else 0
     avg_add_time = (total_add_time / valid_metric_samples) if valid_metric_samples > 0 else 0
-    avg_context_tokens = (total_context_tokens / valid_metric_samples) if valid_metric_samples > 0 else 0
+    avg_context_tokens = (
+        (total_context_tokens / valid_metric_samples) if valid_metric_samples > 0 else 0
+    )
 
     try:
         generate_excel_summary(

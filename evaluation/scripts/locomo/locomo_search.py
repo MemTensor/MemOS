@@ -17,10 +17,10 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
-from prompts import TEMPLATE_MEM0, TEMPLATE_MEMOBASE, TEMPLATE_MEMOS, TEMPLATE_MEM0_GRAPH
-
 
 def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+    from prompts import TEMPLATE_MEM0
+
     start = time()
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
@@ -47,6 +47,8 @@ def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, spea
 def mem0_graph_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
+    from prompts import TEMPLATE_MEM0_GRAPH
+
     start = time()
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
@@ -93,6 +95,8 @@ def mem0_graph_search(
 def memos_api_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
+    from prompts import TEMPLATE_MEMOS
+
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
@@ -117,6 +121,8 @@ def memos_api_search(
 def memobase_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
+    from prompts import TEMPLATE_MEMOBASE
+
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
@@ -132,6 +138,8 @@ def memobase_search(
 
 
 def memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
+    from prompts import TEMPLATE_MEM0
+
     start = time()
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)
@@ -152,6 +160,8 @@ def memu_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, spea
 def supermemory_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
+    from prompts import TEMPLATE_MEM0
+
     start = time()
     search_speaker_a_results = client.search(query, speaker_a_user_id, top_k)
     search_speaker_b_results = client.search(query, speaker_b_user_id, top_k)

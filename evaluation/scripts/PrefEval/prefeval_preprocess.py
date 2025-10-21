@@ -92,7 +92,6 @@ def process_jsonl_file(input_filepath, output_filepath):
 
 def main():
     huggingface_dataset_name = "siyanzhao/prefeval_implicit_persona"
-    # output_directory = "./PrefEval"
     output_directory = "./data/prefeval"
     input_file_path = os.path.join(output_directory, "train.jsonl")
     processed_file_path = os.path.join(output_directory, "pref_processed.jsonl")
