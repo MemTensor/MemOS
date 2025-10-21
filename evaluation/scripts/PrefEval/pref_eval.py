@@ -20,7 +20,6 @@ OUTPUT_FILE = "./results/prefeval/eval_pref_memos.jsonl"
 OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
 
 
-# --- 重写 API 调用函数 ---
 async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
 
     messages = [{"role": "user", "content": prompt}]
