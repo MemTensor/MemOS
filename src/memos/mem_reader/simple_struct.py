@@ -157,7 +157,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chunker = ChunkerFactory.from_config(config.chunker)
         self.memory_max_length = 8000
         # Use token-based windowing; default to ~5000 tokens if not configured
-        self.chat_window_max_tokens = getattr(self.config, "chat_window_max_tokens", 5000)
+        self.chat_window_max_tokens = getattr(self.config, "chat_window_max_tokens", 1024)
         self._count_tokens = _count_tokens_text
 
     def _make_memory_item(
@@ -229,11 +229,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             role = item.get("role", "")
             content = item.get("content", "")
             chat_time = item.get("chat_time", None)
-            prefix = (
-                f"{role}: "
-                if (role and role != "mix")
-                else (f"[{chat_time}]: " if chat_time else "")
-            )
+            parts = []
+            if role and str(role).lower() != "mix":
+                parts.append(f"{role}: ")
+            if chat_time:
+                parts.append(f"[{chat_time}]: ")
+            prefix = "".join(parts)
             line = f"{prefix}{content}\n"
 
             if self._count_tokens(cur_text + line) > max_tokens and cur_text:
@@ -576,7 +577,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         except json.JSONDecodeError as e:
             logger.error(
                 f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
-                n{s[-400:]}"
+                json: {s}"
             )
             return {}
 

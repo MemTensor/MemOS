@@ -445,7 +445,7 @@ class NebulaGraphDB(BaseGraphDB):
             count = self.count_nodes(memory_type)
             if count > keep_latest:
                 delete_query = f"""
-                    MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
+                    MATCH (n@Memory /*+ INDEX(idx_memory_user_name_memory_type) */)
                     WHERE n.memory_type = '{memory_type}'
                     {optional_condition}
                     ORDER BY n.updated_at DESC
@@ -605,7 +605,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def count_nodes(self, scope: str | None = None) -> int:
-        query = "MATCH (n@Memory)"
+        query = "MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)"
         conditions = []
 
         if scope:
@@ -1584,7 +1584,14 @@ class NebulaGraphDB(BaseGraphDB):
         Create standard B-tree indexes on user_name when use Shared Database
         Multi-Tenant Mode.
         """
-        fields = ["status", "memory_type", "created_at", "updated_at", "user_name"]
+        fields = [
+            "status",
+            "memory_type",
+            "created_at",
+            "updated_at",
+            "user_name",
+            "user_name_memory_type",
+        ]
 
         for field in fields:
             index_name = f"idx_memory_{field}"

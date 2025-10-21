@@ -321,10 +321,14 @@ class GeneralScheduler(BaseScheduler):
             logger.info(f"Processing {len(memory_items)} memories with mem_reader")
 
             # Extract memories using mem_reader
-            processed_memories = self.mem_reader.fine_transfer_simple_mem(
-                memory_items,
-                type="chat",
-            )
+            try:
+                processed_memories = self.mem_reader.fine_transfer_simple_mem(
+                    memory_items,
+                    type="chat",
+                )
+            except Exception as e:
+                logger.warning(f"{e}: Fail to transfer mem: {memory_items}")
+                processed_memories = []
 
             if processed_memories and len(processed_memories) > 0:
                 # Flatten the results (mem_reader returns list of lists)

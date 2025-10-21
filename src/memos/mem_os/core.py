@@ -691,7 +691,7 @@ class MOSCore:
         sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
         if sync_mode == "async":
             assert self.mem_scheduler is not None, (
-                "Mem-Scheduler must be working when use synchronous memory adding."
+                "Mem-Scheduler must be working when use asynchronous memory adding."
             )
         logger.debug(f"Mem-reader mode is: {sync_mode}")
         time_start_1 = time.time()

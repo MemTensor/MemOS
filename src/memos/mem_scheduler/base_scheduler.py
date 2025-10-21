@@ -644,7 +644,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             pass
 
     def mem_scheduler_wait(
-        self, timeout: float = 180.0, poll: float = 0.1, log_every: float = 1.0
+        self, timeout: float = 180.0, poll: float = 0.1, log_every: float = 0.01
     ) -> bool:
         """
         Uses EWMA throughput, detects leaked `unfinished_tasks`, and waits for dispatcher.
