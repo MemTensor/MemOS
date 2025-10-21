@@ -9,8 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from tqdm import tqdm
-from utils.client import mem0_client, memos_client, zep_client
-from utils.memos_api import MemOSAPI
+from utils.client import mem0_client,zep_client,memos_api_client
 from zep_cloud.types import Message
 
 
@@ -142,22 +141,10 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
         )
         print("🔌 Using Memos Local client for ingestion...")
     elif frame == "memos-api":
-        client = MemOSAPI()
-
-    sessions = []
-    session = []
-    for idx, text in enumerate(context):
-        if idx % 30 == 0 and idx > 0:
-            sessions.append(session)
-            session = []
-        session.append(text)
-    if session:
-        sessions.append(session)
-
-    print(f"📊 Total sessions to ingest: {len(sessions)}")
+        client = memos_api_client()
 
     for idx, session in enumerate(sessions):
-        ingest_session(session=session, user_id=user_id, session_id=idx, frame=frame, client=client, )
+        ingest_session(session=context, user_id=user_id, session_id=idx, frame=frame, client=client, )
     print(f"✅ Ingestion of conversation {conv_idx} completed")
     print("=" * 80)
 
