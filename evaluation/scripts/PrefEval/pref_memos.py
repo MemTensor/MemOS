@@ -20,7 +20,7 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
-from utils.client import memos_api_client
+from utils.client import MemosApiClient
 
 load_dotenv()
 
@@ -164,12 +164,12 @@ def main():
 
     try:
         with open(args.input, "r", encoding="utf-8") as infile:
-            lines = infile.readlines()
+            lines = infile.readlines()[:15]
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    mem_client = memos_api_client()
+    mem_client = MemosApiClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
