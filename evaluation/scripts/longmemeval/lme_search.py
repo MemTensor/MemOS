@@ -115,8 +115,8 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
                 pass
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api":
-        from utils.client import memos_client
-        client = memos_client()
+        from utils.client import memos_api_client
+        client = memos_api_client()
         context, duration_ms = memos_search(client, question, user_id, top_k)
     elif frame == "memu":
         from utils.client import memu_client
