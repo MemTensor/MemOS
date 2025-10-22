@@ -7,6 +7,7 @@ import time
 
 import nltk
 import numpy as np
+import tiktoken
 import transformers
 
 from bert_score import score as bert_score
@@ -23,7 +24,7 @@ from tqdm import tqdm
 
 logging.basicConfig(level=logging.CRITICAL)
 transformers.logging.set_verbosity_error()
-
+encoding = tiktoken.get_encoding("cl100k_base")
 # Download necessary NLTK resources
 try:
     nltk.download("wordnet", quiet=True)
@@ -173,7 +174,7 @@ def calculate_nlp_metrics(gold_answer, response, context, options=None):
     gold_answer = str(gold_answer) if gold_answer is not None else ""
     response = str(response) if response is not None else ""
 
-    metrics = {"context_tokens": len(nltk.word_tokenize(context)) if context else 0}
+    metrics = {"context_tokens": len(encoding.encode(context)) if context else 0}
 
     if "lexical" in options:
         gold_tokens = nltk.word_tokenize(gold_answer.lower())
@@ -362,7 +363,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        choices=["mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        default="memos-api",
     )
     parser.add_argument(
         "--version",
@@ -376,9 +378,9 @@ if __name__ == "__main__":
         default=3,
         help="Number of times to run the LLM grader for each question",
     )
-    parser.add_argument("--options", nargs="+", default=["lexical", "semantic"])
+    parser.add_argument("--options", nargs="+", default=["lexical"])
     parser.add_argument(
-        "--workers", type=int, default=4, help="Number of concurrent workers for processing groups"
+        "--workers", type=int, default=10, help="Number of concurrent workers for processing groups"
     )
     args = parser.parse_args()
 
