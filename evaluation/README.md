@@ -21,7 +21,14 @@ This repository provides tools and scripts for evaluating the LoCoMo dataset usi
 
 2. Copy the `configs-example/` directory to a new directory named `configs/`, and modify the configuration files inside it as needed. This directory contains model and API-specific settings.
 
+## Setup MemOS
+```bash
+#start server
+uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 8
 
+# modify .env file
+MEMOS_URL="http://127.0.0.1:8001"
+```
 ## Evaluation Scripts
 
 ### LoCoMo Evaluation
