@@ -133,7 +133,7 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
         client.delete_all(user_id=user_id)
         print(f"🗑️  Deleted existing memories for user {user_id}...")
     elif frame == "memos-local":
-        client = memos_client(
+        client = memosclient(
             mode="local",
             db_name=f"pm_{frame}-{version}",
             user_id=user_id,
