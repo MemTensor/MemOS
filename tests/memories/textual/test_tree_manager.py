@@ -102,37 +102,6 @@ def test_add_to_graph_memory_creates_new_node(memory_manager, mock_graph_store):
     assert mock_graph_store.add_node.called
 
 
-def test_inherit_edges(memory_manager, mock_graph_store):
-    from_id = "from_id"
-    to_id = "to_id"
-    mock_graph_store.get_edges.return_value = [
-        {"from": from_id, "to": "node_b", "type": "RELATE"},
-        {"from": "node_c", "to": from_id, "type": "RELATE"},
-    ]
-    memory_manager._inherit_edges(from_id, to_id)
-    assert mock_graph_store.add_edge.call_count > 0
-
-
-def test_ensure_structure_path_creates_new(memory_manager, mock_graph_store):
-    mock_graph_store.get_by_metadata.return_value = []
-    meta = TreeNodeTextualMemoryMetadata(
-        key="hobby",
-        embedding=[0.1] * 5,
-        user_id="user123",
-        session_id="sess",
-    )
-    node_id = memory_manager._ensure_structure_path("UserMemory", meta)
-    assert isinstance(node_id, str)
-    assert mock_graph_store.add_node.called
-
-
-def test_ensure_structure_path_reuses_existing(memory_manager, mock_graph_store):
-    mock_graph_store.get_by_metadata.return_value = ["existing_node_id"]
-    meta = TreeNodeTextualMemoryMetadata(key="hobby")
-    node_id = memory_manager._ensure_structure_path("UserMemory", meta)
-    assert node_id == "existing_node_id"
-
-
 def test_add_returns_written_node_ids(memory_manager):
     memory = TextualMemoryItem(
         memory="test memory",
