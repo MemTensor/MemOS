@@ -3,7 +3,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
-from memos.memories.textual.prefer_text_memory.utils import deduplicate_preferences
 
 
 class BaseRetriever(ABC):

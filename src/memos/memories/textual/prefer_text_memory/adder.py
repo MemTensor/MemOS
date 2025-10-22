@@ -4,9 +4,13 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.prefer_complete_prompt import NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT, NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE
 from memos.vec_dbs.item import MilvusVecDBItem
+
+
+logger = get_logger(__name__)
 
 
 class BaseAdder(ABC):
@@ -51,7 +55,7 @@ class NaiveAdder(BaseAdder):
             response = result.get("is_same", False)
             return response if isinstance(response, bool) else response == "true"
         except Exception as e:
-            print(f"Error in judge_update_or_add: {e}")
+            logger.error(f"Error in judge_update_or_add: {e}")
             # Fallback to simple string comparison
             return old_msg == new_msg
 
@@ -63,7 +67,7 @@ class NaiveAdder(BaseAdder):
             result = json.loads(response)
             return result
         except Exception as e:
-            print(f"Error in judge_update_or_add_trace_op: {e}")
+            logger.error(f"Error in judge_update_or_add_trace_op: {e}")
             return None
 
     def _update_memory_op_trace(self,
@@ -198,7 +202,7 @@ class NaiveAdder(BaseAdder):
             return self._update_memory(memory, search_results, collection_name, preference_type, update_mode="fast")
 
         except Exception as e:
-            print(f"Error processing memory {memory.id}: {e}")
+            logger.error(f"Error processing memory {memory.id}: {e}")
             return None
 
     def add(
@@ -228,7 +232,7 @@ class NaiveAdder(BaseAdder):
                             added_ids.append(memory_id)
                 except Exception as e:
                     memory = future_to_memory[future]
-                    print(f"Error processing memory {memory.id}: {e}")
+                    logger.error(f"Error processing memory {memory.id}: {e}")
                     continue
 
         return added_ids

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
+from memos.log import get_logger
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.prefer_text_memory.spliter import Splitter
 from memos.memories.textual.prefer_text_memory.utils import convert_messages_to_string
@@ -14,6 +15,9 @@ from memos.templates.prefer_complete_prompt import (
     NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT,
 )
 from memos.types import MessageList
+
+
+logger = get_logger(__name__)
 
 
 class BaseExtractor(ABC):
@@ -56,7 +60,7 @@ class NaiveExtractor(BaseExtractor):
             result = json.loads(response)
             return result
         except Exception as e:
-            print(f"Error extracting explicit preference: {e}, return None")
+            logger.error(f"Error extracting explicit preference: {e}, return None")
             return None
 
     def extract_implicit_preference(
@@ -74,7 +78,7 @@ class NaiveExtractor(BaseExtractor):
             result = json.loads(response)
             return result
         except Exception as e:
-            print(f"Error extracting implicit preferences: {e}, return None")
+            logger.error(f"Error extracting implicit preferences: {e}, return None")
             return None
 
     def _process_single_chunk_explicit(
@@ -178,7 +182,7 @@ class NaiveExtractor(BaseExtractor):
                             memories.append(memory)
                 except Exception as e:
                     task_type, chunk = futures[future]
-                    print(f"Error processing {task_type} chunk: {chunk}\n{e}")
+                    logger.error(f"Error processing {task_type} chunk: {chunk}\n{e}")
                     continue
 
         return memories
