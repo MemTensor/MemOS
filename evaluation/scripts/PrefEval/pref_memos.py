@@ -1,15 +1,14 @@
+import argparse
+import concurrent.futures
+import json
 import os
 import sys
-import json
 import time
-import uuid
 import tiktoken
-import requests
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
-import concurrent.futures
-import argparse
+
 from irrelevant_conv import irre_10, irre_300
 
 ROOT_DIR = os.path.dirname(
@@ -19,15 +18,10 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
-
-from utils.client import MemosApiClient
-
 load_dotenv()
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-
 tokenizer = tiktoken.get_encoding("cl100k_base")
 
 
@@ -60,11 +54,9 @@ def add_memory_for_line(
                 mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
-        
+
         original_data["user_id"] = user_id
-        original_data["metrics"] = {
-            "add_memories_duration_seconds": add_duration
-        }
+        original_data["metrics"] = {"add_memories_duration_seconds": add_duration}
         return original_data
 
     except Exception as e:
@@ -98,7 +90,9 @@ def search_memory_for_line(
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = "\n".join(f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]['memories'])
+        memories_str = "\n".join(
+            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
+        )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -207,35 +201,39 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    mem_client = MemosApiClient()
+    from utils.client import memosApiClient
+
+    mem_client = memosApiClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
         print(f"Adding {args.add_turn} irrelevant turns.")
         print(f"Using {args.max_workers} workers.")
-        with open(args.output, "w", encoding="utf-8") as outfile, \
-             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
-                futures = [
-                    executor.submit(
-                        add_memory_for_line,
-                        (i, line),
-                        mem_client,
-                        args.add_turn,
-                        args.lib,
-                        args.version,
-                    )
-                    for i, line in enumerate(lines)
-                ]
-
-                pbar = tqdm(
-                    concurrent.futures.as_completed(futures),
-                    total=len(lines),
-                    desc="Adding memories...",
+        with (
+            open(args.output, "w", encoding="utf-8") as outfile,
+            concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
+        ):
+            futures = [
+                executor.submit(
+                    add_memory_for_line,
+                    (i, line),
+                    mem_client,
+                    args.add_turn,
+                    args.lib,
+                    args.version,
                 )
-                for future in pbar:
-                    result = future.result()
-                    if result:
-                        outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
+                for i, line in enumerate(lines)
+            ]
+
+            pbar = tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(lines),
+                desc="Adding memories...",
+            )
+            for future in pbar:
+                result = future.result()
+                if result:
+                    outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
         print(f"\n'add' mode complete! Data with user_id written to '{args.output}'.")
 
     elif args.mode == "search":

@@ -13,7 +13,6 @@ ROOT_DIR = os.path.dirname(
 EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
-from prompts import custom_instructions
 
 
 def ingest_session(client, session, frame, version, metadata):
@@ -90,6 +89,7 @@ def process_user(conv_idx, frame, locomo_df, version):
     client = None
     if frame == "mem0" or frame == "mem0_graph":
         from utils.client import Mem0Client
+        from prompts import custom_instructions
 
         client = Mem0Client(enable_graph="graph" in frame)
         client.client.update_project(custom_instructions=custom_instructions)

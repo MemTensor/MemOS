@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def ingest_session(session, date, user_id, session_id, frame, client):
     messages = []
     if "mem0" in frame:
-        for idx, msg in enumerate(session):
+        for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
             client.add(messages, user_id, int(date.timestamp()))
     elif frame == "memobase":
@@ -134,9 +134,7 @@ def main(frame, version, num_workers=2):
             for i in f.readlines():
                 success_records.append(i.strip())
 
-    f = open(record_file, "a+")
-
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    with ThreadPoolExecutor(max_workers=num_workers) as executor, open(record_file, "a+") as f:
         futures = []
         for session_idx in range(num_multi_sessions):
             future = executor.submit(
