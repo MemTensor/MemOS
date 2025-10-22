@@ -64,9 +64,7 @@ def add_memory_for_line(
         return None
 
 
-def search_memory_for_line(
-    line_data: tuple, mem_client, top_k_value: int
-) -> dict:
+def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> dict:
     """
     Processes a single line of data, searching memory based on the question.
     """
@@ -96,11 +94,13 @@ def search_memory_for_line(
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
-        metrics_dict.update({
-            "search_memories_duration_seconds": search_memories_duration,
-            "memory_tokens_used": memory_tokens_used,
-            "retrieved_memories_text": memories_str
-        })
+        metrics_dict.update(
+            {
+                "search_memories_duration_seconds": search_memories_duration,
+                "memory_tokens_used": memory_tokens_used,
+                "retrieved_memories_text": memories_str,
+            }
+        )
         original_data["metrics"] = metrics_dict
 
         return original_data
@@ -111,9 +111,7 @@ def search_memory_for_line(
         return None
 
 
-def generate_response_for_line(
-    line_data: tuple, openai_client: OpenAI
-) -> dict:
+def generate_response_for_line(line_data: tuple, openai_client: OpenAI) -> dict:
     """
     Generates a response for a single line of data using pre-fetched memories.
     """
@@ -128,11 +126,11 @@ def generate_response_for_line(
         # If an error occurred in 'add' or 'search' mode, just pass the line through
         if original_data.get("error"):
             return original_data
-        
+
         if not question:
             original_data["error"] = "Question not found in this line."
             return original_data
-        
+
         # Check for None, as an empty string (no memories found) is a valid result
         if memories_str is None:
             original_data["error"] = (
@@ -150,7 +148,7 @@ def generate_response_for_line(
         response = openai_client.chat.completions.create(model=MODEL_NAME, messages=messages)
         assistant_response = response.choices[0].message.content
         original_data["response"] = assistant_response
-        
+
         return original_data
 
     except Exception as e:
@@ -170,7 +168,12 @@ def main():
     )
     parser.add_argument("--input", required=True, help="Path to the input JSONL file.")
     parser.add_argument("--output", required=True, help="Path to the output JSONL file.")
-    parser.add_argument("--top-k", type=int, default=10, help="Number of memories to retrieve (used in 'search' mode).")
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Number of memories to retrieve (used in 'search' mode).",
+    )
     parser.add_argument(
         "--add-turn",
         type=int,
@@ -186,7 +189,10 @@ def main():
         help="Which MemOS library to use (used in 'add' mode).",
     )
     parser.add_argument(
-        "--version", type=str, default="0929-1", help="Version identifier for user_id generation (used in 'add' mode)."
+        "--version",
+        type=str,
+        default="0929-1",
+        help="Version identifier for user_id generation (used in 'add' mode).",
     )
     parser.add_argument(
         "--max-workers", type=int, default=20, help="Maximum number of concurrent workers."
@@ -240,40 +246,50 @@ def main():
         print(f"Running in 'search' mode. Searching memories based on '{args.input}'...")
         print(f"Retrieving top {args.top_k} memories for each query.")
         print(f"Using {args.max_workers} workers.")
-        with open(args.output, "w", encoding="utf-8") as outfile, \
-             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        with (
+            open(args.output, "w", encoding="utf-8") as outfile,
+            concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
+        ):
+            futures = [
+                executor.submit(search_memory_for_line, (i, line), mem_client, args.top_k)
+                for i, line in enumerate(lines)
+            ]
 
-                futures = [executor.submit(search_memory_for_line, (i, line), mem_client, args.top_k) for i, line in enumerate(lines)]
-
-                pbar = tqdm(
-                    concurrent.futures.as_completed(futures),
-                    total=len(lines),
-                    desc="Searching memories...",
-                )
-                for future in pbar:
-                    result = future.result()
-                    if result:
-                        outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
-        print(f"\n'search' mode complete! Results with retrieved memories written to '{args.output}'.")
+            pbar = tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(lines),
+                desc="Searching memories...",
+            )
+            for future in pbar:
+                result = future.result()
+                if result:
+                    outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
+        print(
+            f"\n'search' mode complete! Results with retrieved memories written to '{args.output}'."
+        )
 
     elif args.mode == "response":
         print(f"Running in 'response' mode. Generating responses based on '{args.input}'...")
         print(f"Using {args.max_workers} workers.")
         openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
-        with open(args.output, "w", encoding="utf-8") as outfile, \
-             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        with (
+            open(args.output, "w", encoding="utf-8") as outfile,
+            concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
+        ):
+            futures = [
+                executor.submit(generate_response_for_line, (i, line), openai_client)
+                for i, line in enumerate(lines)
+            ]
 
-                futures = [executor.submit(generate_response_for_line, (i, line), openai_client) for i, line in enumerate(lines)]
-
-                pbar = tqdm(
-                    concurrent.futures.as_completed(futures),
-                    total=len(lines),
-                    desc="Generating responses...",
-                )
-                for future in pbar:
-                    result = future.result()
-                    if result:
-                        outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
+            pbar = tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(lines),
+                desc="Generating responses...",
+            )
+            for future in pbar:
+                result = future.result()
+                if result:
+                    outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
         print(f"\n'response' mode complete! Final results written to '{args.output}'.")
 
 

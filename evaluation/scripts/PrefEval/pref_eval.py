@@ -15,6 +15,7 @@ load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_URL = os.getenv("OPENAI_BASE_URL")
 
+
 async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
     messages = [{"role": "user", "content": prompt}]
 
@@ -250,8 +251,8 @@ def generate_excel_summary(
     avg_search_time: float,
     avg_context_tokens: float,
     avg_add_time: float,
-    output_excel_file: str,  
-    model_name: str = "gpt-4o-mini", 
+    output_excel_file: str,
+    model_name: str = "gpt-4o-mini",
 ):
     print(f"Generating Excel summary at {output_excel_file}...")
 
@@ -299,12 +300,7 @@ def generate_excel_summary(
     print(f"Successfully saved summary to {output_excel_file}")
 
 
-async def main(
-    concurrency_limit: int, 
-    input_file: str, 
-    output_file: str, 
-    output_excel_file: str
-):
+async def main(concurrency_limit: int, input_file: str, output_file: str, output_excel_file: str):
     semaphore = asyncio.Semaphore(concurrency_limit)
     error_counter = Counter()
 
@@ -383,7 +379,7 @@ async def main(
             avg_search_time,
             avg_context_tokens,
             avg_add_time,
-            output_excel_file, 
+            output_excel_file,
         )
     except Exception as e:
         print(f"\nFailed to generate Excel file: {e}")
@@ -391,14 +387,11 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate assistant responses from a JSONL file.")
-    
+
     parser.add_argument(
-        "--input",
-        type=str,
-        required=True,
-        help="Path to the input JSONL file from pref_memos.py."
+        "--input", type=str, required=True, help="Path to the input JSONL file from pref_memos.py."
     )
-    
+
     parser.add_argument(
         "--concurrency-limit",
         type=int,
@@ -408,14 +401,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     input_path = args.input
-    output_dir = os.path.dirname(input_path) 
-    
+    output_dir = os.path.dirname(input_path)
+
     output_jsonl_path = os.path.join(output_dir, "eval_pref_memos.jsonl")
     output_excel_path = os.path.join(output_dir, "eval_pref_memos_summary.xlsx")
 
-    asyncio.run(main(
-        concurrency_limit=args.concurrency_limit,
-        input_file=input_path,
-        output_file=output_jsonl_path,
-        output_excel_file=output_excel_path
-    ))
+    asyncio.run(
+        main(
+            concurrency_limit=args.concurrency_limit,
+            input_file=input_path,
+            output_file=output_jsonl_path,
+            output_excel_file=output_excel_path,
+        )
+    )
