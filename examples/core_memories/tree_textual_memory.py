@@ -172,7 +172,8 @@ for m_list in memory:
     added_ids = my_tree_textual_memory.add(m_list)
     for i, id in enumerate(added_ids):
         print(f"{i}'th added result is:" + my_tree_textual_memory.get(id).memory)
-    my_tree_textual_memory.memory_manager.wait_reorganizer()
+    # wait the synchronous thread
+    # TODO: USE SCHEDULE MODULE TO WAIT
 
 time.sleep(60)
 
@@ -233,7 +234,8 @@ doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "sessi
 
 for m_list in doc_memory:
     added_ids = my_tree_textual_memory.add(m_list)
-    my_tree_textual_memory.memory_manager.wait_reorganizer()
+    # wait the synchronous thread
+    # TODO: USE SCHEDULE MODULE TO WAIT
 
 results = my_tree_textual_memory.search(
     "Tell me about what memos consist of?",
@@ -245,9 +247,10 @@ for i, r in enumerate(results):
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results)} memories")
 
-# close the synchronous thread in memory manager
-my_tree_textual_memory.memory_manager.close()
+# close the synchronous thread
+# TODO: USE SCHEDULE MODULE TO CLOSE
 
 # my_tree_textual_memory.dump
+# Note that you cannot drop this tree when`use_multi_db` ==
+# false. my_tree_textual_memory.drop() """
 my_tree_textual_memory.dump("tmp/my_tree_textual_memory")
-my_tree_textual_memory.drop()
