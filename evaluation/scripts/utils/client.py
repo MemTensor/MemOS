@@ -55,8 +55,6 @@ class Mem0Client:
                 messages=messages,
                 timestamp=timestamp,
                 user_id=user_id,
-                output_format="v1.1",
-                version="v2",
                 enable_graph=True,
             )
         else:
@@ -68,19 +66,15 @@ class Mem0Client:
                 query=query,
                 top_k=top_k,
                 user_id=user_id,
-                output_format="v1.1",
-                version="v2",
                 enable_graph=True,
-                filters={"AND": [{"user_id": f"{user_id}"}, {"run_id": "*"}]},
+                filters={"AND": [{"user_id": f"{user_id}"}]},
             )
         else:
             res = self.client.search(
                 query=query,
                 top_k=top_k,
                 user_id=user_id,
-                output_format="v1.1",
-                version="v2",
-                filters={"AND": [{"user_id": f"{user_id}"}, {"run_id": "*"}]},
+                filters={"AND": [{"user_id": f"{user_id}"}]},
             )
         return res
 
