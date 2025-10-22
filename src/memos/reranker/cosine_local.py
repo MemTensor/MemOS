@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from memos.log import get_logger
+
 from .base import BaseReranker
 
-from memos.log import get_logger
 
 if TYPE_CHECKING:
     from memos.memories.textual.item import TextualMemoryItem
@@ -18,6 +19,7 @@ except Exception:
     _HAS_NUMPY = False
 
 logger = get_logger(__name__)
+
 
 def _cosine_one_to_many(q: list[float], m: list[list[float]]) -> list[float]:
     """
