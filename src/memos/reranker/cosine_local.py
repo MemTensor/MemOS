@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from .base import BaseReranker
 
+from memos.log import get_logger
 
 if TYPE_CHECKING:
     from memos.memories.textual.item import TextualMemoryItem
@@ -16,6 +17,7 @@ try:
 except Exception:
     _HAS_NUMPY = False
 
+logger = get_logger(__name__)
 
 def _cosine_one_to_many(q: list[float], m: list[list[float]]) -> list[float]:
     """
@@ -92,5 +94,5 @@ class CosineLocalReranker(BaseReranker):
             chosen = {it.id for it, _ in top_items}
             remain = [(it, -1.0) for it in graph_results if it.id not in chosen]
             top_items.extend(remain[: top_k - len(top_items)])
-
+        logger.info(f"CosineLocalReranker rerank result: {top_items[:1]}")
         return top_items

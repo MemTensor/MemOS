@@ -80,7 +80,7 @@ class HTTPBGEReranker(BaseReranker):
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
         headers_extra: dict | None = None,
-        rerank_source: list[str] | None = None,
+        rerank_source: str | None = None,
         boost_weights: dict[str, float] | None = None,
         boost_default: float = 0.0,
         warn_unknown_filter_keys: bool = True,
@@ -107,7 +107,7 @@ class HTTPBGEReranker(BaseReranker):
         self.model = model
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
-        self.concat_source = rerank_source
+        self.rerank_source = rerank_source
 
         self.boost_weights = (
             DEFAULT_BOOST_WEIGHTS.copy()
@@ -152,8 +152,8 @@ class HTTPBGEReranker(BaseReranker):
         # Build a mapping from "payload docs index" -> "original graph_results index"
         # Only include items that have a non-empty string memory. This ensures that
         # any index returned by the server can be mapped back correctly.
-        if self.concat_source:
-            documents = concat_original_source(graph_results, self.concat_source)
+        if self.rerank_source:
+            documents = concat_original_source(graph_results, self.rerank_source)
         else:
             documents = [
                 (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
