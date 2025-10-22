@@ -27,6 +27,8 @@ embedder_config = EmbedderConfigFactory.model_validate(
 )
 embedder = EmbedderFactory.from_config(embedder_config)
 
+user_name = "lucy4"
+
 # === Step 2: Initialize Neo4j GraphStore ===
 graph_config = GraphDBConfigFactory(
     backend="neo4j",
@@ -34,7 +36,7 @@ graph_config = GraphDBConfigFactory(
         "uri": "bolt://localhost:7687",
         "user": "neo4j",
         "password": "12345678",
-        "db_name": "lucy4",
+        "db_name": user_name,
         "auto_create": True,
     },
 )
@@ -178,6 +180,7 @@ relation_detector = RelationAndReasoningDetector(
 
 results = relation_detector.process_node(
     node=node,
+    user_name=user_name,
     exclude_ids=[node.id],  # Exclude self when searching for neighbors
     top_k=5,
 )

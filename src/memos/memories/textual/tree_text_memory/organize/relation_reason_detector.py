@@ -1,9 +1,9 @@
 import json
 import traceback
 
-from memos.embedders.factory import OllamaEmbedder
+from memos.embedders.base import BaseEmbedder
+from memos.graph_dbs.base import BaseGraphDB
 from memos.graph_dbs.item import GraphDBNode
-from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
@@ -18,12 +18,14 @@ logger = get_logger(__name__)
 
 
 class RelationAndReasoningDetector:
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder):
+    def __init__(self, graph_store: BaseGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
 
-    def process_node(self, node: GraphDBNode, exclude_ids: list[str], top_k: int = 5):
+    def process_node(
+        self, node: GraphDBNode, user_name: str, exclude_ids: list[str], top_k: int = 5
+    ):
         """
         Unified pipeline for:
         1) Pairwise relations (cause, condition, conflict, relate)
@@ -52,6 +54,7 @@ class RelationAndReasoningDetector:
                 exclude_ids=exclude_ids,
                 top_k=top_k,
                 min_overlap=2,
+                user_name=user_name,
             )
             nearest = [GraphDBNode(**cand_data) for cand_data in nearest]
 
@@ -62,7 +65,7 @@ class RelationAndReasoningDetector:
 
             """
             # 2) Inferred nodes (from causal/condition)
-            inferred = self._infer_fact_nodes_from_relations(pairwise)
+            inferred = self._infer_fact_nodes_from_relations(pairwise, user_name=user_name)
             results["inferred_nodes"].extend(inferred)
             """
 
@@ -115,12 +118,18 @@ class RelationAndReasoningDetector:
 
         return results
 
-    def _infer_fact_nodes_from_relations(self, pairwise_results: dict):
+    def _infer_fact_nodes_from_relations(self, pairwise_results: dict, user_name: str):
         inferred_nodes = []
         for rel in pairwise_results["relations"]:
             if rel["relation_type"] in ("CAUSE", "CONDITION"):
-                src = self.graph_store.get_node(rel["source_id"])
-                tgt = self.graph_store.get_node(rel["target_id"])
+                src = self.graph_store.get_node(
+                    rel["source_id"],
+                    user_name=user_name,
+                )
+                tgt = self.graph_store.get_node(
+                    rel["target_id"],
+                    user_name=user_name,
+                )
                 if not src or not tgt:
                     continue
 

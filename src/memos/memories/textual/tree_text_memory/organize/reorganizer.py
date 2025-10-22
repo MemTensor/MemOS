@@ -174,7 +174,7 @@ class GraphStructureReorganizer:
             if _check_deadline("[GraphStructureReorganize] Before loading candidates"):
                 return
             raw_nodes = self.graph_store.get_structure_optimization_candidates(
-                scope, user_name=user_name
+                scope, user_name=user_name, include_embedding=True
             )
             nodes = [GraphDBNode(**n) for n in raw_nodes]
 
@@ -208,6 +208,7 @@ class GraphStructureReorganizer:
                             local_tree_threshold,
                             min_cluster_size,
                             user_name,
+                            _check_deadline,
                         )
                     )
 
@@ -234,6 +235,7 @@ class GraphStructureReorganizer:
         local_tree_threshold: int,
         min_cluster_size: int,
         user_name: str,
+        check_deadline_func,
     ):
         if len(cluster_nodes) <= min_cluster_size:
             return
@@ -271,11 +273,20 @@ class GraphStructureReorganizer:
                         node,
                         exclude_ids,
                         10,  # top_k
+                        user_name=user_name,
                     )
                 )
 
-            for f in as_completed(futures, timeout=300):
-                results = f.result()
+            for f in as_completed(futures):
+                if check_deadline_func("[GraphStructureReorganize] Relations/reasons"):
+                    for x in futures:
+                        x.cancel()
+                    return
+                try:
+                    results = f.result()
+                except Exception as e:
+                    logger.warning(f"Relation task failed: {e}", exc_info=True)
+                    continue
 
                 # 1) Add pairwise relations
                 for rel in results["relations"]:
