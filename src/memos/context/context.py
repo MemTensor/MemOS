@@ -29,9 +29,19 @@ class RequestContext:
     This provides a Flask g-like object for FastAPI applications.
     """
 
-    def __init__(self, trace_id: str | None = None, api_path: str | None = None):
+    def __init__(
+        self,
+        trace_id: str | None = None,
+        api_path: str | None = None,
+        env: str | None = None,
+        user_type: str | None = None,
+        user_name: str | None = None,
+    ):
         self.trace_id = trace_id or "trace-id"
         self.api_path = api_path
+        self.env = env
+        self.user_type = user_type
+        self.user_name = user_name
         self._data: dict[str, Any] = {}
 
     def set(self, key: str, value: Any) -> None:
@@ -43,7 +53,13 @@ class RequestContext:
         return self._data.get(key, default)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name.startswith("_") or name in ("trace_id", "api_path"):
+        if name.startswith("_") or name in (
+            "trace_id",
+            "api_path",
+            "env",
+            "user_type",
+            "user_name",
+        ):
             super().__setattr__(name, value)
         else:
             if not hasattr(self, "_data"):
@@ -58,7 +74,14 @@ class RequestContext:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert context to dictionary."""
-        return {"trace_id": self.trace_id, "api_path": self.api_path, "data": self._data.copy()}
+        return {
+            "trace_id": self.trace_id,
+            "api_path": self.api_path,
+            "env": self.env,
+            "user_type": self.user_type,
+            "user_name": self.user_name,
+            "data": self._data.copy(),
+        }
 
 
 def set_request_context(context: RequestContext) -> None:
