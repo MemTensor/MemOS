@@ -17,6 +17,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    MEM_ORGANIZE_LABEL,
     MEM_READ_LABEL,
     QUERY_LABEL,
 )
@@ -735,6 +736,17 @@ class MOSCore:
                             mem_cube_id=mem_cube_id,
                             mem_cube=mem_cube,
                             label=MEM_READ_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
+
+                    elif sync_mode == "sync":
+                        message_item = ScheduleMessageItem(
+                            user_id=user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=MEM_ORGANIZE_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
