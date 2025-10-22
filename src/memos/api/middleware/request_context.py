@@ -2,6 +2,8 @@
 Request context middleware for automatic trace_id injection.
 """
 
+import time
+
 from collections.abc import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -38,8 +40,19 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Extract or generate trace_id
         trace_id = extract_trace_id_from_headers(request) or generate_trace_id()
 
+        env = request.headers.get("x-env")
+        user_type = request.headers.get("x-user-type")
+        user_name = request.headers.get("x-user-name")
+        start_time = time.time()
+
         # Create and set request context
-        context = RequestContext(trace_id=trace_id, api_path=request.url.path)
+        context = RequestContext(
+            trace_id=trace_id,
+            api_path=request.url.path,
+            env=env,
+            user_type=user_type,
+            user_name=user_name,
+        )
         set_request_context(context)
 
         # Log request start with parameters
@@ -49,15 +62,21 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         if request.query_params:
             params_log["query_params"] = dict(request.query_params)
 
-        logger.info(f"Request started: {request.method} {request.url.path}, {params_log}")
+        logger.info(f"Request started, params: {params_log}, headers: {request.headers}")
 
         # Process the request
         response = await call_next(request)
+        end_time = time.time()
 
         # Log request completion with output
-        logger.info(f"Request completed: {request.url.path}, status: {response.status_code}")
+        logger.info(
+            f"Request completed: {request.url.path}, status: {response.status_code}, cost: {end_time - start_time}s"
+        )
 
         # Add trace_id to response headers for debugging
         response.headers["x-trace-id"] = trace_id
+        response.headers["x-env"] = env
+        response.headers["x-user-type"] = user_type
+        response.headers["x-user-name"] = user_name
 
         return response

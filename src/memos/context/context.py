@@ -93,6 +93,36 @@ def get_current_api_path() -> str | None:
     return None
 
 
+def get_current_env() -> str | None:
+    """
+    Get the current request's env.
+    """
+    context = _request_context.get()
+    if context:
+        return context.get("env")
+    return "prod"
+
+
+def get_current_user_type() -> str | None:
+    """
+    Get the current request's user type.
+    """
+    context = _request_context.get()
+    if context:
+        return context.get("user_type")
+    return "normal"
+
+
+def get_current_user_name() -> str | None:
+    """
+    Get the current request's user name.
+    """
+    context = _request_context.get()
+    if context:
+        return context.get("user_name")
+    return "unknown"
+
+
 def get_current_context() -> RequestContext | None:
     """
     Get the current request context.
@@ -103,7 +133,11 @@ def get_current_context() -> RequestContext | None:
     context_dict = _request_context.get()
     if context_dict:
         ctx = RequestContext(
-            trace_id=context_dict.get("trace_id"), api_path=context_dict.get("api_path")
+            trace_id=context_dict.get("trace_id"),
+            api_path=context_dict.get("api_path"),
+            env=context_dict.get("env"),
+            user_type=context_dict.get("user_type"),
+            user_name=context_dict.get("user_name"),
         )
         ctx._data = context_dict.get("data", {}).copy()
         return ctx
@@ -141,6 +175,9 @@ class ContextThread(threading.Thread):
 
         self.main_trace_id = get_current_trace_id()
         self.main_api_path = get_current_api_path()
+        self.main_env = get_current_env()
+        self.main_user_type = get_current_user_type()
+        self.main_user_name = get_current_user_name()
         self.main_context = get_current_context()
 
     def run(self):
@@ -148,7 +185,11 @@ class ContextThread(threading.Thread):
         if self.main_context:
             # Copy the context data
             child_context = RequestContext(
-                trace_id=self.main_trace_id, api_path=self.main_context.api_path
+                trace_id=self.main_trace_id,
+                api_path=self.main_api_path,
+                env=self.main_env,
+                user_type=self.main_user_type,
+                user_name=self.main_user_name,
             )
             child_context._data = self.main_context._data.copy()
 
@@ -171,13 +212,22 @@ class ContextThreadPoolExecutor(ThreadPoolExecutor):
         """
         main_trace_id = get_current_trace_id()
         main_api_path = get_current_api_path()
+        main_env = get_current_env()
+        main_user_type = get_current_user_type()
+        main_user_name = get_current_user_name()
         main_context = get_current_context()
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if main_context:
                 # Create and set new context in worker thread
-                child_context = RequestContext(trace_id=main_trace_id, api_path=main_api_path)
+                child_context = RequestContext(
+                    trace_id=main_trace_id,
+                    api_path=main_api_path,
+                    env=main_env,
+                    user_type=main_user_type,
+                    user_name=main_user_name,
+                )
                 child_context._data = main_context._data.copy()
                 set_request_context(child_context)
 
@@ -198,13 +248,22 @@ class ContextThreadPoolExecutor(ThreadPoolExecutor):
         """
         main_trace_id = get_current_trace_id()
         main_api_path = get_current_api_path()
+        main_env = get_current_env()
+        main_user_type = get_current_user_type()
+        main_user_name = get_current_user_name()
         main_context = get_current_context()
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if main_context:
                 # Create and set new context in worker thread
-                child_context = RequestContext(trace_id=main_trace_id, api_path=main_api_path)
+                child_context = RequestContext(
+                    trace_id=main_trace_id,
+                    api_path=main_api_path,
+                    env=main_env,
+                    user_type=main_user_type,
+                    user_name=main_user_name,
+                )
                 child_context._data = main_context._data.copy()
                 set_request_context(child_context)
 
