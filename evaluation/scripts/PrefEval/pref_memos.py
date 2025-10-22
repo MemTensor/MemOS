@@ -164,7 +164,7 @@ def main():
 
     try:
         with open(args.input, "r", encoding="utf-8") as infile:
-            lines = infile.readlines()[:15]
+            lines = infile.readlines()
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")
         return

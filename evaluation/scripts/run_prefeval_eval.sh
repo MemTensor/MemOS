@@ -10,9 +10,9 @@ WORKERS=10
 
 # Parameters for pref_memos.py
 TOP_K=10
-ADD_TURN=0  # Options: 0, 10, or 300
+ADD_TURN=10  # Options: 0, 10, or 300
 LIB="memos-api" 
-VERSION="1021-5"  
+VERSION="1021-8"  
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
