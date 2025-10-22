@@ -15,11 +15,6 @@ load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_URL = os.getenv("OPENAI_BASE_URL")
 
-INPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
-OUTPUT_FILE = "./results/prefeval/eval_pref_memos.jsonl"
-OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
-
-
 async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
     messages = [{"role": "user", "content": prompt}]
 
@@ -255,9 +250,10 @@ def generate_excel_summary(
     avg_search_time: float,
     avg_context_tokens: float,
     avg_add_time: float,
-    model_name: str = "gpt-4o-mini",
+    output_excel_file: str,  
+    model_name: str = "gpt-4o-mini", 
 ):
-    print(f"Generating Excel summary at {OUTPUT_EXCEL_FILE}...")
+    print(f"Generating Excel summary at {output_excel_file}...")
 
     def get_pct(key):
         return summary_results.get(key, {}).get("percentage", 0)
@@ -282,7 +278,7 @@ def generate_excel_summary(
 
     df = pd.DataFrame(data)
 
-    with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(output_excel_file, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Summary")
 
         workbook = writer.book
@@ -300,10 +296,15 @@ def generate_excel_summary(
         bold_pct_format = workbook.add_format({"num_format": "0.0%", "bold": True})
         worksheet.set_column("F:F", 18, bold_pct_format)
 
-    print(f"Successfully saved summary to {OUTPUT_EXCEL_FILE}")
+    print(f"Successfully saved summary to {output_excel_file}")
 
 
-async def main(concurrency_limit: int):
+async def main(
+    concurrency_limit: int, 
+    input_file: str, 
+    output_file: str, 
+    output_excel_file: str
+):
     semaphore = asyncio.Semaphore(concurrency_limit)
     error_counter = Counter()
 
@@ -313,17 +314,17 @@ async def main(concurrency_limit: int):
     total_add_time = 0
 
     print(f"Starting evaluation with a concurrency limit of {concurrency_limit}...")
-    print(f"Input file: {INPUT_FILE}")
-    print(f"Output JSONL: {OUTPUT_FILE}")
-    print(f"Output Excel: {OUTPUT_EXCEL_FILE}")
+    print(f"Input file: {input_file}")
+    print(f"Output JSONL: {output_file}")
+    print(f"Output Excel: {output_excel_file}")
 
     client = OpenAI(api_key=API_KEY, base_url=API_URL)
 
     try:
-        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+        with open(input_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
-        print(f"Error: Input file not found at '{INPUT_FILE}'")
+        print(f"Error: Input file not found at '{input_file}'")
         return
 
     if not lines:
@@ -332,7 +333,7 @@ async def main(concurrency_limit: int):
 
     tasks = [process_line(line, client, semaphore) for line in lines]
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as outfile:
+    with open(output_file, "w", encoding="utf-8") as outfile:
         pbar = tqdm(
             asyncio.as_completed(tasks),
             total=len(tasks),
@@ -382,6 +383,7 @@ async def main(concurrency_limit: int):
             avg_search_time,
             avg_context_tokens,
             avg_add_time,
+            output_excel_file, 
         )
     except Exception as e:
         print(f"\nFailed to generate Excel file: {e}")
@@ -389,6 +391,14 @@ async def main(concurrency_limit: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate assistant responses from a JSONL file.")
+    
+    parser.add_argument(
+        "--input",
+        type=str,
+        required=True,
+        help="Path to the input JSONL file from pref_memos.py."
+    )
+    
     parser.add_argument(
         "--concurrency-limit",
         type=int,
@@ -397,4 +407,15 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    asyncio.run(main(concurrency_limit=args.concurrency_limit))
+    input_path = args.input
+    output_dir = os.path.dirname(input_path) 
+    
+    output_jsonl_path = os.path.join(output_dir, "eval_pref_memos.jsonl")
+    output_excel_path = os.path.join(output_dir, "eval_pref_memos_summary.xlsx")
+
+    asyncio.run(main(
+        concurrency_limit=args.concurrency_limit,
+        input_file=input_path,
+        output_file=output_jsonl_path,
+        output_excel_file=output_excel_path
+    ))

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from tqdm import tqdm
-from utils.client import mem0_client,zep_client,memos_api_client
+from utils.client import Mem0Client,ZepClient,MemosApiClient
 from zep_cloud.types import Message
 
 
@@ -116,24 +116,24 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
     print("=" * 80)
 
     if frame == "zep":
-        client = zep_client()
+        client = ZepClient()
         print("🔌 Using Zep client for ingestion...")
         client.user.delete(user_id)
         print(f"🗑️  Deleted existing user {user_id} from Zep memory...")
         client.user.add(user_id=user_id)
         print(f"➕ Added user {user_id} to Zep memory...")
     elif frame == "mem0-local":
-        client = mem0_client(mode="local")
+        client = Mem0Client(mode="local")
         print("🔌 Using Mem0 Local client for ingestion...")
         client.delete_all(user_id=user_id)
         print(f"🗑️  Deleted existing memories for user {user_id}...")
     elif frame == "mem0-api":
-        client = mem0_client(mode="api")
+        client = Mem0Client(mode="api")
         print("🔌 Using Mem0 API client for ingestion...")
         client.delete_all(user_id=user_id)
         print(f"🗑️  Deleted existing memories for user {user_id}...")
     elif frame == "memos-local":
-        client = memos_client(
+        client = memosclient(
             mode="local",
             db_name=f"pm_{frame}-{version}",
             user_id=user_id,
@@ -145,7 +145,7 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
         )
         print("🔌 Using Memos Local client for ingestion...")
     elif frame == "memos-api":
-        client = memos_api_client()
+        client = MemosApiClient()
 
     ingest_session(session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client)
     print(f"✅ Ingestion of conversation {conv_idx} completed")
