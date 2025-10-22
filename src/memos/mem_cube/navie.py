@@ -7,7 +7,6 @@ from memos.configs.utils import get_json_file_model_schema
 from memos.embedders.base import BaseEmbedder
 from memos.exceptions import ConfigurationError, MemCubeError
 from memos.graph_dbs.base import BaseGraphDB
-from memos.vec_dbs.base import BaseVecDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
@@ -15,13 +14,14 @@ from memos.mem_reader.base import BaseMemReader
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.parametric.base import BaseParaMemory
 from memos.memories.textual.base import BaseTextMemory
+from memos.memories.textual.prefer_text_memory.adder import BaseAdder
+from memos.memories.textual.prefer_text_memory.extractor import BaseExtractor
+from memos.memories.textual.prefer_text_memory.retrievers import BaseRetriever
+from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.reranker.base import BaseReranker
-from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
-from memos.memories.textual.prefer_text_memory.extractor import BaseExtractor
-from memos.memories.textual.prefer_text_memory.adder import BaseAdder
-from memos.memories.textual.prefer_text_memory.retrievers import BaseRetriever
+from memos.vec_dbs.base import BaseVecDB
 
 
 logger = get_logger(__name__)
@@ -41,9 +41,9 @@ class NaiveMemCube(BaseMemCube):
         default_cube_config: GeneralMemCubeConfig,
         vector_db: BaseVecDB,
         internet_retriever: None = None,
-        extractor: BaseExtractor=None,
-        adder: BaseAdder=None,
-        retriever: BaseRetriever=None,
+        extractor: BaseExtractor | None = None,
+        adder: BaseAdder | None = None,
+        retriever: BaseRetriever | None = None,
     ):
         """Initialize the MemCube with a configuration."""
         self._text_mem: BaseTextMemory | None = SimpleTreeTextMemory(
@@ -109,7 +109,9 @@ class NaiveMemCube(BaseMemCube):
         logger.info(f"MemCube loaded successfully from {dir} (types: {memory_types})")
 
     def dump(
-        self, dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None
+        self,
+        dir: str,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Dump memories.
         Args:

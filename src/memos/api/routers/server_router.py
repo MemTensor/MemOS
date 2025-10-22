@@ -1,7 +1,7 @@
 import os
-from concurrent.futures import ThreadPoolExecutor
 import traceback
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -16,11 +16,11 @@ from memos.api.product_models import (
 )
 from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
-from memos.configs.vec_db import VectorDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
 from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
+from memos.configs.vec_db import VectorDBConfigFactory
 from memos.embedders.factory import EmbedderFactory
 from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
@@ -28,15 +28,23 @@ from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
+from memos.memories.textual.prefer_text_memory.config import (
+    AdderConfigFactory,
+    ExtractorConfigFactory,
+    RetrieverConfigFactory,
+)
+from memos.memories.textual.prefer_text_memory.factory import (
+    AdderFactory,
+    ExtractorFactory,
+    RetrieverFactory,
+)
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
-from memos.memories.textual.prefer_text_memory.factory import AdderFactory, ExtractorFactory, RetrieverFactory
-from memos.memories.textual.prefer_text_memory.config import AdderConfigFactory, ExtractorConfigFactory, RetrieverConfigFactory
-from memos.vec_dbs.factory import VecDBFactory
 from memos.reranker.factory import RerankerFactory
 from memos.types import MOSSearchResult, UserContext
+from memos.vec_dbs.factory import VecDBFactory
 
 
 logger = get_logger(__name__)
@@ -105,30 +113,18 @@ def _build_internet_retriever_config() -> dict[str, Any]:
 
 def _build_extractor_config() -> dict[str, Any]:
     """Build extractor configuration."""
-    return ExtractorConfigFactory.model_validate(
-        {
-            "backend": "naive",
-            "config": {}
-        }
-    )
+    return ExtractorConfigFactory.model_validate({"backend": "naive", "config": {}})
+
 
 def _build_adder_config() -> dict[str, Any]:
     """Build adder configuration."""
-    return AdderConfigFactory.model_validate(
-        {
-            "backend": "naive",
-            "config": {}
-        }
-    )
+    return AdderConfigFactory.model_validate({"backend": "naive", "config": {}})
+
 
 def _build_retriever_config() -> dict[str, Any]:
     """Build retriever configuration."""
-    return RetrieverConfigFactory.model_validate(
-        {
-            "backend": "naive",
-            "config": {}
-        }
-    )
+    return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
+
 
 def _get_default_memory_size(cube_config) -> dict[str, int]:
     """Get default memory size configuration."""
@@ -362,6 +358,7 @@ def add_memories(add_req: APIADDRequest):
     target_session_id = add_req.session_id
     if not target_session_id:
         target_session_id = "default_session"
+
     def _process_text_mem() -> list[dict[str, str]]:
         memories_local = mem_reader.get_memory(
             [add_req.messages],
@@ -418,7 +415,6 @@ def add_memories(add_req: APIADDRequest):
         pref_future = executor.submit(_process_pref_mem)
         text_response_data = text_future.result()
         pref_response_data = pref_future.result()
-
 
     return MemoryResponse(
         message="Memory added successfully",

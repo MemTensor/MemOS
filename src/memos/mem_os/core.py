@@ -2,11 +2,11 @@ import json
 import os
 import time
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
-from concurrent.futures import ThreadPoolExecutor
 
 from memos.configs.mem_os import MOSConfig
 from memos.llms.factory import LLMFactory
@@ -18,8 +18,8 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
-    QUERY_LABEL,
     PREF_ADD_LABEL,
+    QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_user.user_manager import UserManager, UserRole
@@ -604,14 +604,14 @@ class MOSCore:
 
         for mem_cube_id, mem_cube in tmp_mem_cubes.items():
             # Define internal functions for parallel search execution
-            def search_textual_memory():
+            def search_textual_memory(cube_id, cube):
                 if (
-                    (mem_cube_id in install_cube_ids)
-                    and (mem_cube.text_mem is not None)
+                    (cube_id in install_cube_ids)
+                    and (cube.text_mem is not None)
                     and self.config.enable_textual_memory
                 ):
                     time_start = time.time()
-                    memories = mem_cube.text_mem.search(
+                    memories = cube.text_mem.search(
                         query,
                         top_k=top_k if top_k else self.config.top_k,
                         mode=mode,
@@ -626,22 +626,22 @@ class MOSCore:
                     )
                     search_time_end = time.time()
                     logger.info(
-                        f"🧠 [Memory] Searched memories from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                        f"🧠 [Memory] Searched memories from {cube_id}:\n{self._str_memories(memories)}\n"
                     )
                     logger.info(
                         f"time search graph: search graph time user_id: {target_user_id} time is: {search_time_end - time_start}"
                     )
-                    return {"cube_id": mem_cube_id, "memories": memories}
+                    return {"cube_id": cube_id, "memories": memories}
                 return None
 
-            def search_preference_memory():
+            def search_preference_memory(cube_id, cube):
                 if (
-                    (mem_cube_id in install_cube_ids)
-                    and (mem_cube.pref_mem is not None)
+                    (cube_id in install_cube_ids)
+                    and (cube.pref_mem is not None)
                     and self.config.enable_preference_memory
                 ):
                     time_start = time.time()
-                    memories = mem_cube.pref_mem.search(
+                    memories = cube.pref_mem.search(
                         query,
                         top_k=top_k if top_k else self.config.top_k,
                         info={
@@ -652,18 +652,18 @@ class MOSCore:
                     )
                     search_time_end = time.time()
                     logger.info(
-                        f"🧠 [Memory] Searched preferences from {mem_cube_id}:\n{self._str_memories(memories)}\n"
+                        f"🧠 [Memory] Searched preferences from {cube_id}:\n{self._str_memories(memories)}\n"
                     )
                     logger.info(
                         f"time search pref: search pref time user_id: {target_user_id} time is: {search_time_end - time_start}"
                     )
-                    return {"cube_id": mem_cube_id, "memories": memories}
+                    return {"cube_id": cube_id, "memories": memories}
                 return None
 
             # Execute both search functions in parallel
             with ThreadPoolExecutor(max_workers=2) as executor:
-                text_future = executor.submit(search_textual_memory)
-                pref_future = executor.submit(search_preference_memory)
+                text_future = executor.submit(search_textual_memory, mem_cube_id, mem_cube)
+                pref_future = executor.submit(search_preference_memory, mem_cube_id, mem_cube)
 
                 # Wait for both tasks to complete and collect results
                 text_result = text_future.result()
@@ -784,7 +784,8 @@ class MOSCore:
                     pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
                         messages_list,
                         type="chat",
-                        info={"user_id": target_user_id, "session_id": self.session_id})
+                        info={"user_id": target_user_id, "session_id": self.session_id},
+                    )
                     pref_ids = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
                     logger.info(
                         f"Added preferences user {target_user_id} to memcube {mem_cube_id}: {pref_ids}"

@@ -3,8 +3,8 @@ from memos.types import MessageList
 
 
 def build_system_prompt(
-    memories: list[TextualMemoryItem] | None = None,
-    instruction_strategy: str = "process_conflict"):
+    memories: list[TextualMemoryItem] | None = None, instruction_strategy: str = "process_conflict"
+):
     # Initialize all memory lists
     mems = {
         "textual_mems": [],
@@ -67,12 +67,12 @@ def get_instruction(
     query: str,
     memories: list[TextualMemoryItem] | None = None,
     history: MessageList | None = None,
-    instruction_strategy: str = "process_conflict"
+    instruction_strategy: str = "process_conflict",
 ) -> str:
     """Create instruction following the memories, preference and tool information."""
 
     system_prompt = build_system_prompt(memories, instruction_strategy)
-        
+
     messages = [
         {"role": "system", "content": system_prompt},
         *history,

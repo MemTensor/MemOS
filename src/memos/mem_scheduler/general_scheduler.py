@@ -1,6 +1,5 @@
-import json
-
 import concurrent.futures
+import json
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.log import get_logger
@@ -9,8 +8,8 @@ from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
-    PREF_ADD_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
+    PREF_ADD_LABEL,
     QUERY_LABEL,
     WORKING_MEMORY_TYPE,
     MemCubeID,
@@ -20,8 +19,8 @@ from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 from memos.mem_scheduler.utils.filter_utils import is_all_chinese, is_all_english
 from memos.memories.textual.item import TextualMemoryItem
-from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.preference import PreferenceTextMemory
+from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = get_logger(__name__)
@@ -240,9 +239,7 @@ class GeneralScheduler(BaseScheduler):
                 content = message.content
                 messages_list = json.loads(content)
 
-                logger.info(
-                    f"Processing pref_add for user_id={user_id}, mem_cube_id={mem_cube_id}"
-                )
+                logger.info(f"Processing pref_add for user_id={user_id}, mem_cube_id={mem_cube_id}")
 
                 # Get the preference memory from the mem_cube
                 pref_mem = mem_cube.pref_mem
@@ -251,7 +248,9 @@ class GeneralScheduler(BaseScheduler):
                     return
 
                 # Use pref_mem.get_memory to process the memories
-                pref_memories = pref_mem.get_memory(messages_list, type="chat", info={"user_id": user_id, "session_id": session_id})
+                pref_memories = pref_mem.get_memory(
+                    messages_list, type="chat", info={"user_id": user_id, "session_id": session_id}
+                )
                 # Add pref_mem to vector db
                 pref_ids = pref_mem.add(pref_memories)
 

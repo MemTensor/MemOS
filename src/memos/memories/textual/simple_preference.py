@@ -1,6 +1,3 @@
-import json
-import os
-
 from typing import Any
 
 from memos.embedders.factory import (
@@ -11,8 +8,8 @@ from memos.embedders.factory import (
 )
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
-from memos.memories.textual.preference import PreferenceTextMemory
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
+from memos.memories.textual.preference import PreferenceTextMemory
 from memos.types import MessageList
 from memos.vec_dbs.factory import MilvusVecDB, QdrantVecDB
 
@@ -32,7 +29,7 @@ class SimplePreferenceTextMemory(PreferenceTextMemory):
         extractor,
         adder,
         retriever,
-        ):
+    ):
         """Initialize memory with the given configuration."""
         self.extractor_llm = extractor_llm
         self.vector_db = vector_db

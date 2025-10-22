@@ -85,7 +85,4 @@ class NaiveRetriever(BaseRetriever):
             explicit_prefs = [item for item, _ in explicit_prefs]
             implicit_prefs = [item for item, _ in implicit_prefs]
 
-        # deduplicate implicit preferences, due to more duplicates
-        # implicit_prefs = deduplicate_preferences(implicit_prefs, similarity_threshold=0.6, num_perm=256)
-
         return explicit_prefs + implicit_prefs

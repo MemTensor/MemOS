@@ -73,4 +73,6 @@ class RetrieverFactory(BaseRetriever):
         if backend not in cls.backend_to_class:
             raise ValueError(f"Invalid backend: {backend}")
         retriever_class = cls.backend_to_class[backend]
-        return retriever_class(llm_provider=llm_provider, embedder=embedder, reranker=reranker, vector_db=vector_db)
+        return retriever_class(
+            llm_provider=llm_provider, embedder=embedder, reranker=reranker, vector_db=vector_db
+        )

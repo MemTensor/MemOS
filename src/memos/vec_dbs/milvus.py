@@ -39,9 +39,7 @@ class MilvusVecDB(BaseVecDB):
         schema.add_field(
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
         )
-        schema.add_field(
-            field_name="memory", datatype=DataType.VARCHAR, max_length=65535
-        )
+        schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
         )
@@ -337,7 +335,9 @@ class MilvusVecDB(BaseVecDB):
     def update(self, collection_name: str, id: str, data: MilvusVecDBItem | dict[str, Any]) -> None:
         """Update an item in the vector database."""
         if id != data.id:
-            raise ValueError(f"The id of the data to update must be the same as the id of the item to update, ID mismatch: expected {id}, got {data.id}")
+            raise ValueError(
+                f"The id of the data to update must be the same as the id of the item to update, ID mismatch: expected {id}, got {data.id}"
+            )
         if isinstance(data, dict):
             data = data.copy()
             data = MilvusVecDBItem.from_dict(data)

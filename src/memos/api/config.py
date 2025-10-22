@@ -121,20 +121,11 @@ class APIConfig:
                 },
                 "embedder": APIConfig.get_embedder_config(),
                 "reranker": APIConfig.get_reranker_config(),
-                "extractor": {
-                    "backend": "naive",
-                    "config": {}
-                },
-                "adder": {
-                    "backend": "naive",
-                    "config": {}
-                },
-                "retriever": {
-                    "backend": "naive",
-                    "config": {}
-                },
+                "extractor": {"backend": "naive", "config": {}},
+                "adder": {"backend": "naive", "config": {}},
+                "retriever": {"backend": "naive", "config": {}},
+            },
         }
-    }
 
     @staticmethod
     def get_reranker_config() -> dict[str, Any]:
@@ -314,7 +305,7 @@ class APIConfig:
             "distance_metric": "cosine",
             "uri": os.getenv("MILVUS_URI", "http://localhost:19530"),
             "user_name": os.getenv("MILVUS_USER_NAME", "root"),
-            "password": os.getenv("MILVUS_PASSWORD", "12345678")
+            "password": os.getenv("MILVUS_PASSWORD", "12345678"),
         }
 
     @staticmethod
@@ -591,7 +582,7 @@ class APIConfig:
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
-                    "pref_mem": {} 
+                    "pref_mem": {}
                     if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
                     else APIConfig.get_preference_memory_config(),
                 }
@@ -656,7 +647,7 @@ class APIConfig:
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
-                    "pref_mem": {} 
+                    "pref_mem": {}
                     if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
                     else APIConfig.get_preference_memory_config(),
                 }

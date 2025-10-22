@@ -170,9 +170,9 @@ class SearchedTreeNodeTextualMemoryMetadata(TreeNodeTextualMemoryMetadata):
 class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     """Metadata for preference memory item."""
 
-    preference_type: Literal[
-        "explicit_preference", "implicit_preference"
-    ] = Field(default="explicit_preference", description="Type of preference.")
+    preference_type: Literal["explicit_preference", "implicit_preference"] = Field(
+        default="explicit_preference", description="Type of preference."
+    )
     dialog_id: str | None = Field(default=None, description="ID of the dialog.")
     dialog_str: str | None = Field(default=None, description="String of the dialog.")
     embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")

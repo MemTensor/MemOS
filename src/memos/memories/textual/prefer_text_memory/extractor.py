@@ -63,9 +63,7 @@ class NaiveExtractor(BaseExtractor):
             logger.error(f"Error extracting explicit preference: {e}, return None")
             return None
 
-    def extract_implicit_preference(
-        self, qa_pair: MessageList | str
-    ) -> dict[str, Any] | None:
+    def extract_implicit_preference(self, qa_pair: MessageList | str) -> dict[str, Any] | None:
         """Extract implicit preferences from cluster qa pairs."""
         if not qa_pair:
             return None
@@ -152,9 +150,7 @@ class NaiveExtractor(BaseExtractor):
             return []
 
         memories = []
-        with ThreadPoolExecutor(
-            max_workers=min(max_workers, len(chunks))
-        ) as executor:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
             futures = {
                 executor.submit(self._process_single_chunk_explicit, chunk, msg_type, info): (
                     "explicit",

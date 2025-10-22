@@ -6,7 +6,10 @@ from typing import Any
 
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
-from memos.templates.prefer_complete_prompt import NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT, NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE
+from memos.templates.prefer_complete_prompt import (
+    NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT,
+    NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE,
+)
 from memos.vec_dbs.item import MilvusVecDBItem
 
 
@@ -59,8 +62,12 @@ class NaiveAdder(BaseAdder):
             # Fallback to simple string comparison
             return old_msg == new_msg
 
-    def _judge_update_or_add_trace_op(self, new_mem: str, retrieved_mems: str) -> dict[str, Any] | None:
-        prompt = NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE.replace("{new_memory}", new_mem).replace("{retrieved_memories}", retrieved_mems)
+    def _judge_update_or_add_trace_op(
+        self, new_mem: str, retrieved_mems: str
+    ) -> dict[str, Any] | None:
+        prompt = NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE.replace("{new_memory}", new_mem).replace(
+            "{retrieved_memories}", retrieved_mems
+        )
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             response = response.strip().replace("```json", "").replace("```", "").strip()
@@ -70,63 +77,91 @@ class NaiveAdder(BaseAdder):
             logger.error(f"Error in judge_update_or_add_trace_op: {e}")
             return None
 
-    def _update_memory_op_trace(self,
-            new_memory: TextualMemoryItem,
-            retrieved_memories: list[MilvusVecDBItem],
-            collection_name: str,
-            preference_type: str
-        ) -> list[str] | str:
-
+    def _update_memory_op_trace(
+        self,
+        new_memory: TextualMemoryItem,
+        retrieved_memories: list[MilvusVecDBItem],
+        collection_name: str,
+        preference_type: str,
+    ) -> list[str] | str:
         if not retrieved_memories:
             payload = new_memory.to_dict()["metadata"]
             fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
             payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
             vec_db_item = MilvusVecDBItem(
-                id=new_memory.id, memory=new_memory.memory, vector=new_memory.metadata.embedding, payload=payload
+                id=new_memory.id,
+                memory=new_memory.memory,
+                vector=new_memory.metadata.embedding,
+                payload=payload,
             )
             self.vector_db.add(collection_name, [vec_db_item])
             return new_memory.id
 
         new_mem_input = {
             "context_summary": new_memory.memory,
-            "preference": new_memory.metadata.explicit_preference if preference_type == "explicit_preference" else new_memory.metadata.implicit_preference,
+            "preference": new_memory.metadata.explicit_preference
+            if preference_type == "explicit_preference"
+            else new_memory.metadata.implicit_preference,
         }
-        retrieved_mem_inputs = [{"id": mem.id, "context_summary": mem.memory, "preference": mem.payload[preference_type]} for mem in retrieved_memories]
+        retrieved_mem_inputs = [
+            {
+                "id": mem.id,
+                "context_summary": mem.memory,
+                "preference": mem.payload[preference_type],
+            }
+            for mem in retrieved_memories
+        ]
 
-        rsp = self._judge_update_or_add_trace_op(new_mem=json.dumps(new_mem_input), retrieved_mems=json.dumps(retrieved_mem_inputs))
+        rsp = self._judge_update_or_add_trace_op(
+            new_mem=json.dumps(new_mem_input), retrieved_mems=json.dumps(retrieved_mem_inputs)
+        )
         if not rsp:
             payload = new_memory.to_dict()["metadata"]
             fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
             payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
             vec_db_item = MilvusVecDBItem(
-                id=new_memory.id, memory=new_memory.memory, vector=new_memory.metadata.embedding, payload=payload
+                id=new_memory.id,
+                memory=new_memory.memory,
+                vector=new_memory.metadata.embedding,
+                payload=payload,
             )
             self.vector_db.add(collection_name, [vec_db_item])
             return new_memory.id
-        
+
         def execute_op(op):
             op_type = op["type"].lower()
             if op_type == "add":
                 payload = new_memory.to_dict()["metadata"]
-                payload = {k: v for k, v in payload.items() if k not in {"dialog_id", "dialog_str", "embedding"}}
+                payload = {
+                    k: v
+                    for k, v in payload.items()
+                    if k not in {"dialog_id", "dialog_str", "embedding"}
+                }
                 vec_db_item = MilvusVecDBItem(
-                    id=new_memory.id, memory=new_memory.memory, 
-                    vector=new_memory.metadata.embedding, payload=payload
+                    id=new_memory.id,
+                    memory=new_memory.memory,
+                    vector=new_memory.metadata.embedding,
+                    payload=payload,
                 )
                 self.vector_db.add(collection_name, [vec_db_item])
                 return new_memory.id
             elif op_type == "update":
-                payload = {"preference_type": preference_type, preference_type: op["new_preference"]}
+                payload = {
+                    "preference_type": preference_type,
+                    preference_type: op["new_preference"],
+                }
                 vec_db_item = MilvusVecDBItem(
-                    id=op["target_id"], memory=op["new_context_summary"], 
-                    vector=self.embedder.embed([op["new_context_summary"]])[0], payload=payload
+                    id=op["target_id"],
+                    memory=op["new_context_summary"],
+                    vector=self.embedder.embed([op["new_context_summary"]])[0],
+                    payload=payload,
                 )
                 self.vector_db.update(collection_name, op["target_id"], vec_db_item)
                 return op["target_id"]
             elif op_type == "delete":
                 self.vector_db.delete(collection_name, [op["target_id"]])
                 return None
-        
+
         with ThreadPoolExecutor(max_workers=min(len(rsp["trace"]), 5)) as executor:
             future_to_op = {executor.submit(execute_op, op): op for op in rsp["trace"]}
             added_ids = []
@@ -137,16 +172,20 @@ class NaiveAdder(BaseAdder):
 
         return added_ids
 
-    def _update_memory_fast(self,
-            new_memory: TextualMemoryItem,
-            retrieved_memories: list[MilvusVecDBItem],
-            collection_name: str,
-        ) -> str:
+    def _update_memory_fast(
+        self,
+        new_memory: TextualMemoryItem,
+        retrieved_memories: list[MilvusVecDBItem],
+        collection_name: str,
+    ) -> str:
         payload = new_memory.to_dict()["metadata"]
         fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
         payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
         vec_db_item = MilvusVecDBItem(
-            id=new_memory.id, memory=new_memory.memory, vector=new_memory.metadata.embedding, payload=payload
+            id=new_memory.id,
+            memory=new_memory.memory,
+            vector=new_memory.metadata.embedding,
+            payload=payload,
         )
         recall = retrieved_memories[0] if retrieved_memories else None
         if not recall or (recall.score is not None and recall.score < 0.5):
@@ -161,13 +200,14 @@ class NaiveAdder(BaseAdder):
         self.vector_db.update(collection_name, new_memory.id, vec_db_item)
         return new_memory.id
 
-    def _update_memory(self,
-            new_memory: TextualMemoryItem,
-            retrieved_memories: list[MilvusVecDBItem],
-            collection_name: str,
-            preference_type: str,
-            update_mode: str = "op_trace",
-        ) -> list[str] | str | None:
+    def _update_memory(
+        self,
+        new_memory: TextualMemoryItem,
+        retrieved_memories: list[MilvusVecDBItem],
+        collection_name: str,
+        preference_type: str,
+        update_mode: str = "op_trace",
+    ) -> list[str] | str | None:
         """Update the memory.
         Args:
             new_memory: TextualMemoryItem
@@ -177,12 +217,13 @@ class NaiveAdder(BaseAdder):
             update_mode: str, "op_trace" or "fast"
         """
         if update_mode == "op_trace":
-            return self._update_memory_op_trace(new_memory, retrieved_memories, collection_name, preference_type)
+            return self._update_memory_op_trace(
+                new_memory, retrieved_memories, collection_name, preference_type
+            )
         elif update_mode == "fast":
             return self._update_memory_fast(new_memory, retrieved_memories, collection_name)
         else:
             raise ValueError(f"Invalid update mode: {update_mode}")
-
 
     def _process_single_memory(self, memory: TextualMemoryItem) -> list[str] | str | None:
         """Process a single memory and return its ID if added successfully."""
@@ -195,11 +236,16 @@ class NaiveAdder(BaseAdder):
             collection_name = pref_type_collection_map[preference_type]
 
             search_results = self.vector_db.search(
-                memory.metadata.embedding, collection_name, top_k=5, filter={"user_id": memory.metadata.user_id}
+                memory.metadata.embedding,
+                collection_name,
+                top_k=5,
+                filter={"user_id": memory.metadata.user_id},
             )
             search_results.sort(key=lambda x: x.score, reverse=True)
-            
-            return self._update_memory(memory, search_results, collection_name, preference_type, update_mode="fast")
+
+            return self._update_memory(
+                memory, search_results, collection_name, preference_type, update_mode="fast"
+            )
 
         except Exception as e:
             logger.error(f"Error processing memory {memory.id}: {e}")

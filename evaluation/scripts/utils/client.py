@@ -11,14 +11,14 @@ from zep_cloud.types import Message
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from memobase import ChatBlob
+from utils.mem0_local import Mem0Client
+from utils.memos_api import MemOSAPI
+from utils.memos_filters import filter_memory_data
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.product import MOSProduct
-from utils.mem0_local import Mem0Client
-from utils.memos_api import MemOSAPI
-from utils.memos_filters import filter_memory_data
 
 
 load_dotenv()

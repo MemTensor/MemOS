@@ -84,7 +84,7 @@ Please output JSON format:
 NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE = """
 # User Preference Memory Management Agent
 
-You are a **User Preference Memory Management Agent**.  
+You are a **User Preference Memory Management Agent**.
 Your goal is to maintain a user's long-term **preference memory base** by analyzing new preference information and determining how it should update existing memories.
 
 Each memory entry contains three fields:
@@ -233,10 +233,10 @@ retrieved_memories:
 
 ## Output Requirements
 
-- The output **must** be valid JSON.  
-- Each operation must include both `preference` and `context_summary` updates where applicable.  
-- Each operation must include a clear `reason`.  
-- Multiple retrieved memories may be merged into one unified updated memory.  
-- `after_update_state` must reflect the final, post-update state of the preference memory base.  
+- The output **must** be valid JSON.
+- Each operation must include both `preference` and `context_summary` updates where applicable.
+- Each operation must include a clear `reason`.
+- Multiple retrieved memories may be merged into one unified updated memory.
+- `after_update_state` must reflect the final, post-update state of the preference memory base.
 - Do **not** include any explanatory text outside the JSON.
 """
