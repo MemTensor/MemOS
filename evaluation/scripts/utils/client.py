@@ -56,9 +56,12 @@ class Mem0Client:
                 timestamp=timestamp,
                 user_id=user_id,
                 enable_graph=True,
+                async_mode=False,
             )
         else:
-            self.client.add(messages=messages, timestamp=timestamp, user_id=user_id, version="v2")
+            self.client.add(
+                messages=messages, timestamp=timestamp, user_id=user_id, async_mode=False
+            )
 
     def search(self, query, user_id, top_k):
         if self.enable_graph:
@@ -147,6 +150,62 @@ class MemosApiClient:
             response.text
         )
         return json.loads(response.text)["data"]
+
+
+class MemosApiOnlineClient:
+    def __init__(self):
+        self.memos_url = os.getenv("MEMOS_ONLINE_URL")
+        self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
+
+    def add(self, messages, user_id, conv_id):
+        url = f"{self.memos_url}/add/message"
+        payload = json.dumps(
+            {
+                "messages": messages,
+                "user_id": user_id,
+                "conversation_id": conv_id,
+            }
+        )
+
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = requests.request("POST", url, data=payload, headers=self.headers)
+                assert response.status_code == 200, response.text
+                assert json.loads(response.text)["message"] == "ok", response.text
+                return response.text
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)  # 指数退避
+                else:
+                    raise e
+
+    def search(self, query, user_id, top_k):
+        """Search memories."""
+        url = f"{self.memos_url}/search/memory"
+        payload = json.dumps(
+            {
+                "query": query,
+                "user_id": user_id,
+                "memory_limit_number": top_k,
+            }
+        )
+
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = requests.request("POST", url, data=payload, headers=self.headers)
+                assert response.status_code == 200, response.text
+                assert json.loads(response.text)["message"] == "ok", response.text
+                res = json.loads(response.text)["data"]["memory_detail_list"]
+                for i in res:
+                    i.update({"memory": i.pop("memory_value")})
+                return {"text_mem": [{"memories": res}]}
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)  # 指数退避
+                else:
+                    raise e
 
 
 class SupermemoryClient:
