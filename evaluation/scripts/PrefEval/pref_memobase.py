@@ -33,11 +33,7 @@ def add_memory_for_line(
     """
     i, line = line_data
     user_id = f"{lib}_user_pref_eval_{i}_{version}"
-    all_users = mem_client.client.get_all_users(limit=5000)
-    for user in all_users:
-        if user["additional_fields"] is not None:
-            if user["additional_fields"]["user_id"] == user_id:
-                mem_client.client.delete_user(user["id"])
+    mem_client.delete_user(user_id)
     user_id = mem_client.client.add_user({"user_id": user_id})
     print("user_id:", user_id)
     try:

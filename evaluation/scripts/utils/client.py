@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import suppress
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
@@ -111,8 +112,15 @@ class MemobaseClient:
         user = self.client.get_or_create_user(real_uid)
         for i in range(0, len(messages), batch_size):
             batch_messages = messages[i: i + batch_size]
-            _ = user.insert(ChatBlob(messages=batch_messages), sync=True)
-            user.flush(sync=True)
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    _ = user.insert(ChatBlob(messages=batch_messages), sync=True)
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)
+                    else:
+                        raise e
 
     def search(self, query, user_id, top_k):
         real_uid = self.string_to_uuid(user_id)
@@ -128,10 +136,8 @@ class MemobaseClient:
     def delete_user(self, user_id):
         from memobase.error import ServerError
         real_uid = self.string_to_uuid(user_id)
-        try:
+        with suppress(ServerError):
             self.client.delete_user(real_uid)
-        except ServerError:
-            pass
 
     def string_to_uuid(self, s: str, salt="memobase_client"):
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))

@@ -1,5 +1,6 @@
 import os
 import yaml
+from tqdm import tqdm
 
 
 def get_mirix_client(config_path, load_from=None):
@@ -60,7 +61,7 @@ if __name__ == "__main__":
         "Important meeting with client on Friday at 2 PM",
     ]
 
-    for idx, chunk in tqdm(enumerate(chunks), total=len(chunks)):
+    for _idx, chunk in tqdm(enumerate(chunks), total=len(chunks)):
         response = assistant.add(chunk)
 
     assistant.save(out_dir)
