@@ -54,7 +54,7 @@ class Mem0Client:
     def add(self, messages, user_id, timestamp, batch_size=2):
         max_retries = 5
         for i in range(0, len(messages), batch_size):
-            batch_messages = messages[i: i + batch_size]
+            batch_messages = messages[i : i + batch_size]
             for attempt in range(max_retries):
                 try:
                     if self.enable_graph:
@@ -67,12 +67,15 @@ class Mem0Client:
                         )
                     else:
                         self.client.add(
-                            messages=batch_messages, timestamp=timestamp, user_id=user_id, async_mode=False
+                            messages=batch_messages,
+                            timestamp=timestamp,
+                            user_id=user_id,
+                            async_mode=False,
                         )
                     break
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        time.sleep(2 ** attempt)
+                        time.sleep(2**attempt)
                     else:
                         raise e
 
@@ -108,17 +111,18 @@ class MemobaseClient:
         messages = [{"role": "assistant", "content": data, "created_at": iso_date}]
         """
         from memobase import ChatBlob
+
         real_uid = self.string_to_uuid(user_id)
         user = self.client.get_or_create_user(real_uid)
         for i in range(0, len(messages), batch_size):
-            batch_messages = messages[i: i + batch_size]
+            batch_messages = messages[i : i + batch_size]
             max_retries = 5
             for attempt in range(max_retries):
                 try:
                     _ = user.insert(ChatBlob(messages=batch_messages), sync=True)
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        time.sleep(2 ** attempt)
+                        time.sleep(2**attempt)
                     else:
                         raise e
 
@@ -135,6 +139,7 @@ class MemobaseClient:
 
     def delete_user(self, user_id):
         from memobase.error import ServerError
+
         real_uid = self.string_to_uuid(user_id)
         with suppress(ServerError):
             self.client.delete_user(real_uid)
@@ -211,7 +216,7 @@ class MemosApiOnlineClient:
                 return response.text
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 else:
                     raise e
 
@@ -238,7 +243,7 @@ class MemosApiOnlineClient:
                 return {"text_mem": [{"memories": res}]}
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 else:
                     raise e
 
@@ -260,7 +265,7 @@ class SupermemoryClient:
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 else:
                     raise e
 
@@ -280,7 +285,7 @@ class SupermemoryClient:
                 return context
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 else:
                     raise e
 
@@ -340,5 +345,3 @@ if __name__ == "__main__":
         m["created_at"] = iso_date
     client.add(messages, user_id)
     memories = client.search(query, user_id, top_k)
-
-

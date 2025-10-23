@@ -315,9 +315,7 @@ def main(frame, version, top_k=20, num_workers=2):
 
     with open(f"results/pm/{frame}-{version}/{frame}_pm_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
-    print(
-        f"📁 Results saved to: mresults/pm/{frame}-{version}/{frame}_pm_search_results.json"
-    )
+    print(f"📁 Results saved to: mresults/pm/{frame}-{version}/{frame}_pm_search_results.json")
     print("=" * 80 + "\n")
 
 
