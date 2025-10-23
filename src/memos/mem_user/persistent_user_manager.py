@@ -177,7 +177,7 @@ class PersistentUserManager(UserManager):
         finally:
             session.close()
 
-    def list_user_configs(self) -> dict[str, MOSConfig]:
+    def list_user_configs(self, limit: int = 1) -> dict[str, MOSConfig]:
         """List all user configurations.
 
         Returns:
@@ -185,7 +185,7 @@ class PersistentUserManager(UserManager):
         """
         session = self._get_session()
         try:
-            user_configs = session.query(UserConfig).all()
+            user_configs = session.query(UserConfig).limit(limit).all()
             result = {}
 
             for user_config in user_configs:
