@@ -74,7 +74,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             )
         else:
             logger.error(
-                f"Request Failed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Failed: {request.url.path}, response: {response.json()}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
 
         return response
