@@ -1,7 +1,6 @@
 import re
 
-from datasketch import MinHash, MinHashLSH
-
+from memos.dependency import require_python_package
 from memos.memories.textual.item import TextualMemoryItem
 from memos.types import MessageList
 
@@ -18,6 +17,11 @@ def convert_messages_to_string(messages: MessageList) -> str:
     return message_text
 
 
+@require_python_package(
+    import_name="datasketch",
+    install_command="pip install datasketch",
+    install_link="https://github.com/ekzhu/datasketch",
+)
 def deduplicate_preferences(
     prefs: list[TextualMemoryItem], similarity_threshold: float = 0.6, num_perm: int = 256
 ) -> list[TextualMemoryItem]:
@@ -31,6 +35,8 @@ def deduplicate_preferences(
     Returns:
         Deduplicated list of preference items
     """
+    from datasketch import MinHash, MinHashLSH
+
     if not prefs:
         return prefs
 
