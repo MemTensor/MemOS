@@ -214,9 +214,7 @@ def main():
             self.client = Supermemory(api_key=os.getenv("SUPERMEMORY_API_KEY"))
 
         def add(self, messages, user_id):
-            content = "\n".join(
-                [f"{msg['role']}: {msg['content']}" for msg in messages]
-            )
+            content = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
             max_retries = 5
             for attempt in range(max_retries):
                 try:
@@ -224,7 +222,7 @@ def main():
                     break
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        time.sleep(2**attempt) 
+                        time.sleep(2**attempt)
                     else:
                         raise e
 
@@ -244,7 +242,7 @@ def main():
                     return context
                 except Exception as e:
                     if attempt < max_retries - 1:
-                        time.sleep(2**attempt) 
+                        time.sleep(2**attempt)
                     else:
                         raise e
 

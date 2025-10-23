@@ -25,6 +25,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 tokenizer = tiktoken.get_encoding("cl100k_base")
 os.environ["MEM0_API_KEY"] = os.getenv("MEM0_API_KEY")
 
+
 def add_memory_for_line(
     line_data: tuple, mem_client, num_irrelevant_turns: int, lib: str, version: str
 ) -> dict:
@@ -48,7 +49,7 @@ def add_memory_for_line(
         if conversation:
             for chunk_start in range(0, len(conversation), turns_add * 2):
                 chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                timestamp_add = int(time.time()*100)
+                timestamp_add = int(time.time() * 100)
                 mem_client.add(messages=chunk, user_id=user_id, timestamp=timestamp_add)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
@@ -86,7 +87,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memory_list = relevant_memories.get('results', [])
+        memory_list = relevant_memories.get("results", [])
         memories_str = "\n".join(f"- {entry['memory']}" for entry in memory_list)
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
@@ -205,6 +206,7 @@ def main():
         return
 
     from utils.client import Mem0Client
+
     mem_client = Mem0Client(enable_graph="graph" in args.lib)
 
     if args.mode == "add":

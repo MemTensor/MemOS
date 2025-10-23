@@ -257,9 +257,13 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         users = client.client.get_all_users(limit=5000)
         for u in users:
             try:
-                if u["additional_fields"]["user_id"] == speaker_a_user_id.replace(f'_{version}', ""):
+                if u["additional_fields"]["user_id"] == speaker_a_user_id.replace(
+                    f"_{version}", ""
+                ):
                     speaker_a_user_id = u["id"]
-                if u["additional_fields"]["user_id"] == speaker_b_user_id.replace(f'_{version}', ""):
+                if u["additional_fields"]["user_id"] == speaker_b_user_id.replace(
+                    f"_{version}", ""
+                ):
                     speaker_b_user_id = u["id"]
             except TypeError:
                 pass

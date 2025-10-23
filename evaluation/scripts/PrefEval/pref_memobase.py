@@ -10,6 +10,7 @@ from openai import OpenAI
 from tqdm import tqdm
 import time
 from irrelevant_conv import irre_10, irre_300
+
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
@@ -54,16 +55,15 @@ def add_memory_for_line(
 
             for chunk_start in range(0, len(conversation)):
                 chunk = conversation[chunk_start : chunk_start + 1]
-                timestamp_add = str(int(time.time()*100))
+                timestamp_add = str(int(time.time() * 100))
                 time.sleep(0.001)  # Ensure unique timestamp
 
                 messages.append(
-                {
-                    "role": chunk[0]["role"],
-                    "content": chunk[0]["content"][:8000],
-                    "created_at": timestamp_add,
-                }
-                
+                    {
+                        "role": chunk[0]["role"],
+                        "content": chunk[0]["content"][:8000],
+                        "created_at": timestamp_add,
+                    }
                 )
             mem_client.add(messages=messages, user_id=user_id)
 

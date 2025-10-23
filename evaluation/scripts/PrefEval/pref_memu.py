@@ -49,9 +49,13 @@ def add_memory_for_line(
             if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
                 for chunk_start in range(0, len(conversation), turns_add * 2):
                     chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, iso_date=datetime.now().isoformat())
+                    mem_client.add(
+                        messages=chunk, user_id=user_id, iso_date=datetime.now().isoformat()
+                    )
             else:
-                mem_client.add(messages=conversation, user_id=user_id, iso_date=datetime.now().isoformat())
+                mem_client.add(
+                    messages=conversation, user_id=user_id, iso_date=datetime.now().isoformat()
+                )
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
