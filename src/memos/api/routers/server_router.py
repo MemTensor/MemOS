@@ -281,8 +281,8 @@ def search_memories(search_req: APISearchRequest):
         "text_mem": [],
         "act_mem": [],
         "para_mem": [],
-        "pref_mem": [],
-        "instruct_completion": "",
+        "pref_mem": str,
+        "prefs": [],
     }
     target_session_id = search_req.session_id
     if not target_session_id:
@@ -333,16 +333,17 @@ def search_memories(search_req: APISearchRequest):
             "memories": text_formatted_memories,
         }
     )
+    if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true":
+        memories_result["prefs"].append(
+            {
+                "cube_id": search_req.mem_cube_id,
+                "memories": pref_formatted_memories,
+            }
+        )
 
-    memories_result["pref_mem"].append(
-        {
-            "cube_id": search_req.mem_cube_id,
-            "memories": pref_formatted_memories,
-        }
-    )
-
-    pref_instruction = instruct_completion(pref_formatted_memories)
-    memories_result["instruct_completion"] = pref_instruction
+    pref_instruction: str = instruct_completion(pref_formatted_memories)
+    if search_req.handle_pref_mem:
+        memories_result["pref_mem"] = pref_instruction
 
     return SearchResponse(
         message="Search completed successfully",
