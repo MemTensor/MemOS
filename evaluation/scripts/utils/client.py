@@ -50,18 +50,27 @@ class Mem0Client:
         self.enable_graph = enable_graph
 
     def add(self, messages, user_id, timestamp):
-        if self.enable_graph:
-            self.client.add(
-                messages=messages,
-                timestamp=timestamp,
-                user_id=user_id,
-                enable_graph=True,
-                async_mode=False,
-            )
-        else:
-            self.client.add(
-                messages=messages, timestamp=timestamp, user_id=user_id, async_mode=False
-            )
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                if self.enable_graph:
+                    self.client.add(
+                        messages=messages,
+                        timestamp=timestamp,
+                        user_id=user_id,
+                        enable_graph=True,
+                        async_mode=False,
+                    )
+                else:
+                    self.client.add(
+                        messages=messages, timestamp=timestamp, user_id=user_id, async_mode=False
+                    )
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)  # 指数退避
+                else:
+                    raise e
 
     def search(self, query, user_id, top_k):
         if self.enable_graph:
@@ -99,6 +108,7 @@ class MemobaseClient:
         """
         user = self.client.get_user(user_id, no_get=True)
         user.insert(ChatBlob(messages=messages), sync=True)
+        user.flush(sync=True)
 
     def search(self, query, user_id, top_k):
         user = self.client.get_user(user_id, no_get=True)

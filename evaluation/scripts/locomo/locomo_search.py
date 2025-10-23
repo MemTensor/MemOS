@@ -256,10 +256,13 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         client = MemobaseClient()
         users = client.client.get_all_users(limit=5000)
         for u in users:
-            if u["additional_fields"]["user_id"] == speaker_a_user_id:
-                speaker_a_user_id = u["id"]
-            if u["additional_fields"]["user_id"] == speaker_b_user_id:
-                speaker_b_user_id = u["id"]
+            try:
+                if u["additional_fields"]["user_id"] == speaker_a_user_id.replace(f'_{version}', ""):
+                    speaker_a_user_id = u["id"]
+                if u["additional_fields"]["user_id"] == speaker_b_user_id.replace(f'_{version}', ""):
+                    speaker_b_user_id = u["id"]
+            except TypeError:
+                pass
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -336,19 +339,19 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
-        default="memos-api",
+        default="memobase",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="default",
+        default="0905",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
         "--workers", type=int, default=5, help="Number of parallel workers to process users"
     )
     parser.add_argument(
-        "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"
+        "--top_k", type=int, default=15, help="Number of results to retrieve in search queries"
     )
     args = parser.parse_args()
     lib = args.lib
