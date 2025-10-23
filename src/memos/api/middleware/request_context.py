@@ -73,10 +73,4 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             f"Request completed: {request.url.path}, status: {response.status_code}, cost: {end_time - start_time}s"
         )
 
-        # Add trace_id to response headers for debugging
-        response.headers["x-trace-id"] = trace_id
-        response.headers["x-env"] = env
-        response.headers["x-user-type"] = user_type
-        response.headers["x-user-name"] = user_name
-
         return response
