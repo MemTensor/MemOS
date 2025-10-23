@@ -28,13 +28,11 @@ class BaseSchedulerConfig(BaseConfig):
     thread_pool_max_workers: int = Field(
         default=DEFAULT_THREAD_POOL_MAX_WORKERS,
         gt=1,
-        lt=20,
         description=f"Maximum worker threads in pool (default: {DEFAULT_THREAD_POOL_MAX_WORKERS})",
     )
     consume_interval_seconds: float = Field(
         default=DEFAULT_CONSUME_INTERVAL_SECONDS,
         gt=0,
-        le=60,
         description=f"Interval for consuming messages from queue in seconds (default: {DEFAULT_CONSUME_INTERVAL_SECONDS})",
     )
     auth_config_path: str | None = Field(

@@ -17,6 +17,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    MEM_READ_LABEL,
     QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
@@ -70,6 +71,7 @@ class MOSCore:
         if self.enable_mem_scheduler:
             self._mem_scheduler = self._initialize_mem_scheduler()
             self._mem_scheduler.mem_cubes = self.mem_cubes
+            self._mem_scheduler.mem_reader = self.mem_reader
         else:
             self._mem_scheduler: GeneralScheduler = None
 
@@ -681,6 +683,12 @@ class MOSCore:
         logger.info(
             f"time add: get mem_cube_id check in mem_cubes time user_id: {target_user_id} time is: {time.time() - time_start_0}"
         )
+        sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
+        if sync_mode == "async":
+            assert self.mem_scheduler is not None, (
+                "Mem-Scheduler must be working when use asynchronous memory adding."
+            )
+        logger.debug(f"Mem-reader mode is: {sync_mode}")
         time_start_1 = time.time()
         if (
             (messages is not None)
@@ -690,6 +698,7 @@ class MOSCore:
             logger.info(
                 f"time add: messages is not None and enable_textual_memory and text_mem is not None time user_id: {target_user_id} time is: {time.time() - time_start_1}"
             )
+
             if self.mem_cubes[mem_cube_id].config.text_mem.backend != "tree_text":
                 add_memory = []
                 metadata = TextualMemoryMetadata(
@@ -707,21 +716,30 @@ class MOSCore:
                     messages_list,
                     type="chat",
                     info={"user_id": target_user_id, "session_id": target_session_id},
+                    mode="fast" if sync_mode == "async" else "fine",
                 )
                 logger.info(
                     f"time add: get mem_reader time user_id: {target_user_id} time is: {time.time() - time_start_2}"
                 )
-                mem_ids = []
-                for mem in memories:
-                    mem_id_list: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(mem)
-                    mem_ids.extend(mem_id_list)
-                    logger.info(
-                        f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_id_list}"
-                    )
-
+                memories_flatten = [m for m_list in memories for m in m_list]
+                mem_ids: list[str] = self.mem_cubes[mem_cube_id].text_mem.add(memories_flatten)
+                logger.info(
+                    f"Added memory user {target_user_id} to memcube {mem_cube_id}: {mem_ids}"
+                )
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
                     mem_cube = self.mem_cubes[mem_cube_id]
+                    if sync_mode == "async":
+                        message_item = ScheduleMessageItem(
+                            user_id=target_user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=MEM_READ_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
+
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
@@ -749,10 +767,12 @@ class MOSCore:
                 messages_list = [
                     [{"role": "user", "content": memory_content}]
                 ]  # for only user-str input and convert message
+
                 memories = self.mem_reader.get_memory(
                     messages_list,
                     type="chat",
                     info={"user_id": target_user_id, "session_id": target_session_id},
+                    mode="fast" if sync_mode == "async" else "fine",
                 )
 
                 mem_ids = []
@@ -766,6 +786,16 @@ class MOSCore:
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
                     mem_cube = self.mem_cubes[mem_cube_id]
+                    if sync_mode == "async":
+                        message_item = ScheduleMessageItem(
+                            user_id=target_user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=MEM_READ_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,

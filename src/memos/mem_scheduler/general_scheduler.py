@@ -1,4 +1,6 @@
+import concurrent.futures
 import json
+import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.log import get_logger
@@ -8,6 +10,8 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
+    MEM_ORGANIZE_LABEL,
+    MEM_READ_LABEL,
     QUERY_LABEL,
     WORKING_MEMORY_TYPE,
     MemCubeID,
@@ -34,6 +38,8 @@ class GeneralScheduler(BaseScheduler):
             QUERY_LABEL: self._query_message_consumer,
             ANSWER_LABEL: self._answer_message_consumer,
             ADD_LABEL: self._add_message_consumer,
+            MEM_READ_LABEL: self._mem_read_message_consumer,
+            MEM_ORGANIZE_LABEL: self._mem_reorganize_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
 
@@ -180,7 +186,7 @@ class GeneralScheduler(BaseScheduler):
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
-        grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
         try:
@@ -203,7 +209,15 @@ class GeneralScheduler(BaseScheduler):
 
                         mem_cube = msg.mem_cube
                         for memory_id in userinput_memory_ids:
-                            mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
+                            try:
+                                mem_item: TextualMemoryItem = mem_cube.text_mem.get(
+                                    memory_id=memory_id
+                                )
+                            except Exception:
+                                logger.warning(
+                                    f"This MemoryItem {memory_id} has already been deleted."
+                                )
+                                continue
                             mem_type = mem_item.metadata.memory_type
                             mem_content = mem_item.memory
 
@@ -221,6 +235,238 @@ class GeneralScheduler(BaseScheduler):
 
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
+
+    def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
+
+        def process_message(message: ScheduleMessageItem):
+            try:
+                user_id = message.user_id
+                mem_cube_id = message.mem_cube_id
+                mem_cube = message.mem_cube
+                content = message.content
+
+                # Parse the memory IDs from content
+                mem_ids = json.loads(content) if isinstance(content, str) else content
+                if not mem_ids:
+                    return
+
+                logger.info(
+                    f"Processing mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
+                )
+
+                # Get the text memory from the mem_cube
+                text_mem = mem_cube.text_mem
+                if not isinstance(text_mem, TreeTextMemory):
+                    logger.error(f"Expected TreeTextMemory but got {type(text_mem).__name__}")
+                    return
+
+                # Use mem_reader to process the memories
+                self._process_memories_with_reader(
+                    mem_ids=mem_ids,
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    mem_cube=mem_cube,
+                    text_mem=text_mem,
+                )
+
+                logger.info(
+                    f"Successfully processed mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing mem_read message: {e}", exc_info=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+            futures = [executor.submit(process_message, msg) for msg in messages]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Thread task failed: {e}", exc_info=True)
+
+    def _process_memories_with_reader(
+        self,
+        mem_ids: list[str],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        text_mem: TreeTextMemory,
+    ) -> None:
+        """
+        Process memories using mem_reader for enhanced memory processing.
+
+        Args:
+            mem_ids: List of memory IDs to process
+            user_id: User ID
+            mem_cube_id: Memory cube ID
+            mem_cube: Memory cube instance
+            text_mem: Text memory instance
+        """
+        try:
+            # Get the mem_reader from the parent MOSCore
+            if not hasattr(self, "mem_reader") or self.mem_reader is None:
+                logger.warning(
+                    "mem_reader not available in scheduler, skipping enhanced processing"
+                )
+                return
+
+            # Get the original memory items
+            memory_items = []
+            for mem_id in mem_ids:
+                try:
+                    memory_item = text_mem.get(mem_id)
+                    memory_items.append(memory_item)
+                except Exception as e:
+                    logger.warning(f"Failed to get memory {mem_id}: {e}")
+                    continue
+
+            if not memory_items:
+                logger.warning("No valid memory items found for processing")
+                return
+
+            # Use mem_reader to process the memories
+            logger.info(f"Processing {len(memory_items)} memories with mem_reader")
+
+            # Extract memories using mem_reader
+            try:
+                processed_memories = self.mem_reader.fine_transfer_simple_mem(
+                    memory_items,
+                    type="chat",
+                )
+            except Exception as e:
+                logger.warning(f"{e}: Fail to transfer mem: {memory_items}")
+                processed_memories = []
+
+            if processed_memories and len(processed_memories) > 0:
+                # Flatten the results (mem_reader returns list of lists)
+                flattened_memories = []
+                for memory_list in processed_memories:
+                    flattened_memories.extend(memory_list)
+
+                logger.info(f"mem_reader processed {len(flattened_memories)} enhanced memories")
+
+                # Add the enhanced memories back to the memory system
+                if flattened_memories:
+                    enhanced_mem_ids = text_mem.add(flattened_memories)
+                    logger.info(
+                        f"Added {len(enhanced_mem_ids)} enhanced memories: {enhanced_mem_ids}"
+                    )
+                else:
+                    logger.info("No enhanced memories generated by mem_reader")
+            else:
+                logger.info("mem_reader returned no processed memories")
+
+            text_mem.delete(mem_ids)
+            logger.info("Delete raw mem_ids")
+            text_mem.memory_manager.remove_and_refresh_memory()
+            logger.info("Remove and Refresh Memories")
+            logger.debug(f"Finished add {user_id} memory: {mem_ids}")
+
+        except Exception:
+            logger.error(
+                f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
+            )
+
+    def _mem_reorganize_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
+
+        def process_message(message: ScheduleMessageItem):
+            try:
+                user_id = message.user_id
+                mem_cube_id = message.mem_cube_id
+                mem_cube = message.mem_cube
+                content = message.content
+
+                # Parse the memory IDs from content
+                mem_ids = json.loads(content) if isinstance(content, str) else content
+                if not mem_ids:
+                    return
+
+                logger.info(
+                    f"Processing mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
+                )
+
+                # Get the text memory from the mem_cube
+                text_mem = mem_cube.text_mem
+                if not isinstance(text_mem, TreeTextMemory):
+                    logger.error(f"Expected TreeTextMemory but got {type(text_mem).__name__}")
+                    return
+
+                # Use mem_reader to process the memories
+                self._process_memories_with_reorganize(
+                    mem_ids=mem_ids,
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    mem_cube=mem_cube,
+                    text_mem=text_mem,
+                )
+
+                logger.info(
+                    f"Successfully processed mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing mem_read message: {e}", exc_info=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+            futures = [executor.submit(process_message, msg) for msg in messages]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Thread task failed: {e}", exc_info=True)
+
+    def _process_memories_with_reorganize(
+        self,
+        mem_ids: list[str],
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        text_mem: TreeTextMemory,
+    ) -> None:
+        """
+        Process memories using mem_reorganize for enhanced memory processing.
+
+        Args:
+            mem_ids: List of memory IDs to process
+            user_id: User ID
+            mem_cube_id: Memory cube ID
+            mem_cube: Memory cube instance
+            text_mem: Text memory instance
+        """
+        try:
+            # Get the mem_reader from the parent MOSCore
+            if not hasattr(self, "mem_reader") or self.mem_reader is None:
+                logger.warning(
+                    "mem_reader not available in scheduler, skipping enhanced processing"
+                )
+                return
+
+            # Get the original memory items
+            memory_items = []
+            for mem_id in mem_ids:
+                try:
+                    memory_item = text_mem.get(mem_id)
+                    memory_items.append(memory_item)
+                except Exception as e:
+                    logger.warning(f"Failed to get memory {mem_id}: {e}")
+                    continue
+
+            if not memory_items:
+                logger.warning("No valid memory items found for processing")
+                return
+
+            # Use mem_reader to process the memories
+            logger.info(f"Processing {len(memory_items)} memories with mem_reader")
+            text_mem.memory_manager.remove_and_refresh_memory()
+            logger.info("Remove and Refresh Memories")
+            logger.debug(f"Finished add {user_id} memory: {mem_ids}")
+
+        except Exception:
+            logger.error(
+                f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
+            )
 
     def process_session_turn(
         self,

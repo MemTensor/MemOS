@@ -669,7 +669,7 @@ class Neo4jGraphDB(BaseGraphDB):
             vector (list[float]): The embedding vector representing query semantics.
             top_k (int): Number of top similar nodes to retrieve.
             scope (str, optional): Memory type filter (e.g., 'WorkingMemory', 'LongTermMemory').
-            status (str, optional): Node status filter (e.g., 'active', 'archived').
+            status (str, optional): Node status filter (e.g., 'activated', 'archived').
                             If provided, restricts results to nodes with matching status.
             threshold (float, optional): Minimum similarity score threshold (0 ~ 1).
             search_filter (dict, optional): Additional metadata filters for search results.

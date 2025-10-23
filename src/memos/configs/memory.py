@@ -179,6 +179,11 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ),
     )
 
+    mode: str | None = Field(
+        default="sync",
+        description=("whether use asynchronous mode in memory add"),
+    )
+
 
 class SimpleTreeTextMemoryConfig(TreeTextMemoryConfig):
     """Simple tree text memory configuration class."""
