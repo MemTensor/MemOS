@@ -167,6 +167,20 @@ class SearchedTreeNodeTextualMemoryMetadata(TreeNodeTextualMemoryMetadata):
     )
 
 
+class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
+    """Metadata for preference memory item."""
+
+    preference_type: Literal["explicit_preference", "implicit_preference"] = Field(
+        default="explicit_preference", description="Type of preference."
+    )
+    dialog_id: str | None = Field(default=None, description="ID of the dialog.")
+    dialog_str: str | None = Field(default=None, description="String of the dialog.")
+    embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")
+    explicit_preference: str | None = Field(default=None, description="Explicit preference.")
+    created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
+    implicit_preference: str | None = Field(default=None, description="Implicit preference.")
+
+
 class TextualMemoryItem(BaseModel):
     """Represents a single memory item in the textual memory.
 
@@ -180,6 +194,7 @@ class TextualMemoryItem(BaseModel):
         SearchedTreeNodeTextualMemoryMetadata
         | TreeNodeTextualMemoryMetadata
         | TextualMemoryMetadata
+        | PreferenceTextualMemoryMetadata
     ) = Field(default_factory=TextualMemoryMetadata)
 
     model_config = ConfigDict(extra="forbid")
@@ -204,12 +219,15 @@ class TextualMemoryItem(BaseModel):
             v,
             SearchedTreeNodeTextualMemoryMetadata
             | TreeNodeTextualMemoryMetadata
-            | TextualMemoryMetadata,
+            | TextualMemoryMetadata
+            | PreferenceTextualMemoryMetadata,
         ):
             return v
         if isinstance(v, dict):
             if v.get("relativity") is not None:
                 return SearchedTreeNodeTextualMemoryMetadata(**v)
+            if v.get("preference_type") is not None:
+                return PreferenceTextualMemoryMetadata(**v)
             if any(k in v for k in ("sources", "memory_type", "embedding", "background", "usage")):
                 return TreeNodeTextualMemoryMetadata(**v)
             return TextualMemoryMetadata(**v)

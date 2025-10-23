@@ -179,6 +179,7 @@ class APISearchRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
+    handle_pref_mem: bool = Field(False, description="Whether to handle preference memory")
 
 
 class APIADDRequest(BaseRequest):
