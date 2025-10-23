@@ -109,7 +109,6 @@ class MemobaseClient:
         from memobase import ChatBlob
         real_uid = self.string_to_uuid(user_id)
         user = self.client.get_or_create_user(real_uid)
-        user.insert(ChatBlob(messages=messages), sync=True)
         for i in range(0, len(messages), batch_size):
             batch_messages = messages[i: i + batch_size]
             _ = user.insert(ChatBlob(messages=batch_messages), sync=True)
@@ -127,8 +126,12 @@ class MemobaseClient:
         return memories
 
     def delete_user(self, user_id):
+        from memobase.error import ServerError
         real_uid = self.string_to_uuid(user_id)
-        client.delete_user(real_uid)
+        try:
+            self.client.delete_user(real_uid)
+        except ServerError:
+            pass
 
     def string_to_uuid(self, s: str, salt="memobase_client"):
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
