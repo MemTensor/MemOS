@@ -8,7 +8,7 @@ import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
-
+from datetime import datetime
 from irrelevant_conv import irre_10, irre_300
 
 ROOT_DIR = os.path.dirname(
@@ -49,9 +49,9 @@ def add_memory_for_line(
             if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
                 for chunk_start in range(0, len(conversation), turns_add * 2):
                     chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
+                    mem_client.add(messages=chunk, user_id=user_id, iso_date=datetime.now().isoformat())
             else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+                mem_client.add(messages=conversation, user_id=user_id, iso_date=datetime.now().isoformat())
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -184,9 +184,9 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
-        default="memos-api",
-        help="Which MemOS library to use (used in 'add' mode).",
+        choices=["memu"],
+        default="memu",
+        help="Which Memu library to use (used in 'add' mode).",
     )
     parser.add_argument(
         "--version",
@@ -207,9 +207,9 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
+    from utils.client import MemuClient
 
-    mem_client = MemosApiClient()
+    mem_client = MemuClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")

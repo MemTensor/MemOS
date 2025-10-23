@@ -323,7 +323,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib", 
         type=str, 
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
+        choices=["zep","mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
         required=True,
         help="Memory library to evaluate",
         default='memos-api'

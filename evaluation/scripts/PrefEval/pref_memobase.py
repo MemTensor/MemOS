@@ -8,9 +8,8 @@ import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
-
+import time
 from irrelevant_conv import irre_10, irre_300
-
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
@@ -33,7 +32,13 @@ def add_memory_for_line(
     """
     i, line = line_data
     user_id = f"{lib}_user_pref_eval_{i}_{version}"
-
+    all_users = mem_client.client.get_all_users(limit=5000)
+    for user in all_users:
+        if user["additional_fields"] is not None:
+            if user["additional_fields"]["user_id"] == user_id:
+                mem_client.client.delete_user(user["id"])
+    user_id = mem_client.client.add_user({"user_id": user_id})
+    print("user_id:", user_id)
     try:
         original_data = json.loads(line)
         conversation = original_data.get("conversation", [])
@@ -43,15 +48,25 @@ def add_memory_for_line(
         elif num_irrelevant_turns == 300:
             conversation = conversation + irre_300
 
-        turns_add = 5
         start_time_add = time.monotonic()
         if conversation:
-            if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
-                for chunk_start in range(0, len(conversation), turns_add * 2):
-                    chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
-            else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+            messages = []
+
+            for chunk_start in range(0, len(conversation)):
+                chunk = conversation[chunk_start : chunk_start + 1]
+                timestamp_add = str(int(time.time()*100))
+                time.sleep(0.001)  # Ensure unique timestamp
+
+                messages.append(
+                {
+                    "role": chunk[0]["role"],
+                    "content": chunk[0]["content"][:8000],
+                    "created_at": timestamp_add,
+                }
+                
+                )
+            mem_client.add(messages=messages, user_id=user_id)
+
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -88,9 +103,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = "\n".join(
-            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
-        )
+        memories_str = relevant_memories
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -184,9 +197,9 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
-        default="memos-api",
-        help="Which MemOS library to use (used in 'add' mode).",
+        choices=["memobase"],
+        default="memobase",
+        help="Which Memobase library to use (used in 'add' mode).",
     )
     parser.add_argument(
         "--version",
@@ -207,9 +220,9 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
+    from utils.client import MemobaseClient
 
-    mem_client = MemosApiClient()
+    mem_client = MemobaseClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")

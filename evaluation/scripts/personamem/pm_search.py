@@ -12,7 +12,6 @@ from time import time
 import csv
 
 from tqdm import tqdm
-from utils.client import Mem0Client,ZepClient,MemosApiClient
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
@@ -50,81 +49,47 @@ def zep_search(client, user_id, query, top_k=20):
     return context, duration_ms
 
 
-def mem0_search(client, user_id, query, top_k=20, enable_graph=False, frame="mem0-api"):
+def mem0_search(client, query, user_id, top_k):
     start = time()
-
-    if frame == "mem0-local":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k,
-        )
-        search_memories = "\n".join(
+    results = client.search(query, user_id, top_k)
+    memory = [f"{memory['created_at']}: {memory['memory']}" for memory in results["results"]]
+    if client.enable_graph:
+        graph = "\n".join(
             [
-                f"  - {item['memory']} (date: {item['metadata']['timestamp']})"
-                for item in results["results"]
+                f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} "
+                f"(relationship: {item.get('relationship', '?')})"
+                for item in results.get("relations", [])
             ]
         )
-        search_graph = (
-            "\n".join(
-                [
-                    f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('destination', '?')} (relationship: {item.get('relationship', '?')})"
-                    for item in results.get("relations", [])
-                ]
-            )
-            if enable_graph
-            else ""
-        )
-
-    elif frame == "mem0-api":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k,
-            version="v2",
-            output_format="v1.1",
-            enable_graph=enable_graph,
-            filters={"AND": [{"user_id": user_id}, {"run_id": "*"}]},
-        )
-        search_memories = "\n".join(
-            [f"  - {item['memory']} (date: {item['created_at']})" for item in results["results"]]
-        )
-        search_graph = (
-            "\n".join(
-                [
-                    f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} (relationship: {item.get('relationship', '?')})"
-                    for item in results.get("relations", [])
-                ]
-            )
-            if enable_graph
-            else ""
-        )
-    if enable_graph:
         context = MEM0_GRAPH_CONTEXT_TEMPLATE.format(
-            user_id=user_id, memories=search_memories, relations=search_graph
+            user_id=user_id, memories=memory, relations=graph
         )
     else:
-        context = MEM0_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
+        context = MEM0_CONTEXT_TEMPLATE.format(user_id=user_id, memories=memory)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
-
-
-def memos_search(client, user_id, query, top_k, frame="memos-local"):
+def memobase_search(client, query, user_id, top_k):
     start = time()
-    if frame == "memos-local":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-        )
-
-        results = filter_memory_data(results)["text_mem"][0]["memories"]
-        search_memories = "\n".join([f"  - {item['memory']}" for item in results])
-
-    elif frame == "memos-api":
-        results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join(item['memory'] for cube in results['text_mem'] for item in cube['memories'])
+    context = client.search(query=query, user_id=user_id, top_k=top_k)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+def memos_search(client, user_id, query, top_k):
+    start = time()
+    results = client.search(query=query, user_id=user_id, top_k=top_k)
+    search_memories = "\n".join(item['memory'] for cube in results['text_mem'] for item in cube['memories'])
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+def supermemory_search(client, query, user_id, top_k):
+    start = time()
+    context = client.search(query, user_id, top_k)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+def memu_search(client, query, user_id, top_k):
+    start = time()
+    results = client.search(query, user_id, top_k)
+    context = "\n".join(results)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -218,35 +183,36 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         return existing_results
 
     if frame == "zep":
-        client = zep_client()
+        from utils.client import ZepClient
+
+        client = ZepClient()
         print("🔌 Using Zep client for search...")
         context, duration_ms = zep_search(client, user_id, question)
 
-    elif frame == "mem0-local":
-        client = mem0_client(mode="local")
-        print("🔌 Using Mem0 Local client for search...")
-        context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
-    elif frame == "mem0-api":
-        client = mem0_client(mode="api")
+    elif frame == "mem0" or frame == "mem0-graph":
+        from utils.client import Mem0Client
+
+        client = Mem0Client(enable_graph="graph" in frame)
         print("🔌 Using Mem0 API client for search...")
-        context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
-    elif frame == "memos-local":
-        client = memos_client(
-            mode="local",
-            db_name=f"pm_{frame}-{version}",
-            user_id=user_id,
-            top_k=top_k,
-            mem_cube_path=f"results/pm/{frame}-{version}/storages/{user_id}",
-            mem_cube_config_path="configs/mu_mem_cube_config.json",
-            mem_os_config_path="configs/mos_memos_config.json",
-            addorsearch="search",
-        )
-        print("🔌 Using Memos Local client for search...")
-        context, duration_ms = memos_search(client, user_id, question, frame=frame)
+        context, duration_ms = mem0_search(client, question, user_id, top_k)
     elif frame == "memos-api":
+        from utils.client import MemosApiClient
+
         client = MemosApiClient()
         print("🔌 Using Memos API client for search...")
-        context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
+        context, duration_ms = memos_search(client, user_id, question, top_k=top_k)
+    elif frame == "supermemory":
+        from utils.client import SupermemoryClient
+
+        client = SupermemoryClient()
+        print("🔌 Using supermemory client for search...")
+        context, duration_ms = supermemory_search(client, question, user_id, top_k)
+    elif frame == "memu":
+        from utils.client import MemuClient
+
+        client = MemuClient()
+        print("🔌 Using memu client for search...")
+        context, duration_ms = memu_search(client, question, user_id, top_k)
 
     search_results[user_id].append(
         {
@@ -276,7 +242,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
 
 def load_existing_results(frame, version, group_idx):
     result_path = (
-        f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{group_idx}.json"
+        f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{group_idx}.json"
     )
     if os.path.exists(result_path):
         try:
@@ -353,7 +319,7 @@ def main(frame, version, top_k=20, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Search Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
+    parser.add_argument("--lib", type=str, choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
                         default='memos-api')
     parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
     parser.add_argument("--top_k", type=int, default=20, help="Number of top results to retrieve from the search.")

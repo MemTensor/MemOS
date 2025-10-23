@@ -52,10 +52,20 @@ First prepare the dataset `longmemeval_s` from https://huggingface.co/datasets/x
 ./scripts/run_lme_eval.sh
 ```
 
-### prefEval Evaluation
+### PrefEval Evaluation
+To evaluate the **Prefeval** dataset using one of the supported memory frameworks — `memos`, `mem0`, or `zep` — run the following [script](./scripts/run_prefeval_eval.sh):
 
-### personaMem Evaluation
+```bash
+# Edit the configuration in ./scripts/run_prefeval_eval.sh
+# Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
+./scripts/run_prefeval_eval.sh
+```
+
+### PersonaMem Evaluation
 get `questions_32k.csv` and `shared_contexts_32k.jsonl` from https://huggingface.co/datasets/bowen-upenn/PersonaMem and save them at `data/personamem/`
 ```bash
+# Edit the configuration in ./scripts/run_pm_eval.sh
+# Specify the model and memory backend you want to use (e.g., mem0, zep, etc.)
+# If you want to use MIRIX, edit the the configuration in ./scripts/personamem/config.yaml
 ./scripts/run_pm_eval.sh
 ```

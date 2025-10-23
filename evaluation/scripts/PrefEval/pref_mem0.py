@@ -23,7 +23,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
 tokenizer = tiktoken.get_encoding("cl100k_base")
-
+os.environ["MEM0_API_KEY"] = os.getenv("MEM0_API_KEY")
 
 def add_memory_for_line(
     line_data: tuple, mem_client, num_irrelevant_turns: int, lib: str, version: str
@@ -46,12 +46,10 @@ def add_memory_for_line(
         turns_add = 5
         start_time_add = time.monotonic()
         if conversation:
-            if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
-                for chunk_start in range(0, len(conversation), turns_add * 2):
-                    chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
-            else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+            for chunk_start in range(0, len(conversation), turns_add * 2):
+                chunk = conversation[chunk_start : chunk_start + turns_add * 2]
+                timestamp_add = int(time.time()*100)
+                mem_client.add(messages=chunk, user_id=user_id, timestamp=timestamp_add)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -88,9 +86,8 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = "\n".join(
-            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
-        )
+        memory_list = relevant_memories.get('results', [])
+        memories_str = "\n".join(f"- {entry['memory']}" for entry in memory_list)
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -184,9 +181,9 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
-        default="memos-api",
-        help="Which MemOS library to use (used in 'add' mode).",
+        choices=["mem0", "mem0_graph"],
+        default="mem0",
+        help="Which Mem0 library to use (used in 'add' mode).",
     )
     parser.add_argument(
         "--version",
@@ -207,9 +204,8 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
-
-    mem_client = MemosApiClient()
+    from utils.client import Mem0Client
+    mem_client = Mem0Client(enable_graph="graph" in args.lib)
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
