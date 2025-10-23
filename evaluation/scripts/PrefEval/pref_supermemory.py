@@ -8,7 +8,7 @@ import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
-
+from datetime import datetime
 from irrelevant_conv import irre_10, irre_300
 
 ROOT_DIR = os.path.dirname(
@@ -49,9 +49,9 @@ def add_memory_for_line(
             if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
                 for chunk_start in range(0, len(conversation), turns_add * 2):
                     chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
+                    mem_client.add(messages=chunk, user_id=user_id)
             else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+                mem_client.add(messages=conversation, user_id=user_id)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -184,9 +184,9 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
-        default="memos-api",
-        help="Which MemOS library to use (used in 'add' mode).",
+        choices=["supermemory"],
+        default="supermemory",
+        help="Which Supermemory library to use (used in 'add' mode).",
     )
     parser.add_argument(
         "--version",
@@ -207,9 +207,48 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
+    class SupermemoryClient:
+        def __init__(self):
+            from supermemory import Supermemory
 
-    mem_client = MemosApiClient()
+            self.client = Supermemory(api_key=os.getenv("SUPERMEMORY_API_KEY"))
+
+        def add(self, messages, user_id):
+            content = "\n".join(
+                [f"{msg['role']}: {msg['content']}" for msg in messages]
+            )
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    self.client.memories.add(content=content, container_tag=user_id)
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt) 
+                    else:
+                        raise e
+
+        def search(self, query, user_id, top_k):
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    results = self.client.search.memories(
+                        q=query,
+                        container_tag=user_id,
+                        threshold=0,
+                        rerank=True,
+                        rewrite_query=True,
+                        limit=top_k,
+                    )
+                    context = "\n\n".join([r.memory for r in results.results])
+                    return context
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt) 
+                    else:
+                        raise e
+
+    mem_client = SupermemoryClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")

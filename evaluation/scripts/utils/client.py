@@ -99,6 +99,7 @@ class MemobaseClient:
         """
         user = self.client.get_user(user_id, no_get=True)
         user.insert(ChatBlob(messages=messages), sync=True)
+        user.flush(sync=True)
 
     def search(self, query, user_id, top_k):
         user = self.client.get_user(user_id, no_get=True)
