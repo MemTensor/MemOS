@@ -244,7 +244,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{conv_idx}.json", "w"
     ) as f:
         json.dump(search_results, f, indent=4)
-    print(f"💾 \033[92mSearch results for conversation {conv_idx} saved...")
+    print(f"💾 Search results for conversation {conv_idx} saved...")
     print("-" * 80)
 
     return search_results
@@ -257,7 +257,7 @@ def load_existing_results(frame, version, group_idx):
             with open(result_path) as f:
                 return json.load(f), True
         except Exception as e:
-            print(f"\033[91m❌ Error loading existing results for group {group_idx}: {e}")
+            print(f"❌ Error loading existing results for group {group_idx}: {e}")
     return {}, False
 
 
@@ -308,15 +308,15 @@ def main(frame, version, top_k=20, num_workers=2):
     elapsed_time_str = str(elapsed_time).split(".")[0]
 
     print("\n" + "=" * 80)
-    print("✅ \033[1;32mSEARCH COMPLETE".center(80))
+    print("✅ SEARCH COMPLETE".center(80))
     print("=" * 80)
-    print(f"⏱️  Total time taken to search {total_rows} users: \033[92m{elapsed_time_str}")
+    print(f"⏱️  Total time taken to search {total_rows} users: {elapsed_time_str}")
     print(f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}")
 
     with open(f"results/pm/{frame}-{version}/{frame}_pm_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
     print(
-        f"📁 Results saved to: \033[1;94mresults/pm/{frame}-{version}/{frame}_pm_search_results.json"
+        f"📁 Results saved to: mresults/pm/{frame}-{version}/{frame}_pm_search_results.json"
     )
     print("=" * 80 + "\n")
 
@@ -330,7 +330,7 @@ if __name__ == "__main__":
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="0925", help="Version of the evaluation framework."
+        "--version", type=str, default="default", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."

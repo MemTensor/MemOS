@@ -159,12 +159,7 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
 
         client = MemobaseClient()
         print("🔌 Using Memobase client for ingestion...")
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"] is not None:
-                if user["additional_fields"]["user_id"] == user_id:
-                    client.client.delete_user(user["id"])
-        user_id = client.client.add_user({"user_id": user_id})
+        client.delte_user(user_id)
     elif frame == "supermemory":
         from utils.client import SupermemoryClient
 

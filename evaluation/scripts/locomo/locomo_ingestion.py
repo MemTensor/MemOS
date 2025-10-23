@@ -103,12 +103,8 @@ def process_user(conv_idx, frame, locomo_df, version):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
-                client.client.delete_user(user["id"])
-        speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
-        speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
+        client.delete_user(speaker_a_user_id)
+        client.delete_user(speaker_b_user_id)
     elif frame == "memu":
         from utils.client import MemuClient
 
