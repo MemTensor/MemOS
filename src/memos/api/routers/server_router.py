@@ -43,6 +43,7 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
     InternetRetrieverFactory,
 )
 from memos.reranker.factory import RerankerFactory
+from memos.templates.instruction_completion import instruct_completion
 from memos.types import MOSSearchResult, UserContext
 from memos.vec_dbs.factory import VecDBFactory
 
@@ -281,6 +282,7 @@ def search_memories(search_req: APISearchRequest):
         "act_mem": [],
         "para_mem": [],
         "pref_mem": [],
+        "instruct_completion": "",
     }
     target_session_id = search_req.session_id
     if not target_session_id:
@@ -338,6 +340,9 @@ def search_memories(search_req: APISearchRequest):
             "memories": pref_formatted_memories,
         }
     )
+
+    pref_instruction = instruct_completion(pref_formatted_memories)
+    memories_result["instruct_completion"] = pref_instruction
 
     return SearchResponse(
         message="Search completed successfully",

@@ -240,3 +240,11 @@ retrieved_memories:
 - `after_update_state` must reflect the final, post-update state of the preference memory base.
 - Do **not** include any explanatory text outside the JSON.
 """
+
+
+PREF_INSTRUCTIONS = """
+# Note:
+Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
+Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
+When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
+"""

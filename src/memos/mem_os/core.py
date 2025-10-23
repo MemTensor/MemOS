@@ -779,6 +779,7 @@ class MOSCore:
             ):
                 messages_list = [messages]
                 mem_cube = self.mem_cubes[mem_cube_id]
+                # TODO: To be modified, currently only support sync mode, wait for plaintext mode
                 sync_mode = "sync"
                 if sync_mode == "sync":
                     pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
