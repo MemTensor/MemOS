@@ -68,9 +68,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         end_time = time.time()
 
-        # Log request completion with output
-        logger.info(
-            f"Request completed: {request.url.path}, status: {response.status_code}, cost: {end_time - start_time}s"
-        )
+        if response.status_code == 200:
+            logger.info(
+                f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+            )
+        else:
+            logger.error(
+                f"Request Failed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+            )
 
         return response
