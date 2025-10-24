@@ -1,4 +1,5 @@
 import os
+import time
 import traceback
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -247,6 +248,7 @@ def search_memories(search_req: APISearchRequest):
 @router.post("/add", summary="Add memories", response_model=MemoryResponse)
 def add_memories(add_req: APIADDRequest):
     """Add memories for a specific user."""
+    init_time = time.time()
     # Create UserContext object - how to assign values
     user_context = UserContext(
         user_id=add_req.user_id,
@@ -279,6 +281,11 @@ def add_memories(add_req: APIADDRequest):
             )
             logger.info(
                 f"[{mode}] Added {len(mem_id_list)} memories {mem_id_list}"
+                f"in session {add_req.session_id}: {mem_id_list}"
+            )
+            logger.debug(
+                f"Time add for mode {mode} is "
+                f"{round(time.time() - init_time)}"
                 f"in session {add_req.session_id}: {mem_id_list}"
             )
 
