@@ -330,12 +330,12 @@ if __name__ == "__main__":
         "--lib",
         type=str,
         choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
-        default="memobase",
+        default="memos-api",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="0905",
+        default="default",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
