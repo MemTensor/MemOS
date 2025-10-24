@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prompts import LME_ANSWER_PROMPT
+from utils.pref_mem_utils import remove_pref_mem_from_mem_string
 
 
 def lme_response(llm_client, context, question, question_date):
@@ -21,7 +22,6 @@ def lme_response(llm_client, context, question, question_date):
         question_date=question_date,
         context=context,
     )
-
     response = llm_client.chat.completions.create(
         model=os.getenv("CHAT_MODEL"),
         messages=[
@@ -34,12 +34,14 @@ def lme_response(llm_client, context, question, question_date):
     return result
 
 
-def process_qa(user_id, search_result, llm_client):
+def process_qa(user_id, search_result, llm_client, frame):
     start = time()
     search_result = search_result[0]
     question = search_result.get("question")
     question_date = search_result.get("date")
     context = search_result.get("search_context", "")
+    if os.getenv("ABLATION_PREF") == "true" and frame == "memos-api":
+        context = remove_pref_mem_from_mem_string(context)
     anwer = lme_response(llm_client, context, question, question_date)
 
     response_duration_ms = (time() - start) * 1000
@@ -95,7 +97,7 @@ def main(frame, version, num_workers=4):
         future_to_user_id = {}
 
         for user_id, search_results in lme_search_results.items():
-            future = executor.submit(process_qa, user_id, search_results, oai_client)
+            future = executor.submit(process_qa, user_id, search_results, oai_client, frame)
             future_to_user_id[future] = user_id
 
         for future in tqdm(

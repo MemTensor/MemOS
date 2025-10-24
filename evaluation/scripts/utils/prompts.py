@@ -1,3 +1,13 @@
+import os
+
+PREF_INSTRUCTIONS = """
+    # Note: 
+    Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
+    Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
+    When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
+"""
+
+
 LME_ANSWER_PROMPT = """
     You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
 
@@ -17,7 +27,7 @@ LME_ANSWER_PROMPT = """
     5. Formulate a precise, concise answer based solely on the evidence in the memories.
     6. Double-check that your answer directly addresses the question asked.
     7. Ensure your final answer is specific and avoids vague time references.
-
+    {pref_instructions}
     {context}
 
     Current Date: {question_date}
@@ -26,6 +36,13 @@ LME_ANSWER_PROMPT = """
 
     Answer:
     """
+
+
+if os.getenv("INSTRUCT_COMPLETE") == "true":
+   LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+else:
+   LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", "")
+
 
 PM_ANSWER_PROMPT = """
     You are a helpful assistant tasked with selecting the best answer to a user question, based solely on summarized conversation memories.
@@ -46,7 +63,7 @@ PM_ANSWER_PROMPT = """
     - Your final answer **must use parentheses**, like (a) or (b).
     - Do NOT list multiple choices. Choose only one.
     - Do NOT include extra text after <final_answer>. Just output the answer.
-
+    {pref_instructions}
     # QUESTION:
     {question}
 
@@ -56,6 +73,13 @@ PM_ANSWER_PROMPT = """
     Final Answer:
     <final_answer>
 """
+
+
+if os.getenv("INSTRUCT_COMPLETE") == "true":
+   PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+else:
+   PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", "")
+
 
 
 ZEP_CONTEXT_TEMPLATE = """

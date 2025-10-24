@@ -20,6 +20,7 @@ from utils.prompts import (
     MEMOS_CONTEXT_TEMPLATE,
     ZEP_CONTEXT_TEMPLATE,
 )
+from utils.pref_mem_utils import create_mem_string
 
 
 def zep_search(client, user_id, query, top_k=20):
@@ -114,9 +115,7 @@ def memos_search(client, user_id, query, top_k, frame="memos-api"):
     start = time()
     if frame == "memos-api":
         results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join(
-            f"- {entry.get('memory_value', '')}" for entry in results.get("memory_detail_list", [])
-        )
+        search_memories = create_mem_string(results)
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000
@@ -257,7 +256,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
 
 def load_existing_results(frame, version, group_idx):
     result_path = (
-        f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{group_idx}.json"
+        f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{group_idx}.json"
     )
     if os.path.exists(result_path):
         try:
@@ -320,6 +319,7 @@ def main(frame, version, top_k=20, num_workers=2):
     print(f"⏱️  Total time taken to search {total_rows} users: \033[92m{elapsed_time_str}")
     print(f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}")
 
+    os.makedirs(f"results/pm/{frame}-{version}/", exist_ok=True)
     with open(f"results/pm/{frame}-{version}/{frame}_pm_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
     print(

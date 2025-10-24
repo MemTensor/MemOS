@@ -12,6 +12,8 @@ from openai import AsyncOpenAI
 from prompts import ANSWER_PROMPT_MEM0, ANSWER_PROMPT_MEMOS, ANSWER_PROMPT_ZEP
 from tqdm import tqdm
 
+from utils.pref_mem_utils import remove_pref_mem_from_mem_string
+
 
 async def locomo_response(frame, llm_client, context: str, question: str) -> str:
     if frame == "zep":
@@ -47,7 +49,10 @@ async def process_qa(frame, qa, search_result, oai_client):
     gold_answer = qa.get("answer")
     qa_category = qa.get("category")
 
-    answer = await locomo_response(frame, oai_client, search_result.get("context"), query)
+    context = search_result.get("context")
+    if os.getenv("ABLATION_PREF") == "true" and frame == "memos-api":
+        context = remove_pref_mem_from_mem_string(context)
+    answer = await locomo_response(frame, oai_client, context, query)
 
     response_duration_ms = (time() - start) * 1000
 

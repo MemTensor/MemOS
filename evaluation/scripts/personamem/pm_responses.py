@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import re
 
 from utils.prompts import PM_ANSWER_PROMPT
+from utils.pref_mem_utils import remove_pref_mem_from_mem_string
 
 
 def extract_choice_answer(predicted_answer, correct_answer):
@@ -66,11 +67,14 @@ def pm_response(llm_client, context, question, options):
     return result
 
 
-def process_qa(user_id, search_result, num_runs, llm_client):
+def process_qa(user_id, search_result, num_runs, llm_client, frame):
     search_result = search_result[0]
     question = search_result.get("question")
     context = search_result.get("search_context", "")
     options = search_result.get("all_options", [])
+
+    if os.getenv("ABLATION_PREF") == "true" and frame == "memos-api":
+        context = remove_pref_mem_from_mem_string(context)
 
     run_results = []
 
@@ -150,7 +154,7 @@ def main(frame, version, num_runs=3, num_workers=4):
         future_to_user_id = {}
 
         for user_id, search_results in pm_search_results.items():
-            future = executor.submit(process_qa, user_id, search_results, num_runs, oai_client)
+            future = executor.submit(process_qa, user_id, search_results, num_runs, oai_client, frame)
             future_to_user_id[future] = user_id
 
         for future in tqdm(
