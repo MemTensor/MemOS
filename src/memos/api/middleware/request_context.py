@@ -82,7 +82,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Process the request
         response = await call_next(request)
         end_time = time.time()
-        content = await _tee_stream(response)
+        content = _tee_stream(response)
 
         if response.status_code == 200:
             logger.info(
