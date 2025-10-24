@@ -14,13 +14,13 @@ from time import time
 
 from tqdm import tqdm
 from utils.client import mem0_client, memos_api_client, zep_client
+from utils.pref_mem_utils import create_mem_string
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
     ZEP_CONTEXT_TEMPLATE,
 )
-from utils.pref_mem_utils import create_mem_string
 
 
 def zep_search(client, user_id, query, top_k=20):
@@ -255,9 +255,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
 
 
 def load_existing_results(frame, version, group_idx):
-    result_path = (
-        f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{group_idx}.json"
-    )
+    result_path = f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{group_idx}.json"
     if os.path.exists(result_path):
         try:
             with open(result_path) as f:

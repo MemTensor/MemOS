@@ -1,5 +1,8 @@
+import os
+
+
 PREF_INSTRUCTIONS = """
-    # Note: 
+    # Note:
     Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
     Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
     When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
@@ -120,9 +123,9 @@ ANSWER_PROMPT_MEMOS = """
    """
 
 if os.getenv("INSTRUCT_COMPLETE") == "true":
-   ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+    ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", PREF_INSTRUCTIONS)
 else:
-   ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", "")
+    ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", "")
 
 custom_instructions = """
 Generate personal memories that follow these guidelines:

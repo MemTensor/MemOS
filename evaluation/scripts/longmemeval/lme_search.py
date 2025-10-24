@@ -13,12 +13,12 @@ from time import time
 import pandas as pd
 
 from tqdm import tqdm
+from utils.pref_mem_utils import create_mem_string
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
 )
-from utils.pref_mem_utils import create_mem_string
 
 
 def mem0_search(client, query, user_id, top_k):

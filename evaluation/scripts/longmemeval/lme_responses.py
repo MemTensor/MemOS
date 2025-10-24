@@ -12,8 +12,8 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.prompts import LME_ANSWER_PROMPT
 from utils.pref_mem_utils import remove_pref_mem_from_mem_string
+from utils.prompts import LME_ANSWER_PROMPT
 
 
 def lme_response(llm_client, context, question, question_date):

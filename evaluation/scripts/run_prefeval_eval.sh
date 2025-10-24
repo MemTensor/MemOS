@@ -11,13 +11,13 @@ WORKERS=16
 # Parameters for pref_memos.py
 TOP_K=10
 ADD_TURN=10  # Options: 0, 10, or 300
-LIB="memos-api" 
+LIB="memos-api"
 VERSION="102201-${ADD_TURN}turns"
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
 # Step 1 (preprocess) outputs this file:
-PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl" 
+PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl"
 
 # Create a directory name based on LIB and VERSION
 OUTPUT_DIR="results/prefeval/${LIB}_${VERSION}"

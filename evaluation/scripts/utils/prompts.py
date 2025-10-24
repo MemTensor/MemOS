@@ -1,7 +1,8 @@
 import os
 
+
 PREF_INSTRUCTIONS = """
-    # Note: 
+    # Note:
     Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
     Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
     When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
@@ -39,9 +40,9 @@ LME_ANSWER_PROMPT = """
 
 
 if os.getenv("INSTRUCT_COMPLETE") == "true":
-   LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+    LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
 else:
-   LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", "")
+    LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", "")
 
 
 PM_ANSWER_PROMPT = """
@@ -76,10 +77,9 @@ PM_ANSWER_PROMPT = """
 
 
 if os.getenv("INSTRUCT_COMPLETE") == "true":
-   PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+    PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
 else:
-   PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", "")
-
+    PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", "")
 
 
 ZEP_CONTEXT_TEMPLATE = """
