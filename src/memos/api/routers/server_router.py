@@ -281,8 +281,6 @@ def search_memories(search_req: APISearchRequest):
         "text_mem": [],
         "act_mem": [],
         "para_mem": [],
-        "pref_mem": str,
-        "prefs": [],
     }
     target_session_id = search_req.session_id
     if not target_session_id:
@@ -334,6 +332,7 @@ def search_memories(search_req: APISearchRequest):
         }
     )
     if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true":
+        memories_result["prefs"] = []
         memories_result["prefs"].append(
             {
                 "cube_id": search_req.mem_cube_id,
