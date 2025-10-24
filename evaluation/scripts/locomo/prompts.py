@@ -49,12 +49,12 @@ ANSWER_PROMPT_ZEP = """
     5. Always convert relative time references to specific dates, months, or years.
     6. Be as specific as possible when talking about people, places, and events
     7. Timestamps in memories represent the actual time the event occurred, not the time the event was mentioned in a message.
-    
+
     Clarification:
     When interpreting memories, use the timestamp to determine when the described event happened, not when someone talked about the event.
-    
+
     Example:
-    
+
     Memory: (2023-03-15T16:33:00Z) I went to the vet yesterday.
     Question: What day did I go to the vet?
     Correct Answer: March 15, 2023

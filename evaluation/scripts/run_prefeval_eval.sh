@@ -11,13 +11,13 @@ WORKERS=10
 # Parameters for pref_memos.py
 TOP_K=10
 ADD_TURN=0  # Options: 0, 10, or 300
-LIB="memos-api" 
-VERSION="1021-5"  
+LIB="memos-api"
+VERSION="1021-5"
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
 # Assumes Step 1 (preprocess) outputs this file:
-PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl" 
+PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl"
 
 # Intermediate file (output of 'add' mode, input for 'process' mode)
 IDS_FILE="results/prefeval/pref_memos_add.jsonl"

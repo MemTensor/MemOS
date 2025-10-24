@@ -1,10 +1,14 @@
 import argparse
 import os
 import sys
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+
 import pandas as pd
+
 from tqdm import tqdm
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -130,7 +134,7 @@ def main(frame, version, num_workers=2):
     success_records = []
     record_file = f"results/lme/{frame}-{version}/success_records.txt"
     if os.path.exists(record_file):
-        with open(record_file, "r") as f:
+        with open(record_file) as f:
             for i in f.readlines():
                 success_records.append(i.strip())
 
