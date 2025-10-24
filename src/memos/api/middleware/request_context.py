@@ -6,6 +6,7 @@ import time
 
 from collections.abc import Callable
 
+from fastapi.responses import StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -13,6 +14,20 @@ from starlette.responses import Response
 import memos.log
 
 from memos.context.context import RequestContext, generate_trace_id, set_request_context
+
+
+async def _tee_stream(
+    original: StreamingResponse,
+) -> str:
+    chunks = []
+
+    async for chunk in original.body_iterator:
+        chunks.append(chunk)
+        yield chunk
+
+    body_str = "".join(chunks)
+
+    return body_str
 
 
 logger = memos.log.get_logger(__name__)
@@ -67,21 +82,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Process the request
         response = await call_next(request)
         end_time = time.time()
-
-        try:
-            print(f"response.json(): {response}")
-            response_json = response.json()
-        except Exception as e:
-            response_json = None
-            logger.error(f"Error getting response body: {e}")
+        content = await _tee_stream(response)
 
         if response.status_code == 200:
             logger.info(
-                f"Request completed: {request.url.path}, response: {response_json}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request completed: {request.url.path}, content: {content}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
         else:
             logger.error(
-                f"Request Failed: {request.url.path}, response: {response_json}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Failed: {request.url.path}, content: {content}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
 
         return response
