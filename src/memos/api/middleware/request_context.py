@@ -82,7 +82,16 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Process the request
         response = await call_next(request)
         end_time = time.time()
-        content = _tee_stream(response)
+        if isinstance(response, StreamingResponse):
+            response.body_iterator = _tee_stream(response)
+            content = "Streaming response"
+        else:
+            try:
+                content = (
+                    response.body.decode("utf-8") if hasattr(response, "body") else str(response)
+                )
+            except Exception as e:
+                content = f"Unable to decode response content: {e!s}"
 
         if response.status_code == 200:
             logger.info(
