@@ -1,6 +1,7 @@
 import os
 import traceback
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -256,46 +257,44 @@ def add_memories(add_req: APIADDRequest):
     target_session_id = add_req.session_id
     if not target_session_id:
         target_session_id = "default_session"
-    memories = mem_reader.get_memory(
-        [add_req.messages],
-        type="chat",
-        info={
-            "user_id": add_req.user_id,
-            "session_id": target_session_id,
-        },
-    )
-    # Flatten memory list
-    flattened_memories = [mm for m in memories for mm in m]
-    logger.info(f"Memory extraction completed for user {add_req.user_id}")
-    mem_id_list: list[str] = naive_mem_cube.text_mem.add(
-        flattened_memories,
-        user_name=user_context.mem_cube_id,
-        scope=["LongTermMemory", "UserMemory"],
-    )
-    logger.info(
-        f"Added {len(mem_id_list)} memories for user {add_req.user_id} "
-        f"in session {add_req.session_id}: {mem_id_list}"
-    )
 
-    quick_memories = mem_reader.get_memory(
-        [add_req.messages],
-        type="chat",
-        info={
-            "user_id": add_req.user_id,
-            "session_id": target_session_id,
-        },
-        mode="fast",
-    )
-    # Flatten memory list
-    quick_flattened_memories = [q_mm for q_m in quick_memories for q_mm in q_m]
-    logger.info(f"Memory extraction completed for user {add_req.user_id}")
-    quick_mem_id_list: list[str] = naive_mem_cube.text_mem.add(
-        quick_flattened_memories, user_name=user_context.mem_cube_id, scope=["WorkingMemory"]
-    )
-    logger.info(
-        f"Added {len(quick_mem_id_list)} memories for user {add_req.user_id} "
-        f"in session {add_req.session_id}: {quick_mem_id_list}"
-    )
+    def process_mode(mode: str, scopes: list[str]):
+        try:
+            memories = mem_reader.get_memory(
+                [add_req.messages],
+                type="chat",
+                info={
+                    "user_id": add_req.user_id,
+                    "session_id": target_session_id,
+                },
+                mode=None if mode == "normal" else mode,
+            )
+            flattened = [m for group in memories for m in group]
+            logger.info(f"[{mode}] Extracted {len(flattened)} memories")
+
+            mem_id_list = naive_mem_cube.text_mem.add(
+                flattened,
+                user_name=user_context.mem_cube_id,
+                scope=scopes,
+            )
+            logger.info(
+                f"[{mode}] Added {len(mem_id_list)} memories {mem_id_list}"
+                f"in session {add_req.session_id}: {mem_id_list}"
+            )
+
+            return list(zip(mem_id_list, flattened, strict=False))
+        except Exception as e:
+            logger.error(f"[{mode}] Failed: {e} {traceback.format_exc()}")
+            return []
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {
+            executor.submit(process_mode, "normal", ["LongTermMemory", "UserMemory"]): "normal",
+            executor.submit(process_mode, "fast", ["WorkingMemory"]): "fast",
+        }
+        all_results = []
+        for future in as_completed(futures):
+            all_results.extend(future.result())
 
     response_data = [
         {
@@ -303,12 +302,9 @@ def add_memories(add_req: APIADDRequest):
             "memory_id": memory_id,
             "memory_type": memory.metadata.memory_type,
         }
-        for memory_id, memory in zip(
-            mem_id_list + quick_mem_id_list,
-            flattened_memories + quick_flattened_memories,
-            strict=False,
-        )
+        for memory_id, memory in all_results
     ]
+    logger.info(f"[mem_add] All modes done: {len(response_data)} memories total")
     return MemoryResponse(
         message="Memory added successfully",
         data=response_data,
