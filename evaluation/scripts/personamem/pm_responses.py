@@ -10,12 +10,11 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
 
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import re
-
-from utils.pref_mem_utils import remove_pref_mem_from_mem_string
 from utils.prompts import PM_ANSWER_PROMPT
+from utils.pref_mem_utils import remove_pref_mem_from_mem_string, add_pref_instruction
+
+import re
 
 
 def extract_choice_answer(predicted_answer, correct_answer):
@@ -49,8 +48,9 @@ def extract_choice_answer(predicted_answer, correct_answer):
     return False, predicted_answer
 
 
-def pm_response(llm_client, context, question, options):
-    prompt = PM_ANSWER_PROMPT.format(
+def pm_response(llm_client, context, question, options, frame):
+    template = add_pref_instruction(PM_ANSWER_PROMPT, frame=frame)
+    prompt = template.format(
         question=question,
         context=context,
         options=options,
@@ -73,14 +73,13 @@ def process_qa(user_id, search_result, num_runs, llm_client, frame):
     context = search_result.get("search_context", "")
     options = search_result.get("all_options", [])
 
-    if os.getenv("ABLATION_PREF") == "true" and frame == "memos-api":
-        context = remove_pref_mem_from_mem_string(context)
+    context = remove_pref_mem_from_mem_string(context, frame=frame)
 
     run_results = []
 
     for idx in range(num_runs):
         start = time()
-        answer = pm_response(llm_client, context, question, options)
+        answer = pm_response(llm_client, context, question, options, frame)
         is_correct, answer = extract_choice_answer(answer, search_result.get("golden_answer", ""))
         response_duration_ms = (time() - start) * 1000
 
@@ -154,9 +153,7 @@ def main(frame, version, num_runs=3, num_workers=4):
         future_to_user_id = {}
 
         for user_id, search_results in pm_search_results.items():
-            future = executor.submit(
-                process_qa, user_id, search_results, num_runs, oai_client, frame
-            )
+            future = executor.submit(process_qa, user_id, search_results, num_runs, oai_client, frame)
             future_to_user_id[future] = user_id
 
         for future in tqdm(
@@ -194,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
+        choices=["zep", "mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
         default="memos-api",
     )
     parser.add_argument(

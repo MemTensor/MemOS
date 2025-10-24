@@ -8,10 +8,8 @@ import tiktoken
 from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
-
+from datetime import datetime
 from irrelevant_conv import irre_10, irre_300
-from utils.pref_mem_utils import create_mem_string, remove_pref_mem_from_mem_string, add_pref_instruction
-from utils.prompts import PREFEVAL_ANSWER_PROMPT
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,9 +49,9 @@ def add_memory_for_line(
             if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
                 for chunk_start in range(0, len(conversation), turns_add * 2):
                     chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
+                    mem_client.add(messages=chunk, user_id=user_id)
             else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+                mem_client.add(messages=conversation, user_id=user_id)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -90,7 +88,9 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = create_mem_string(relevant_memories)
+        memories_str = "\n".join(
+            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
+        )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -111,7 +111,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         return None
 
 
-def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str) -> dict:
+def generate_response_for_line(line_data: tuple, openai_client: OpenAI) -> dict:
     """
     Generates a response for a single line of data using pre-fetched memories.
     """
@@ -138,13 +138,8 @@ def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str
                 "Please run 'search' mode first."
             )
             return original_data
-        
-        memories_str = remove_pref_mem_from_mem_string(memories_str, frame=lib)
 
-        template = add_pref_instruction(PREFEVAL_ANSWER_PROMPT, frame=lib)
-        system_prompt = template.format(
-            context=memories_str
-        )
+        system_prompt = f"You are a helpful AI. Answer the question based on the query and the following memories:\nUser Memories:\n{memories_str}"
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
@@ -189,9 +184,9 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
-        default="memos-api",
-        help="Which MemOS library to use (used in 'add' mode).",
+        choices=["supermemory"],
+        default="supermemory",
+        help="Which Supermemory library to use (used in 'add' mode).",
     )
     parser.add_argument(
         "--version",
@@ -212,9 +207,46 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
+    class SupermemoryClient:
+        def __init__(self):
+            from supermemory import Supermemory
 
-    mem_client = MemosApiClient()
+            self.client = Supermemory(api_key=os.getenv("SUPERMEMORY_API_KEY"))
+
+        def add(self, messages, user_id):
+            content = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    self.client.memories.add(content=content, container_tag=user_id)
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+                    else:
+                        raise e
+
+        def search(self, query, user_id, top_k):
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    results = self.client.search.memories(
+                        q=query,
+                        container_tag=user_id,
+                        threshold=0,
+                        rerank=True,
+                        rewrite_query=True,
+                        limit=top_k,
+                    )
+                    context = "\n\n".join([r.memory for r in results.results])
+                    return context
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+                    else:
+                        raise e
+
+    mem_client = SupermemoryClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
@@ -282,7 +314,7 @@ def main():
             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
         ):
             futures = [
-                executor.submit(generate_response_for_line, (i, line), openai_client, args.lib)
+                executor.submit(generate_response_for_line, (i, line), openai_client)
                 for i, line in enumerate(lines)
             ]
 

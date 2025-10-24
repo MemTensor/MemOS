@@ -1,6 +1,3 @@
-import os
-
-
 PREF_INSTRUCTIONS = """
     # Note:
     Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
@@ -39,12 +36,6 @@ LME_ANSWER_PROMPT = """
     """
 
 
-if os.getenv("INSTRUCT_COMPLETE") == "true":
-    LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
-else:
-    LME_ANSWER_PROMPT = LME_ANSWER_PROMPT.replace("{pref_instructions}", "")
-
-
 PM_ANSWER_PROMPT = """
     You are a helpful assistant tasked with selecting the best answer to a user question, based solely on summarized conversation memories.
 
@@ -76,10 +67,12 @@ PM_ANSWER_PROMPT = """
 """
 
 
-if os.getenv("INSTRUCT_COMPLETE") == "true":
-    PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", PREF_INSTRUCTIONS)
-else:
-    PM_ANSWER_PROMPT = PM_ANSWER_PROMPT.replace("{pref_instructions}", "")
+PREFEVAL_ANSWER_PROMPT = """
+    You are a helpful AI. Answer the question based on the query and the following memories:
+    User Memories:
+    {context}
+    {pref_instructions}
+"""
 
 
 ZEP_CONTEXT_TEMPLATE = """

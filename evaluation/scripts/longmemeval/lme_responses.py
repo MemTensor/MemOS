@@ -12,12 +12,13 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.pref_mem_utils import remove_pref_mem_from_mem_string
+from utils.pref_mem_utils import remove_pref_mem_from_mem_string, add_pref_instruction
 from utils.prompts import LME_ANSWER_PROMPT
 
 
-def lme_response(llm_client, context, question, question_date):
-    prompt = LME_ANSWER_PROMPT.format(
+def lme_response(llm_client, context, question, question_date, frame):
+    template = add_pref_instruction(LME_ANSWER_PROMPT, frame=frame)
+    prompt = template.format(
         question=question,
         question_date=question_date,
         context=context,
@@ -40,9 +41,8 @@ def process_qa(user_id, search_result, llm_client, frame):
     question = search_result.get("question")
     question_date = search_result.get("date")
     context = search_result.get("search_context", "")
-    if os.getenv("ABLATION_PREF") == "true" and frame == "memos-api":
-        context = remove_pref_mem_from_mem_string(context)
-    anwer = lme_response(llm_client, context, question, question_date)
+    context = remove_pref_mem_from_mem_string(context, frame=frame)
+    anwer = lme_response(llm_client, context, question, question_date, frame)
 
     response_duration_ms = (time() - start) * 1000
 

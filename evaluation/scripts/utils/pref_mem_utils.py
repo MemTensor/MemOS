@@ -1,4 +1,5 @@
-
+import os
+from prompts import PREF_INSTRUCTIONS
 
 def create_mem_string(relevant_memories) -> str:
     text_memories = []
@@ -30,14 +31,14 @@ def create_mem_string(relevant_memories) -> str:
     return context
 
 
-def remove_pref_mem_from_mem_string(mem_string: str) -> str:
-    tmp_list = mem_string.split("Plaintext Memory:")
-    if len(tmp_list) > 1:
-        return tmp_list[1].split("Explicit Preference:")[0]
-    else:
-        return mem_string
+def remove_pref_mem_from_mem_string(mem_string: str, frame: str) -> str:
+    if os.getenv("ABLATION_PREF", "false").lower() == "true" and frame == "memos-api":
+        tmp_list = mem_string.split("Plaintext Memory:")
+        if len(tmp_list) > 1:
+            return tmp_list[1].split("Explicit Preference:")[0]
+    return mem_string
 
-
-if __name__ == "__main__":
-    mem_string = "Plaintext Memory:\nadsadsasasadsadsadsadsa\nExplicit Preference:\nThis is an explicit preference\nImplicit Preference:\nThis is an implicit preference\n"
-    print(remove_pref_mem_from_mem_string(mem_string))
+def add_pref_instruction(template: str, frame: str):
+    if os.getenv("INSTRUCT_COMPLETE", "false").lower() == "true" and frame == "memos-api":
+        return template.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+    return template.replace("{pref_instructions}", "")

@@ -84,11 +84,7 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"]["user_id"] == user_id:
-                client.client.delete_user(user["id"])
-        user_id = client.client.add_user({"user_id": user_id})
+        client.delete_user(user_id)
     elif frame == "memu":
         from utils.client import MemuClient
 

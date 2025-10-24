@@ -115,10 +115,6 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        users = client.client.get_all_users(limit=5000)
-        for u in users:
-            if u["additional_fields"]["user_id"] == user_id:
-                user_id = u["id"]
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api":
         from utils.client import MemosApiClient
