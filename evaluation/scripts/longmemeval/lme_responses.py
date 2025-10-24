@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.pref_mem_utils import remove_pref_mem_from_mem_string, add_pref_instruction
+from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
 from utils.prompts import LME_ANSWER_PROMPT
 
 

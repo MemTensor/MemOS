@@ -4,14 +4,20 @@ import json
 import os
 import sys
 import time
+
 import tiktoken
+
 from dotenv import load_dotenv
+from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
-
-from irrelevant_conv import irre_10, irre_300
-from utils.pref_mem_utils import create_mem_string, remove_pref_mem_from_mem_string, add_pref_instruction
+from utils.pref_mem_utils import (
+    add_pref_instruction,
+    create_mem_string,
+    remove_pref_mem_from_mem_string,
+)
 from utils.prompts import PREFEVAL_ANSWER_PROMPT
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -138,13 +144,11 @@ def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str
                 "Please run 'search' mode first."
             )
             return original_data
-        
+
         memories_str = remove_pref_mem_from_mem_string(memories_str, frame=lib)
 
         template = add_pref_instruction(PREFEVAL_ANSWER_PROMPT, frame=lib)
-        system_prompt = template.format(
-            context=memories_str
-        )
+        system_prompt = template.format(context=memories_str)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
@@ -206,7 +210,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        with open(args.input, "r", encoding="utf-8") as infile:
+        with open(args.input, encoding="utf-8") as infile:
             lines = infile.readlines()
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")

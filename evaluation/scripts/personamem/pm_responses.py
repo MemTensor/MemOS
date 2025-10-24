@@ -10,11 +10,12 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.prompts import PM_ANSWER_PROMPT
-from utils.pref_mem_utils import remove_pref_mem_from_mem_string, add_pref_instruction
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import re
+
+from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
+from utils.prompts import PM_ANSWER_PROMPT
 
 
 def extract_choice_answer(predicted_answer, correct_answer):
@@ -153,7 +154,9 @@ def main(frame, version, num_runs=3, num_workers=4):
         future_to_user_id = {}
 
         for user_id, search_results in pm_search_results.items():
-            future = executor.submit(process_qa, user_id, search_results, num_runs, oai_client, frame)
+            future = executor.submit(
+                process_qa, user_id, search_results, num_runs, oai_client, frame
+            )
             future_to_user_id[future] = user_id
 
         for future in tqdm(

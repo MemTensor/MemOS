@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from prompts import ANSWER_PROMPT_MEM0, ANSWER_PROMPT_MEMOS, ANSWER_PROMPT_ZEP
 from tqdm import tqdm
-from utils.pref_mem_utils import remove_pref_mem_from_mem_string, add_pref_instruction
+from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
 
 
 async def locomo_response(frame, llm_client, context: str, question: str) -> str:

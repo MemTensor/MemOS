@@ -1,14 +1,18 @@
+import argparse
 import asyncio
 import json
-import re
-import argparse
-from typing import Dict, Any
-from collections import Counter
-from tqdm.asyncio import tqdm
 import os
+import re
+
+from collections import Counter
+from typing import Any
+
 import pandas as pd
+
 from dotenv import load_dotenv
 from openai import OpenAI
+from tqdm.asyncio import tqdm
+
 
 load_dotenv()
 
@@ -30,7 +34,7 @@ async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"API call failed: {str(e)}")
+        print(f"API call failed: {e!s}")
         return ""
 
 
@@ -41,7 +45,7 @@ def parse_xml_response(response: str, tag: str) -> str:
 
 async def evaluate_violate_preference_async(
     client: OpenAI, preference: str, question: str, response: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's response violates the user's stated preference.
 Evaluate the response based on these criteria:
 
@@ -73,8 +77,8 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 
 async def evaluate_acknowledge_preference_async(
     client: OpenAI, question: str, response: str
-) -> Dict[str, str]:
-    prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query. 
+) -> dict[str, str]:
+    prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query.
 
 Evaluate the response based on these stringent criteria:
 
@@ -82,7 +86,7 @@ Evaluate the response based on these stringent criteria:
 
 Answer "Yes" if:
 
-1. The response explicitly mentions or refers to a user preference in answering the user's question. Examples include: "Based on your previous preference for xxxx"; "Based on your previous preference, I would suggest you xxxx"; "Since you mentioned you prefer/dislike xxxx"; "Since you are a xxxx"; "I will recommend the following given your preference for xxx", etc. You should extract the "xxxx" in your answer. If it only says "Based on our previous conversation, I recommend..." and does not explicitly mention any preference, you should answer 'No'. 
+1. The response explicitly mentions or refers to a user preference in answering the user's question. Examples include: "Based on your previous preference for xxxx"; "Based on your previous preference, I would suggest you xxxx"; "Since you mentioned you prefer/dislike xxxx"; "Since you are a xxxx"; "I will recommend the following given your preference for xxx", etc. You should extract the "xxxx" in your answer. If it only says "Based on our previous conversation, I recommend..." and does not explicitly mention any preference, you should answer 'No'.
 2. The response assumes the user preference in answering the user's question implicitly. For example, when the user asks 'Can you recommend me cars to drive?', if the response is 'Based on your preference, I will recommend non-EV cars, ...', then this indicates the assistant assumes that the user's preference is a dislike of EV cars, and you should answer 'Yes'.
 
 Answer "No" if the response does not mention or refer to any user preference explicitly or implicitly. If you cannot extract the sentence stating what the preference is, answer 'No'.
@@ -103,7 +107,7 @@ Examine the response meticulously and answer. Please answer in this exact XML fo
 
 async def evaluate_hallucinate_preference_async(
     client: OpenAI, preference: str, restatement: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     if not restatement.strip():
         return {"explanation": "No restatement provided by assistant", "answer": "No"}
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's restatement of the user's stated preference is the same preference. Evaluate the response based on these stringent criteria to answer if the assistant has hallucinated the preference or not:
@@ -120,10 +124,10 @@ Answer "No" if has not hallucinated:
 2. The assistant's restatement is a minor paraphrase that fully preserves the meaning and intent of the original preference.
 3. The restatement is just empty, no hallucination.
 
-Here is the information: 
-Original user preference: "{preference}" 
-Assistant's restatement: "{restatement}" 
-Examine the original preference and the assistant's restatement meticulously and answer. Please answer in this exact XML format without any other additional text: 
+Here is the information:
+Original user preference: "{preference}"
+Assistant's restatement: "{restatement}"
+Examine the original preference and the assistant's restatement meticulously and answer. Please answer in this exact XML format without any other additional text:
 <explanation>[1 short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
@@ -136,7 +140,7 @@ Examine the original preference and the assistant's restatement meticulously and
 
 async def evaluate_helpful_response_async(
     client: OpenAI, question: str, response: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant provides any substantive response to the user's query.
 Evaluate the response based on these stringent criteria:
 
@@ -174,7 +178,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
     }
 
 
-def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
+def classify_error_type(evaluation_results: dict[str, Any]) -> str:
     violate = evaluation_results["violate_preference"]["answer"]
     acknowledge = evaluation_results["acknowledge_preference"]["answer"]
     hallucinate = evaluation_results["hallucinate_preference"]["answer"]
@@ -192,7 +196,7 @@ def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
         return "Personalized Response"
 
 
-async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) -> dict[str, Any]:
     async with semaphore:
         data = json.loads(line.strip())
         preference = data["preference"]
@@ -223,7 +227,7 @@ async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) 
         return result
 
 
-def log_summary(error_counter: Counter, total_samples: int) -> Dict[str, Dict[str, float]]:
+def log_summary(error_counter: Counter, total_samples: int) -> dict[str, dict[str, float]]:
     summary_data = {}
     print("\n--- Error Type Summary ---")
 
@@ -247,7 +251,7 @@ def log_summary(error_counter: Counter, total_samples: int) -> Dict[str, Dict[st
 
 
 def generate_excel_summary(
-    summary_results: Dict[str, Dict[str, float]],
+    summary_results: dict[str, dict[str, float]],
     avg_search_time: float,
     avg_context_tokens: float,
     avg_add_time: float,
@@ -317,7 +321,7 @@ async def main(concurrency_limit: int, input_file: str, output_file: str, output
     client = OpenAI(api_key=API_KEY, base_url=API_URL)
 
     try:
-        with open(input_file, "r", encoding="utf-8") as f:
+        with open(input_file, encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
         print(f"Error: Input file not found at '{input_file}'")

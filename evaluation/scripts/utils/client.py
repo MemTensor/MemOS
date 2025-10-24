@@ -3,10 +3,14 @@ import os
 import sys
 import time
 import uuid
+
 from contextlib import suppress
 from datetime import datetime
-from dotenv import load_dotenv
+
 import requests
+
+from dotenv import load_dotenv
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()

@@ -1,23 +1,26 @@
 import argparse
+import csv
 import json
 import os
 import sys
+
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from time import time
+
 from tqdm import tqdm
-import csv
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils.pref_mem_utils import create_mem_string
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
     ZEP_CONTEXT_TEMPLATE,
 )
-from utils.pref_mem_utils import create_mem_string
 
 
 def zep_search(client, user_id, query, top_k=20):
@@ -108,7 +111,7 @@ def build_jsonl_index(jsonl_path):
     Assumes each line is a JSON object with a single key-value pair.
     """
     index = {}
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         while True:
             offset = f.tell()
             line = f.readline()
@@ -120,14 +123,14 @@ def build_jsonl_index(jsonl_path):
 
 
 def load_context_by_id(jsonl_path, offset):
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         f.seek(offset)
         item = json.loads(f.readline())
         return next(iter(item.values()))
 
 
 def load_rows(csv_path):
-    with open(csv_path, mode="r", newline="", encoding="utf-8") as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for _, row in enumerate(reader, start=1):
             row_data = {}
@@ -139,7 +142,7 @@ def load_rows(csv_path):
 def load_rows_with_context(csv_path, jsonl_path):
     jsonl_index = build_jsonl_index(jsonl_path)
 
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         prev_sid = None
         prev_context = None
@@ -162,7 +165,7 @@ def load_rows_with_context(csv_path, jsonl_path):
 
 
 def count_csv_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         return sum(1 for _ in f) - 1
 
 

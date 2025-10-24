@@ -44,7 +44,7 @@ def save_to_excel(results, output_path):
             category_row[f"response_{metric}"] = value
 
         # Add search duration metrics (if exists)
-        if "search_duration" in scores and scores["search_duration"]:
+        if scores.get("search_duration"):
             for metric, value in scores["search_duration"].items():
                 category_row[f"search_{metric}"] = value
 
@@ -371,7 +371,7 @@ if __name__ == "__main__":
     print(f"📂 Loading response data from: {responses_path}")
 
     try:
-        with open(responses_path, "r", encoding="utf-8") as file:
+        with open(responses_path, encoding="utf-8") as file:
             data = json.load(file)
 
         # Calculate metrics

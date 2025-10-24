@@ -11,13 +11,13 @@ WORKERS=10
 # Parameters for pref_memos.py
 TOP_K=6
 ADD_TURN=0  # Options: 0, 10, or 300
-LIB="memos-api"  
+LIB="memos-api"
 VERSION="1022-0"
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
 # Step 1 (preprocess) outputs this file:
-PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl" 
+PREPROCESSED_FILE="data/prefeval/pref_processed.jsonl"
 
 # Create a directory name based on the *specific* LIB (e.g., "memos")
 OUTPUT_DIR="results/prefeval/${LIB}_${VERSION}"
@@ -54,7 +54,7 @@ export HF_ENDPOINT="https://hf-mirror.com"
 echo "--- Starting PrefEval Pipeline ---"
 echo "Configuration: WORKERS=$WORKERS, TOP_K=$TOP_K, ADD_TURN=$ADD_TURN, LIB=$LIB, VERSION=$VERSION, HF_ENDPOINT=$HF_ENDPOINT"
 echo "Results will be saved to: $OUTPUT_DIR"
-echo "Using script: $LIB_SCRIPT (mapped from LIB=$LIB)" 
+echo "Using script: $LIB_SCRIPT (mapped from LIB=$LIB)"
 echo ""
 
 # --- Step 1: Preprocess the data ---
@@ -134,7 +134,7 @@ echo "Running pref_eval.py..."
 python scripts/PrefEval/pref_eval.py \
     --input $RESPONSE_FILE \
     --concurrency-limit $WORKERS
-    
+
 if [ $? -ne 0 ]; then
     echo "Error: Evaluation script failed."
     exit 1

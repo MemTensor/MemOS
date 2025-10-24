@@ -4,12 +4,14 @@ import json
 import os
 import sys
 import time
+
 import tiktoken
+
 from dotenv import load_dotenv
+from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
-import time
-from irrelevant_conv import irre_10, irre_300
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -49,7 +51,7 @@ def add_memory_for_line(
         if conversation:
             messages = []
 
-            for chunk_start in range(0, len(conversation)):
+            for chunk_start in range(len(conversation)):
                 chunk = conversation[chunk_start : chunk_start + 1]
                 timestamp_add = str(int(time.time() * 100))
                 time.sleep(0.001)  # Ensure unique timestamp
@@ -210,7 +212,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        with open(args.input, "r", encoding="utf-8") as infile:
+        with open(args.input, encoding="utf-8") as infile:
             lines = infile.readlines()
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")
