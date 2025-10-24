@@ -80,7 +80,10 @@ class SimpleTreeTextMemory(TreeTextMemory):
         logger.info(f"time init: internet_retriever time is: {time.time() - time_start_ir}")
 
     def add(
-        self, memories: list[TextualMemoryItem | dict[str, Any]], user_name: str | None = None
+        self,
+        memories: list[TextualMemoryItem | dict[str, Any]],
+        user_name: str | None = None,
+        scope=None,
     ) -> list[str]:
         """Add memories.
         Args:
@@ -91,7 +94,9 @@ class SimpleTreeTextMemory(TreeTextMemory):
             plan = plan_memory_operations(memory_items, metadata, self.graph_store)
             execute_plan(memory_items, metadata, plan, self.graph_store)
         """
-        return self.memory_manager.add(memories, user_name=user_name)
+        if scope is None:
+            scope = ["LongTermMemory", "UserMemory", "WorkingMemory"]
+        return self.memory_manager.add(memories, user_name=user_name, scope=scope)
 
     def replace_working_memory(
         self, memories: list[TextualMemoryItem], user_name: str | None = None

@@ -53,15 +53,24 @@ class MemoryManager:
         self._merged_threshold = merged_threshold
 
     def add(
-        self, memories: list[TextualMemoryItem], user_name: str | None = None, mode: str = "sync"
+        self,
+        memories: list[TextualMemoryItem],
+        user_name: str | None = None,
+        mode: str = "sync",
+        scope: list | None = None,
     ) -> list[str]:
         """
         Add new memories in parallel to different memory types.
         """
+        if scope is None:
+            scope = ["LongTermMemory", "UserMemory", "WorkingMemory"]
+
         added_ids: list[str] = []
 
         with ContextThreadPoolExecutor(max_workers=20) as executor:
-            futures = {executor.submit(self._process_memory, m, user_name): m for m in memories}
+            futures = {
+                executor.submit(self._process_memory, m, user_name, scope): m for m in memories
+            }
             for future in as_completed(futures, timeout=60):
                 try:
                     ids = future.result()
@@ -127,19 +136,27 @@ class MemoryManager:
         self.current_memory_size = {record["memory_type"]: record["count"] for record in results}
         logger.info(f"[MemoryManager] Refreshed memory sizes: {self.current_memory_size}")
 
-    def _process_memory(self, memory: TextualMemoryItem, user_name: str | None = None):
+    def _process_memory(
+        self, memory: TextualMemoryItem, user_name: str | None = None, scope: list | None = None
+    ):
         """
         Process and add memory to different memory types (WorkingMemory, LongTermMemory, UserMemory).
         This method runs asynchronously to process each memory item.
         """
+        if scope is None:
+            scope = ["LongTermMemory", "UserMemory", "WorkingMemory"]
         ids: list[str] = []
         futures = []
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory", user_name)
-            futures.append(f_working)
+            if "WorkingMemory" in scope:
+                f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory", user_name)
+                futures.append(f_working)
 
-            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
+            if (
+                memory.metadata.memory_type in ("LongTermMemory", "UserMemory")
+                and memory.metadata.memory_type in scope
+            ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
                     memory=memory,

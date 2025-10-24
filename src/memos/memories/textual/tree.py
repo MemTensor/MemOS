@@ -81,12 +81,16 @@ class TreeTextMemory(BaseTextMemory):
         else:
             logger.info("No internet retriever configured")
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
+    def add(
+        self, memories: list[TextualMemoryItem | dict[str, Any]], scope=None, **kwargs
+    ) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
         """
-        return self.memory_manager.add(memories, mode=self.mode)
+        if scope is None:
+            scope = ["LongTermMemory", "UserMemory", "WorkingMemory"]
+        return self.memory_manager.add(memories, mode=self.mode, scope=scope)
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         self.memory_manager.replace_working_memory(memories)

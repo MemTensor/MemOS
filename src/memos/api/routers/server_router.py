@@ -264,26 +264,50 @@ def add_memories(add_req: APIADDRequest):
             "session_id": target_session_id,
         },
     )
-
     # Flatten memory list
     flattened_memories = [mm for m in memories for mm in m]
     logger.info(f"Memory extraction completed for user {add_req.user_id}")
     mem_id_list: list[str] = naive_mem_cube.text_mem.add(
         flattened_memories,
         user_name=user_context.mem_cube_id,
+        scope=["LongTermMemory", "UserMemory"],
     )
-
     logger.info(
         f"Added {len(mem_id_list)} memories for user {add_req.user_id} "
         f"in session {add_req.session_id}: {mem_id_list}"
     )
+
+    quick_memories = mem_reader.get_memory(
+        [add_req.messages],
+        type="chat",
+        info={
+            "user_id": add_req.user_id,
+            "session_id": target_session_id,
+        },
+        mode="fast",
+    )
+    # Flatten memory list
+    quick_flattened_memories = [q_mm for q_m in quick_memories for q_mm in q_m]
+    logger.info(f"Memory extraction completed for user {add_req.user_id}")
+    quick_mem_id_list: list[str] = naive_mem_cube.text_mem.add(
+        quick_flattened_memories, user_name=user_context.mem_cube_id, scope=["WorkingMemory"]
+    )
+    logger.info(
+        f"Added {len(quick_mem_id_list)} memories for user {add_req.user_id} "
+        f"in session {add_req.session_id}: {quick_mem_id_list}"
+    )
+
     response_data = [
         {
             "memory": memory.memory,
             "memory_id": memory_id,
             "memory_type": memory.metadata.memory_type,
         }
-        for memory_id, memory in zip(mem_id_list, flattened_memories, strict=False)
+        for memory_id, memory in zip(
+            mem_id_list + quick_mem_id_list,
+            flattened_memories + quick_flattened_memories,
+            strict=False,
+        )
     ]
     return MemoryResponse(
         message="Memory added successfully",
