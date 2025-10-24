@@ -68,13 +68,20 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         end_time = time.time()
 
+        try:
+            print(f"response.json(): {response}")
+            response_json = response.json()
+        except Exception as e:
+            response_json = None
+            logger.error(f"Error getting response body: {e}")
+
         if response.status_code == 200:
             logger.info(
-                f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request completed: {request.url.path}, response: {response_json}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
         else:
             logger.error(
-                f"Request Failed: {request.url.path}, response: {response.json()}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Failed: {request.url.path}, response: {response_json}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
 
         return response
