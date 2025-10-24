@@ -54,7 +54,6 @@ def get_config(user_id: str):
         "model_schema": "memos.configs.mem_cube.GeneralMemCubeConfig",
         "user_id": user_id,
         "cube_id": f"{user_id}/mem_cube",
-        "config_filename": "config.json",
         "text_mem": {
             "backend": "tree_text",
             "config": {
@@ -90,8 +89,6 @@ def get_config(user_id: str):
                         "collection_name": [
                             "explicit_preference",
                             "implicit_preference",
-                            "topic_preference",
-                            "user_preference",
                         ],
                         "vector_dimension": 768,
                         "distance_metric": "cosine",
@@ -393,11 +390,6 @@ memory.add(
     user_id=user_id,
     mem_cube_id=register_result["default_cube_id"],
 )
-
-user_cube_id = memory.user_manager.get_user_cubes(user_id)[0].cube_id
-print(f"user_cube_id: {user_cube_id}")
-memory.mem_cubes[user_cube_id].pref_mem.slow_update(user_id)
-
 
 retrieved_memories = memory.search(query="What do you like?", user_id=user_id)
 print(
