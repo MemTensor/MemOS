@@ -80,26 +80,23 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         logger.info(f"Request started, params: {params_log}, headers: {request.headers}")
 
         # Process the request
-        response = await call_next(request)
-        end_time = time.time()
-        if isinstance(response, StreamingResponse):
-            response.body_iterator = _tee_stream(response)
-            content = "Streaming response"
-        else:
-            try:
-                content = (
-                    response.body.decode("utf-8") if hasattr(response, "body") else str(response)
-                )
-            except Exception as e:
-                content = f"Unable to decode response content: {e!s}"
+        try:
+            response = await call_next(request)
+            end_time = time.time()
 
-        if response.status_code == 200:
-            logger.info(
-                f"Request completed: {request.url.path}, content: {content}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
-            )
-        else:
+            if response.status_code == 200:
+                logger.info(
+                    f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                )
+            else:
+                logger.error(
+                    f"Request Failed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                )
+        except Exception as e:
+            end_time = time.time()
             logger.error(
-                f"Request Failed: {request.url.path}, content: {content}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Exception Error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
+            raise e
 
         return response
