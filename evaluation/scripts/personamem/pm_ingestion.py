@@ -1,15 +1,13 @@
 import argparse
-import os
-import sys
 import csv
 import json
-
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from tqdm import tqdm
-from zep_cloud.types import Message
 import time
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def ingest_session(session, user_id, session_id, frame, client):

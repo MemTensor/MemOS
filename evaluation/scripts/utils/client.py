@@ -63,14 +63,12 @@ class Mem0Client:
                             timestamp=timestamp,
                             user_id=user_id,
                             enable_graph=True,
-                            async_mode=False,
                         )
                     else:
                         self.client.add(
                             messages=batch_messages,
                             timestamp=timestamp,
                             user_id=user_id,
-                            async_mode=False,
                         )
                     break
                 except Exception as e:
