@@ -18,16 +18,16 @@ from memos.context.context import RequestContext, generate_trace_id, set_request
 
 async def _tee_stream(
     original: StreamingResponse,
-) -> str:
+) -> StreamingResponse:
     chunks = []
 
     async for chunk in original.body_iterator:
         chunks.append(chunk)
         yield chunk
 
-    body_str = "".join(chunks)
+    body_str = "".join(chunks).decode("utf-8", errors="replace")
 
-    return body_str
+    logger.info(f"Response content: {body_str}")
 
 
 logger = memos.log.get_logger(__name__)
