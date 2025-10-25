@@ -168,7 +168,9 @@ class HTTPBGERerankerStrategy(BaseReranker):
 
         try:
             # Make the HTTP request to the reranker service
-            resp = requests.post(self.reranker_url, headers=headers, json=payload, timeout=self.timeout)
+            resp = requests.post(
+                self.reranker_url, headers=headers, json=payload, timeout=self.timeout
+            )
             resp.raise_for_status()
             data = resp.json()
 
