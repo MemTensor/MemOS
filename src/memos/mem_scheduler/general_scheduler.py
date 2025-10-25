@@ -152,7 +152,7 @@ class GeneralScheduler(BaseScheduler):
         logger.info(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
 
         # Process the query in a session turn
-        grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=QUERY_LABEL)
 
@@ -174,7 +174,7 @@ class GeneralScheduler(BaseScheduler):
         """
         logger.info(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
         # Process the query in a session turn
-        grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ANSWER_LABEL)
 

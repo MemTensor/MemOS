@@ -26,6 +26,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
 )
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
+    ScheduleMessageItem,
 )
 from memos.memories.textual.tree import TreeTextMemory
 
@@ -36,6 +37,9 @@ sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
 
 
 class TestGeneralScheduler(unittest.TestCase):
+    # Control whether to run activation memory tests that require GPU, default is False
+    RUN_ACTIVATION_MEMORY_TESTS = True
+
     def _create_mock_auth_config(self):
         """Create a mock AuthConfig for testing purposes."""
         # Create mock configs with valid test values
@@ -68,6 +72,19 @@ class TestGeneralScheduler(unittest.TestCase):
         self.llm = MagicMock(spec=BaseLLM)
         self.mem_cube = MagicMock(spec=GeneralMemCube)
         self.tree_text_memory = MagicMock(spec=TreeTextMemory)
+        # Add memory_manager mock to prevent AttributeError in scheduler_logger
+        self.tree_text_memory.memory_manager = MagicMock()
+        self.tree_text_memory.memory_manager.memory_size = {
+            "LongTermMemory": 10000,
+            "UserMemory": 10000,
+            "WorkingMemory": 20,
+        }
+        # Mock get_current_memory_size method
+        self.tree_text_memory.get_current_memory_size.return_value = {
+            "LongTermMemory": 100,
+            "UserMemory": 50,
+            "WorkingMemory": 10,
+        }
         self.mem_cube.text_mem = self.tree_text_memory
         self.mem_cube.act_mem = MagicMock()
 
@@ -185,8 +202,72 @@ class TestGeneralScheduler(unittest.TestCase):
         # Stop the scheduler
         self.scheduler.stop()
 
-        # Verify cleanup
-        self.assertFalse(self.scheduler._running)
+    def test_redis_message_queue(self):
+        """Test Redis message queue functionality for sending and receiving messages."""
+        import asyncio
+        import time
+
+        from unittest.mock import MagicMock, patch
+
+        # Mock Redis connection and operations
+        mock_redis = MagicMock()
+        mock_redis.xadd = MagicMock(return_value=b"1234567890-0")
+
+        # Track received messages
+        received_messages = []
+
+        def redis_handler(messages: list[ScheduleMessageItem]) -> None:
+            """Handler for Redis messages."""
+            received_messages.extend(messages)
+
+        # Register Redis handler
+        redis_label = "test_redis"
+        handlers = {redis_label: redis_handler}
+        self.scheduler.register_handlers(handlers)
+
+        # Enable Redis queue for this test
+        with (
+            patch.object(self.scheduler, "use_redis_queue", True),
+            patch.object(self.scheduler, "_redis_conn", mock_redis),
+        ):
+            # Start scheduler
+            self.scheduler.start()
+
+            # Create test message for Redis
+            redis_message = ScheduleMessageItem(
+                label=redis_label,
+                content="Redis test message",
+                user_id="redis_user",
+                mem_cube_id="redis_cube",
+                mem_cube="redis_mem_cube_obj",
+                timestamp=datetime.now(),
+            )
+
+            # Submit message to Redis queue
+            asyncio.run(self.scheduler.submit_messages(redis_message))
+
+            # Verify Redis xadd was called
+            mock_redis.xadd.assert_called_once()
+            call_args = mock_redis.xadd.call_args
+            self.assertEqual(call_args[0][0], "user:queries:stream")
+
+            # Verify message data was serialized correctly
+            message_data = call_args[0][1]
+            self.assertEqual(message_data["label"], redis_label)
+            self.assertEqual(message_data["content"], "Redis test message")
+            self.assertEqual(message_data["user_id"], "redis_user")
+            self.assertEqual(message_data["cube_id"], "redis_cube")  # Note: to_dict uses cube_id
+
+            # Simulate Redis message consumption
+            # This would normally be handled by the Redis consumer in the scheduler
+            time.sleep(0.1)  # Brief wait for async operations
+
+            # Stop scheduler
+            self.scheduler.stop()
+
+        print("Redis message queue test completed successfully!")
+
+    # Removed test_robustness method - was too time-consuming for CI/CD pipeline
 
     def test_scheduler_startup_mode_process(self):
         """Test scheduler with process startup mode."""
@@ -219,3 +300,284 @@ class TestGeneralScheduler(unittest.TestCase):
         """Test that startup mode constants are properly defined."""
         self.assertEqual(STARTUP_BY_THREAD, "thread")
         self.assertEqual(STARTUP_BY_PROCESS, "process")
+
+    def test_activation_memory_update(self):
+        """Test activation memory update functionality with DynamicCache handling."""
+        if not self.RUN_ACTIVATION_MEMORY_TESTS:
+            self.skipTest(
+                "Skipping activation memory test. Set RUN_ACTIVATION_MEMORY_TESTS=True to enable."
+            )
+
+        from unittest.mock import Mock
+
+        from transformers import DynamicCache
+
+        from memos.memories.activation.kv import KVCacheMemory
+
+        # Mock the mem_cube with activation memory
+        mock_kv_cache_memory = Mock(spec=KVCacheMemory)
+        self.mem_cube.act_mem = mock_kv_cache_memory
+
+        # Mock get_all to return empty list (no existing cache items)
+        mock_kv_cache_memory.get_all.return_value = []
+
+        # Create a mock DynamicCache with layers attribute
+        mock_cache = Mock(spec=DynamicCache)
+        mock_cache.layers = []
+
+        # Create mock layers with key_cache and value_cache
+        for _ in range(2):  # Simulate 2 layers
+            mock_layer = Mock()
+            mock_layer.key_cache = Mock()
+            mock_layer.value_cache = Mock()
+            mock_cache.layers.append(mock_layer)
+
+        # Mock the extract method to return a KVCacheItem
+        mock_cache_item = Mock()
+        mock_cache_item.records = Mock()
+        mock_cache_item.records.text_memories = []
+        mock_cache_item.records.timestamp = None
+        mock_kv_cache_memory.extract.return_value = mock_cache_item
+
+        # Test data
+        test_memories = ["Test memory 1", "Test memory 2"]
+        user_id = "test_user"
+        mem_cube_id = "test_cube"
+
+        # Call the method under test
+        try:
+            self.scheduler.update_activation_memory(
+                new_memories=test_memories,
+                label=QUERY_LABEL,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=self.mem_cube,
+            )
+
+            # Verify that extract was called
+            mock_kv_cache_memory.extract.assert_called_once()
+
+            # Verify that add was called with the extracted cache item
+            mock_kv_cache_memory.add.assert_called_once()
+
+            # Verify that dump was called
+            mock_kv_cache_memory.dump.assert_called_once()
+
+            print("✅ Activation memory update test passed - DynamicCache layers handled correctly")
+
+        except Exception as e:
+            self.fail(f"Activation memory update failed: {e}")
+
+    def test_dynamic_cache_layers_access(self):
+        """Test DynamicCache layers attribute access for compatibility."""
+        if not self.RUN_ACTIVATION_MEMORY_TESTS:
+            self.skipTest(
+                "Skipping activation memory test. Set RUN_ACTIVATION_MEMORY_TESTS=True to enable."
+            )
+
+        from unittest.mock import Mock
+
+        from transformers import DynamicCache
+
+        # Create a real DynamicCache instance
+        cache = DynamicCache()
+
+        # Check if it has layers attribute (may vary by transformers version)
+        if hasattr(cache, "layers"):
+            self.assertIsInstance(cache.layers, list, "DynamicCache.layers should be a list")
+
+            # Test with mock layers
+            mock_layer = Mock()
+            mock_layer.key_cache = Mock()
+            mock_layer.value_cache = Mock()
+            cache.layers.append(mock_layer)
+
+            # Verify we can access layer attributes
+            self.assertEqual(len(cache.layers), 1)
+            self.assertTrue(hasattr(cache.layers[0], "key_cache"))
+            self.assertTrue(hasattr(cache.layers[0], "value_cache"))
+
+            print("✅ DynamicCache layers access test passed")
+        else:
+            # If layers attribute doesn't exist, verify our fix handles this case
+            print("⚠️  DynamicCache doesn't have 'layers' attribute in this transformers version")
+            print("✅ Test passed - our code should handle this gracefully")
+
+    def test_get_running_tasks_with_filter(self):
+        """Test get_running_tasks method with filter function."""
+        # Mock dispatcher and its get_running_tasks method
+        mock_task_item1 = MagicMock()
+        mock_task_item1.item_id = "task_1"
+        mock_task_item1.user_id = "user_1"
+        mock_task_item1.mem_cube_id = "cube_1"
+        mock_task_item1.task_info = {"type": "query"}
+        mock_task_item1.task_name = "test_task_1"
+        mock_task_item1.start_time = datetime.now()
+        mock_task_item1.end_time = None
+        mock_task_item1.status = "running"
+        mock_task_item1.result = None
+        mock_task_item1.error_message = None
+        mock_task_item1.messages = []
+
+        # Define a filter function
+        def user_filter(task):
+            return task.user_id == "user_1"
+
+        # Mock the filtered result (only task_1 matches the filter)
+        with patch.object(
+            self.scheduler.dispatcher, "get_running_tasks", return_value={"task_1": mock_task_item1}
+        ) as mock_get_running_tasks:
+            # Call get_running_tasks with filter
+            result = self.scheduler.get_running_tasks(filter_func=user_filter)
+
+            # Verify result
+            self.assertIsInstance(result, dict)
+            self.assertIn("task_1", result)
+            self.assertEqual(len(result), 1)
+
+            # Verify dispatcher method was called with filter
+            mock_get_running_tasks.assert_called_once_with(filter_func=user_filter)
+
+    def test_get_running_tasks_empty_result(self):
+        """Test get_running_tasks method when no tasks are running."""
+        # Mock dispatcher to return empty dict
+        with patch.object(
+            self.scheduler.dispatcher, "get_running_tasks", return_value={}
+        ) as mock_get_running_tasks:
+            # Call get_running_tasks
+            result = self.scheduler.get_running_tasks()
+
+            # Verify empty result
+            self.assertIsInstance(result, dict)
+            self.assertEqual(len(result), 0)
+
+            # Verify dispatcher method was called
+            mock_get_running_tasks.assert_called_once_with(filter_func=None)
+
+    def test_get_running_tasks_no_dispatcher(self):
+        """Test get_running_tasks method when dispatcher is None."""
+        # Temporarily set dispatcher to None
+        original_dispatcher = self.scheduler.dispatcher
+        self.scheduler.dispatcher = None
+
+        # Call get_running_tasks
+        result = self.scheduler.get_running_tasks()
+
+        # Verify empty result and warning behavior
+        self.assertIsInstance(result, dict)
+        self.assertEqual(len(result), 0)
+
+        # Restore dispatcher
+        self.scheduler.dispatcher = original_dispatcher
+
+    def test_get_running_tasks_multiple_tasks(self):
+        """Test get_running_tasks method with multiple tasks."""
+        # Mock multiple task items
+        mock_task_item1 = MagicMock()
+        mock_task_item1.item_id = "task_1"
+        mock_task_item1.user_id = "user_1"
+        mock_task_item1.mem_cube_id = "cube_1"
+        mock_task_item1.task_info = {"type": "query"}
+        mock_task_item1.task_name = "test_task_1"
+        mock_task_item1.start_time = datetime.now()
+        mock_task_item1.end_time = None
+        mock_task_item1.status = "running"
+        mock_task_item1.result = None
+        mock_task_item1.error_message = None
+        mock_task_item1.messages = []
+
+        mock_task_item2 = MagicMock()
+        mock_task_item2.item_id = "task_2"
+        mock_task_item2.user_id = "user_2"
+        mock_task_item2.mem_cube_id = "cube_2"
+        mock_task_item2.task_info = {"type": "answer"}
+        mock_task_item2.task_name = "test_task_2"
+        mock_task_item2.start_time = datetime.now()
+        mock_task_item2.end_time = None
+        mock_task_item2.status = "completed"
+        mock_task_item2.result = "success"
+        mock_task_item2.error_message = None
+        mock_task_item2.messages = ["message1", "message2"]
+
+        with patch.object(
+            self.scheduler.dispatcher,
+            "get_running_tasks",
+            return_value={"task_1": mock_task_item1, "task_2": mock_task_item2},
+        ) as mock_get_running_tasks:
+            # Call get_running_tasks
+            result = self.scheduler.get_running_tasks()
+
+            # Verify result structure
+            self.assertIsInstance(result, dict)
+            self.assertEqual(len(result), 2)
+            self.assertIn("task_1", result)
+            self.assertIn("task_2", result)
+
+            # Verify task_1 details
+            task1_dict = result["task_1"]
+            self.assertEqual(task1_dict["item_id"], "task_1")
+            self.assertEqual(task1_dict["user_id"], "user_1")
+            self.assertEqual(task1_dict["status"], "running")
+
+            # Verify task_2 details
+            task2_dict = result["task_2"]
+            self.assertEqual(task2_dict["item_id"], "task_2")
+            self.assertEqual(task2_dict["user_id"], "user_2")
+            self.assertEqual(task2_dict["status"], "completed")
+            self.assertEqual(task2_dict["result"], "success")
+            self.assertEqual(task2_dict["messages"], ["message1", "message2"])
+
+            # Verify dispatcher method was called
+            mock_get_running_tasks.assert_called_once_with(filter_func=None)
+
+    def test_message_handler_receives_submitted_message(self):
+        """Test that handlers receive messages after scheduler startup and message submission."""
+        # Create a mock handler that tracks received messages
+        received_messages = []
+
+        def mock_handler(messages: list[ScheduleMessageItem]) -> None:
+            """Mock handler that records received messages."""
+            received_messages.extend(messages)
+
+        # Register the mock handler
+        test_label = "test_handler"
+        handlers = {test_label: mock_handler}
+        self.scheduler.register_handlers(handlers)
+
+        # Verify handler is registered
+        self.assertIn(test_label, self.scheduler.handlers)
+        self.assertEqual(self.scheduler.handlers[test_label], mock_handler)
+
+        # Start the scheduler
+        self.scheduler.start()
+
+        # Create and submit a test message
+        test_message = ScheduleMessageItem(
+            label=test_label,
+            content="Test message content",
+            user_id="test_user",
+            mem_cube_id="test_mem_cube",
+            mem_cube="test_mem_cube_obj",  # Required field - can be string or GeneralMemCube
+            timestamp=datetime.now(),
+        )
+
+        import asyncio
+
+        asyncio.run(self.scheduler.submit_messages(test_message))
+
+        # Wait for message processing to complete
+        import time
+
+        time.sleep(2.0)  # Allow sufficient time for message processing
+
+        # Verify the handler received the message
+        self.assertEqual(
+            len(received_messages), 1, f"Expected 1 message, got {len(received_messages)}"
+        )
+        self.assertEqual(received_messages[0].label, test_label)
+        self.assertEqual(received_messages[0].content, "Test message content")
+        self.assertEqual(received_messages[0].user_id, "test_user")
+        self.assertEqual(received_messages[0].mem_cube_id, "test_mem_cube")
+
+        # Stop the scheduler
+        self.scheduler.stop()

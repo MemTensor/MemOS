@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
+from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 from .general_schemas import NOT_INITIALIZED
 
@@ -40,7 +41,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     mem_cube: GeneralMemCube | str = Field(..., description="memcube for schedule")
     content: str = Field(..., description="Content of the schedule message")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.utcnow(), description="submit time for schedule_messages"
+        default_factory=get_utc_now, description="submit time for schedule_messages"
     )
 
     # Pydantic V2 model configuration
@@ -91,10 +92,11 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         return cls(
             item_id=data.get("item_id", str(uuid4())),
             user_id=data["user_id"],
+            mem_cube_id=data["cube_id"],
             session_id=data["session_id"],
             cube_id=data["cube_id"],
             label=data["label"],
-            cube="Not Applicable",  # Custom cube deserialization
+            mem_cube="Not Applicable",  # Custom cube deserialization
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
         )
@@ -135,7 +137,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         description="Maximum capacities of memory partitions",
     )
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.utcnow(),
+        default_factory=get_utc_now,
         description="Timestamp indicating when the log entry was created",
     )
 
