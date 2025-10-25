@@ -11,13 +11,6 @@ from dotenv import load_dotenv
 from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
-from utils.pref_mem_utils import (
-    add_pref_instruction,
-    create_mem_string,
-    remove_pref_mem_from_mem_string,
-)
-from utils.prompts import PREFEVAL_ANSWER_PROMPT
-
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +19,15 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
+
+from utils.pref_mem_utils import (
+    add_pref_instruction,
+    create_mem_string,
+    remove_pref_mem_from_mem_string,
+)
+from utils.prompts import PREFEVAL_ANSWER_PROMPT
+
+
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")

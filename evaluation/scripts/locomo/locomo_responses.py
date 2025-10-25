@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import json
 import os
-
+import sys
 from time import time
 
 import pandas as pd
@@ -11,7 +11,14 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from prompts import ANSWER_PROMPT_MEM0, ANSWER_PROMPT_MEMOS, ANSWER_PROMPT_ZEP
 from tqdm import tqdm
-from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
+
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
+
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 
 async def locomo_response(frame, llm_client, context: str, question: str) -> str:
@@ -26,6 +33,7 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
             question=question,
         )
     else:
+        from utils.pref_mem_utils import add_pref_instruction
         template = add_pref_instruction(ANSWER_PROMPT_MEMOS, frame=frame)
         prompt = template.format(
             context=context,
@@ -44,6 +52,7 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
 
 
 async def process_qa(frame, qa, search_result, oai_client):
+    from utils.pref_mem_utils import remove_pref_mem_from_mem_string
     start = time()
     query = qa.get("question")
     gold_answer = qa.get("answer")

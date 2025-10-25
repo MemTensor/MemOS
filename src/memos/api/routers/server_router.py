@@ -112,17 +112,17 @@ def _build_internet_retriever_config() -> dict[str, Any]:
     return InternetRetrieverConfigFactory.model_validate(APIConfig.get_internet_config())
 
 
-def _build_extractor_config() -> dict[str, Any]:
+def _build_pref_extractor_config() -> dict[str, Any]:
     """Build extractor configuration."""
     return ExtractorConfigFactory.model_validate({"backend": "naive", "config": {}})
 
 
-def _build_adder_config() -> dict[str, Any]:
+def _build_pref_adder_config() -> dict[str, Any]:
     """Build adder configuration."""
     return AdderConfigFactory.model_validate({"backend": "naive", "config": {}})
 
 
-def _build_retriever_config() -> dict[str, Any]:
+def _build_pref_retriever_config() -> dict[str, Any]:
     """Build retriever configuration."""
     return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
 
@@ -150,9 +150,9 @@ def init_server():
     reranker_config = _build_reranker_config()
     internet_retriever_config = _build_internet_retriever_config()
     vector_db_config = _build_vec_db_config()
-    extractor_config = _build_extractor_config()
-    adder_config = _build_adder_config()
-    retriever_config = _build_retriever_config()
+    pref_extractor_config = _build_pref_extractor_config()
+    pref_adder_config = _build_pref_adder_config()
+    pref_retriever_config = _build_pref_retriever_config()
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
@@ -164,20 +164,20 @@ def init_server():
     internet_retriever = InternetRetrieverFactory.from_config(
         internet_retriever_config, embedder=embedder
     )
-    extractor = ExtractorFactory.from_config(
-        config_factory=extractor_config,
+    pref_extractor = ExtractorFactory.from_config(
+        config_factory=pref_extractor_config,
         llm_provider=llm,
         embedder=embedder,
         vector_db=vector_db,
     )
-    adder = AdderFactory.from_config(
-        config_factory=adder_config,
+    pref_adder = AdderFactory.from_config(
+        config_factory=pref_adder_config,
         llm_provider=llm,
         embedder=embedder,
         vector_db=vector_db,
     )
-    retriever = RetrieverFactory.from_config(
-        config_factory=retriever_config,
+    pref_retriever = RetrieverFactory.from_config(
+        config_factory=pref_retriever_config,
         llm_provider=llm,
         embedder=embedder,
         reranker=reranker,
@@ -208,9 +208,9 @@ def init_server():
         default_cube_config,
         mos_server,
         vector_db,
-        extractor,
-        adder,
-        retriever,
+        pref_extractor,
+        pref_adder,
+        pref_retriever,
     )
 
 
@@ -226,9 +226,9 @@ def init_server():
     default_cube_config,
     mos_server,
     vector_db,
-    extractor,
-    adder,
-    retriever,
+    pref_extractor,
+    pref_adder,
+    pref_retriever,
 ) = init_server()
 
 
@@ -244,9 +244,9 @@ def _create_naive_mem_cube() -> NaiveMemCube:
         memory_manager=memory_manager,
         default_cube_config=default_cube_config,
         vector_db=vector_db,
-        extractor=extractor,
-        adder=adder,
-        retriever=retriever,
+        pref_extractor=pref_extractor,
+        pref_adder=pref_adder,
+        pref_retriever=pref_retriever,
     )
     return naive_mem_cube
 
@@ -265,6 +265,23 @@ def _format_memory_item(memory_data: Any) -> dict[str, Any]:
     memory["metadata"]["memory"] = memory["memory"]
 
     return memory
+
+def _post_process_pref_mem(memories_result: list[dict[str, Any]], pref_formatted_mem: list[dict[str, Any]], mem_cube_id: str, handle_pref_mem: bool):
+    if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true" and pref_formatted_mem:
+        memories_result["prefs"] = []
+        memories_result["prefs"].append(
+            {
+                "cube_id": mem_cube_id,
+                "memories": pref_formatted_mem,
+            }
+        )
+
+    if handle_pref_mem:
+        pref_instruction: str = instruct_completion(pref_formatted_mem)
+        memories_result["pref_mem"] = pref_instruction
+    
+    return memories_result
+
 
 
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
@@ -308,6 +325,8 @@ def search_memories(search_req: APISearchRequest):
         return [_format_memory_item(data) for data in results]
 
     def _search_pref():
+        if not os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "true":
+            return []
         results = naive_mem_cube.pref_mem.search(
             query=search_req.query,
             top_k=search_req.top_k,
@@ -331,18 +350,8 @@ def search_memories(search_req: APISearchRequest):
             "memories": text_formatted_memories,
         }
     )
-    if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true":
-        memories_result["prefs"] = []
-        memories_result["prefs"].append(
-            {
-                "cube_id": search_req.mem_cube_id,
-                "memories": pref_formatted_memories,
-            }
-        )
 
-    pref_instruction: str = instruct_completion(pref_formatted_memories)
-    if search_req.handle_pref_mem:
-        memories_result["pref_mem"] = pref_instruction
+    memories_result = _post_process_pref_mem(memories_result, pref_formatted_memories, search_req.mem_cube_id, search_req.handle_pref_mem)
 
     return SearchResponse(
         message="Search completed successfully",
@@ -393,6 +402,8 @@ def add_memories(add_req: APIADDRequest):
         ]
 
     def _process_pref_mem() -> list[dict[str, str]]:
+        if not os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "true":
+            return []
         pref_memories_local = naive_mem_cube.pref_mem.get_memory(
             [add_req.messages],
             type="chat",

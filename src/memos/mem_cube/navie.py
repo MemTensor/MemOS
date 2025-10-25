@@ -41,9 +41,9 @@ class NaiveMemCube(BaseMemCube):
         default_cube_config: GeneralMemCubeConfig,
         vector_db: BaseVecDB,
         internet_retriever: None = None,
-        extractor: BaseExtractor | None = None,
-        adder: BaseAdder | None = None,
-        retriever: BaseRetriever | None = None,
+        pref_extractor: BaseExtractor | None = None,
+        pref_adder: BaseAdder | None = None,
+        pref_retriever: BaseRetriever | None = None,
     ):
         """Initialize the MemCube with a configuration."""
         self._text_mem: BaseTextMemory | None = SimpleTreeTextMemory(
@@ -63,9 +63,9 @@ class NaiveMemCube(BaseMemCube):
             vector_db=vector_db,
             embedder=embedder,
             reranker=reranker,
-            extractor=extractor,
-            adder=adder,
-            retriever=retriever,
+            extractor=pref_extractor,
+            adder=pref_adder,
+            retriever=pref_retriever,
         )
 
     def load(

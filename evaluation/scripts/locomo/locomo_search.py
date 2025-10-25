@@ -11,8 +11,6 @@ import pandas as pd
 
 from dotenv import load_dotenv
 from tqdm import tqdm
-from utils.pref_mem_utils import create_mem_string
-
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,6 +19,7 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
+
 
 
 def mem0_search(client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b):
@@ -101,6 +100,7 @@ def memos_api_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
     from prompts import TEMPLATE_MEMOS
+    from utils.pref_mem_utils import create_mem_string
 
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
