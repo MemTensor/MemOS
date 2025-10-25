@@ -113,15 +113,16 @@ class APIConfig:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_RERANKER_BACKEND", "http_bge")
 
-        if embedder_backend == "http_bge":
+        if embedder_backend in ["http_bge", "http_bge_strategy"]:
             return {
-                "backend": "http_bge",
+                "backend": embedder_backend,
                 "config": {
                     "url": os.getenv("MOS_RERANKER_URL"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
                     "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
+                    "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
                 },
             }
         else:
