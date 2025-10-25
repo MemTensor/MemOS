@@ -95,12 +95,7 @@ class SingleTurnStrategy(BaseRerankerStrategy):
         Returns:
             List of (reconstructed_memory_item, aggregated_score) tuples
         """
-        documents = kwargs.get("documents", [])
-        # Group ranked pairs by memory_id
-        memory_groups = defaultdict(list)
-        memory_scores = defaultdict(list)
-
-        reconstructed_items = [] 
+        reconstructed_items = []
         for idx, score in zip(ranked_indices, scores):
             dialogue_pair = tracker.get_dialogue_pair_by_index(idx)
             if dialogue_pair and dialogue_pair.memory_id in original_items:

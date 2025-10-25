@@ -4,6 +4,7 @@ import re
 from typing import Any, Literal
 from pydantic import BaseModel
 from memos.memories.textual.item import SourceMessage
+from memos.memories.textual.item import TextualMemoryItem
 
 # Strip a leading "[...]" tag (e.g., "[2025-09-01] ..." or "[meta] ...")
 # before sending text to the reranker. This keeps inputs clean and

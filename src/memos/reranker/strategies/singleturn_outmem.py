@@ -1,12 +1,16 @@
 # memos/reranker/strategies/single_turn.py
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
 from collections import defaultdict
 from copy import deepcopy
 from .base import BaseRerankerStrategy
 from .dialogue_common import DialogueRankingTracker, strip_memory_tags, extract_content
 from .single_turn import SingleTurnStrategy
+
+if TYPE_CHECKING:
+    from .dialogue_common import DialogueRankingTracker
 
 
 class SingleTurnOutMemStrategy(SingleTurnStrategy):
@@ -78,7 +82,7 @@ class SingleTurnOutMemStrategy(SingleTurnStrategy):
         
         reconstructed_items = []
         
-        for memory_id, pairs in memory_groups.items():
+        for memory_id, _pairs in memory_groups.items():
             if memory_id not in original_items:
                 continue
             original_item = original_items[memory_id]

@@ -28,7 +28,6 @@ def truncate_data(data: list[str | dict[str, Any] | Any], max_tokens: int) -> li
     Returns:
         str: Truncated string.
     """
-    total_tokens = 0
     truncated_string = ""
     for item in data:
         if isinstance(item, SourceMessage):
@@ -81,10 +80,7 @@ def concat_original_source(
         list[str]: List of memory and concat orginal memory.
     """
     merge_field = []
-    if rerank_source is None:
-        merge_field = ["sources"]
-    else:
-        merge_field = rerank_source.split(",")
+    merge_field = ["sources"] if rerank_source is None else rerank_source.split(",")
     documents = []
     for item in graph_results:
         memory = _TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m
