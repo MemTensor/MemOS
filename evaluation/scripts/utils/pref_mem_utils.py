@@ -1,7 +1,10 @@
 import os
 import sys
+
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from prompts import PREF_INSTRUCTIONS
+
 
 def create_mem_string(relevant_memories) -> str:
     text_memories = []
@@ -10,7 +13,7 @@ def create_mem_string(relevant_memories) -> str:
     for item in relevant_memories["text_mem"]:
         for mem in item["memories"]:
             text_memories.append(mem["memory"])
-    text_memories_text = "\n".join(f"{i+1}. {mem}" for i, mem in enumerate(text_memories)).strip()
+    text_memories_text = "\n".join(f"{i + 1}. {mem}" for i, mem in enumerate(text_memories)).strip()
     text_context = f"Plaintext Memory:\n{text_memories_text}\n" if text_memories_text else ""
 
     for item in relevant_memories.get("prefs", []):
@@ -19,9 +22,9 @@ def create_mem_string(relevant_memories) -> str:
                 explicit.append(mem["metadata"]["explicit_preference"])
             elif mem["metadata"]["preference_type"] == "implicit_preference":
                 implicit.append(mem["metadata"]["implicit_preference"])
-    explicit_text = "\n".join(f"{i+1}. {pref}" for i, pref in enumerate(explicit)).strip()
+    explicit_text = "\n".join(f"{i + 1}. {pref}" for i, pref in enumerate(explicit)).strip()
     explicit_context = f"Explicit Preference:\n{explicit_text}\n" if explicit_text else ""
-    implicit_text = "\n".join(f"{i+1}. {pref}" for i, pref in enumerate(implicit)).strip()
+    implicit_text = "\n".join(f"{i + 1}. {pref}" for i, pref in enumerate(implicit)).strip()
     implicit_context = f"Implicit Preference:\n{implicit_text}\n" if implicit_text else ""
     return text_context + explicit_context + implicit_context
 

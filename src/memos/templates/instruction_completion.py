@@ -21,10 +21,16 @@ def instruct_completion(
                 implicit_pref.append(pref)
 
     explicit_pref_str = (
-        "Explicit Preference:\n" + "\n".join(f"{i+1}. {pref}" for i, pref in enumerate(explicit_pref)) if explicit_pref else ""
+        "Explicit Preference:\n"
+        + "\n".join(f"{i + 1}. {pref}" for i, pref in enumerate(explicit_pref))
+        if explicit_pref
+        else ""
     )
     implicit_pref_str = (
-        "Implicit Preference:\n" + "\n".join(f"{i+1}. {pref}" for i, pref in enumerate(implicit_pref)) if implicit_pref else ""
+        "Implicit Preference:\n"
+        + "\n".join(f"{i + 1}. {pref}" for i, pref in enumerate(implicit_pref))
+        if implicit_pref
+        else ""
     )
 
     if not explicit_pref_str and not implicit_pref_str:

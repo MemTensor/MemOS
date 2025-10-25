@@ -266,7 +266,13 @@ def _format_memory_item(memory_data: Any) -> dict[str, Any]:
 
     return memory
 
-def _post_process_pref_mem(memories_result: list[dict[str, Any]], pref_formatted_mem: list[dict[str, Any]], mem_cube_id: str, handle_pref_mem: bool):
+
+def _post_process_pref_mem(
+    memories_result: list[dict[str, Any]],
+    pref_formatted_mem: list[dict[str, Any]],
+    mem_cube_id: str,
+    handle_pref_mem: bool,
+):
     if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true" and pref_formatted_mem:
         memories_result["prefs"] = []
         memories_result["prefs"].append(
@@ -279,9 +285,8 @@ def _post_process_pref_mem(memories_result: list[dict[str, Any]], pref_formatted
     if handle_pref_mem:
         pref_instruction: str = instruct_completion(pref_formatted_mem)
         memories_result["pref_mem"] = pref_instruction
-    
-    return memories_result
 
+    return memories_result
 
 
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
@@ -325,7 +330,7 @@ def search_memories(search_req: APISearchRequest):
         return [_format_memory_item(data) for data in results]
 
     def _search_pref():
-        if not os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "true":
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
         results = naive_mem_cube.pref_mem.search(
             query=search_req.query,
@@ -351,7 +356,9 @@ def search_memories(search_req: APISearchRequest):
         }
     )
 
-    memories_result = _post_process_pref_mem(memories_result, pref_formatted_memories, search_req.mem_cube_id, search_req.handle_pref_mem)
+    memories_result = _post_process_pref_mem(
+        memories_result, pref_formatted_memories, search_req.mem_cube_id, search_req.handle_pref_mem
+    )
 
     return SearchResponse(
         message="Search completed successfully",
@@ -402,7 +409,7 @@ def add_memories(add_req: APIADDRequest):
         ]
 
     def _process_pref_mem() -> list[dict[str, str]]:
-        if not os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "true":
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
         pref_memories_local = naive_mem_cube.pref_mem.get_memory(
             [add_req.messages],

@@ -37,7 +37,7 @@ def ingest_session(session, user_id, session_id, frame, client):
             client.add(messages=session, user_id=user_id, conv_id=session_id)
             print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
     elif frame == "memobase":
-        for idx, msg in enumerate(session):
+        for _idx, msg in enumerate(session):
             if msg["role"] != "system":
                 messages.append(
                     {

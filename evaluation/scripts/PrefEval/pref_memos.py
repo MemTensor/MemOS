@@ -12,6 +12,7 @@ from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
 
+
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
@@ -19,13 +20,6 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
-
-from utils.pref_mem_utils import (
-    add_pref_instruction,
-    create_mem_string,
-    remove_pref_mem_from_mem_string,
-)
-from utils.prompts import PREFEVAL_ANSWER_PROMPT
 
 
 load_dotenv()
@@ -78,6 +72,8 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
     """
     Processes a single line of data, searching memory based on the question.
     """
+    from utils.pref_mem_utils import create_mem_string
+
     i, line = line_data
     try:
         original_data = json.loads(line)
@@ -123,6 +119,9 @@ def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str
     """
     Generates a response for a single line of data using pre-fetched memories.
     """
+    from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
+    from utils.prompts import PREFEVAL_ANSWER_PROMPT
+
     i, line = line_data
     try:
         original_data = json.loads(line)

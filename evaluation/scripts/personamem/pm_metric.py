@@ -80,7 +80,7 @@ def calculate_scores(data, grade_path, output_path):
     print(f"📋 Processing response data for {len(data)} users...")
 
     # First pass: determine number of runs and initialize run accuracy arrays
-    for user_id, user_data in data.items():
+    for _user_id, user_data in data.items():
         # Skip incomplete data (users with only topic field)
         if len(user_data) <= 2 and "topic" in user_data:
             continue
