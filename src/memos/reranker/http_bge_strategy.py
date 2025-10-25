@@ -84,7 +84,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
         boost_weights: dict[str, float] | None = None,
         boost_default: float = 0.0,
         warn_unknown_filter_keys: bool = True,
-        reranker_strategy: str = "singleturn_outputmem",
+        reranker_strategy: str = "single_turn",
         **kwargs,
     ):
         """

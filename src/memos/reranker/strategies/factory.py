@@ -18,7 +18,7 @@ class RerankerStrategyFactory:
     backend_to_class: ClassVar[dict[str, Any]] = {
         "single_turn": SingleTurnStrategy,
         "concat_background": ConcatBackgroundStrategy,
-        "singleturn_outputmem": SingleTurnOutMemStrategy,
+        "singleturn_outmem": SingleTurnOutMemStrategy,
     }
 
     @classmethod
