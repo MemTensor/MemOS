@@ -356,7 +356,7 @@ def search_memories(search_req: APISearchRequest):
             top_k=search_req.top_k,
             info={
                 "user_id": search_req.user_id,
-                "session_id": target_session_id,
+                "session_id": search_req.session_id,
                 "chat_history": search_req.chat_history,
             },
         )
