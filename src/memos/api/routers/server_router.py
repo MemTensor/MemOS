@@ -338,11 +338,17 @@ def search_memories(search_req: APISearchRequest):
 
     def _search_text():
         if search_mode == SearchMode.FAST:
-            formatted_memories = fast_search_memories(search_req=search_req, user_context=user_context)
+            formatted_memories = fast_search_memories(
+                search_req=search_req, user_context=user_context
+            )
         elif search_mode == SearchMode.FINE:
-            formatted_memories = fine_search_memories(search_req=search_req, user_context=user_context)
+            formatted_memories = fine_search_memories(
+                search_req=search_req, user_context=user_context
+            )
         elif search_mode == SearchMode.MIXTURE:
-            formatted_memories = mix_search_memories(search_req=search_req, user_context=user_context)
+            formatted_memories = mix_search_memories(
+                search_req=search_req, user_context=user_context
+            )
         else:
             logger.error(f"Unsupported search mode: {search_mode}")
             raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
