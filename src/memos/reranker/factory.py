@@ -8,8 +8,8 @@ from memos.memos_tools.singleton import singleton_factory
 
 from .cosine_local import CosineLocalReranker
 from .http_bge import HTTPBGEReranker
-from .noop import NoopReranker
 from .http_bge_strategy import HTTPBGERerankerStrategy
+from .noop import NoopReranker
 
 
 if TYPE_CHECKING:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+
 from typing import Any, Literal
+
 from pydantic import BaseModel
-from memos.memories.textual.item import SourceMessage
-from memos.memories.textual.item import TextualMemoryItem
+
+from memos.memories.textual.item import SourceMessage, TextualMemoryItem
+
 
 # Strip a leading "[...]" tag (e.g., "[2025-09-01] ..." or "[meta] ...")
 # before sending text to the reranker. This keeps inputs clean and
@@ -17,10 +20,11 @@ def strip_memory_tags(item: TextualMemoryItem) -> str:
     memory = _TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m
     return memory
 
+
 def extract_content(msg: dict[str, Any] | str) -> str:
     """Extract content from message, handling both string and dict formats."""
     if isinstance(msg, dict):
-        return msg.get('content', str(msg))
+        return msg.get("content", str(msg))
     if isinstance(msg, SourceMessage):
         return msg.content
     return str(msg)
@@ -33,7 +37,7 @@ class DialoguePair(BaseModel):
     memory_id: str  # ID of the source TextualMemoryItem
     memory: str
     pair_index: int  # Index of this pair within the source memory's dialogue
-    user_msg: str | dict[str, Any] | SourceMessage # User message content
+    user_msg: str | dict[str, Any] | SourceMessage  # User message content
     assistant_msg: str | dict[str, Any] | SourceMessage  # Assistant message content
     combined_text: str  # The concatenated text used for ranking
     chat_time: str | None = None
@@ -56,14 +60,14 @@ class DialogueRankingTracker:
         self.dialogue_pairs: list[DialoguePair] = []
 
     def add_dialogue_pair(
-        self, 
-        memory_id: str, 
+        self,
+        memory_id: str,
         pair_index: int,
-        user_msg: str | dict[str, Any], 
+        user_msg: str | dict[str, Any],
         assistant_msg: str | dict[str, Any],
         memory: str,
         chat_time: str | None = None,
-        concat_format: Literal["user_assistant", "user_only"] = "user_assistant"
+        concat_format: Literal["user_assistant", "user_only"] = "user_assistant",
     ) -> str:
         """Add a dialogue pair and return its unique ID."""
         user_content = extract_content(user_msg)
@@ -85,7 +89,7 @@ class DialogueRankingTracker:
             assistant_msg=assistant_msg,
             combined_text=combined_text,
             memory=memory,
-            chat_time=chat_time
+            chat_time=chat_time,
         )
 
         self.dialogue_pairs.append(dialogue_pair)

@@ -9,10 +9,9 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from memos.log import get_logger
-
-from .base import BaseReranker
 from memos.reranker.strategies import RerankerStrategyFactory
 
+from .base import BaseReranker
 
 
 logger = get_logger(__name__)
@@ -151,7 +150,9 @@ class HTTPBGERerankerStrategy(BaseReranker):
         if not graph_results:
             return []
 
-        tracker, original_items, documents = self.reranker_strategy.prepare_documents(query, graph_results, top_k)
+        tracker, original_items, documents = self.reranker_strategy.prepare_documents(
+            query, graph_results, top_k
+        )
 
         logger.info(
             f"[HTTPBGEWithSourceReranker] strategy: {self.reranker_strategy}, "
@@ -167,9 +168,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
 
         try:
             # Make the HTTP request to the reranker service
-            resp = requests.post(
-                self.reranker_url, headers=headers, json=payload, timeout=30
-            )
+            resp = requests.post(self.reranker_url, headers=headers, json=payload, timeout=self.timeout)
             resp.raise_for_status()
             data = resp.json()
 
@@ -192,13 +191,13 @@ class HTTPBGERerankerStrategy(BaseReranker):
                         ranked_indices.append(idx)
                         scores.append(raw_score)
                 reconstructed_items = self.reranker_strategy.reconstruct_items(
-                    ranked_indices=ranked_indices, 
-                    scores=scores, 
-                    tracker=tracker, 
-                    original_items=original_items, 
+                    ranked_indices=ranked_indices,
+                    scores=scores,
+                    tracker=tracker,
+                    original_items=original_items,
                     top_k=top_k,
                     graph_results=graph_results,
-                    documents=documents
+                    documents=documents,
                 )
                 return reconstructed_items
 

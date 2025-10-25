@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
 from memos.memories.textual.item import TextualMemoryItem
+
 from .dialogue_common import DialogueRankingTracker
+
 
 class BaseRerankerStrategy(ABC):
     """Abstract interface for memory rerankers with concatenation strategy."""
@@ -16,21 +19,21 @@ class BaseRerankerStrategy(ABC):
     ) -> tuple[DialogueRankingTracker, dict[str, Any], list[str]]:
         """
         Prepare documents for ranking based on the strategy.
-        
+
         Args:
             query: The search query
             graph_results: List of TextualMemoryItem objects to process
             top_k: Maximum number of items to return
             **kwargs: Additional strategy-specific parameters
-            
+
         Returns:
-            tuple[DialogueRankingTracker, dict[str, Any], list[str]]: 
+            tuple[DialogueRankingTracker, dict[str, Any], list[str]]:
             - Tracker: DialogueRankingTracker instance
             - original_items: Dict mapping memory_id to original TextualMemoryItem
             - documents: List of text documents ready for ranking
         """
         raise NotImplementedError
-            
+
     @abstractmethod
     def reconstruct_items(
         self,
@@ -43,7 +46,7 @@ class BaseRerankerStrategy(ABC):
     ) -> list[tuple[TextualMemoryItem, float]]:
         """
         Reconstruct TextualMemoryItem objects from ranked results.
-        
+
         Args:
             ranked_indices: List of indices sorted by relevance
             scores: Corresponding relevance scores
@@ -51,7 +54,7 @@ class BaseRerankerStrategy(ABC):
             original_items: Dict mapping memory_id to original TextualMemoryItem
             top_k: Maximum number of items to return
             **kwargs: Additional strategy-specific parameters
-            
+
         Returns:
             List of (reconstructed_memory_item, aggregated_score) tuples
         """
