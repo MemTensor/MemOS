@@ -45,10 +45,19 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Extract or generate trace_id
         trace_id = extract_trace_id_from_headers(request) or generate_trace_id()
 
+        env = request.headers.get("x-env")
+        user_type = request.headers.get("x-user-type")
+        user_name = request.headers.get("x-user-name")
         start_time = time.time()
 
         # Create and set request context
-        context = RequestContext(trace_id=trace_id, api_path=request.url.path)
+        context = RequestContext(
+            trace_id=trace_id,
+            api_path=request.url.path,
+            env=env,
+            user_type=user_type,
+            user_name=user_name,
+        )
         set_request_context(context)
 
         # Log request start with parameters
@@ -64,9 +73,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             end_time = time.time()
-            logger.info(f"response is: {response.body}")
-
-            # 记录请求状态
             if response.status_code == 200:
                 logger.info(
                     f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
