@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="MemOS Product REST APIs",
+    title="MemOS Product REST API",
     description="A REST API for managing multiple users with MemOS Product.",
     version="1.0.1",
 )
