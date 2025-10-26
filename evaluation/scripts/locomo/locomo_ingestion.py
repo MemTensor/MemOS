@@ -1,11 +1,15 @@
-import os
-import sys
 import argparse
 import concurrent.futures
+import os
+import sys
 import time
+
 from datetime import datetime, timezone
+
 import pandas as pd
+
 from dotenv import load_dotenv
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,8 +92,8 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     client = None
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import Mem0Client
         from prompts import custom_instructions
+        from utils.client import Mem0Client
 
         client = Mem0Client(enable_graph="graph" in frame)
         client.client.update_project(custom_instructions=custom_instructions)

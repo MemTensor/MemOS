@@ -1,3 +1,14 @@
+import os
+
+
+PREF_INSTRUCTIONS = """
+    # Note:
+    Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
+    Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
+    When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
+"""
+
+
 ANSWER_PROMPT_MEM0 = """
     You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
 
@@ -49,12 +60,12 @@ ANSWER_PROMPT_ZEP = """
     5. Always convert relative time references to specific dates, months, or years.
     6. Be as specific as possible when talking about people, places, and events
     7. Timestamps in memories represent the actual time the event occurred, not the time the event was mentioned in a message.
-    
+
     Clarification:
     When interpreting memories, use the timestamp to determine when the described event happened, not when someone talked about the event.
-    
+
     Example:
-    
+
     Memory: (2023-03-15T16:33:00Z) I went to the vet yesterday.
     Question: What day did I go to the vet?
     Correct Answer: March 15, 2023
@@ -103,13 +114,18 @@ ANSWER_PROMPT_MEMOS = """
    5. Formulate a precise, concise answer based on the evidence from the memories (and allowed world knowledge).
    6. Double-check that your answer directly addresses the question asked and adheres to all instructions.
    7. Ensure your final answer is specific and avoids vague time references.
-
+   {pref_instructions}
    {context}
 
    Question: {question}
 
    Answer:
    """
+
+if os.getenv("INSTRUCT_COMPLETE") == "true":
+    ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", PREF_INSTRUCTIONS)
+else:
+    ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", "")
 
 custom_instructions = """
 Generate personal memories that follow these guidelines:

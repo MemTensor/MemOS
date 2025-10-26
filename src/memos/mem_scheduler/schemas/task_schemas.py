@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, computed_field
 
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
+from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 
 logger = get_logger(__name__)
@@ -26,7 +27,7 @@ class RunningTaskItem(BaseModel, DictConversionMixin):
     mem_cube_id: str = Field(..., description="Required memory cube identifier", min_length=1)
     task_info: str = Field(..., description="Information about the task being executed")
     task_name: str = Field(..., description="Name/type of the task handler")
-    start_time: datetime = Field(description="Task start time", default_factory=datetime.utcnow)
+    start_time: datetime = Field(description="Task start time", default_factory=get_utc_now)
     end_time: datetime | None = Field(default=None, description="Task completion time")
     status: str = Field(default="running", description="Task status: running, completed, failed")
     result: Any | None = Field(default=None, description="Task execution result")
@@ -37,13 +38,13 @@ class RunningTaskItem(BaseModel, DictConversionMixin):
 
     def mark_completed(self, result: Any | None = None) -> None:
         """Mark task as completed with optional result."""
-        self.end_time = datetime.utcnow()
+        self.end_time = get_utc_now()
         self.status = "completed"
         self.result = result
 
     def mark_failed(self, error_message: str) -> None:
         """Mark task as failed with error message."""
-        self.end_time = datetime.utcnow()
+        self.end_time = get_utc_now()
         self.status = "failed"
         self.error_message = error_message
 

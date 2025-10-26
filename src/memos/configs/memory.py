@@ -10,6 +10,11 @@ from memos.configs.llm import LLMConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
+from memos.memories.textual.prefer_text_memory.config import (
+    AdderConfigFactory,
+    ExtractorConfigFactory,
+    RetrieverConfigFactory,
+)
 
 
 # ─── 1. Global Base Memory Config ─────────────────────────────────────────────
@@ -189,6 +194,45 @@ class SimpleTreeTextMemoryConfig(TreeTextMemoryConfig):
     """Simple tree text memory configuration class."""
 
 
+class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
+    """Preference memory configuration class."""
+
+    extractor_llm: LLMConfigFactory = Field(
+        ...,
+        default_factory=LLMConfigFactory,
+        description="LLM configuration for the memory extractor",
+    )
+    vector_db: VectorDBConfigFactory = Field(
+        ...,
+        default_factory=VectorDBConfigFactory,
+        description="Vector database configuration for the memory storage",
+    )
+    embedder: EmbedderConfigFactory = Field(
+        ...,
+        default_factory=EmbedderConfigFactory,
+        description="Embedder configuration for the memory embedding",
+    )
+    reranker: RerankerConfigFactory | None = Field(
+        None,
+        description="Reranker configuration (optional).",
+    )
+    extractor: ExtractorConfigFactory = Field(
+        ...,
+        default_factory=ExtractorConfigFactory,
+        description="Extractor configuration for the memory extracting",
+    )
+    adder: AdderConfigFactory = Field(
+        ...,
+        default_factory=AdderConfigFactory,
+        description="Adder configuration for the memory adding",
+    )
+    retriever: RetrieverConfigFactory = Field(
+        ...,
+        default_factory=RetrieverConfigFactory,
+        description="Retriever configuration for the memory retrieving",
+    )
+
+
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 
 
@@ -203,6 +247,7 @@ class MemoryConfigFactory(BaseConfig):
         "general_text": GeneralTextMemoryConfig,
         "simple_tree_text": SimpleTreeTextMemoryConfig,
         "tree_text": TreeTextMemoryConfig,
+        "pref_text": PreferenceTextMemoryConfig,
         "kv_cache": KVCacheMemoryConfig,
         "vllm_kv_cache": KVCacheMemoryConfig,  # Use same config as kv_cache
         "lora": LoRAMemoryConfig,

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Common parameters for all scripts
-LIB="memu"
+LIB="memos-api"
 VERSION="072202"
 WORKERS=10
 TOPK=20

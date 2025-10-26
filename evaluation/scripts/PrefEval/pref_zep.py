@@ -4,12 +4,16 @@ import json
 import os
 import sys
 import time
+
+from datetime import datetime
+
 import tiktoken
+
 from dotenv import load_dotenv
+from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
-from datetime import datetime
-from irrelevant_conv import irre_10, irre_300
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -211,7 +215,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        with open(args.input, "r", encoding="utf-8") as infile:
+        with open(args.input, encoding="utf-8") as infile:
             lines = infile.readlines()
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")

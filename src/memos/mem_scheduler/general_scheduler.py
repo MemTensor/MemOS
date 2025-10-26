@@ -12,6 +12,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_MAX_QUERY_KEY_WORDS,
     MEM_ORGANIZE_LABEL,
     MEM_READ_LABEL,
+    PREF_ADD_LABEL,
     QUERY_LABEL,
     WORKING_MEMORY_TYPE,
     MemCubeID,
@@ -20,7 +21,9 @@ from memos.mem_scheduler.schemas.general_schemas import (
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 from memos.mem_scheduler.utils.filter_utils import is_all_chinese, is_all_english
-from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.preference import PreferenceTextMemory
+from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = get_logger(__name__)
@@ -40,6 +43,7 @@ class GeneralScheduler(BaseScheduler):
             ADD_LABEL: self._add_message_consumer,
             MEM_READ_LABEL: self._mem_read_message_consumer,
             MEM_ORGANIZE_LABEL: self._mem_reorganize_message_consumer,
+            PREF_ADD_LABEL: self._pref_add_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
 
@@ -148,7 +152,7 @@ class GeneralScheduler(BaseScheduler):
         logger.info(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
 
         # Process the query in a session turn
-        grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=QUERY_LABEL)
 
@@ -170,7 +174,7 @@ class GeneralScheduler(BaseScheduler):
         """
         logger.info(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
         # Process the query in a session turn
-        grouped_messages = self.dispatcher.group_messages_by_user_and_cube(messages=messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ANSWER_LABEL)
 
@@ -467,6 +471,48 @@ class GeneralScheduler(BaseScheduler):
             logger.error(
                 f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
             )
+
+    def _pref_add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(f"Messages {messages} assigned to {PREF_ADD_LABEL} handler.")
+
+        def process_message(message: ScheduleMessageItem):
+            try:
+                user_id = message.user_id
+                session_id = message.session_id
+                mem_cube_id = message.mem_cube_id
+                mem_cube = message.mem_cube
+                content = message.content
+                messages_list = json.loads(content)
+
+                logger.info(f"Processing pref_add for user_id={user_id}, mem_cube_id={mem_cube_id}")
+
+                # Get the preference memory from the mem_cube
+                pref_mem = mem_cube.pref_mem
+                if not isinstance(pref_mem, PreferenceTextMemory):
+                    logger.error(f"Expected PreferenceTextMemory but got {type(pref_mem).__name__}")
+                    return
+
+                # Use pref_mem.get_memory to process the memories
+                pref_memories = pref_mem.get_memory(
+                    messages_list, type="chat", info={"user_id": user_id, "session_id": session_id}
+                )
+                # Add pref_mem to vector db
+                pref_ids = pref_mem.add(pref_memories)
+
+                logger.info(
+                    f"Successfully processed and add preferences for user_id={user_id}, mem_cube_id={mem_cube_id}, pref_ids={pref_ids}"
+                )
+
+            except Exception as e:
+                logger.error(f"Error processing pref_add message: {e}", exc_info=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+            futures = [executor.submit(process_message, msg) for msg in messages]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Thread task failed: {e}", exc_info=True)
 
     def process_session_turn(
         self,

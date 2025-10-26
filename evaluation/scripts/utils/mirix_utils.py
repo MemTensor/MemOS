@@ -1,18 +1,21 @@
 import os
+
 import yaml
+
 from tqdm import tqdm
 
 
 def get_mirix_client(config_path, load_from=None):
-    if os.path.exists(os.path.expanduser(f"~/.mirix")):
-        os.system(f"rm -rf ~/.mirix/*")
+    if os.path.exists(os.path.expanduser("~/.mirix")):
+        os.system("rm -rf ~/.mirix/*")
 
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         agent_config = yaml.safe_load(f)
 
     os.environ["OPENAI_API_KEY"] = agent_config["api_key"]
     import mirix
-    from mirix import Mirix, EmbeddingConfig, LLMConfig
+
+    from mirix import EmbeddingConfig, LLMConfig, Mirix
 
     embedding_default_config = EmbeddingConfig(
         embedding_model=agent_config["embedding_model_name"],

@@ -3,10 +3,13 @@ import csv
 import json
 import os
 import sys
+import time
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+
 from tqdm import tqdm
-import time
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,7 +37,7 @@ def ingest_session(session, user_id, session_id, frame, client):
             client.add(messages=session, user_id=user_id, conv_id=session_id)
             print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
     elif frame == "memobase":
-        for idx, msg in enumerate(session):
+        for _idx, msg in enumerate(session):
             if msg["role"] != "system":
                 messages.append(
                     {
@@ -67,7 +70,7 @@ def build_jsonl_index(jsonl_path):
     Assumes each line is a JSON object with a single key-value pair.
     """
     index = {}
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         while True:
             offset = f.tell()
             line = f.readline()
@@ -79,14 +82,14 @@ def build_jsonl_index(jsonl_path):
 
 
 def load_context_by_id(jsonl_path, offset):
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         f.seek(offset)
         item = json.loads(f.readline())
         return next(iter(item.values()))
 
 
 def load_rows(csv_path):
-    with open(csv_path, mode="r", newline="", encoding="utf-8") as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for _, row in enumerate(reader, start=1):
             row_data = {}
@@ -98,7 +101,7 @@ def load_rows(csv_path):
 def load_rows_with_context(csv_path, jsonl_path):
     jsonl_index = build_jsonl_index(jsonl_path)
 
-    with open(csv_path, mode="r", newline="", encoding="utf-8") as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         prev_sid = None
         prev_context = None
@@ -118,7 +121,7 @@ def load_rows_with_context(csv_path, jsonl_path):
 
 
 def count_csv_rows(csv_path):
-    with open(csv_path, mode="r", newline="", encoding="utf-8") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         return sum(1 for _ in f) - 1
 
 

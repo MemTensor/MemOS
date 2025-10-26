@@ -1,13 +1,17 @@
-import os
-import sys
 import argparse
 import json
+import os
+import sys
+
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time
+
 import pandas as pd
+
 from dotenv import load_dotenv
 from tqdm import tqdm
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,16 +100,14 @@ def memos_api_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
     from prompts import TEMPLATE_MEMOS
+    from utils.pref_mem_utils import create_mem_string
 
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
-    speaker_a_context = "\n".join(
-        [i["memory"] for i in search_a_results["text_mem"][0]["memories"]]
-    )
-    speaker_b_context = "\n".join(
-        [i["memory"] for i in search_b_results["text_mem"][0]["memories"]]
-    )
+
+    speaker_a_context = create_mem_string(search_a_results)
+    speaker_b_context = create_mem_string(search_b_results)
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,

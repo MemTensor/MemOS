@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
+from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 from .general_schemas import NOT_INITIALIZED
 
@@ -34,12 +35,13 @@ DEFAULT_MEMORY_CAPACITIES = {
 class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
     user_id: str = Field(..., description="user id")
+    session_id: str | None = Field(default=None, description="session id")
     mem_cube_id: str = Field(..., description="memcube id")
     label: str = Field(..., description="Label of the schedule message")
     mem_cube: GeneralMemCube | str = Field(..., description="memcube for schedule")
     content: str = Field(..., description="Content of the schedule message")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.utcnow(), description="submit time for schedule_messages"
+        default_factory=get_utc_now, description="submit time for schedule_messages"
     )
 
     # Pydantic V2 model configuration
@@ -54,6 +56,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "example": {
                 "item_id": "123e4567-e89b-12d3-a456-426614174000",  # Sample UUID
                 "user_id": "user123",  # Example user identifier
+                "session_id": "session123",  # Example session identifier
                 "mem_cube_id": "cube456",  # Sample memory cube ID
                 "label": "sample_label",  # Demonstration label value
                 "mem_cube": "obj of GeneralMemCube",  # Added mem_cube example
@@ -75,6 +78,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         return {
             "item_id": self.item_id,
             "user_id": self.user_id,
+            "session_id": self.session_id,
             "cube_id": self.mem_cube_id,
             "label": self.label,
             "cube": "Not Applicable",  # Custom cube serialization
@@ -88,9 +92,11 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         return cls(
             item_id=data.get("item_id", str(uuid4())),
             user_id=data["user_id"],
+            mem_cube_id=data["cube_id"],
+            session_id=data["session_id"],
             cube_id=data["cube_id"],
             label=data["label"],
-            cube="Not Applicable",  # Custom cube deserialization
+            mem_cube="Not Applicable",  # Custom cube deserialization
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
         )
@@ -131,7 +137,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         description="Maximum capacities of memory partitions",
     )
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.utcnow(),
+        default_factory=get_utc_now,
         description="Timestamp indicating when the log entry was created",
     )
 
