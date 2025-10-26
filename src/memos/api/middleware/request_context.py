@@ -2,7 +2,6 @@
 Request context middleware for automatic trace_id injection.
 """
 
-import os
 import time
 
 from collections.abc import Callable
@@ -17,10 +16,6 @@ from memos.context.context import RequestContext, generate_trace_id, set_request
 
 
 logger = memos.log.get_logger(__name__)
-
-print("ARMS_APP_NAME", os.environ["ARMS_APP_NAME"])
-print("ARMS_REGION_ID", os.environ["ARMS_REGION_ID"])
-print("ARMS_LICENSE_KEY", os.environ["ARMS_LICENSE_KEY"])
 
 
 def extract_trace_id_from_headers(request: Request) -> str | None:
