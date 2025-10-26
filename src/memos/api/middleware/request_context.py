@@ -2,6 +2,9 @@
 Request context middleware for automatic trace_id injection.
 """
 
+import os
+import time
+
 from collections.abc import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -14,6 +17,10 @@ from memos.context.context import RequestContext, generate_trace_id, set_request
 
 
 logger = memos.log.get_logger(__name__)
+
+print("ARMS_APP_NAME", os.environ["ARMS_APP_NAME"])
+print("ARMS_REGION_ID", os.environ["ARMS_REGION_ID"])
+print("ARMS_LICENSE_KEY", os.environ["ARMS_LICENSE_KEY"])
 
 
 def extract_trace_id_from_headers(request: Request) -> str | None:
@@ -38,6 +45,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # Extract or generate trace_id
         trace_id = extract_trace_id_from_headers(request) or generate_trace_id()
 
+        start_time = time.time()
+
         # Create and set request context
         context = RequestContext(trace_id=trace_id, api_path=request.url.path)
         set_request_context(context)
@@ -49,15 +58,28 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         if request.query_params:
             params_log["query_params"] = dict(request.query_params)
 
-        logger.info(f"Request started: {request.method} {request.url.path}, {params_log}")
+        logger.info(f"Request started, params: {params_log}, headers: {request.headers}")
 
         # Process the request
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+            end_time = time.time()
+            logger.info(f"response is: {response.body}")
 
-        # Log request completion with output
-        logger.info(f"Request completed: {request.url.path}, status: {response.status_code}")
-
-        # Add trace_id to response headers for debugging
-        response.headers["x-trace-id"] = trace_id
+            # 记录请求状态
+            if response.status_code == 200:
+                logger.info(
+                    f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                )
+            else:
+                logger.error(
+                    f"Request Failed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                )
+        except Exception as e:
+            end_time = time.time()
+            logger.error(
+                f"Request Exception Error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
+            )
+            raise e
 
         return response

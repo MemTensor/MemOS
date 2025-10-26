@@ -237,6 +237,8 @@ def search_memories(search_req: APISearchRequest):
         }
     )
 
+    logger.info(f"search_memories response is: {memories_result}")
+
     return SearchResponse(
         message="Search completed successfully",
         data=memories_result,
@@ -285,6 +287,9 @@ def add_memories(add_req: APIADDRequest):
         }
         for memory_id, memory in zip(mem_id_list, flattened_memories, strict=False)
     ]
+
+    logger.info(f"add_memories response is: {response_data}")
+
     return MemoryResponse(
         message="Memory added successfully",
         data=response_data,
