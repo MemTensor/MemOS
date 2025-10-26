@@ -172,13 +172,13 @@ LOGGING_CONFIG = {
     "disable_existing_loggers": False,
     "formatters": {
         "standard": {
-            "format": "%(asctime)s | %(trace_id)s | %(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "%(asctime)s | %(trace_id)s | url=%(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "no_datetime": {
-            "format": "%(trace_id)s | %(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+            "format": "%(trace_id)s | url=%(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s"
         },
         "simplified": {
-            "format": "%(asctime)s | %(trace_id)s | %(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | % %(levelname)s | %(filename)s:%(lineno)d: %(funcName)s | %(message)s"
+            "format": "%(asctime)s | %(trace_id)s | url=%(api_path)s | env=%(env)s | user_type=%(user_type)s | user_name=%(user_name)s | % %(levelname)s | %(filename)s:%(lineno)d: %(funcName)s | %(message)s"
         },
     },
     "filters": {
