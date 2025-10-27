@@ -1,11 +1,15 @@
-import os
-import sys
 import argparse
 import concurrent.futures
+import os
+import sys
 import time
+
 from datetime import datetime, timezone
+
 import pandas as pd
+
 from dotenv import load_dotenv
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,8 +92,8 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     client = None
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import Mem0Client
         from prompts import custom_instructions
+        from utils.client import Mem0Client
 
         client = Mem0Client(enable_graph="graph" in frame)
         client.client.update_project(custom_instructions=custom_instructions)
@@ -103,12 +107,8 @@ def process_user(conv_idx, frame, locomo_df, version):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
-                client.client.delete_user(user["id"])
-        speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
-        speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
+        client.delete_user(speaker_a_user_id)
+        client.delete_user(speaker_b_user_id)
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -193,7 +193,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="default1",
+        default="default",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(

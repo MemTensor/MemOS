@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 
 from datetime import datetime
 from pathlib import Path
@@ -33,28 +32,17 @@ class TreeTextMemory(BaseTextMemory):
 
     def __init__(self, config: TreeTextMemoryConfig):
         """Initialize memory with the given configuration."""
-        time_start = time.time()
+        # Set mode from class default or override if needed
+        self.mode = config.mode
         self.config: TreeTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
         )
-        logger.info(f"time init: extractor_llm time is: {time.time() - time_start}")
-
-        time_start_ex = time.time()
         self.dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.dispatcher_llm
         )
-        logger.info(f"time init: dispatcher_llm time is: {time.time() - time_start_ex}")
-
-        time_start_em = time.time()
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
-        logger.info(f"time init: embedder time is: {time.time() - time_start_em}")
-
-        time_start_gs = time.time()
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
-        logger.info(f"time init: graph_store time is: {time.time() - time_start_gs}")
-
-        time_start_rr = time.time()
         if config.reranker is None:
             default_cfg = RerankerConfigFactory.model_validate(
                 {
@@ -68,10 +56,7 @@ class TreeTextMemory(BaseTextMemory):
             self.reranker = RerankerFactory.from_config(default_cfg)
         else:
             self.reranker = RerankerFactory.from_config(config.reranker)
-        logger.info(f"time init: reranker time is: {time.time() - time_start_rr}")
         self.is_reorganize = config.reorganize
-
-        time_start_mm = time.time()
         self.memory_manager: MemoryManager = MemoryManager(
             self.graph_store,
             self.embedder,
@@ -84,8 +69,6 @@ class TreeTextMemory(BaseTextMemory):
             },
             is_reorganize=self.is_reorganize,
         )
-        logger.info(f"time init: memory_manager time is: {time.time() - time_start_mm}")
-        time_start_ir = time.time()
         # Create internet retriever if configured
         self.internet_retriever = None
         if config.internet_retriever is not None:
@@ -97,19 +80,13 @@ class TreeTextMemory(BaseTextMemory):
             )
         else:
             logger.info("No internet retriever configured")
-        logger.info(f"time init: internet_retriever time is: {time.time() - time_start_ir}")
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
-        Later:
-            memory_items = [TextualMemoryItem(**m) if isinstance(m, dict) else m for m in memories]
-            metadata = extract_metadata(memory_items, self.extractor_llm)
-            plan = plan_memory_operations(memory_items, metadata, self.graph_store)
-            execute_plan(memory_items, metadata, plan, self.graph_store)
         """
-        return self.memory_manager.add(memories)
+        return self.memory_manager.add(memories, mode=self.mode)
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         self.memory_manager.replace_working_memory(memories)
@@ -294,7 +271,14 @@ class TreeTextMemory(BaseTextMemory):
         return all_items
 
     def delete(self, memory_ids: list[str]) -> None:
-        raise NotImplementedError
+        """Hard delete: permanently remove nodes and their edges from the graph."""
+        if not memory_ids:
+            return
+        for mid in memory_ids:
+            try:
+                self.graph_store.delete_node(mid)
+            except Exception as e:
+                logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
 
     def delete_all(self) -> None:
         """Delete all memories and their relationships from the graph store."""

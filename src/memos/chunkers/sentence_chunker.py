@@ -28,7 +28,7 @@ class SentenceChunker(BaseChunker):
         )
         logger.info(f"Initialized SentenceChunker with config: {config}")
 
-    def chunk(self, text: str) -> list[Chunk]:
+    def chunk(self, text: str) -> list[str] | list[Chunk]:
         """Chunk the given text into smaller chunks based on sentences."""
         chonkie_chunks = self.chunker.chunk(text)
 

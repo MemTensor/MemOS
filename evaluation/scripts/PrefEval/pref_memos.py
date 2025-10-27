@@ -4,12 +4,14 @@ import json
 import os
 import sys
 import time
+
 import tiktoken
+
 from dotenv import load_dotenv
+from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
 
-from irrelevant_conv import irre_10, irre_300
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,6 +20,8 @@ EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
 
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
+
+
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")
@@ -64,12 +68,12 @@ def add_memory_for_line(
         return None
 
 
-def process_line_with_id(
-    line_data: tuple, mem_client, openai_client: OpenAI, top_k_value: int, lib: str, version: str
-) -> dict:
+def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> dict:
     """
-    Processes a single line of data using a pre-existing user_id, searching memory and generating a response.
+    Processes a single line of data, searching memory based on the question.
     """
+    from utils.pref_mem_utils import create_mem_string
+
     i, line = line_data
     try:
         original_data = json.loads(line)
@@ -79,32 +83,20 @@ def process_line_with_id(
         metrics_dict = original_data.get("metrics", {})
 
         if not user_id:
-            original_data["response"] = (
+            original_data["error"] = (
                 "Error: user_id not found in this line. Please run 'add' mode first."
             )
             return original_data
         if not question:
-            original_data["response"] = "Question not found in this line."
+            original_data["error"] = "Question not found in this line."
             return original_data
 
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = "\n".join(
-            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
-        )
+        memories_str = create_mem_string(relevant_memories)
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
-
-        system_prompt = f"You are a helpful AI. Answer the question based on the query and the following memories:\nUser Memories:\n{memories_str}"
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question},
-        ]
-
-        response = openai_client.chat.completions.create(model=MODEL_NAME, messages=messages)
-        assistant_response = response.choices[0].message.content
-        original_data["response"] = assistant_response
 
         metrics_dict.update(
             {
@@ -119,38 +111,98 @@ def process_line_with_id(
 
     except Exception as e:
         user_id_from_data = json.loads(line).get("user_id", "N/A")
-        print(f"Error processing line {i + 1} (user_id: {user_id_from_data}): {e}")
+        print(f"Error searching memory for line {i + 1} (user_id: {user_id_from_data}): {e}")
+        return None
+
+
+def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str) -> dict:
+    """
+    Generates a response for a single line of data using pre-fetched memories.
+    """
+    from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
+    from utils.prompts import PREFEVAL_ANSWER_PROMPT
+
+    i, line = line_data
+    try:
+        original_data = json.loads(line)
+
+        question = original_data.get("question")
+        metrics_dict = original_data.get("metrics", {})
+        memories_str = metrics_dict.get("retrieved_memories_text")
+
+        # If an error occurred in 'add' or 'search' mode, just pass the line through
+        if original_data.get("error"):
+            return original_data
+
+        if not question:
+            original_data["error"] = "Question not found in this line."
+            return original_data
+
+        # Check for None, as an empty string (no memories found) is a valid result
+        if memories_str is None:
+            original_data["error"] = (
+                "Error: retrieved_memories_text not found in metrics. "
+                "Please run 'search' mode first."
+            )
+            return original_data
+
+        memories_str = remove_pref_mem_from_mem_string(memories_str, frame=lib)
+
+        template = add_pref_instruction(PREFEVAL_ANSWER_PROMPT, frame=lib)
+        system_prompt = template.format(context=memories_str)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question},
+        ]
+
+        response = openai_client.chat.completions.create(model=MODEL_NAME, messages=messages)
+        assistant_response = response.choices[0].message.content
+        original_data["response"] = assistant_response
+
+        return original_data
+
+    except Exception as e:
+        user_id_from_data = json.loads(line).get("user_id", "N/A")
+        print(f"Error generating response for line {i + 1} (user_id: {user_id_from_data}): {e}")
         return None
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Process conversations with MemOS. Run 'add' mode first, then 'process' mode."
+        description="Process conversations with MemOS. Run 'add', then 'search', then 'response'."
     )
     parser.add_argument(
         "mode",
-        choices=["add", "process"],
-        help="The mode to run the script in ('add' or 'process').",
+        choices=["add", "search", "response"],
+        help="The mode to run the script in ('add', 'search', or 'response').",
     )
     parser.add_argument("--input", required=True, help="Path to the input JSONL file.")
     parser.add_argument("--output", required=True, help="Path to the output JSONL file.")
-    parser.add_argument("--top-k", type=int, default=10, help="Number of memories to retrieve.")
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=10,
+        help="Number of memories to retrieve (used in 'search' mode).",
+    )
     parser.add_argument(
         "--add-turn",
         type=int,
         choices=[0, 10, 300],
         default=0,
-        help="Number of irrelevant turns to add (0, 10, or 300).",
+        help="Number of irrelevant turns to add (used in 'add' mode).",
     )
     parser.add_argument(
         "--lib",
         type=str,
         choices=["memos-api", "memos-local"],
         default="memos-api",
-        help="Which MemOS library to use.",
+        help="Which MemOS library to use (used in 'add' mode).",
     )
     parser.add_argument(
-        "--version", type=str, default="0929-1", help="Version identifier for user_id generation."
+        "--version",
+        type=str,
+        default="0929-1",
+        help="Version identifier for user_id generation (used in 'add' mode).",
     )
     parser.add_argument(
         "--max-workers", type=int, default=20, help="Maximum number of concurrent workers."
@@ -159,15 +211,15 @@ def main():
     args = parser.parse_args()
 
     try:
-        with open(args.input, "r", encoding="utf-8") as infile:
+        with open(args.input, encoding="utf-8") as infile:
             lines = infile.readlines()
     except FileNotFoundError:
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import memosApiClient
+    from utils.client import MemosApiClient
 
-    mem_client = memosApiClient()
+    mem_client = MemosApiClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
@@ -200,9 +252,34 @@ def main():
                     outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
         print(f"\n'add' mode complete! Data with user_id written to '{args.output}'.")
 
-    elif args.mode == "process":
-        print(f"Running in 'process' mode. Processing questions from '{args.input}'...")
+    elif args.mode == "search":
+        print(f"Running in 'search' mode. Searching memories based on '{args.input}'...")
         print(f"Retrieving top {args.top_k} memories for each query.")
+        print(f"Using {args.max_workers} workers.")
+        with (
+            open(args.output, "w", encoding="utf-8") as outfile,
+            concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
+        ):
+            futures = [
+                executor.submit(search_memory_for_line, (i, line), mem_client, args.top_k)
+                for i, line in enumerate(lines)
+            ]
+
+            pbar = tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(lines),
+                desc="Searching memories...",
+            )
+            for future in pbar:
+                result = future.result()
+                if result:
+                    outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
+        print(
+            f"\n'search' mode complete! Results with retrieved memories written to '{args.output}'."
+        )
+
+    elif args.mode == "response":
+        print(f"Running in 'response' mode. Generating responses based on '{args.input}'...")
         print(f"Using {args.max_workers} workers.")
         openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=BASE_URL)
         with (
@@ -210,28 +287,20 @@ def main():
             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
         ):
             futures = [
-                executor.submit(
-                    process_line_with_id,
-                    (i, line),
-                    mem_client,
-                    openai_client,
-                    args.top_k,
-                    args.lib,
-                    args.version,
-                )
+                executor.submit(generate_response_for_line, (i, line), openai_client, args.lib)
                 for i, line in enumerate(lines)
             ]
 
             pbar = tqdm(
                 concurrent.futures.as_completed(futures),
                 total=len(lines),
-                desc="Processing questions...",
+                desc="Generating responses...",
             )
             for future in pbar:
                 result = future.result()
                 if result:
                     outfile.write(json.dumps(result, ensure_ascii=False) + "\n")
-        print(f"\n'process' mode complete! Final results written to '{args.output}'.")
+        print(f"\n'response' mode complete! Final results written to '{args.output}'.")
 
 
 if __name__ == "__main__":

@@ -312,23 +312,25 @@ class MOS(MOSCore):
         # Handle activation memory if enabled (same as core method)
         past_key_values = None
         if self.config.enable_activation_memory:
-            assert self.config.chat_model.backend == "huggingface", (
-                "Activation memory only used for huggingface backend."
-            )
-            # Get accessible cubes for the user
-            target_user_id = user_id if user_id is not None else self.user_id
-            accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
-            user_cube_ids = [cube.cube_id for cube in accessible_cubes]
+            if self.config.chat_model.backend != "huggingface":
+                logger.error(
+                    "Activation memory only used for huggingface backend. Skipping activation memory."
+                )
+            else:
+                # Get accessible cubes for the user
+                target_user_id = user_id if user_id is not None else self.user_id
+                accessible_cubes = self.user_manager.get_user_cubes(target_user_id)
+                user_cube_ids = [cube.cube_id for cube in accessible_cubes]
 
-            for mem_cube_id, mem_cube in self.mem_cubes.items():
-                if mem_cube_id not in user_cube_ids:
-                    continue
-                if mem_cube.act_mem:
-                    kv_cache = next(iter(mem_cube.act_mem.get_all()), None)
-                    past_key_values = (
-                        kv_cache.memory if (kv_cache and hasattr(kv_cache, "memory")) else None
-                    )
-                    break
+                for mem_cube_id, mem_cube in self.mem_cubes.items():
+                    if mem_cube_id not in user_cube_ids:
+                        continue
+                    if mem_cube.act_mem:
+                        kv_cache = next(iter(mem_cube.act_mem.get_all()), None)
+                        past_key_values = (
+                            kv_cache.memory if (kv_cache and hasattr(kv_cache, "memory")) else None
+                        )
+                        break
 
         try:
             # Generate the enhanced response using the chat LLM with same parameters as core

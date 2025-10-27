@@ -379,10 +379,52 @@ class HFLLM(BaseLLM):
             raise ValueError(
                 "Prompt after chat template is empty, cannot build KV cache. Check your messages input."
             )
-        kv = DynamicCache()
+        # Create cache and perform forward pass without pre-existing cache
         with torch.no_grad():
-            self.model(**inputs, use_cache=True, past_key_values=kv)
-        for i, (k, v) in enumerate(zip(kv.key_cache, kv.value_cache, strict=False)):
-            kv.key_cache[i] = k[:, :, :seq_len, :]
-            kv.value_cache[i] = v[:, :, :seq_len, :]
-        return kv
+            outputs = self.model(**inputs, use_cache=True)
+
+        # Get the cache from model outputs
+        if hasattr(outputs, "past_key_values") and outputs.past_key_values is not None:
+            kv = outputs.past_key_values
+
+            # Convert from legacy tuple format to DynamicCache if needed
+            if isinstance(kv, tuple):
+                kv = DynamicCache.from_legacy_cache(kv)
+
+            # Handle compatibility between old and new transformers versions
+            # In newer versions, DynamicCache uses 'layers' attribute
+            # In older versions, it uses 'key_cache' and 'value_cache' attributes
+            if hasattr(kv, "layers"):
+                # New version: trim cache using layers attribute
+                for layer in kv.layers:
+                    if hasattr(layer, "key_cache") and hasattr(layer, "value_cache"):
+                        # Trim each layer's cache to the sequence length
+                        if layer.key_cache is not None:
+                            layer.key_cache = layer.key_cache[:, :, :seq_len, :]
+                        if layer.value_cache is not None:
+                            layer.value_cache = layer.value_cache[:, :, :seq_len, :]
+                    elif hasattr(layer, "keys") and hasattr(layer, "values"):
+                        # Alternative attribute names in some versions
+                        if layer.keys is not None:
+                            layer.keys = layer.keys[:, :, :seq_len, :]
+                        if layer.values is not None:
+                            layer.values = layer.values[:, :, :seq_len, :]
+            elif hasattr(kv, "key_cache") and hasattr(kv, "value_cache"):
+                # Old version: trim cache using key_cache and value_cache attributes
+                for i in range(len(kv.key_cache)):
+                    if kv.key_cache[i] is not None:
+                        kv.key_cache[i] = kv.key_cache[i][:, :, :seq_len, :]
+                    if kv.value_cache[i] is not None:
+                        kv.value_cache[i] = kv.value_cache[i][:, :, :seq_len, :]
+            else:
+                # Fallback: log warning but continue without trimming
+                logger.warning(
+                    f"DynamicCache object of type {type(kv)} has unexpected structure. "
+                    f"Cache trimming skipped. Available attributes: {dir(kv)}"
+                )
+
+            return kv
+        else:
+            raise RuntimeError(
+                "Failed to build KV cache: no cache data available from model outputs"
+            )

@@ -2,6 +2,11 @@ import time
 
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 
 
 def main():
@@ -11,7 +16,7 @@ def main():
     )
     reader = SimpleStructMemReader(reader_config)
 
-    # 3. Define scene data
+    # 2. Define scene data
     scene_data = [
         [
             {"role": "user", "chat_time": "3 May 2025", "content": "I'm feeling a bit down today."},
@@ -187,32 +192,389 @@ def main():
         ],
     ]
 
-    # 4. Acquiring memories
-    start_time = time.time()
-    chat_memory = reader.get_memory(
-        scene_data, type="chat", info={"user_id": "user1", "session_id": "session1"}
-    )
-    print("\nChat Memory:\n", chat_memory)
+    print("=== Mem-Reader Fast vs Fine Mode Comparison ===\n")
 
-    # 5. Example of processing documents
-    print("\n=== Processing Documents ===")
+    # 3. Test Fine Mode (default)
+    print("🔄 Testing FINE mode (default, with LLM processing)...")
+    start_time = time.time()
+    fine_memory = reader.get_memory(
+        scene_data, type="chat", info={"user_id": "user1", "session_id": "session1"}, mode="fine"
+    )
+    fine_time = time.time() - start_time
+    print(f"✅ Fine mode completed in {fine_time:.2f} seconds")
+    print(f"📊 Fine mode generated {sum(len(mem_list) for mem_list in fine_memory)} memory items")
+
+    # 4. Test Fast Mode
+    print("\n⚡ Testing FAST mode (quick processing, no LLM calls)...")
+    start_time = time.time()
+    fast_memory = reader.get_memory(
+        scene_data, type="chat", info={"user_id": "user1", "session_id": "session1"}, mode="fast"
+    )
+    fast_time = time.time() - start_time
+    print(f"✅ Fast mode completed in {fast_time:.2f} seconds")
+    print(f"📊 Fast mode generated {sum(len(mem_list) for mem_list in fast_memory)} memory items")
+
+    # 5. Performance Comparison
+    print("\n📈 Performance Comparison:")
+    print(f"   Fine mode: {fine_time:.2f}s")
+    print(f"   Fast mode: {fast_time:.2f}s")
+    print(f"   Speed improvement: {fine_time / fast_time:.1f}x faster")
+
+    # 6. Show sample results from both modes
+    print("\n🔍 Sample Results Comparison:")
+    print("\n--- FINE Mode Results (first 3 items) ---")
+    for i, mem_list in enumerate(fine_memory[:3]):
+        for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
+            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+
+    print("\n--- FAST Mode Results (first 3 items) ---")
+    for i, mem_list in enumerate(fast_memory[:3]):
+        for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
+            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+
+    # 7. Example of transfer fast mode result into fine result
+    fast_mode_memories = [
+        TextualMemoryItem(
+            id="4553141b-3a33-4548-b779-e677ec797a9f",
+            memory="user: Nate:Oh cool! I might check that one out some time soon! I do love watching classics.\nassistant: Joanna:Yep, that movie is awesome. I first watched it around 3 years ago. I even went out and got a physical copy!\nuser: Nate:Sounds cool! Have you seen it a lot? sounds like you know the movie well!\nassistant: Joanna:A few times. It's one of my favorites! I really like the idea and the acting.\nuser: Nate:Cool! I'll definitely check it out. Thanks for the recommendation!\nassistant: Joanna:No problem, Nate! Let me know if you like it!\n",
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id="nate_test",
+                session_id="root_session",
+                status="activated",
+                type="fact",
+                key="user: Nate:Oh cool",
+                confidence=0.9900000095367432,
+                source=None,
+                tags=["mode:fast", "lang:en", "role:assistant", "role:user"],
+                visibility=None,
+                updated_at="2025-10-16T17:16:30.094877+08:00",
+                memory_type="LongTermMemory",
+                sources=[
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=0,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=1,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=2,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=3,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=4,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=5,
+                    ),
+                ],
+                embedding=None,
+                created_at="2025-10-16T17:16:30.094919+08:00",
+                usage=[],
+                background="",
+            ),
+        ),
+        TextualMemoryItem(
+            id="752e42fa-92b6-491a-a430-6864a7730fba",
+            memory="user: Nate:It was! How about you? Do you have any hobbies you love?\nassistant: Joanna:Yeah! Besides writing, I also enjoy reading, watching movies, and exploring nature. Anything else you enjoy doing, Nate?\nuser: Nate:Playing video games and watching movies are my main hobbies.\nassistant: Joanna:Cool, Nate! So we both have similar interests. What type of movies do you like best?\nuser: Nate:I love action and sci-fi movies, the effects are so cool! What about you, what's your favorite genre?\nassistant: Joanna:I'm all about dramas and romcoms. I love getting immersed in the feelings and plots.\nuser: Nate:Wow, movies can be so powerful! Do you have any recommendations for me?\nassistant: Joanna:Yeah, totally! Have you seen this romantic drama that's all about memory and relationships? It's such a good one.\nuser: Nate:Oh cool! I might check that one out some time soon! I do love watching classics.\nassistant: Joanna:Yep, that movie is awesome. I first watched it around 3 years ago. I even went out and got a physical copy!\n",
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id="nate_test",
+                session_id="root_session",
+                status="activated",
+                type="fact",
+                key="user: Nate:It was",
+                confidence=0.9900000095367432,
+                source=None,
+                tags=["mode:fast", "lang:en", "role:assistant", "role:user"],
+                visibility=None,
+                updated_at="2025-10-16T17:16:30.095726+08:00",
+                memory_type="LongTermMemory",
+                sources=[
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=0,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=1,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=2,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=3,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=4,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=5,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=6,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=7,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=8,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=9,
+                    ),
+                ],
+                embedding=None,
+                created_at="2025-10-16T17:16:30.095767+08:00",
+                usage=[],
+                background="",
+            ),
+        ),
+        TextualMemoryItem(
+            id="c9cf448c-deee-43a8-bafd-eb15fde535b2",
+            memory="user: Nate:Hey Joanna! Long time no see! What's up? Anything fun going on?\nassistant: Joanna:Hey Nate! Long time no see! I've been working on a project lately - it's been pretty cool. What about you - any fun projects or hobbies?\nuser: Nate:Hey Joanna! That's cool! I won my first video game tournament last week - so exciting!\nassistant: Joanna:Wow Nate! Congrats on winning! Tell me more - what game was it?\nuser: Nate:Thanks! it's a team shooter game.\nassistant: Joanna:Wow, great job! What was is called?\nuser: Nate:The game was called Counter-Strike: Global Offensive, and me and my team had a blast to the very end!\nassistant: Joanna:Cool, Nate! Sounds like a fun experience, even if I'm not into games.\nuser: Nate:It was! How about you? Do you have any hobbies you love?\nassistant: Joanna:Yeah! Besides writing, I also enjoy reading, watching movies, and exploring nature. Anything else you enjoy doing, Nate?\n",
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id="nate_test",
+                session_id="root_session",
+                status="activated",
+                type="fact",
+                key="user: Nate:Hey Joanna",
+                confidence=0.9900000095367432,
+                source=None,
+                tags=["mode:fast", "lang:en", "role:assistant", "role:user"],
+                visibility=None,
+                updated_at="2025-10-16T17:16:30.098208+08:00",
+                memory_type="LongTermMemory",
+                sources=[
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=0,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=1,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=2,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=3,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=4,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=5,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=6,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=7,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="user",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=8,
+                    ),
+                    SourceMessage(
+                        type="chat",
+                        role="assistant",
+                        chat_time="7:31 pm on 21 January, 2022",
+                        message_id=None,
+                        content=None,
+                        doc_path=None,
+                        index=9,
+                    ),
+                ],
+                embedding=None,
+                created_at="2025-10-16T17:16:30.098246+08:00",
+                usage=[],
+                background="",
+            ),
+        ),
+    ]
+    fine_memories = reader.fine_transfer_simple_mem(fast_mode_memories, type="chat")
+    print("\n--- Transfer Mode Results (first 3 items) ---")
+    for i, mem_list in enumerate(fine_memories[:3]):
+        for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
+            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+
+    # 7. Example of processing documents (only in fine mode)
+    print("\n=== Processing Documents (Fine Mode Only) ===")
     # Example document paths (you should replace these with actual document paths)
     doc_paths = [
         "examples/mem_reader/text1.txt",
         "examples/mem_reader/text2.txt",
     ]
-    # 6. Acquiring memories from documents
-    doc_memory = reader.get_memory(
-        doc_paths,
-        "doc",
-        info={
-            "user_id": "1111",
-            "session_id": "2222",
-        },
-    )
-    print("\nDocument Memory:\n", doc_memory)
-    end_time = time.time()
-    print(f"The runtime is {end_time - start_time} seconds.")
+
+    try:
+        # 6. Acquiring memories from documents
+        doc_memory = reader.get_memory(
+            doc_paths,
+            "doc",
+            info={
+                "user_id": "1111",
+                "session_id": "2222",
+            },
+            mode="fine",
+        )
+        print(
+            f"\n📄 Document Memory generated {sum(len(mem_list) for mem_list in doc_memory)} items"
+        )
+    except Exception as e:
+        print(f"⚠️  Document processing failed: {e}")
+        print("   (This is expected if document files don't exist)")
+
+    print("\n🎯 Summary:")
+    print(f"   • Fast mode: {fast_time:.2f}s - Quick processing, no LLM calls")
+    print(f"   • Fine mode: {fine_time:.2f}s - Full LLM processing for better understanding")
+    print("   • Use fast mode for: Real-time applications, high-throughput scenarios")
+    print("   • Use fine mode for: Quality analysis, detailed memory extraction")
 
 
 if __name__ == "__main__":
