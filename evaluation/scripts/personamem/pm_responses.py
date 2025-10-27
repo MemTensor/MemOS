@@ -14,7 +14,6 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import re
 
-from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
 from utils.prompts import PM_ANSWER_PROMPT
 
 
@@ -49,9 +48,8 @@ def extract_choice_answer(predicted_answer, correct_answer):
     return False, predicted_answer
 
 
-def pm_response(llm_client, context, question, options, frame):
-    template = add_pref_instruction(PM_ANSWER_PROMPT, frame=frame)
-    prompt = template.format(
+def pm_response(llm_client, context, question, options):
+    prompt = PM_ANSWER_PROMPT.format(
         question=question,
         context=context,
         options=options,
@@ -68,19 +66,17 @@ def pm_response(llm_client, context, question, options, frame):
     return result
 
 
-def process_qa(user_id, search_result, num_runs, llm_client, frame):
+def process_qa(user_id, search_result, num_runs, llm_client):
     search_result = search_result[0]
     question = search_result.get("question")
     context = search_result.get("search_context", "")
     options = search_result.get("all_options", [])
 
-    context = remove_pref_mem_from_mem_string(context, frame=frame)
-
     run_results = []
 
     for idx in range(num_runs):
         start = time()
-        answer = pm_response(llm_client, context, question, options, frame)
+        answer = pm_response(llm_client, context, question, options)
         is_correct, answer = extract_choice_answer(answer, search_result.get("golden_answer", ""))
         response_duration_ms = (time() - start) * 1000
 
@@ -154,9 +150,7 @@ def main(frame, version, num_runs=3, num_workers=4):
         future_to_user_id = {}
 
         for user_id, search_results in pm_search_results.items():
-            future = executor.submit(
-                process_qa, user_id, search_results, num_runs, oai_client, frame
-            )
+            future = executor.submit(process_qa, user_id, search_results, num_runs, oai_client)
             future_to_user_id[future] = user_id
 
         for future in tqdm(

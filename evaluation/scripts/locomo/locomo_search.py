@@ -100,14 +100,19 @@ def memos_api_search(
     client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
 ):
     from prompts import TEMPLATE_MEMOS
-    from utils.pref_mem_utils import create_mem_string
 
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
 
-    speaker_a_context = create_mem_string(search_a_results)
-    speaker_b_context = create_mem_string(search_b_results)
+    speaker_a_context = (
+        "\n".join([i["memory"] for i in search_a_results["text_mem"][0]["memories"]])
+        + f"\n{search_a_results['pref_mem']}"
+    )
+    speaker_b_context = (
+        "\n".join([i["memory"] for i in search_b_results["text_mem"][0]["memories"]])
+        + f"\n{search_b_results['pref_mem']}"
+    )
 
     context = TEMPLATE_MEMOS.format(
         speaker_1=speaker_a,

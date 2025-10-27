@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from memos.log import get_logger
+from memos.reranker.strategies import RerankerStrategyFactory
 
 from .base import BaseReranker
-from .concat import concat_original_source
 
 
 logger = get_logger(__name__)
@@ -48,7 +48,7 @@ def _value_matches(item_value: Any, wanted: Any) -> bool:
         return item_value == wanted
 
 
-class HTTPBGEReranker(BaseReranker):
+class HTTPBGERerankerStrategy(BaseReranker):
     """
     HTTP-based BGE reranker.
 
@@ -84,6 +84,7 @@ class HTTPBGEReranker(BaseReranker):
         boost_weights: dict[str, float] | None = None,
         boost_default: float = 0.0,
         warn_unknown_filter_keys: bool = True,
+        reranker_strategy: str = "single_turn",
         **kwargs,
     ):
         """
@@ -107,7 +108,6 @@ class HTTPBGEReranker(BaseReranker):
         self.model = model
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
-        self.rerank_source = rerank_source
 
         self.boost_weights = (
             DEFAULT_BOOST_WEIGHTS.copy()
@@ -117,6 +117,7 @@ class HTTPBGEReranker(BaseReranker):
         self.boost_default = float(boost_default)
         self.warn_unknown_filter_keys = bool(warn_unknown_filter_keys)
         self._warned_missing_keys: set[str] = set()
+        self.reranker_strategy = RerankerStrategyFactory.from_config(reranker_strategy)
 
     def rerank(
         self,
@@ -149,19 +150,15 @@ class HTTPBGEReranker(BaseReranker):
         if not graph_results:
             return []
 
-        # Build a mapping from "payload docs index" -> "original graph_results index"
-        # Only include items that have a non-empty string memory. This ensures that
-        # any index returned by the server can be mapped back correctly.
-        if self.rerank_source:
-            documents = concat_original_source(graph_results, self.rerank_source)
-        else:
-            documents = [
-                (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
-                for item in graph_results
-            ]
-            documents = [d for d in documents if isinstance(d, str) and d]
+        tracker, original_items, documents = self.reranker_strategy.prepare_documents(
+            query, graph_results, top_k
+        )
 
-        logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
+        logger.info(
+            f"[HTTPBGEWithSourceReranker] strategy: {self.reranker_strategy}, "
+            f"query: {query}, documents count: {len(documents)}"
+        )
+        logger.info(f"[HTTPBGEWithSourceReranker] sample documents: {documents[:3]}...")
 
         if not documents:
             return []
@@ -184,19 +181,27 @@ class HTTPBGEReranker(BaseReranker):
                 # dict("results": [{"index": int, "relevance_score": float},
                 # ...])
                 rows = data.get("results", [])
+
+                ranked_indices = []
+                scores = []
                 for r in rows:
                     idx = r.get("index")
                     # The returned index refers to 'documents' (i.e., our 'pairs' order),
                     # so we must map it back to the original graph_results index.
                     if isinstance(idx, int) and 0 <= idx < len(graph_results):
                         raw_score = float(r.get("relevance_score", r.get("score", 0.0)))
-                        item = graph_results[idx]
-                        # generic boost
-                        score = self._apply_boost_generic(item, raw_score, search_filter)
-                        scored_items.append((item, score))
-
-                scored_items.sort(key=lambda x: x[1], reverse=True)
-                return scored_items[: min(top_k, len(scored_items))]
+                        ranked_indices.append(idx)
+                        scores.append(raw_score)
+                reconstructed_items = self.reranker_strategy.reconstruct_items(
+                    ranked_indices=ranked_indices,
+                    scores=scores,
+                    tracker=tracker,
+                    original_items=original_items,
+                    top_k=top_k,
+                    graph_results=graph_results,
+                    documents=documents,
+                )
+                return reconstructed_items
 
             elif "data" in data:
                 # Format: {"data": [{"score": float}, ...]} aligned by list order

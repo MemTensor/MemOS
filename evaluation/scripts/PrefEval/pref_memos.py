@@ -72,7 +72,6 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
     """
     Processes a single line of data, searching memory based on the question.
     """
-    from utils.pref_mem_utils import create_mem_string
 
     i, line = line_data
     try:
@@ -94,7 +93,13 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = create_mem_string(relevant_memories)
+        memories_str = (
+            "\n".join(
+                f"- {entry.get('memory', '')}"
+                for entry in relevant_memories["text_mem"][0]["memories"]
+            )
+            + f"\n{relevant_memories['pref_mem']}"
+        )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -119,7 +124,6 @@ def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str
     """
     Generates a response for a single line of data using pre-fetched memories.
     """
-    from utils.pref_mem_utils import add_pref_instruction, remove_pref_mem_from_mem_string
     from utils.prompts import PREFEVAL_ANSWER_PROMPT
 
     i, line = line_data
@@ -146,10 +150,7 @@ def generate_response_for_line(line_data: tuple, openai_client: OpenAI, lib: str
             )
             return original_data
 
-        memories_str = remove_pref_mem_from_mem_string(memories_str, frame=lib)
-
-        template = add_pref_instruction(PREFEVAL_ANSWER_PROMPT, frame=lib)
-        system_prompt = template.format(context=memories_str)
+        system_prompt = PREFEVAL_ANSWER_PROMPT.format(context=memories_str)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
