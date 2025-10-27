@@ -92,11 +92,11 @@ class SingleTurnStrategy(BaseRerankerStrategy):
         reconstructed_items = []
         for idx, score in zip(ranked_indices, scores, strict=False):
             dialogue_pair = tracker.get_dialogue_pair_by_index(idx)
-            if dialogue_pair and dialogue_pair.memory_id in original_items:
+            if dialogue_pair and (dialogue_pair.memory_id in original_items):
                 original_item = original_items[dialogue_pair.memory_id]
                 reconstructed_item = deepcopy(original_item)
                 reconstructed_item.memory = (
-                    dialogue_pair.memory + "\n\n" + dialogue_pair.combined_text
+                    dialogue_pair.memory + "\n\nsources-dialogue-pairs" + dialogue_pair.combined_text
                 )
                 reconstructed_items.append((reconstructed_item, score))
 

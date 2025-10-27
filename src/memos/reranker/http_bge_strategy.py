@@ -158,7 +158,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
             f"[HTTPBGEWithSourceReranker] strategy: {self.reranker_strategy}, "
             f"query: {query}, documents count: {len(documents)}"
         )
-        logger.debug(f"[HTTPBGEWithSourceReranker] sample documents: {documents[:2]}...")
+        logger.info(f"[HTTPBGEWithSourceReranker] sample documents: {documents[:3]}...")
 
         if not documents:
             return []
