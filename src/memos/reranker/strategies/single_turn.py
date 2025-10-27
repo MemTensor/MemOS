@@ -96,7 +96,9 @@ class SingleTurnStrategy(BaseRerankerStrategy):
                 original_item = original_items[dialogue_pair.memory_id]
                 reconstructed_item = deepcopy(original_item)
                 reconstructed_item.memory = (
-                    dialogue_pair.memory + "\n\nsources-dialogue-pairs" + dialogue_pair.combined_text
+                    dialogue_pair.memory
+                    + "\n\nsources-dialogue-pairs"
+                    + dialogue_pair.combined_text
                 )
                 reconstructed_items.append((reconstructed_item, score))
 

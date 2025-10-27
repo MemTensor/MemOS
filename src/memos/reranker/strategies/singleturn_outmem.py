@@ -88,7 +88,7 @@ class SingleTurnOutMemStrategy(SingleTurnStrategy):
 
             # Calculate aggregated score (e.g., max, mean, or weighted average)
             pair_scores = memory_scores[memory_id]
-            
+
             aggregated_score = max(pair_scores) if pair_scores else 0.0
 
             reconstructed_items.append((original_item, aggregated_score))

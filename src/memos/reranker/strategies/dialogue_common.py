@@ -80,7 +80,7 @@ class DialogueRankingTracker:
             raise ValueError(f"Invalid concat format: {concat_format}")
 
         pair_id = f"{memory_id}_{pair_index}"
-        
+
         dialogue_pair = DialoguePair(
             pair_id=pair_id,
             memory_id=memory_id,
@@ -91,7 +91,7 @@ class DialogueRankingTracker:
             memory=memory,
             chat_time=chat_time,
         )
-        
+
         self.dialogue_pairs.append(dialogue_pair)
         return pair_id
 
