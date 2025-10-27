@@ -39,7 +39,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                 }
             )
         if messages:
-            client.add(messages=messages, user_id=user_id, conv_id=session_id)
+            client.add(messages=messages, user_id=user_id, conv_id=session_id, batch_size=2)
     elif frame == "memu":
         for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
@@ -171,7 +171,7 @@ if __name__ == "__main__":
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="default", help="Version of the evaluation framework."
+        "--version", type=str, default="1027", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation."
