@@ -35,10 +35,7 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
             question=question,
         )
     else:
-        from utils.pref_mem_utils import add_pref_instruction
-
-        template = add_pref_instruction(ANSWER_PROMPT_MEMOS, frame=frame)
-        prompt = template.format(
+        prompt = ANSWER_PROMPT_MEMOS.format(
             context=context,
             question=question,
         )
@@ -55,8 +52,6 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
 
 
 async def process_qa(frame, qa, search_result, oai_client):
-    from utils.pref_mem_utils import remove_pref_mem_from_mem_string
-
     start = time()
     query = qa.get("question")
     gold_answer = qa.get("answer")
@@ -64,7 +59,6 @@ async def process_qa(frame, qa, search_result, oai_client):
 
     context = search_result.get("context")
 
-    context = remove_pref_mem_from_mem_string(context, frame)
     answer = await locomo_response(frame, oai_client, context, query)
 
     response_duration_ms = (time() - start) * 1000

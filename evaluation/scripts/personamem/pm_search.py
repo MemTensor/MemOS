@@ -14,7 +14,6 @@ from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.pref_mem_utils import create_mem_string
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
@@ -83,7 +82,10 @@ def memobase_search(client, query, user_id, top_k):
 def memos_search(client, user_id, query, top_k):
     start = time()
     results = client.search(query=query, user_id=user_id, top_k=top_k)
-    search_memories = create_mem_string(results)
+    search_memories = (
+        "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
+        + f"\n{results['pref_mem']}"
+    )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
     duration_ms = (time() - start) * 1000

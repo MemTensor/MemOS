@@ -1,14 +1,3 @@
-import os
-
-
-PREF_INSTRUCTIONS = """
-    # Note:
-    Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
-    Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
-    When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
-"""
-
-
 ANSWER_PROMPT_MEM0 = """
     You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
 
@@ -114,7 +103,7 @@ ANSWER_PROMPT_MEMOS = """
    5. Formulate a precise, concise answer based on the evidence from the memories (and allowed world knowledge).
    6. Double-check that your answer directly addresses the question asked and adheres to all instructions.
    7. Ensure your final answer is specific and avoids vague time references.
-   {pref_instructions}
+
    {context}
 
    Question: {question}
@@ -122,10 +111,6 @@ ANSWER_PROMPT_MEMOS = """
    Answer:
    """
 
-if os.getenv("INSTRUCT_COMPLETE") == "true":
-    ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", PREF_INSTRUCTIONS)
-else:
-    ANSWER_PROMPT_MEMOS = ANSWER_PROMPT_MEMOS.replace("{pref_instructions}", "")
 
 custom_instructions = """
 Generate personal memories that follow these guidelines:

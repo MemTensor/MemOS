@@ -13,7 +13,6 @@ from time import time
 import pandas as pd
 
 from tqdm import tqdm
-from utils.pref_mem_utils import create_mem_string
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
@@ -45,7 +44,10 @@ def mem0_search(client, query, user_id, top_k):
 def memos_search(client, query, user_id, top_k):
     start = time()
     results = client.search(query=query, user_id=user_id, top_k=top_k)
-    context = create_mem_string(results)
+    context = (
+        "\n".join([i["memory"] for i in results["text_mem"][0]["memories"]])
+        + f"\n{results['pref_mem']}"
+    )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms

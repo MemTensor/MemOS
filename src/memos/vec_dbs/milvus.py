@@ -138,7 +138,7 @@ class MilvusVecDB(BaseVecDB):
 
             items.append(
                 MilvusVecDBItem(
-                    id=str(hit["id"]),
+                    id=str(entity.get("id")),
                     memory=entity.get("memory"),
                     vector=entity.get("vector"),
                     payload=entity.get("payload", {}),
