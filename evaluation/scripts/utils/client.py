@@ -82,21 +82,13 @@ class Mem0Client:
                         raise e
 
     def search(self, query, user_id, top_k):
-        if self.enable_graph:
-            res = self.client.search(
-                query=query,
-                top_k=top_k,
-                user_id=user_id,
-                enable_graph=True,
-                filters={"AND": [{"user_id": f"{user_id}"}]},
-            )
-        else:
-            res = self.client.search(
-                query=query,
-                top_k=top_k,
-                user_id=user_id,
-                filters={"AND": [{"user_id": f"{user_id}"}]},
-            )
+        res = self.client.search(
+            query=query,
+            top_k=top_k,
+            user_id=user_id,
+            enable_graph=self.enable_graph,
+            filters={"AND": [{"user_id": f"{user_id}"}]},
+        )
         return res
 
 
