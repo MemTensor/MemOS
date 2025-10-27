@@ -65,7 +65,7 @@ class OpenAILLM(BaseLLM):
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             top_p=self.config.top_p,
-            **kwargs
+            **kwargs,
         )
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
         response_content = response.choices[0].message.content
