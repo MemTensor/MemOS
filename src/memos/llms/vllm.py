@@ -85,16 +85,16 @@ class VLLMLLM(BaseLLM):
 
         return prompt
 
-    def generate(self, messages: list[MessageDict]) -> str:
+    def generate(self, messages: list[MessageDict], **kwargs) -> str:
         """
         Generate a response from the model.
         """
         if self.client:
-            return self._generate_with_api_client(messages)
+            return self._generate_with_api_client(messages, **kwargs)
         else:
             raise RuntimeError("API client is not available")
 
-    def _generate_with_api_client(self, messages: list[MessageDict]) -> str:
+    def _generate_with_api_client(self, messages: list[MessageDict], **kwargs) -> str:
         """
         Generate response using vLLM API client.
         """
@@ -106,6 +106,7 @@ class VLLMLLM(BaseLLM):
                 "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
                 "top_p": float(getattr(self.config, "top_p", 0.9)),
                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                **kwargs
             }
 
             response = self.client.chat.completions.create(**completion_kwargs)

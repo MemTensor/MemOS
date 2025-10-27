@@ -417,3 +417,48 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
 }
 
 """
+
+reader_output_schema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "memory list": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "A brief title or identifier for the memory."
+          },
+          "memory_type": {
+            "type": "string",
+            "enum": ["LongTermMemory", "ShortTermMemory", "WorkingMemory"],
+            "description": "The type of memory, expected to be 'LongTermMemory' in this context."
+          },
+          "value": {
+            "type": "string",
+            "description": "Detailed description of the memory, including viewpoint, time, and content."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of keywords or categories associated with the memory."
+          }
+        },
+        "required": ["key", "memory_type", "value", "tags"],
+        "additionalProperties": False
+      },
+      "description": "List of memory entries."
+    },
+    "summary": {
+      "type": "string",
+      "description": "A synthesized summary of the overall situation based on all memories."
+    }
+  },
+  "required": ["memory list", "summary"],
+  "additionalProperties": False,
+  "description": "Structured output containing a list of memories and a summary."
+}

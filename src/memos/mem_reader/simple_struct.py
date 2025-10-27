@@ -27,6 +27,7 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
+    reader_output_schema
 )
 from memos.utils import timed
 
@@ -200,7 +201,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
         try:
-            response_text = self.llm.generate(messages)
+            response_text = self.llm.generate(messages,
+                                              response_format={"type": "json_object",
+                                                               "schema": reader_output_schema})
             response_json = self.parse_json_result(response_text)
         except Exception as e:
             logger.error(f"[LLM] Exception during chat generation: {e}")

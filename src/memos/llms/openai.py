@@ -56,7 +56,7 @@ class OpenAILLM(BaseLLM):
         cls._instances.clear()
         logger.info("OpenAI LLM instance cache cleared")
 
-    def generate(self, messages: MessageList) -> str:
+    def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM."""
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
@@ -65,6 +65,7 @@ class OpenAILLM(BaseLLM):
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
             top_p=self.config.top_p,
+            **kwargs
         )
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
         response_content = response.choices[0].message.content
