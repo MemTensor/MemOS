@@ -9,9 +9,9 @@ Notes:
 - When the user modifies or updates their preferences for the same topic or event, extract the complete evolution process of their preference changes, including both the original and updated preferences.
 
 Requirements:
-1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.
+1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume. If the user mentions reasons for their preferences, include those reasons as well.
 2. Output should be a list of concise natural language summaries and the corresponding context summary, context summary must contain complete information of the conversation fragment that the preference is mentioned.
-3. If multiple preferences are mentioned within the same topic, you need to merge the preferences and context summary.
+3. If multiple preferences are mentioned within the same topic, you need to merge the preferences and context summary. Avoid repetition and redundancy in the merged content.
 
 Conversation:
 {qa_pair}
@@ -78,6 +78,35 @@ Please output JSON format:
 
 **New Information:**
 {new_information}
+"""
+
+NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_FINE = """
+You are a preference memory comparison expert. Analyze if the new preference memory describes the same topic as any retrieved memories. At most one retrieved memory can match the new memory.
+
+**Task:** Compare the new preference memory with retrieved memories to determine if they discuss the same topic and whether an update is needed.
+
+**Criteria:**
+- Same core topic = need to check if update is needed
+- Different topics = no update needed
+- If same topic but content has changed/evolved = update needed
+- If same topic and content is identical = no update needed
+
+**Output JSON:**
+```json
+{
+  "need_update": true/false,
+  "id": "ID of the memory being updated (empty string if no update needed)",
+  "new_memory": "Updated memory field with change description (empty string if no update needed)",
+  "new_preference": "Updated preference field (empty string if no update needed)",
+  "reasoning": "Brief explanation of the comparison"
+}
+```
+
+**New preference memory:**
+{new_memory}
+
+**Retrieved preference memories:**
+{retrieved_memories}
 """
 
 

@@ -45,10 +45,10 @@ class NaiveRetriever(BaseRetriever):
         with ThreadPoolExecutor(max_workers=2) as executor:
             # Submit all search tasks
             future_explicit = executor.submit(
-                self.vector_db.search, query_embedding, "explicit_preference", top_k * 2, info
+                self.vector_db.search, query_embedding, query, "explicit_preference", top_k * 2, info
             )
             future_implicit = executor.submit(
-                self.vector_db.search, query_embedding, "implicit_preference", top_k * 2, info
+                self.vector_db.search, query_embedding, query, "implicit_preference", top_k * 2, info
             )
 
             # Wait for all results
