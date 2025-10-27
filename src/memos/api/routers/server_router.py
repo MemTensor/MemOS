@@ -332,6 +332,7 @@ def search_memories(search_req: APISearchRequest):
         "text_mem": [],
         "act_mem": [],
         "para_mem": [],
+        "pref_mem": "",
     }
 
     search_mode = search_req.mode
