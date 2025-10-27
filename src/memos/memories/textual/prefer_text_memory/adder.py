@@ -110,6 +110,7 @@ class NaiveAdder(BaseAdder):
         new_vec_db_item = MilvusVecDBItem(
             id=new_memory.id,
             memory=new_memory.memory,
+            original_text=new_memory.metadata.dialog_str,
             vector=new_memory.metadata.embedding,
             payload=payload,
         )
@@ -142,15 +143,17 @@ class NaiveAdder(BaseAdder):
             op_type = op["type"].lower()
             if op_type == "add":
                 self.vector_db.add(collection_name, [new_mem_vec_db_item])
-                return new_memory.id
+                return new_mem_vec_db_item.id
             elif op_type == "update":
                 update_item = [mem for mem in retrieved_memories if mem.id == op["target_id"]]
                 if not update_item:
                     self.vector_db.add(collection_name, [new_mem_vec_db_item])
-                    return new_memory.id
+                    return new_mem_vec_db_item.id
                 update_vec_db_item = update_item[0]
                 update_vec_db_item.payload[preference_type] = op["new_preference"]
+                update_vec_db_item.payload["updated_at"] = new_mem_vec_db_item.payload["updated_at"]
                 update_vec_db_item.memory = op["new_context_summary"]
+                update_vec_db_item.original_text = new_mem_vec_db_item.original_text
                 update_vec_db_item.vector = self.embedder.embed([op["new_context_summary"]])[0]
                 self.vector_db.update(collection_name, op["target_id"], update_vec_db_item)
                 return op["target_id"]
@@ -181,6 +184,7 @@ class NaiveAdder(BaseAdder):
         vec_db_item = MilvusVecDBItem(
             id=new_memory.id,
             memory=new_memory.memory,
+            original_text=new_memory.metadata.dialog_str,
             vector=new_memory.metadata.embedding,
             payload=payload,
         )
@@ -205,17 +209,20 @@ class NaiveAdder(BaseAdder):
         )
         need_update = rsp.get("need_update", False) if rsp else False
         need_update = need_update if isinstance(need_update, bool) else need_update.lower() == "true"
-        if need_update:
-            payload[preference_type] = rsp["new_preference"]
-            vec_db_item.id = rsp["id"]
-            vec_db_item.memory = rsp["new_memory"]
-            vec_db_item.vector = self.embedder.embed([rsp["new_memory"]])[0]
+        update_item = [mem for mem in retrieved_memories if mem.id == rsp["id"]]
+        if need_update and update_item:
+            update_vec_db_item = update_item[0]
+            update_vec_db_item.payload[preference_type] = rsp["new_preference"]
+            update_vec_db_item.payload["updated_at"] = vec_db_item.payload["updated_at"]
+            update_vec_db_item.memory = rsp["new_memory"]
+            update_vec_db_item.original_text = vec_db_item.original_text
+            update_vec_db_item.vector = self.embedder.embed([rsp["new_memory"]])[0]
 
-            self.vector_db.update(collection_name, rsp["id"], vec_db_item)
+            self.vector_db.update(collection_name, rsp["id"], update_vec_db_item)
             return rsp["id"]
         else:
             self.vector_db.add(collection_name, [vec_db_item])
-            return new_memory.id
+            return vec_db_item.id
 
     def _update_memory_fast(
         self,
@@ -229,6 +236,7 @@ class NaiveAdder(BaseAdder):
         vec_db_item = MilvusVecDBItem(
             id=new_memory.id,
             memory=new_memory.memory,
+            original_text=new_memory.metadata.dialog_str,
             vector=new_memory.metadata.embedding,
             payload=payload,
         )

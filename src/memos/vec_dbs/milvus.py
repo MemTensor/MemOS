@@ -42,6 +42,7 @@ class MilvusVecDB(BaseVecDB):
         )
         analyzer_params = {"tokenizer": "standard", "filter": ["lowercase"]}
         schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535, analyzer_params=analyzer_params, enable_match=True, enable_analyzer=True)
+        schema.add_field(field_name="original_text", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
         )
@@ -228,6 +229,7 @@ class MilvusVecDB(BaseVecDB):
                 MilvusVecDBItem(
                     id=str(entity.get("id")),
                     memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
                     payload=entity.get("payload", {}),
                     score=1 - float(hit["distance"]),
@@ -284,6 +286,7 @@ class MilvusVecDB(BaseVecDB):
         return MilvusVecDBItem(
             id=entity["id"],
             memory=entity.get("memory"),
+            original_text=entity.get("original_text"),
             vector=entity.get("vector"),
             payload=payload,
         )
@@ -305,6 +308,7 @@ class MilvusVecDB(BaseVecDB):
                 MilvusVecDBItem(
                     id=entity["id"],
                     memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
                     payload=payload,
                 )
@@ -352,6 +356,7 @@ class MilvusVecDB(BaseVecDB):
                         MilvusVecDBItem(
                             id=entity["id"],
                             memory=entity.get("memory"),
+                            original_text=entity.get("original_text"),
                             vector=entity.get("vector"),
                             payload=payload,
                         )
@@ -409,6 +414,7 @@ class MilvusVecDB(BaseVecDB):
             entity = {
                 "id": item.id,
                 "memory": item.memory,
+                "original_text": item.original_text,
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }
