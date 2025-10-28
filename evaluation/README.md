@@ -1,6 +1,6 @@
 # Evaluation Memory Framework
 
-This repository provides tools and scripts for evaluating the LoCoMo dataset using various models and APIs.
+This repository provides tools and scripts for evaluating the `LoCoMo`, `LongMemEval`, `PrefEval`, `personaMem` dataset using various models and APIs.
 
 ## Installation
 
