@@ -18,6 +18,7 @@ from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
+    MEM_ORGANIZE_LABEL,
     MEM_READ_LABEL,
     PREF_ADD_LABEL,
     QUERY_LABEL,
@@ -165,25 +166,6 @@ class MOSCore:
         except Exception as e:
             logger.error(f"Failed to stop scheduler: {e!s}")
             return False
-
-    def mem_reorganizer_on(self) -> bool:
-        pass
-
-    def mem_reorganizer_off(self) -> bool:
-        """temporally implement"""
-        for mem_cube in self.mem_cubes.values():
-            logger.info(f"try to close reorganizer for {mem_cube.text_mem.config.cube_id}")
-            if mem_cube.text_mem and mem_cube.text_mem.is_reorganize:
-                logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
-                mem_cube.text_mem.memory_manager.close()
-                mem_cube.text_mem.memory_manager.wait_reorganizer()
-
-    def mem_reorganizer_wait(self) -> bool:
-        for mem_cube in self.mem_cubes.values():
-            logger.info(f"try to close reorganizer for {mem_cube.text_mem.config.cube_id}")
-            if mem_cube.text_mem and mem_cube.text_mem.is_reorganize:
-                logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
-                mem_cube.text_mem.memory_manager.wait_reorganizer()
 
     def _register_chat_history(
         self, user_id: str | None = None, session_id: str | None = None
@@ -727,9 +709,12 @@ class MOSCore:
             f"time add: get mem_cube_id time user_id: {target_user_id} time is: {time.time() - time_start}"
         )
 
+        time_start_0 = time.time()
         if mem_cube_id not in self.mem_cubes:
             raise ValueError(f"MemCube '{mem_cube_id}' is not loaded. Please register.")
-
+        logger.info(
+            f"time add: get mem_cube_id check in mem_cubes time user_id: {target_user_id} time is: {time.time() - time_start_0}"
+        )
         sync_mode = self.mem_cubes[mem_cube_id].text_mem.mode
         if sync_mode == "async":
             assert self.mem_scheduler is not None, (
@@ -779,16 +764,25 @@ class MOSCore:
                                 timestamp=datetime.utcnow(),
                             )
                             self.mem_scheduler.submit_messages(messages=[message_item])
-
-                        message_item = ScheduleMessageItem(
-                            user_id=target_user_id,
-                            mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
-                            label=ADD_LABEL,
-                            content=json.dumps(mem_ids),
-                            timestamp=datetime.utcnow(),
-                        )
-                        self.mem_scheduler.submit_messages(messages=[message_item])
+                        elif sync_mode == "sync":
+                            message_item = ScheduleMessageItem(
+                                user_id=user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=mem_cube,
+                                label=MEM_ORGANIZE_LABEL,
+                                content=json.dumps(mem_ids),
+                                timestamp=datetime.utcnow(),
+                            )
+                            self.mem_scheduler.submit_messages(messages=[message_item])
+                            message_item = ScheduleMessageItem(
+                                user_id=target_user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=mem_cube,
+                                label=ADD_LABEL,
+                                content=json.dumps(mem_ids),
+                                timestamp=datetime.utcnow(),
+                            )
+                            self.mem_scheduler.submit_messages(messages=[message_item])
 
         def process_preference_memory():
             if (

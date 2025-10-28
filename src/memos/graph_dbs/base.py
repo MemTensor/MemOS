@@ -70,7 +70,7 @@ class BaseGraphDB(ABC):
 
     # Graph Query & Reasoning
     @abstractmethod
-    def get_node(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and content of a node.
         Args:

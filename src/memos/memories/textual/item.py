@@ -42,6 +42,11 @@ class SourceMessage(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    @property
+    def content_safe(self) -> str:
+        """Always return a string, fallback to '' if content is None."""
+        return self.content or ""
+
 
 class TextualMemoryMetadata(BaseModel):
     """Metadata for a memory item.

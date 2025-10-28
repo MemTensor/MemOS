@@ -1174,7 +1174,7 @@ class NebulaGraphDB(BaseGraphDB):
             group_by_fields.append(alias)
         # Full GQL query construction
         gql = f"""
-            MATCH (n /*+ INDEX(idx_memory_user_name) */)
+            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             {where_clause}
             RETURN {", ".join(return_fields)}, COUNT(n) AS count
             """
@@ -1381,31 +1381,55 @@ class NebulaGraphDB(BaseGraphDB):
         where_clause += f' AND n.user_name = "{user_name}"'
 
         return_fields = self._build_return_fields(include_embedding)
-        return_fields += f", n.{self.dim_field} AS {self.dim_field}"
 
-        query = f"""
+        gql = f"""
             MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
             WHERE {where_clause}
-            OPTIONAL MATCH (n)-[@PARENT]->(c@Memory)
-            OPTIONAL MATCH (p@Memory)-[@PARENT]->(n)
-            WHERE c IS NULL AND p IS NULL
-            RETURN {return_fields}
+            OPTIONAL MATCH (n)-[@PARENT]->(c@Memory {{user_name: "{user_name}"}})
+            OPTIONAL MATCH (p@Memory {{user_name: "{user_name}"}})-[@PARENT]->(n)
+            RETURN {return_fields},
+                   c.id AS child_id,
+                   p.id AS parent_id
         """
 
-        candidates = []
-        node_ids = set()
+        per_node_seen_has_child_or_parent: dict[str, bool] = {}
+        per_node_payload: dict[str, dict] = {}
+
         try:
-            results = self.execute_query(query)
-            for row in results:
-                props = {k: v.value for k, v in row.items()}
-                node = self._parse_node(props)
-                node_id = node["id"]
-                if node_id not in node_ids:
-                    candidates.append(node)
-                    node_ids.add(node_id)
+            results = self.execute_query(gql)
         except Exception as e:
-            logger.error(f"Failed : {e}, traceback: {traceback.format_exc()}")
-        return candidates
+            logger.error(
+                f"[get_structure_optimization_candidates] Query failed: {e}, "
+                f"traceback: {traceback.format_exc()}"
+            )
+            return []
+
+        for row in results:
+            props = {k: v.value for k, v in row.items() if k not in ("child_id", "parent_id")}
+            node = self._parse_node(props)
+            nid = node["id"]
+
+            if nid not in per_node_payload:
+                per_node_payload[nid] = node
+                per_node_seen_has_child_or_parent[nid] = False
+
+            child_val = row.get("child_id")
+            parent_val = row.get("parent_id")
+
+            child_unwrapped = self._parse_value(child_val) if (child_val is not None) else None
+            parent_unwrapped = self._parse_value(parent_val) if (parent_val is not None) else None
+
+            if child_unwrapped:
+                per_node_seen_has_child_or_parent[nid] = True
+            if parent_unwrapped:
+                per_node_seen_has_child_or_parent[nid] = True
+
+        isolated_nodes: list[dict] = []
+        for nid, node_obj in per_node_payload.items():
+            if not per_node_seen_has_child_or_parent[nid]:
+                isolated_nodes.append(node_obj)
+
+        return isolated_nodes
 
     @timed
     def drop_database(self) -> None:
@@ -1450,7 +1474,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def get_neighbors(
-        self, id: str, type: str, direction: Literal["in", "out", "both"] = "out"
+        self, id: str, type: str, direction: Literal["in", "out", "both"] = "both"
     ) -> list[str]:
         """
         Get connected node IDs in a specific direction and relationship type.
@@ -1461,7 +1485,70 @@ class NebulaGraphDB(BaseGraphDB):
         Returns:
             List of neighboring node IDs.
         """
-        raise NotImplementedError
+        if direction not in ("in", "out", "both"):
+            raise ValueError(f"Unsupported direction: {direction}")
+
+        user_name = self.config.user_name
+        id_val = self._format_value(id)  # e.g. '"5225-uuid..."'
+        user_val = self._format_value(user_name)  # e.g. '"lme_user_1"'
+        edge_type = type  # assume caller passes valid edge tag
+
+        def _run_out_query() -> list[str]:
+            # out: (this)-[edge_type]->(dst)
+            gql = f"""
+                    MATCH (src@Memory {{id: {id_val}, user_name: {user_val}}})
+                          -[r@{edge_type}]->
+                          (dst@Memory {{user_name: {user_val}}})
+                    RETURN DISTINCT dst.id AS neighbor
+                """.strip()
+            try:
+                result = self.execute_query(gql)
+            except Exception as e:
+                logger.error(f"[get_neighbors][out] Query failed: {e}, gql={gql}")
+                return []
+
+            out_ids = []
+            try:
+                for row in result:
+                    out_ids.append(row["neighbor"].value)
+            except Exception as e:
+                logger.error(f"[get_neighbors][out] Parse failed: {e}")
+            return out_ids
+
+        def _run_in_query() -> list[str]:
+            # in: (src)-[edge_type]->(this)
+            gql = f"""
+                    MATCH (src@Memory {{user_name: {user_val}}})
+                          -[r@{edge_type}]->
+                          (dst@Memory {{id: {id_val}, user_name: {user_val}}})
+                    RETURN DISTINCT src.id AS neighbor
+                """.strip()
+            try:
+                result = self.execute_query(gql)
+            except Exception as e:
+                logger.error(f"[get_neighbors][in] Query failed: {e}, gql={gql}")
+                return []
+
+            in_ids = []
+            try:
+                for row in result:
+                    in_ids.append(row["neighbor"].value)
+            except Exception as e:
+                logger.error(f"[get_neighbors][in] Parse failed: {e}")
+            return in_ids
+
+        if direction == "out":
+            return list(set(_run_out_query()))
+        elif direction == "in":
+            return list(set(_run_in_query()))
+        else:  # direction == "both"
+            out_ids = _run_out_query()
+            in_ids = _run_in_query()
+            merged = set(out_ids)
+            merged.update(in_ids)
+            if id in merged:
+                merged.remove(id)
+            return list(merged)
 
     @timed
     def get_path(self, source_id: str, target_id: str, max_depth: int = 3) -> list[str]:
