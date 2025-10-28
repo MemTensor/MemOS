@@ -361,8 +361,8 @@ class APIConfig:
                 "thread_pool_max_workers": int(
                     os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
                 ),
-                "consume_interval_seconds": int(
-                    os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "3")
+                "consume_interval_seconds": float(
+                    os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "0.01")
                 ),
                 "enable_parallel_dispatch": os.getenv(
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"

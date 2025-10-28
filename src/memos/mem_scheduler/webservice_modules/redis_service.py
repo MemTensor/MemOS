@@ -273,7 +273,7 @@ class RedisSchedulerModule(BaseSchedulerModule):
 
         self._cleanup_local_redis()
 
-    async def redis_add_message_stream(self, message: dict):
+    def redis_add_message_stream(self, message: dict):
         logger.debug(f"add_message_stream: {message}")
         return self._redis_conn.xadd("user:queries:stream", message)
 

@@ -502,7 +502,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         except Exception as e:
             logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
 
-    async def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
+    def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit messages to the message queue (either local queue or Redis)."""
         if isinstance(messages, ScheduleMessageItem):
             messages = [messages]  # transform single message to list
@@ -519,7 +519,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             if self.use_redis_queue:
                 # Use Redis stream for message queue
-                await self.redis_add_message_stream(message.to_dict())
+                self.redis_add_message_stream(message.to_dict())
                 logger.info(f"Submitted message to Redis: {message.label} - {message.content}")
             else:
                 # Use local queue
@@ -774,34 +774,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         return self.dispatcher.unregister_handlers(labels)
 
     def get_running_tasks(self, filter_func: Callable | None = None) -> dict[str, dict]:
-        """
-        Get currently running tasks, optionally filtered by a custom function.
-
-        This method delegates to the dispatcher's get_running_tasks method.
-
-        Args:
-            filter_func: Optional function to filter tasks. Should accept a RunningTaskItem
-                        and return True if the task should be included in results.
-
-        Returns:
-            dict[str, dict]: Dictionary mapping task IDs to task information dictionaries.
-                           Each task dict contains: item_id, user_id, mem_cube_id, task_info,
-                           task_name, start_time, end_time, status, result, error_message, messages
-
-        Examples:
-            # Get all running tasks
-            all_tasks = scheduler.get_running_tasks()
-
-            # Get tasks for specific user
-            user_tasks = scheduler.get_running_tasks(
-                filter_func=lambda task: task.user_id == "user123"
-            )
-
-            # Get tasks with specific status
-            active_tasks = scheduler.get_running_tasks(
-                filter_func=lambda task: task.status == "running"
-            )
-        """
         if not self.dispatcher:
             logger.warning("Dispatcher is not initialized, returning empty tasks dict")
             return {}
