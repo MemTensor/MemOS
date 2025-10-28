@@ -7,6 +7,7 @@ for search and add operations with reusable instance variables.
 
 import http.client
 import json
+import time
 
 from typing import Any
 from urllib.parse import urlparse
@@ -364,10 +365,203 @@ class DirectSearchMemoriesAnalyzer:
             self.UserContext = UserContext
             self.MessageDict = MessageDict
 
+            # Initialize conversation history for continuous conversation support
+            self.conversation_history = []
+            self.current_session_id = None
+            self.current_user_id = None
+            self.current_mem_cube_id = None
+
             logger.info("DirectSearchMemoriesAnalyzer initialized successfully")
         except ImportError as e:
             logger.error(f"Failed to import modules: {e}")
             raise
+
+    def start_conversation(self, user_id="test_user", mem_cube_id="test_cube", session_id=None):
+        """
+        Start a new conversation session for continuous dialogue.
+
+        Args:
+            user_id: User ID for the conversation
+            mem_cube_id: Memory cube ID for the conversation
+            session_id: Session ID for the conversation (auto-generated if None)
+        """
+        self.current_user_id = user_id
+        self.current_mem_cube_id = mem_cube_id
+        self.current_session_id = (
+            session_id or f"session_{hash(user_id + mem_cube_id)}_{len(self.conversation_history)}"
+        )
+        self.conversation_history = []
+
+        logger.info(f"Started conversation session: {self.current_session_id}")
+        print(f"🚀 Started new conversation session: {self.current_session_id}")
+        print(f"   User ID: {self.current_user_id}")
+        print(f"   Mem Cube ID: {self.current_mem_cube_id}")
+
+    def add_to_conversation(self, user_message, assistant_message=None):
+        """
+        Add messages to the current conversation and store them in memory.
+
+        Args:
+            user_message: User's message content
+            assistant_message: Assistant's response (optional)
+
+        Returns:
+            Result from add_memories function
+        """
+        if not self.current_session_id:
+            raise ValueError("No active conversation session. Call start_conversation() first.")
+
+        # Prepare messages for adding to memory
+        messages = [{"role": "user", "content": user_message}]
+        if assistant_message:
+            messages.append({"role": "assistant", "content": assistant_message})
+
+        # Add to conversation history
+        self.conversation_history.extend(messages)
+
+        # Create add request
+        add_req = self.create_test_add_request(
+            user_id=self.current_user_id,
+            mem_cube_id=self.current_mem_cube_id,
+            messages=messages,
+            session_id=self.current_session_id,
+        )
+
+        print(f"💬 Adding to conversation (Session: {self.current_session_id}):")
+        print(f"   User: {user_message}")
+        if assistant_message:
+            print(f"   Assistant: {assistant_message}")
+
+        # Add to memory
+        result = self.add_memories(add_req)
+        print("   ✅ Added to memory successfully")
+
+        return result
+
+    def search_in_conversation(self, query, mode="fast", top_k=10, include_history=True):
+        """
+        Search memories within the current conversation context.
+
+        Args:
+            query: Search query
+            mode: Search mode ("fast", "fine", or "mixture")
+            top_k: Number of results to return
+            include_history: Whether to include conversation history in the search
+
+        Returns:
+            Search results
+        """
+        if not self.current_session_id:
+            raise ValueError("No active conversation session. Call start_conversation() first.")
+
+        # Prepare chat history if requested
+        chat_history = self.conversation_history if include_history else None
+
+        # Create search request
+        search_req = self.create_test_search_request(
+            query=query,
+            user_id=self.current_user_id,
+            mem_cube_id=self.current_mem_cube_id,
+            mode=mode,
+            top_k=top_k,
+            chat_history=chat_history,
+            session_id=self.current_session_id,
+        )
+
+        print(f"🔍 Searching in conversation (Session: {self.current_session_id}):")
+        print(f"   Query: {query}")
+        print(f"   Mode: {mode}")
+        print(f"   Top K: {top_k}")
+        print(f"   Include History: {include_history}")
+        print(f"   History Length: {len(self.conversation_history) if chat_history else 0}")
+
+        # Perform search
+        result = self.search_memories(search_req)
+
+        print("   ✅ Search completed")
+        if hasattr(result, "data") and result.data:
+            total_memories = sum(
+                len(mem_list) for mem_list in result.data.values() if isinstance(mem_list, list)
+            )
+            print(f"   📊 Found {total_memories} total memories")
+
+        return result
+
+    def test_continuous_conversation(self):
+        """Test continuous conversation functionality"""
+        print("=" * 80)
+        print("Testing Continuous Conversation Functionality")
+        print("=" * 80)
+
+        try:
+            # Start a conversation
+            self.start_conversation(user_id="conv_test_user", mem_cube_id="conv_test_cube")
+
+            # Prepare all conversation messages for batch addition
+            all_messages = [
+                {
+                    "role": "user",
+                    "content": "I'm planning a trip to Shanghai for New Year's Eve. What are some good places to visit?",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Shanghai has many great places for New Year's Eve! You could visit the Bund for the countdown, go to a rooftop party, or enjoy fireworks at Disneyland Shanghai. The French Concession also has nice bars and restaurants.",
+                },
+                {"role": "user", "content": "What about food? Any restaurant recommendations?"},
+                {
+                    "role": "assistant",
+                    "content": "For New Year's Eve dining in Shanghai, I'd recommend trying some local specialties like xiaolongbao at Din Tai Fung, or for a fancy dinner, you could book at restaurants in the Bund area with great views.",
+                },
+                {"role": "user", "content": "I'm on a budget though. Any cheaper alternatives?"},
+                {
+                    "role": "assistant",
+                    "content": "For budget-friendly options, try street food in Yuyuan Garden area, local noodle shops, or food courts in shopping malls. You can also watch the fireworks from free public areas along the Huangpu River.",
+                },
+            ]
+
+            # Add all conversation messages at once
+            print("\n📝 Adding all conversation messages at once:")
+            add_req = self.create_test_add_request(
+                user_id=self.current_user_id,
+                mem_cube_id=self.current_mem_cube_id,
+                messages=all_messages,
+                session_id=self.current_session_id,
+            )
+
+            print(
+                f"💬 Adding {len(all_messages)} messages to conversation (Session: {self.current_session_id})"
+            )
+            self.add_memories(add_req)
+
+            # Update conversation history
+            self.conversation_history.extend(all_messages)
+            print("   ✅ Added all messages to memory successfully")
+
+            # Test searching within the conversation
+            print("\n🔍 Testing search within conversation:")
+
+            # Search for trip-related information
+            self.search_in_conversation(
+                query="New Year's Eve Shanghai recommendations", mode="mixture", top_k=5
+            )
+
+            # Search for food-related information
+            self.search_in_conversation(query="budget food Shanghai", mode="mixture", top_k=3)
+
+            # Search without conversation history
+            self.search_in_conversation(
+                query="Shanghai travel", mode="mixture", top_k=3, include_history=False
+            )
+
+            print("\n✅ Continuous conversation test completed successfully!")
+            return True
+
+        except Exception as e:
+            print(f"❌ Continuous conversation test failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return False
 
     def create_test_search_request(
         self,
@@ -451,115 +645,19 @@ class DirectSearchMemoriesAnalyzer:
             operation=None,
         )
 
-    def test_add_memories_basic(self, user_id="test_user_add", mem_cube_id="test_cube_add"):
-        """Basic add_memories test"""
-        print("=" * 60)
-        print("Starting basic add_memories test")
-        print("=" * 60)
-
-        try:
-            # Create test request with default messages
-            add_req = self.create_test_add_request(user_id=user_id, mem_cube_id=mem_cube_id)
-
-            print("Test request created:")
-            print(f"  User ID: {add_req.user_id}")
-            print(f"  Mem Cube ID: {add_req.mem_cube_id}")
-            print(f"  Messages: {add_req.messages}")
-            print(f"  Session ID: {add_req.session_id}")
-
-            # Call add_memories function
-            print("\nCalling add_memories function...")
-            result = self.add_memories(add_req)
-
-            print(f"Add result: {result}")
-            print("Basic add_memories test completed successfully")
-            return result
-
-        except Exception as e:
-            print(f"Basic add_memories test failed: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return None
-
-    def test_search_memories_basic(self, query: str, mode: str, topk: int):
-        """Basic search_memories test"""
-        print("=" * 60)
-        print("Starting basic search_memories test")
-        print("=" * 60)
-
-        try:
-            # Create test request
-            search_req = self.create_test_search_request(
-                query=query,
-                user_id="test_user_id",
-                mem_cube_id="test_mem_cube_id",
-                mode=mode,
-                top_k=topk,
-            )
-
-            print("Test request parameters:")
-            print(f"  - query: {search_req.query}")
-            print(f"  - user_id: {search_req.user_id}")
-            print(f"  - mem_cube_id: {search_req.mem_cube_id}")
-            print(f"  - mode: {search_req.mode}")
-            print(f"  - top_k: {search_req.top_k}")
-            print(f"  - internet_search: {search_req.internet_search}")
-            print(f"  - moscube: {search_req.moscube}")
-            print()
-
-            # Call search_memories function
-            print("Calling search_memories function...")
-            result = self.search_memories(search_req)
-
-            print("✅ Function call successful!")
-            print(f"Return result type: {type(result)}")
-            print(f"Return result: {result}")
-
-            # Analyze return result
-            if hasattr(result, "message"):
-                print(f"Message: {result.message}")
-            if hasattr(result, "data"):
-                print(f"Data type: {type(result.data)}")
-                if result.data and isinstance(result.data, dict):
-                    for key, value in result.data.items():
-                        print(f"  {key}: {len(value) if isinstance(value, list) else value}")
-
-            return result
-
-        except Exception as e:
-            print(f"❌ Test failed: {e}")
-            import traceback
-
-            print("Detailed error information:")
-            traceback.print_exc()
-            return None
-
     def run_all_tests(self):
         """Run all available tests"""
         print("🚀 Starting comprehensive test suite")
         print("=" * 80)
 
-        # Test add_memories functions (more likely to have dependency issues)
-        print("\n\n📝 Testing ADD_MEMORIES functions:")
+        # Test continuous conversation functionality
+        print("\n💬 Testing CONTINUOUS CONVERSATION functions:")
         try:
-            print("\n" + "-" * 40)
-            self.test_add_memories_basic()
-            print("✅ Basic add memories test completed")
+            self.test_continuous_conversation()
+            time.sleep(5)
+            print("✅ Continuous conversation test completed successfully")
         except Exception as e:
-            print(f"❌ Basic add memories test failed: {e}")
-
-        # Test search_memories functions first (less likely to fail)
-        print("\n🔍 Testing SEARCH_MEMORIES functions:")
-        try:
-            self.test_search_memories_basic(
-                query="What are some good places to celebrate New Year's Eve in Shanghai?",
-                mode="fast",
-                topk=3,
-            )
-            print("✅ Search memories test completed successfully")
-        except Exception as e:
-            print(f"❌ Search memories test failed: {e}")
+            print(f"❌ Continuous conversation test failed: {e}")
 
         print("\n" + "=" * 80)
         print("✅ All tests completed!")

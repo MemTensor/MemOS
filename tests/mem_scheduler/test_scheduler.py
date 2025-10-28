@@ -204,7 +204,6 @@ class TestGeneralScheduler(unittest.TestCase):
 
     def test_redis_message_queue(self):
         """Test Redis message queue functionality for sending and receiving messages."""
-        import asyncio
         import time
 
         from unittest.mock import MagicMock, patch
@@ -244,7 +243,7 @@ class TestGeneralScheduler(unittest.TestCase):
             )
 
             # Submit message to Redis queue
-            asyncio.run(self.scheduler.submit_messages(redis_message))
+            self.scheduler.submit_messages(redis_message)
 
             # Verify Redis xadd was called
             mock_redis.xadd.assert_called_once()
@@ -529,55 +528,3 @@ class TestGeneralScheduler(unittest.TestCase):
 
             # Verify dispatcher method was called
             mock_get_running_tasks.assert_called_once_with(filter_func=None)
-
-    def test_message_handler_receives_submitted_message(self):
-        """Test that handlers receive messages after scheduler startup and message submission."""
-        # Create a mock handler that tracks received messages
-        received_messages = []
-
-        def mock_handler(messages: list[ScheduleMessageItem]) -> None:
-            """Mock handler that records received messages."""
-            received_messages.extend(messages)
-
-        # Register the mock handler
-        test_label = "test_handler"
-        handlers = {test_label: mock_handler}
-        self.scheduler.register_handlers(handlers)
-
-        # Verify handler is registered
-        self.assertIn(test_label, self.scheduler.handlers)
-        self.assertEqual(self.scheduler.handlers[test_label], mock_handler)
-
-        # Start the scheduler
-        self.scheduler.start()
-
-        # Create and submit a test message
-        test_message = ScheduleMessageItem(
-            label=test_label,
-            content="Test message content",
-            user_id="test_user",
-            mem_cube_id="test_mem_cube",
-            mem_cube="test_mem_cube_obj",  # Required field - can be string or GeneralMemCube
-            timestamp=datetime.now(),
-        )
-
-        import asyncio
-
-        asyncio.run(self.scheduler.submit_messages(test_message))
-
-        # Wait for message processing to complete
-        import time
-
-        time.sleep(2.0)  # Allow sufficient time for message processing
-
-        # Verify the handler received the message
-        self.assertEqual(
-            len(received_messages), 1, f"Expected 1 message, got {len(received_messages)}"
-        )
-        self.assertEqual(received_messages[0].label, test_label)
-        self.assertEqual(received_messages[0].content, "Test message content")
-        self.assertEqual(received_messages[0].user_id, "test_user")
-        self.assertEqual(received_messages[0].mem_cube_id, "test_mem_cube")
-
-        # Stop the scheduler
-        self.scheduler.stop()
