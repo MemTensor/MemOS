@@ -351,6 +351,8 @@ class GeneralScheduler(BaseScheduler):
                 flattened_memories = []
                 for memory_list in processed_memories:
                     flattened_memories.extend(memory_list)
+                    for mem in memory_list:
+                        logger.debug(f"Add Processed Mem Reader Mem: {mem.id}: {mem.memory}")
 
                 logger.info(f"mem_reader processed {len(flattened_memories)} enhanced memories")
 
@@ -366,6 +368,10 @@ class GeneralScheduler(BaseScheduler):
                             self.dispatcher, "handlers", {}
                         ):
                             # Dispatcher exists but organize not enabled; skip enqueue.
+                            pass
+                        elif not getattr(
+                            text_mem.memory_manager.reorganizer, "is_reorganize", True
+                        ):
                             pass
                         else:
                             message_item = ScheduleMessageItem(
@@ -440,6 +446,15 @@ class GeneralScheduler(BaseScheduler):
             self._reorg_locks[mem_cube_id] = lock
         return lock
 
+    def _get_reorg_state(self, mem_cube_id: str):
+        if not hasattr(self, "_reorg_state"):
+            self._reorg_state = {}
+        st = self._reorg_state.get(mem_cube_id)
+        if st is None:
+            st = {"running": False, "rerun_requested": False}
+            self._reorg_state[mem_cube_id] = st
+        return st
+
     def _run_reorganize_singleflight(
         self,
         mem_cube: GeneralMemCube,
@@ -451,54 +466,68 @@ class GeneralScheduler(BaseScheduler):
         If `scopes` is None, run both LongTermMemory and UserMemory (safe default).
         """
         lock = self._get_reorg_lock(mem_cube_id)
-        if not lock.acquire(blocking=False):
-            logger.info(
-                f"[Reorganize] Another task is already running for mem_cube_id={mem_cube_id}; skipping this trigger."
+        state = self._get_reorg_state(mem_cube_id)
+
+        with lock:
+            if state["running"]:
+                state["rerun_requested"] = True
+                print(
+                    f"[Reorganize] Already running for {mem_cube_id}; mark trailing rerun and skip."
+                )
+                return
+            state["running"] = True
+            state["rerun_requested"] = False
+
+        try:
+            print("state is not running.. start to run!")
+            # ===== Run First Turn =====
+            self._run_reorganize_once(mem_cube, mem_cube_id, scopes)
+
+            # ===== Run Trailing Turn =====
+            do_trailing = False
+            with lock:
+                if state["rerun_requested"]:
+                    state["rerun_requested"] = False
+                    do_trailing = True
+
+            if do_trailing:
+                logger.info(f"[Reorganize] Running single trailing pass for {mem_cube_id}.")
+                self._run_reorganize_once(mem_cube, mem_cube_id, scopes)
+
+        finally:
+            with lock:
+                state["running"] = False
+
+    def _run_reorganize_once(
+        self, mem_cube: GeneralMemCube, mem_cube_id: str, scopes: list[str] | None
+    ):
+        print(f"[Reorganize] Acquired lock for mem_cube_id={mem_cube_id}; starting reorganize.")
+        text_mem = mem_cube.text_mem
+        if not isinstance(text_mem, TreeTextMemory):
+            logger.error(
+                f"[Reorganize] Expected TreeTextMemory but got {type(text_mem).__name__} for mem_cube_id={mem_cube_id}"
             )
             return
 
-        try:
-            text_mem = mem_cube.text_mem
-            if not isinstance(text_mem, TreeTextMemory):
-                logger.error(
-                    f"[Reorganize] Expected TreeTextMemory but got {type(text_mem).__name__} for mem_cube_id={mem_cube_id}"
-                )
-                return
+        reorganizer = text_mem.memory_manager.reorganizer
+        if not reorganizer or not getattr(reorganizer, "is_reorganize", True):
+            logger.debug(
+                f"[Reorganize] Reorganizer disabled or missing for mem_cube_id={mem_cube_id}; skip."
+            )
+            return
 
-            # Fetch reorganizer from the attached memory manager
-            reorganizer = text_mem.memory_manager.reorganizer
-            if not reorganizer or not getattr(reorganizer, "is_reorganize", True):
-                logger.debug(
-                    f"[Reorganize] Reorganizer disabled or missing for mem_cube_id={mem_cube_id}; skip."
-                )
-                return
-
-            # Optional: also respect internal optimizing flags if present
+        run_scopes = scopes or ["LongTermMemory", "UserMemory"]
+        for scope in run_scopes:
+            logger.info(
+                f"[Reorganize] Start optimize_structure(scope={scope}) for mem_cube_id={mem_cube_id}"
+            )
             try:
-                if any(getattr(reorganizer, "_is_optimizing", {}).values()):
-                    logger.debug(
-                        f"[Reorganize] Reorganizer busy (internal flag) for mem_cube_id={mem_cube_id}; skip."
-                    )
-                    return
-            except Exception:
-                # If structure differs, just proceed; locking still guarantees single-flight per cube.
-                pass
-
-            run_scopes = scopes or ["LongTermMemory", "UserMemory"]
-            for scope in run_scopes:
-                try:
-                    logger.info(
-                        f"[Reorganize] Start optimize_structure(scope={scope}) for mem_cube_id={mem_cube_id}"
-                    )
-                    reorganizer.optimize_structure(scope=scope)
-                except Exception as e:
-                    logger.warning(
-                        f"[Reorganize] optimize_structure failed for scope={scope}, mem_cube_id={mem_cube_id}: {e}",
-                        exc_info=True,
-                    )
-
-        finally:
-            lock.release()
+                reorganizer.optimize_structure(scope=scope)
+            except Exception as e:
+                logger.warning(
+                    f"[Reorganize] optimize_structure failed for scope={scope}, mem_cube_id={mem_cube_id}: {e}",
+                    exc_info=True,
+                )
 
     def _process_memories_with_reorganize(
         self,
