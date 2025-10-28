@@ -835,7 +835,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 # Parse embedding from JSONB if it exists
                 if embedding_json is not None:
                     try:
-                        print("embedding_json:", embedding_json)
                         # remove embedding
                         """
                         embedding = json.loads(embedding_json) if isinstance(embedding_json, str) else embedding_json
