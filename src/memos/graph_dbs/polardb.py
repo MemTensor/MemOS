@@ -1,17 +1,17 @@
 import json
-import time
 import random
+
 from datetime import datetime
 from typing import Any, Literal
 
 import numpy as np
-
 
 from memos.configs.graph_db import PolarDBGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 from memos.utils import timed
+
 
 logger = get_logger(__name__)
 
@@ -200,31 +200,31 @@ class PolarDBGraphDB(BaseGraphDB):
                 # Add embedding column if it doesn't exist (using JSONB for compatibility)
                 try:
                     cursor.execute(f"""
-                        ALTER TABLE "{self.db_name}_graph"."Memory" 
+                        ALTER TABLE "{self.db_name}_graph"."Memory"
                         ADD COLUMN IF NOT EXISTS embedding JSONB;
                     """)
-                    logger.info(f"Embedding column added to Memory table.")
+                    logger.info("Embedding column added to Memory table.")
                 except Exception as e:
                     logger.warning(f"Failed to add embedding column: {e}")
 
                 # Create indexes
                 cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_memory_properties 
+                    CREATE INDEX IF NOT EXISTS idx_memory_properties
                     ON "{self.db_name}_graph"."Memory" USING GIN (properties);
                 """)
 
                 # Create vector index for embedding field
                 try:
                     cursor.execute(f"""
-                        CREATE INDEX IF NOT EXISTS idx_memory_embedding 
+                        CREATE INDEX IF NOT EXISTS idx_memory_embedding
                         ON "{self.db_name}_graph"."Memory" USING ivfflat (embedding vector_cosine_ops)
                         WITH (lists = 100);
                     """)
-                    logger.info(f"Vector index created for Memory table.")
+                    logger.info("Vector index created for Memory table.")
                 except Exception as e:
                     logger.warning(f"Vector index creation failed (might not be supported): {e}")
 
-                logger.info(f"Indexes created for Memory table.")
+                logger.info("Indexes created for Memory table.")
 
         except Exception as e:
             logger.error(f"Failed to create graph schema: {e}")
@@ -246,20 +246,20 @@ class PolarDBGraphDB(BaseGraphDB):
                 # Create indexes on the underlying PostgreSQL tables
                 # Apache AGE stores data in regular PostgreSQL tables
                 cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_memory_properties 
+                    CREATE INDEX IF NOT EXISTS idx_memory_properties
                     ON "{self.db_name}_graph"."Memory" USING GIN (properties);
                 """)
 
                 # Try to create vector index, but don't fail if it doesn't work
                 try:
                     cursor.execute(f"""
-                        CREATE INDEX IF NOT EXISTS idx_memory_embedding 
+                        CREATE INDEX IF NOT EXISTS idx_memory_embedding
                         ON "{self.db_name}_graph"."Memory" USING ivfflat (embedding vector_cosine_ops);
                     """)
                 except Exception as ve:
                     logger.warning(f"Vector index creation failed (might not be supported): {ve}")
 
-                logger.debug(f"Indexes created successfully.")
+                logger.debug("Indexes created successfully.")
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
 
@@ -267,8 +267,8 @@ class PolarDBGraphDB(BaseGraphDB):
         """Get count of memory nodes by type."""
         user_name = user_name if user_name else self._get_config_value("user_name")
         query = f"""
-            SELECT COUNT(*) 
-            FROM "{self.db_name}_graph"."Memory" 
+            SELECT COUNT(*)
+            FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
         """
         query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
@@ -290,8 +290,8 @@ class PolarDBGraphDB(BaseGraphDB):
         """Check if a node with given scope exists."""
         user_name = user_name if user_name else self._get_config_value("user_name")
         query = f"""
-            SELECT id 
-            FROM "{self.db_name}_graph"."Memory" 
+            SELECT id
+            FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
         """
         query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
@@ -327,15 +327,13 @@ class PolarDBGraphDB(BaseGraphDB):
         # Use actual OFFSET logic, consistent with nebular.py
         # First find IDs to delete, then delete them
         select_query = f"""
-            SELECT id FROM "{self.db_name}_graph"."Memory" 
+            SELECT id FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
             AND ag_catalog.agtype_access_operator(properties, '"user_name"'::agtype) = %s::agtype
-            ORDER BY ag_catalog.agtype_access_operator(properties, '"updated_at"'::agtype) DESC 
+            ORDER BY ag_catalog.agtype_access_operator(properties, '"updated_at"'::agtype) DESC
             OFFSET %s
         """
         select_params = [f'"{memory_type}"', f'"{user_name}"', keep_latest]
-        print(f"[remove_oldest_memory] Select query: {select_query}")
-        print(f"[remove_oldest_memory] Select params: {select_params}")
 
         try:
             with self.connection.cursor() as cursor:
@@ -403,14 +401,14 @@ class PolarDBGraphDB(BaseGraphDB):
         # Build update query
         if embedding_vector is not None:
             query = f"""
-                UPDATE "{self.db_name}_graph"."Memory" 
+                UPDATE "{self.db_name}_graph"."Memory"
                 SET properties = %s, embedding = %s
                 WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
             """
             params = [json.dumps(properties), json.dumps(embedding_vector), f'"{id}"']
         else:
             query = f"""
-                UPDATE "{self.db_name}_graph"."Memory" 
+                UPDATE "{self.db_name}_graph"."Memory"
                 SET properties = %s
                 WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
             """
@@ -438,7 +436,7 @@ class PolarDBGraphDB(BaseGraphDB):
             user_name (str, optional): User name for filtering in non-multi-db mode
         """
         query = f"""
-            DELETE FROM "{self.db_name}_graph"."Memory" 
+            DELETE FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
         """
         params = [f'"{id}"']
@@ -462,7 +460,7 @@ class PolarDBGraphDB(BaseGraphDB):
         try:
             with self.connection.cursor() as cursor:
                 # Ensure in the correct database context
-                cursor.execute(f"SELECT current_database();")
+                cursor.execute("SELECT current_database();")
                 current_db = cursor.fetchone()[0]
                 print(f"Current database context: {current_db}")
 
@@ -487,7 +485,7 @@ class PolarDBGraphDB(BaseGraphDB):
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(f"""
-                    SELECT COUNT(*) FROM ag_catalog.ag_graph 
+                    SELECT COUNT(*) FROM ag_catalog.ag_graph
                     WHERE name = '{self.db_name}_graph';
                 """)
                 graph_exists = cursor.fetchone()[0] > 0
@@ -664,11 +662,11 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Prepare the match pattern with direction
         if direction == "OUTGOING":
-            pattern = f"(a:Memory)-[r]->(b:Memory)"
+            pattern = "(a:Memory)-[r]->(b:Memory)"
         elif direction == "INCOMING":
-            pattern = f"(a:Memory)<-[r]-(b:Memory)"
+            pattern = "(a:Memory)<-[r]-(b:Memory)"
         elif direction == "ANY":
-            pattern = f"(a:Memory)-[r]-(b:Memory)"
+            pattern = "(a:Memory)-[r]-(b:Memory)"
         else:
             raise ValueError(
                 f"Invalid direction: {direction}. Must be 'OUTGOING', 'INCOMING', or 'ANY'."
@@ -720,7 +718,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         query = f"""
             SELECT {select_fields}
-            FROM "{self.db_name}_graph"."Memory" 
+            FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
         """
         params = [format_param_value(id)]
@@ -806,7 +804,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         query = f"""
             SELECT id, properties, embedding
-            FROM "{self.db_name}_graph"."Memory" 
+            FROM "{self.db_name}_graph"."Memory"
             WHERE ({where_clause})
         """
 
@@ -893,15 +891,15 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 # Create indexes
                 cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_edges_source 
+                    CREATE INDEX IF NOT EXISTS idx_edges_source
                     ON "{self.db_name}_graph"."Edges" (source_id);
                 """)
                 cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_edges_target 
+                    CREATE INDEX IF NOT EXISTS idx_edges_target
                     ON "{self.db_name}_graph"."Edges" (target_id);
                 """)
                 cursor.execute(f"""
-                    CREATE INDEX IF NOT EXISTS idx_edges_type 
+                    CREATE INDEX IF NOT EXISTS idx_edges_type
                     ON "{self.db_name}_graph"."Edges" (edge_type);
                 """)
         except Exception as e:
@@ -998,7 +996,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Get all candidate nodes
         query = f"""
             SELECT id, properties, embedding
-            FROM "{self.db_name}_graph"."Memory" 
+            FROM "{self.db_name}_graph"."Memory"
             WHERE {where_clause}
         """
 
@@ -1061,7 +1059,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT *
                 FROM cypher('{self.db_name}_graph', $$
                 MATCH (p:Memory)-[r:PARENT]->(c:Memory)
-                WHERE p.id = '{id}' {where_user} 
+                WHERE p.id = '{id}' {where_user}
                 RETURN id(c) as cid, c.id AS id, c.memory AS memory
                 $$) as (cid agtype, id agtype, memory agtype)
                 )
@@ -1518,7 +1516,7 @@ class PolarDBGraphDB(BaseGraphDB):
                    MATCH (n:Memory)
                    {where_clause}
                    RETURN {group_fields_cypher}, COUNT(n) AS count1
-               $$ ) as ({group_fields_cypher_polardb}, count1 agtype); 
+               $$ ) as ({group_fields_cypher_polardb}, count1 agtype);
                """
         print("get_grouped_counts:" + query)
         try:
@@ -1673,8 +1671,8 @@ class PolarDBGraphDB(BaseGraphDB):
         try:
             query = f"""
                 SELECT * FROM cypher('{self.db_name}_graph', $$
-                MATCH (n:Memory) 
-                WHERE n.user_name = '{user_name}' 
+                MATCH (n:Memory)
+                WHERE n.user_name = '{user_name}'
                 DETACH DELETE n
                 $$) AS (result agtype)
             """
@@ -1765,7 +1763,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT * FROM cypher('{self.db_name}_graph', $$
                 MATCH (a:Memory)-[r]->(b:Memory)
                 WHERE a.user_name = '{user_name}' AND b.user_name = '{user_name}'
-                RETURN a.id AS source, b.id AS target, type(r) as edge 
+                RETURN a.id AS source, b.id AS target, type(r) as edge
                 $$) AS (source agtype, target agtype, edge agtype)
             """
 
@@ -1803,7 +1801,7 @@ class PolarDBGraphDB(BaseGraphDB):
         query = f"""
             SELECT * FROM cypher('{self.db_name}_graph', $$
                 MATCH (n:Memory)
-                WHERE n.memory_type = '{scope}' 
+                WHERE n.memory_type = '{scope}'
                 AND n.user_name = '{user_name}'
                 RETURN count(n)
             $$) AS (count agtype)
@@ -1842,8 +1840,8 @@ class PolarDBGraphDB(BaseGraphDB):
                        LIMIT 100
                        $$) AS (id1 agtype,n agtype)
                    )
-                   SELECT 
-                       m.embedding, 
+                   SELECT
+                       m.embedding,
                        t.n
                    FROM t,
                         {self.db_name}_graph."Memory" m
@@ -1939,8 +1937,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     LIMIT 100
                     $$) AS (id1 agtype,n agtype)
                 )
-                SELECT 
-                    m.embedding, 
+                SELECT
+                    m.embedding,
                     t.n
                 FROM t,
                      {self.db_name}_graph."Memory" m
@@ -2107,8 +2105,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     WITH t as (
                         {cypher_query}
                     )
-                        SELECT 
-                        m.embedding, 
+                        SELECT
+                        m.embedding,
                         t.n
                         FROM t,
                              {self.db_name}_graph."Memory" m
@@ -2321,7 +2319,7 @@ class PolarDBGraphDB(BaseGraphDB):
         with self.connection.cursor() as cursor:
             # Delete existing record first (if any)
             delete_query = f"""
-                DELETE FROM {self.db_name}_graph."Memory" 
+                DELETE FROM {self.db_name}_graph."Memory"
                 WHERE id = ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, %s::text::cstring)
             """
             cursor.execute(delete_query, (id,))
@@ -2456,7 +2454,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Fetch all candidate nodes
         query = f"""
             SELECT id, properties, embedding
-            FROM "{self.db_name}_graph"."Memory" 
+            FROM "{self.db_name}_graph"."Memory"
             WHERE {where_clause}
         """
 
@@ -2732,13 +2730,13 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name = user_name if user_name else self._get_config_value("user_name")
 
         if direction == "OUTGOING":
-            pattern = f"(a:Memory)-[r]->(b:Memory)"
+            pattern = "(a:Memory)-[r]->(b:Memory)"
             where_clause = f"a.id = '{id}'"
         elif direction == "INCOMING":
-            pattern = f"(a:Memory)<-[r]-(b:Memory)"
+            pattern = "(a:Memory)<-[r]-(b:Memory)"
             where_clause = f"a.id = '{id}'"
         elif direction == "ANY":
-            pattern = f"(a:Memory)-[r]-(b:Memory)"
+            pattern = "(a:Memory)-[r]-(b:Memory)"
             where_clause = f"a.id = '{id}' OR b.id = '{id}'"
         else:
             raise ValueError("Invalid direction. Must be 'OUTGOING', 'INCOMING', or 'ANY'.")
