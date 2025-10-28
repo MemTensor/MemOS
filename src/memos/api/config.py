@@ -310,6 +310,32 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_polardb_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get PolarDB configuration."""
+        use_multi_db = os.getenv("POLAR_DB_USE_MULTI_DB", "false").lower() == "true"
+
+        if use_multi_db:
+            # Multi-DB mode: each user gets their own database (physical isolation)
+            db_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+            user_name = None
+        else:
+            # Shared-DB mode: all users share one database with user_name tag (logical isolation)
+            db_name = os.getenv("POLAR_DB_DB_NAME", "shared_memos_db")
+            user_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+
+        return {
+            "host": os.getenv("POLAR_DB_HOST", "localhost"),
+            "port": int(os.getenv("POLAR_DB_PORT", "5432")),
+            "user": os.getenv("POLAR_DB_USER", "root"),
+            "password": os.getenv("POLAR_DB_PASSWORD", "123456"),
+            "db_name": db_name,
+            "user_name": user_name,
+            "use_multi_db": use_multi_db,
+            "auto_create": True,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+        }
+
+    @staticmethod
     def get_mysql_config() -> dict[str, Any]:
         """Get MySQL configuration."""
         return {
@@ -540,6 +566,7 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
         nebular_config = APIConfig.get_nebular_config(user_id)
+        polardb_config = APIConfig.get_polardb_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
@@ -549,6 +576,7 @@ class APIConfig:
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
+            "polardb": polardb_config,
         }
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
@@ -607,10 +635,12 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         nebular_config = APIConfig.get_nebular_config(user_id="default")
+        polardb_config = APIConfig.get_polardb_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
+            "polardb": polardb_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
