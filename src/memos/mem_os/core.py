@@ -165,25 +165,6 @@ class MOSCore:
             logger.error(f"Failed to stop scheduler: {e!s}")
             return False
 
-    def mem_reorganizer_on(self) -> bool:
-        pass
-
-    def mem_reorganizer_off(self) -> bool:
-        """temporally implement"""
-        for mem_cube in self.mem_cubes.values():
-            logger.info(f"try to close reorganizer for {mem_cube.text_mem.config.cube_id}")
-            if mem_cube.text_mem and mem_cube.text_mem.is_reorganize:
-                logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
-                mem_cube.text_mem.memory_manager.close()
-                mem_cube.text_mem.memory_manager.wait_reorganizer()
-
-    def mem_reorganizer_wait(self) -> bool:
-        for mem_cube in self.mem_cubes.values():
-            logger.info(f"try to close reorganizer for {mem_cube.text_mem.config.cube_id}")
-            if mem_cube.text_mem and mem_cube.text_mem.is_reorganize:
-                logger.info(f"close reorganizer for {mem_cube.text_mem.config.cube_id}")
-                mem_cube.text_mem.memory_manager.wait_reorganizer()
-
     def _register_chat_history(
         self, user_id: str | None = None, session_id: str | None = None
     ) -> None:

@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+import traceback
 
 from collections.abc import Generator
 from datetime import datetime
@@ -215,7 +216,7 @@ class MOSProduct(MOSCore):
                         logger.error(f"Failed to restore user configuration for {user_id}: {e}")
 
         except Exception as e:
-            logger.error(f"Error during user instance restoration: {e}")
+            logger.error(f"Error during user instance restoration: {e}: {traceback.print_exc()}")
 
     def _initialize_cube_from_default_config(
         self, cube_id: str, user_id: str, default_config: GeneralMemCubeConfig
