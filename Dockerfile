@@ -16,6 +16,7 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && p
 RUN pip install pymilvus
 RUN pip install gunicorn
 RUN pip install aliyun-bootstrap
+RUN pip install "sglang>=0.4.0"
 RUN aliyun-bootstrap -a install
 
 # Expose port
