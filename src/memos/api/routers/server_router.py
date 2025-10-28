@@ -1,8 +1,7 @@
-import json
 import os
 import traceback
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -33,11 +32,8 @@ from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
-    API_MIX_SEARCH_LABEL,
     SearchMode,
 )
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.memories.textual.prefer_text_memory.config import (
     AdderConfigFactory,
     ExtractorConfigFactory,
@@ -54,6 +50,10 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
 )
 from memos.reranker.factory import RerankerFactory
 from memos.templates.instruction_completion import instruct_completion
+
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
 from memos.types import MOSSearchResult, UserContext
 from memos.vec_dbs.factory import VecDBFactory
 
@@ -154,7 +154,6 @@ def init_server():
 
     # Build component configurations
     graph_db_config = _build_graph_db_config()
-    print(graph_db_config)
     llm_config = _build_llm_config()
     embedder_config = _build_embedder_config()
     mem_reader_config = _build_mem_reader_config()
@@ -209,22 +208,6 @@ def init_server():
         online_bot=False,
     )
 
-    # Initialize Scheduler
-    scheduler_config_dict = APIConfig.get_scheduler_config()
-    scheduler_config = SchedulerConfigFactory(
-        backend="optimized_scheduler", config=scheduler_config_dict
-    )
-    mem_scheduler = SchedulerFactory.from_config(scheduler_config)
-    mem_scheduler.initialize_modules(
-        chat_llm=llm,
-        process_llm=mem_reader.llm,
-        db_engine=BaseDBManager.create_default_sqlite_engine(),
-    )
-    mem_scheduler.start()
-
-    # Initialize SchedulerAPIModule
-    api_module = mem_scheduler.api_module
-
     naive_mem_cube = NaiveMemCube(
         llm=llm,
         embedder=embedder,
@@ -239,6 +222,23 @@ def init_server():
         pref_adder=pref_adder,
         pref_retriever=pref_retriever,
     )
+
+    # Initialize Scheduler
+    scheduler_config_dict = APIConfig.get_scheduler_config()
+    scheduler_config = SchedulerConfigFactory(
+        backend="optimized_scheduler", config=scheduler_config_dict
+    )
+    mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
+    mem_scheduler.initialize_modules(
+        chat_llm=llm,
+        process_llm=mem_reader.llm,
+        db_engine=BaseDBManager.create_default_sqlite_engine(),
+    )
+    mem_scheduler.current_mem_cube = naive_mem_cube
+    mem_scheduler.start()
+
+    # Initialize SchedulerAPIModule
+    api_module = mem_scheduler.api_module
 
     return (
         graph_db,
@@ -400,96 +400,12 @@ def mix_search_memories(
     """
     Mix search memories: fast search + async fine search
     """
-    # Get fast memories first
-    fast_memories = fast_search_memories(search_req, user_context)
 
-    # Check if scheduler and dispatcher are available for async execution
-    if mem_scheduler and hasattr(mem_scheduler, "dispatcher") and mem_scheduler.dispatcher:
-        try:
-            # Create message for async fine search
-            message_content = {
-                "search_req": {
-                    "query": search_req.query,
-                    "user_id": search_req.user_id,
-                    "session_id": search_req.session_id,
-                    "top_k": search_req.top_k,
-                    "internet_search": search_req.internet_search,
-                    "moscube": search_req.moscube,
-                    "chat_history": search_req.chat_history,
-                },
-                "user_context": {"mem_cube_id": user_context.mem_cube_id},
-            }
-
-            message = ScheduleMessageItem(
-                item_id=f"mix_search_{search_req.user_id}_{get_utc_now().timestamp()}",
-                user_id=search_req.user_id,
-                mem_cube_id=user_context.mem_cube_id,
-                label=API_MIX_SEARCH_LABEL,
-                mem_cube=naive_mem_cube,
-                content=json.dumps(message_content),
-                timestamp=get_utc_now(),
-            )
-
-            # Submit async task
-            mem_scheduler.dispatcher.submit_message(message)
-            logger.info(f"Submitted async fine search task for user {search_req.user_id}")
-
-            # Try to get pre-computed fine memories if available
-            try:
-                pre_fine_memories = api_module.get_pre_fine_memories(
-                    user_id=search_req.user_id, mem_cube_id=user_context.mem_cube_id
-                )
-                if pre_fine_memories:
-                    # Merge fast and pre-computed fine memories
-                    all_memories = fast_memories + pre_fine_memories
-                    # Remove duplicates based on content
-                    seen_contents = set()
-                    unique_memories = []
-                    for memory in all_memories:
-                        content_key = memory.get("content", "")
-                        if content_key not in seen_contents:
-                            seen_contents.add(content_key)
-                            unique_memories.append(memory)
-                    return unique_memories
-            except Exception as e:
-                logger.warning(f"Failed to get pre-computed fine memories: {e}")
-
-        except Exception as e:
-            logger.error(f"Failed to submit async fine search task: {e}")
-            # Fall back to synchronous execution
-
-    # Fallback: synchronous fine search
-    try:
-        fine_memories = fine_search_memories(search_req, user_context)
-
-        # Merge fast and fine memories
-        all_memories = fast_memories + fine_memories
-
-        # Remove duplicates based on content
-        seen_contents = set()
-        unique_memories = []
-        for memory in all_memories:
-            content_key = memory.get("content", "")
-            if content_key not in seen_contents:
-                seen_contents.add(content_key)
-                unique_memories.append(memory)
-
-        # Sync search data to Redis
-        try:
-            api_module.sync_search_data(
-                user_id=search_req.user_id,
-                mem_cube_id=user_context.mem_cube_id,
-                query=search_req.query,
-                formatted_memories=unique_memories,
-            )
-        except Exception as e:
-            logger.error(f"Failed to sync search data: {e}")
-
-        return unique_memories
-
-    except Exception as e:
-        logger.error(f"Fine search failed: {e}")
-        return fast_memories
+    formatted_memories = mem_scheduler.mix_search_memories(
+        search_req=search_req,
+        user_context=user_context,
+    )
+    return formatted_memories
 
 
 def fine_search_memories(
