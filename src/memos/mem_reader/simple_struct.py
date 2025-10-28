@@ -225,7 +225,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         max_tokens = max_tokens or self.chat_window_max_tokens
         buf, sources, start_idx = [], [], 0
         cur_text = ""
-
         for idx, item in enumerate(scene_data_info):
             role = item.get("role", "")
             content = item.get("content", "")
@@ -253,8 +252,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     "type": "chat",
                     "index": idx,
                     "role": role,
-                    "content": content,
                     "chat_time": chat_time,
+                    "content": content,
                 }
             )
             cur_text = "".join(buf)

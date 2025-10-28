@@ -157,7 +157,7 @@ class Neo4jGraphDB(BaseGraphDB):
         """
         if not self.config.use_multi_db and (self.config.user_name or user_name):
             query += f"\nAND n.user_name = '{user_name}'"
-
+        keep_latest = int(keep_latest)
         query += f"""
             WITH n ORDER BY n.updated_at DESC
             SKIP {keep_latest}

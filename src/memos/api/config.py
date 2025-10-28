@@ -109,19 +109,39 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_preference_memory_config() -> dict[str, Any]:
+        """Get preference memory configuration."""
+        return {
+            "backend": "pref_text",
+            "config": {
+                "extractor_llm": {"backend": "openai", "config": APIConfig.get_openai_config()},
+                "vector_db": {
+                    "backend": "milvus",
+                    "config": APIConfig.get_milvus_config(),
+                },
+                "embedder": APIConfig.get_embedder_config(),
+                "reranker": APIConfig.get_reranker_config(),
+                "extractor": {"backend": "naive", "config": {}},
+                "adder": {"backend": "naive", "config": {}},
+                "retriever": {"backend": "naive", "config": {}},
+            },
+        }
+
+    @staticmethod
     def get_reranker_config() -> dict[str, Any]:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_RERANKER_BACKEND", "http_bge")
 
-        if embedder_backend == "http_bge":
+        if embedder_backend in ["http_bge", "http_bge_strategy"]:
             return {
-                "backend": "http_bge",
+                "backend": embedder_backend,
                 "config": {
                     "url": os.getenv("MOS_RERANKER_URL"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
                     "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
+                    "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
                 },
             }
         else:
@@ -276,6 +296,46 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_milvus_config():
+        return {
+            "collection_name": [
+                "explicit_preference",
+                "implicit_preference",
+            ],
+            "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+            "distance_metric": "cosine",
+            "uri": os.getenv("MILVUS_URI", "http://localhost:19530"),
+            "user_name": os.getenv("MILVUS_USER_NAME", "root"),
+            "password": os.getenv("MILVUS_PASSWORD", "12345678"),
+        }
+
+    @staticmethod
+    def get_polardb_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get PolarDB configuration."""
+        use_multi_db = os.getenv("POLAR_DB_USE_MULTI_DB", "false").lower() == "true"
+
+        if use_multi_db:
+            # Multi-DB mode: each user gets their own database (physical isolation)
+            db_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+            user_name = None
+        else:
+            # Shared-DB mode: all users share one database with user_name tag (logical isolation)
+            db_name = os.getenv("POLAR_DB_DB_NAME", "shared_memos_db")
+            user_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+
+        return {
+            "host": os.getenv("POLAR_DB_HOST", "localhost"),
+            "port": int(os.getenv("POLAR_DB_PORT", "5432")),
+            "user": os.getenv("POLAR_DB_USER", "root"),
+            "password": os.getenv("POLAR_DB_PASSWORD", "123456"),
+            "db_name": db_name,
+            "user_name": user_name,
+            "use_multi_db": use_multi_db,
+            "auto_create": True,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+        }
+
+    @staticmethod
     def get_mysql_config() -> dict[str, Any]:
         """Get MySQL configuration."""
         return {
@@ -385,6 +445,8 @@ class APIConfig:
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
             == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
+            == "true",
             "top_k": int(os.getenv("MOS_TOP_K", "50")),
             "max_turns_window": int(os.getenv("MOS_MAX_TURNS_WINDOW", "20")),
         }
@@ -413,6 +475,8 @@ class APIConfig:
             "session_id": os.getenv("MOS_SESSION_ID", "default_session"),
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
+            == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
             == "true",
             "top_k": int(os.getenv("MOS_TOP_K", "5")),
             "chat_model": {
@@ -478,6 +542,8 @@ class APIConfig:
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
             == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
+            == "true",
             "top_k": 30,
             "max_turns_window": 20,
         }
@@ -500,6 +566,7 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
         nebular_config = APIConfig.get_nebular_config(user_id)
+        polardb_config = APIConfig.get_polardb_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
@@ -509,6 +576,7 @@ class APIConfig:
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
+            "polardb": polardb_config,
         }
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
@@ -543,6 +611,9 @@ class APIConfig:
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
+                    "pref_mem": {}
+                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_preference_memory_config(),
                 }
             )
         else:
@@ -564,10 +635,12 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         nebular_config = APIConfig.get_nebular_config(user_id="default")
+        polardb_config = APIConfig.get_polardb_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
+            "polardb": polardb_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
@@ -605,6 +678,9 @@ class APIConfig:
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
+                    "pref_mem": {}
+                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_preference_memory_config(),
                 }
             )
         else:

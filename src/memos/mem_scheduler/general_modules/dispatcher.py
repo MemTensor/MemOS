@@ -101,15 +101,43 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         return wrapped_handler
 
-    def get_running_tasks(self) -> dict[str, RunningTaskItem]:
+    def get_running_tasks(
+        self, filter_func: Callable[[RunningTaskItem], bool] | None = None
+    ) -> dict[str, RunningTaskItem]:
         """
-        Get a copy of currently running tasks.
+        Get a copy of currently running tasks, optionally filtered by a custom function.
+
+        Args:
+            filter_func: Optional function that takes a RunningTaskItem and returns True if it should be included.
+                        Common filters can be created using helper methods like filter_by_user_id, filter_by_task_name, etc.
 
         Returns:
             Dictionary of running tasks keyed by task ID
+
+        Examples:
+            # Get all running tasks
+            all_tasks = dispatcher.get_running_tasks()
+
+            # Get tasks for specific user
+            user_tasks = dispatcher.get_running_tasks(lambda task: task.user_id == "user123")
+
+            # Get tasks for specific task name
+            handler_tasks = dispatcher.get_running_tasks(lambda task: task.task_name == "test_handler")
+
+            # Get tasks with multiple conditions
+            filtered_tasks = dispatcher.get_running_tasks(
+                lambda task: task.user_id == "user123" and task.status == "running"
+            )
         """
         with self._task_lock:
-            return self._running_tasks.copy()
+            if filter_func is None:
+                return self._running_tasks.copy()
+
+            return {
+                task_id: task_item
+                for task_id, task_item in self._running_tasks.items()
+                if filter_func(task_item)
+            }
 
     def get_running_task_count(self) -> int:
         """

@@ -1444,6 +1444,24 @@ class MOSProduct(MOSCore):
             reformat_memory_list.append({"cube_id": memory["cube_id"], "memories": memories_list})
         logger.info(f"search memory list is : {reformat_memory_list}")
         search_result["text_mem"] = reformat_memory_list
+
+        pref_memory_list = search_result["pref_mem"]
+        reformat_pref_memory_list = []
+        for memory in pref_memory_list:
+            memories_list = []
+            for data in memory["memories"]:
+                memories = data.model_dump()
+                memories["ref_id"] = f"[{memories['id'].split('-')[0]}]"
+                memories["metadata"]["embedding"] = []
+                memories["metadata"]["sources"] = []
+                memories["metadata"]["ref_id"] = f"[{memories['id'].split('-')[0]}]"
+                memories["metadata"]["id"] = memories["id"]
+                memories["metadata"]["memory"] = memories["memory"]
+                memories_list.append(memories)
+            reformat_pref_memory_list.append(
+                {"cube_id": memory["cube_id"], "memories": memories_list}
+            )
+        search_result["pref_mem"] = reformat_pref_memory_list
         time_end = time.time()
         logger.info(
             f"time search: total time for user_id: {user_id} time is: {time_end - time_start}"

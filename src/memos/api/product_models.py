@@ -5,6 +5,7 @@ from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 # Import message types from core types module
+from memos.mem_scheduler.schemas.general_schemas import SearchMode
 from memos.types import MessageDict, PermissionDict
 
 
@@ -170,7 +171,7 @@ class APISearchRequest(BaseRequest):
     query: str = Field(..., description="Search query")
     user_id: str = Field(None, description="User ID")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
-    mode: str = Field("fast", description="search mode fast or fine")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
     top_k: int = Field(10, description="Number of results to return")
@@ -179,6 +180,7 @@ class APISearchRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
+    handle_pref_mem: bool = Field(False, description="Whether to handle preference memory")
 
 
 class APIADDRequest(BaseRequest):

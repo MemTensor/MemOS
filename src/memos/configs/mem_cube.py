@@ -54,6 +54,11 @@ class GeneralMemCubeConfig(BaseMemCubeConfig):
         default_factory=MemoryConfigFactory,
         description="Configuration for the parametric memory",
     )
+    pref_mem: MemoryConfigFactory = Field(
+        ...,
+        default_factory=MemoryConfigFactory,
+        description="Configuration for the preference memory",
+    )
 
     @field_validator("text_mem")
     @classmethod
@@ -87,3 +92,14 @@ class GeneralMemCubeConfig(BaseMemCubeConfig):
                 f"GeneralMemCubeConfig requires para_mem backend to be one of {allowed_backends}, got '{para_mem.backend}'"
             )
         return para_mem
+
+    @field_validator("pref_mem")
+    @classmethod
+    def validate_pref_mem(cls, pref_mem: MemoryConfigFactory) -> MemoryConfigFactory:
+        """Validate the pref_mem field."""
+        allowed_backends = ["pref_text", "uninitialized"]
+        if pref_mem.backend not in allowed_backends:
+            raise ConfigurationError(
+                f"GeneralMemCubeConfig requires pref_mem backend to be one of {allowed_backends}, got '{pref_mem.backend}'"
+            )
+        return pref_mem

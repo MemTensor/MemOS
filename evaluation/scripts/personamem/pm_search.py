@@ -1,18 +1,19 @@
 import argparse
+import csv
 import json
 import os
 import sys
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from time import time
 
-import csv
-
 from tqdm import tqdm
-from utils.client import mem0_client,zep_client,memos_api_client
+
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
@@ -50,82 +51,58 @@ def zep_search(client, user_id, query, top_k=20):
     return context, duration_ms
 
 
-def mem0_search(client, user_id, query, top_k=20, enable_graph=False, frame="mem0-api"):
+def mem0_search(client, query, user_id, top_k):
     start = time()
-
-    if frame == "mem0-local":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k,
-        )
-        search_memories = "\n".join(
+    results = client.search(query, user_id, top_k)
+    memory = [f"{memory['created_at']}: {memory['memory']}" for memory in results["results"]]
+    if client.enable_graph:
+        graph = "\n".join(
             [
-                f"  - {item['memory']} (date: {item['metadata']['timestamp']})"
-                for item in results["results"]
+                f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} "
+                f"(relationship: {item.get('relationship', '?')})"
+                for item in results.get("relations", [])
             ]
         )
-        search_graph = (
-            "\n".join(
-                [
-                    f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('destination', '?')} (relationship: {item.get('relationship', '?')})"
-                    for item in results.get("relations", [])
-                ]
-            )
-            if enable_graph
-            else ""
-        )
-
-    elif frame == "mem0-api":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-            top_k=top_k,
-            version="v2",
-            output_format="v1.1",
-            enable_graph=enable_graph,
-            filters={"AND": [{"user_id": user_id}, {"run_id": "*"}]},
-        )
-        search_memories = "\n".join(
-            [f"  - {item['memory']} (date: {item['created_at']})" for item in results["results"]]
-        )
-        search_graph = (
-            "\n".join(
-                [
-                    f"  - 'source': {item.get('source', '?')} -> 'target': {item.get('target', '?')} (relationship: {item.get('relationship', '?')})"
-                    for item in results.get("relations", [])
-                ]
-            )
-            if enable_graph
-            else ""
-        )
-    if enable_graph:
         context = MEM0_GRAPH_CONTEXT_TEMPLATE.format(
-            user_id=user_id, memories=search_memories, relations=search_graph
+            user_id=user_id, memories=memory, relations=graph
         )
     else:
-        context = MEM0_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
+        context = MEM0_CONTEXT_TEMPLATE.format(user_id=user_id, memories=memory)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
 
-def memos_search(client, user_id, query, top_k, frame="memos-local"):
+def memobase_search(client, query, user_id, top_k):
     start = time()
-    if frame == "memos-local":
-        results = client.search(
-            query=query,
-            user_id=user_id,
-        )
+    context = client.search(query=query, user_id=user_id, top_k=top_k)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
 
-        results = filter_memory_data(results)["text_mem"][0]["memories"]
-        search_memories = "\n".join([f"  - {item['memory']}" for item in results])
 
-    elif frame == "memos-api":
-        results = client.search(query=query, user_id=user_id, top_k=top_k)
-        search_memories = "\n".join(f"- {entry.get('memory_value', '')}"
-                                    for entry in results.get("memory_detail_list", []))
+def memos_search(client, user_id, query, top_k):
+    start = time()
+    results = client.search(query=query, user_id=user_id, top_k=top_k)
+    search_memories = (
+        "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
+        + f"\n{results['pref_mem']}"
+    )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
+def supermemory_search(client, query, user_id, top_k):
+    start = time()
+    context = client.search(query, user_id, top_k)
+    duration_ms = (time() - start) * 1000
+    return context, duration_ms
+
+
+def memu_search(client, query, user_id, top_k):
+    start = time()
+    results = client.search(query, user_id, top_k)
+    context = "\n".join(results)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -136,7 +113,7 @@ def build_jsonl_index(jsonl_path):
     Assumes each line is a JSON object with a single key-value pair.
     """
     index = {}
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         while True:
             offset = f.tell()
             line = f.readline()
@@ -148,14 +125,14 @@ def build_jsonl_index(jsonl_path):
 
 
 def load_context_by_id(jsonl_path, offset):
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         f.seek(offset)
         item = json.loads(f.readline())
         return next(iter(item.values()))
 
 
 def load_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for _, row in enumerate(reader, start=1):
             row_data = {}
@@ -167,7 +144,7 @@ def load_rows(csv_path):
 def load_rows_with_context(csv_path, jsonl_path):
     jsonl_index = build_jsonl_index(jsonl_path)
 
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         prev_sid = None
         prev_context = None
@@ -190,7 +167,7 @@ def load_rows_with_context(csv_path, jsonl_path):
 
 
 def count_csv_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         return sum(1 for _ in f) - 1
 
 
@@ -219,35 +196,36 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         return existing_results
 
     if frame == "zep":
-        client = zep_client()
+        from utils.client import ZepClient
+
+        client = ZepClient()
         print("🔌 Using Zep client for search...")
         context, duration_ms = zep_search(client, user_id, question)
 
-    elif frame == "mem0-local":
-        client = mem0_client(mode="local")
-        print("🔌 Using Mem0 Local client for search...")
-        context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
-    elif frame == "mem0-api":
-        client = mem0_client(mode="api")
+    elif frame == "mem0" or frame == "mem0-graph":
+        from utils.client import Mem0Client
+
+        client = Mem0Client(enable_graph="graph" in frame)
         print("🔌 Using Mem0 API client for search...")
-        context, duration_ms = mem0_search(client, user_id, question, top_k=top_k, frame=frame)
-    elif frame == "memos-local":
-        client = memos_client(
-            mode="local",
-            db_name=f"pm_{frame}-{version}",
-            user_id=user_id,
-            top_k=top_k,
-            mem_cube_path=f"results/pm/{frame}-{version}/storages/{user_id}",
-            mem_cube_config_path="configs/mu_mem_cube_config.json",
-            mem_os_config_path="configs/mos_memos_config.json",
-            addorsearch="search",
-        )
-        print("🔌 Using Memos Local client for search...")
-        context, duration_ms = memos_search(client, user_id, question, frame=frame)
+        context, duration_ms = mem0_search(client, question, user_id, top_k)
     elif frame == "memos-api":
-        client = memos_api_client()
+        from utils.client import MemosApiClient
+
+        client = MemosApiClient()
         print("🔌 Using Memos API client for search...")
-        context, duration_ms = memos_search(client, user_id, question, top_k=top_k, frame=frame)
+        context, duration_ms = memos_search(client, user_id, question, top_k=top_k)
+    elif frame == "supermemory":
+        from utils.client import SupermemoryClient
+
+        client = SupermemoryClient()
+        print("🔌 Using supermemory client for search...")
+        context, duration_ms = supermemory_search(client, question, user_id, top_k)
+    elif frame == "memu":
+        from utils.client import MemuClient
+
+        client = MemuClient()
+        print("🔌 Using memu client for search...")
+        context, duration_ms = memu_search(client, question, user_id, top_k)
 
     search_results[user_id].append(
         {
@@ -266,25 +244,23 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
 
     os.makedirs(f"results/pm/{frame}-{version}/tmp", exist_ok=True)
     with open(
-            f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{conv_idx}.json", "w"
+        f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{conv_idx}.json", "w"
     ) as f:
         json.dump(search_results, f, indent=4)
-    print(f"💾 \033[92mSearch results for conversation {conv_idx} saved...")
+    print(f"💾 Search results for conversation {conv_idx} saved...")
     print("-" * 80)
 
     return search_results
 
 
 def load_existing_results(frame, version, group_idx):
-    result_path = (
-        f"results/locomo/{frame}-{version}/tmp/{frame}_locomo_search_results_{group_idx}.json"
-    )
+    result_path = f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{group_idx}.json"
     if os.path.exists(result_path):
         try:
             with open(result_path) as f:
                 return json.load(f), True
         except Exception as e:
-            print(f"\033[91m❌ Error loading existing results for group {group_idx}: {e}")
+            print(f"❌ Error loading existing results for group {group_idx}: {e}")
     return {}, False
 
 
@@ -299,9 +275,7 @@ def main(frame, version, top_k=20, num_workers=2):
 
     print(f"📚 Loaded PersonaMem dataset from {question_csv_path} and {context_jsonl_path}")
     print(f"📊 Total conversations: {total_rows}")
-    print(
-        f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}"
-    )
+    print(f"⚙️  Search parameters: top_k={top_k}, workers={num_workers}")
     print("-" * 80)
 
     all_search_results = defaultdict(list)
@@ -320,7 +294,9 @@ def main(frame, version, top_k=20, num_workers=2):
             for idx, (row_data, _) in enumerate(all_data)
         }
 
-        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"):
+        for future in tqdm(
+            as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
+        ):
             idx = future_to_idx[future]
             try:
                 search_results = future.result()
@@ -328,37 +304,41 @@ def main(frame, version, top_k=20, num_workers=2):
                     all_search_results[user_id].extend(results)
                 print(f"✅ Conversation {idx} processed successfully.")
             except Exception as exc:
-                print(f'\n❌ Conversation {idx} generated an exception: {exc}')
+                print(f"\n❌ Conversation {idx} generated an exception: {exc}")
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
     elapsed_time_str = str(elapsed_time).split(".")[0]
 
     print("\n" + "=" * 80)
-    print("✅ \033[1;32mSEARCH COMPLETE".center(80))
+    print("✅ SEARCH COMPLETE".center(80))
     print("=" * 80)
-    print(
-        f"⏱️  Total time taken to search {total_rows} users: \033[92m{elapsed_time_str}"
-    )
-    print(
-        f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}"
-    )
+    print(f"⏱️  Total time taken to search {total_rows} users: {elapsed_time_str}")
+    print(f"🔄 Framework: {frame} | Version: {version} | Workers: {num_workers}")
 
     with open(f"results/pm/{frame}-{version}/{frame}_pm_search_results.json", "w") as f:
         json.dump(dict(all_search_results), f, indent=4)
-    print(
-        f"📁 Results saved to: \033[1;94mresults/pm/{frame}-{version}/{frame}_pm_search_results.json"
-    )
+    print(f"📁 Results saved to: mresults/pm/{frame}-{version}/{frame}_pm_search_results.json")
     print("=" * 80 + "\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Search Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
-                        default='memos-api')
-    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
-    parser.add_argument("--top_k", type=int, default=20, help="Number of top results to retrieve from the search.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        default="memos-api",
+    )
+    parser.add_argument(
+        "--version", type=str, default="default", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3, help="Number of parallel workers for processing users."
+    )
 
     args = parser.parse_args()
 

@@ -21,7 +21,6 @@ def lme_response(llm_client, context, question, question_date):
         question_date=question_date,
         context=context,
     )
-
     response = llm_client.chat.completions.create(
         model=os.getenv("CHAT_MODEL"),
         messages=[
