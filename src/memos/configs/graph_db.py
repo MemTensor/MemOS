@@ -154,6 +154,59 @@ class NebulaGraphDBConfig(BaseGraphDBConfig):
         return self
 
 
+class PolarDBGraphDBConfig(BaseConfig):
+    """
+    PolarDB-specific configuration.
+
+    Key concepts:
+    - `db_name`: The name of the target PolarDB database
+    - `user_name`: Used for logical tenant isolation if needed
+    - `auto_create`: Whether to automatically create the target database if it does not exist
+    - `use_multi_db`: Whether to use multi-database mode for physical isolation
+
+    Example:
+    ---
+    host = "localhost"
+    port = 5432
+    user = "postgres"
+    password = "password"
+    db_name = "memos_db"
+    user_name = "alice"
+    use_multi_db = True
+    auto_create = True
+    """
+
+    host: str = Field(..., description="Database host")
+    port: int = Field(default=5432, description="Database port")
+    user: str = Field(..., description="Database user")
+    password: str = Field(..., description="Database password")
+    db_name: str = Field(..., description="The name of the target PolarDB database")
+    user_name: str | None = Field(
+        default=None,
+        description="Logical user or tenant ID for data isolation (optional, used in metadata tagging)",
+    )
+    auto_create: bool = Field(
+        default=False,
+        description="Whether to auto-create the database if it does not exist",
+    )
+    use_multi_db: bool = Field(
+        default=True,
+        description=(
+            "If True: use multi-database mode for physical isolation; "
+            "each tenant typically gets a separate database. "
+            "If False: use a single shared database with logical isolation by user_name."
+        ),
+    )
+    embedding_dimension: int = Field(default=1024, description="Dimension of vector embedding")
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        """Validate config."""
+        if not self.db_name:
+            raise ValueError("`db_name` must be provided")
+        return self
+
+
 class GraphDBConfigFactory(BaseModel):
     backend: str = Field(..., description="Backend for graph database")
     config: dict[str, Any] = Field(..., description="Configuration for the graph database backend")
@@ -162,6 +215,7 @@ class GraphDBConfigFactory(BaseModel):
         "neo4j": Neo4jGraphDBConfig,
         "neo4j-community": Neo4jCommunityGraphDBConfig,
         "nebular": NebulaGraphDBConfig,
+        "polardb": PolarDBGraphDBConfig,
     }
 
     @field_validator("backend")

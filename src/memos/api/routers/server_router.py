@@ -69,6 +69,7 @@ def _build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
         "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
         "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
         "nebular": APIConfig.get_nebular_config(user_id=user_id),
+        "polardb": APIConfig.get_polardb_config(user_id=user_id),
     }
 
     graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
@@ -332,6 +333,7 @@ def search_memories(search_req: APISearchRequest):
         "text_mem": [],
         "act_mem": [],
         "para_mem": [],
+        "pref_mem": "",
     }
 
     search_mode = search_req.mode

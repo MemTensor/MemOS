@@ -224,6 +224,17 @@ class TextualMemoryItem(BaseModel):
         ):
             return v
         if isinstance(v, dict):
+            if "metadata" in v and isinstance(v["metadata"], dict):
+                nested_metadata = v["metadata"]
+                nested_metadata = nested_metadata.copy()
+                nested_metadata.pop("id", None)
+                nested_metadata.pop("memory", None)
+                v = nested_metadata
+            else:
+                v = v.copy()
+                v.pop("id", None)
+                v.pop("memory", None)
+
             if v.get("relativity") is not None:
                 return SearchedTreeNodeTextualMemoryMetadata(**v)
             if v.get("preference_type") is not None:
