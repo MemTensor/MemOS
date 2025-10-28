@@ -18,7 +18,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
     if "mem0" in frame:
         for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
-            client.add(messages, user_id, int(date.timestamp()))
+        client.add(messages, user_id, int(date.timestamp()), batch_size=2)
     elif frame == "memobase":
         for _idx, msg in enumerate(session):
             messages.append(
@@ -28,8 +28,8 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                     "created_at": date.isoformat(),
                 }
             )
-        client.add(messages, user_id)
-    elif frame == "memos-api":
+        client.add(messages, user_id, batch_size=2)
+    elif "memos-api" in frame:
         for msg in session:
             messages.append(
                 {
@@ -80,6 +80,10 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
     elif frame == "memobase":
         from utils.client import MemobaseClient
 
@@ -167,11 +171,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="1027", help="Version of the evaluation framework."
+        "--version", type=str, default="default", help="Version of the evaluation framework."
     )
     parser.add_argument(
         "--workers", type=int, default=20, help="Number of runs for LLM-as-a-Judge evaluation."

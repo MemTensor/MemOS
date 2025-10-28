@@ -154,7 +154,7 @@ class MemosApiClient:
         url = f"{self.memos_url}/product/add"
         added_memories = []
         for i in range(0, len(messages), batch_size):
-            batch_messages = messages[i: i + batch_size]
+            batch_messages = messages[i : i + batch_size]
             payload = json.dumps(
                 {
                     "messages": batch_messages,
@@ -165,8 +165,10 @@ class MemosApiClient:
             )
             response = requests.request("POST", url, data=payload, headers=self.headers)
             assert response.status_code == 200, response.text
-            assert json.loads(response.text)["message"] == "Memory added successfully", response.text
-            added_memories += json.loads(response.text)['data']
+            assert json.loads(response.text)["message"] == "Memory added successfully", (
+                response.text
+            )
+            added_memories += json.loads(response.text)["data"]
         return added_memories
 
     def search(self, query, user_id, top_k):
