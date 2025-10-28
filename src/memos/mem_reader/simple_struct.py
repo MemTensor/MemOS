@@ -246,9 +246,16 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 cur_text = "".join(buf)
 
             buf.append(line)
-            sources.append({"type": "chat", "index": idx, "role": role, "chat_time": chat_time, "content": content})
+            sources.append(
+                {
+                    "type": "chat",
+                    "index": idx,
+                    "role": role,
+                    "chat_time": chat_time,
+                    "content": content,
+                }
+            )
             cur_text = "".join(buf)
-
 
         if buf:
             yield {"text": "".join(buf), "sources": sources.copy(), "start_idx": start_idx}
