@@ -24,7 +24,11 @@ class RelationAndReasoningDetector:
         self.embedder = embedder
 
     def process_node(
-        self, node: GraphDBNode, user_name: str, exclude_ids: list[str], top_k: int = 5
+        self,
+        node: GraphDBNode,
+        exclude_ids: list[str],
+        top_k: int = 5,
+        user_name: str | None = None,
     ):
         """
         Unified pipeline for:

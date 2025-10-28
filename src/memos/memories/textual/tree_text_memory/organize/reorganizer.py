@@ -1,5 +1,4 @@
 import json
-import time
 import traceback
 
 from collections import defaultdict
@@ -133,8 +132,8 @@ class GraphStructureReorganizer:
 
     def optimize_structure(
         self,
-        user_name: str,
         scope: str = "LongTermMemory",
+        user_name: str | None = None,
         local_tree_threshold: int = 10,
         min_cluster_size: int = 4,
         min_group_size: int = 20,
@@ -147,6 +146,8 @@ class GraphStructureReorganizer:
         3. Create parent nodes and build local PARENT trees.
         """
         # --- Total time watch dog: check functions ---
+        import time
+
         start_ts = time.time()
 
         def _check_deadline(where: str):
@@ -176,7 +177,25 @@ class GraphStructureReorganizer:
             raw_nodes = self.graph_store.get_structure_optimization_candidates(
                 scope, user_name=user_name, include_embedding=True
             )
-            nodes = [GraphDBNode(**n) for n in raw_nodes]
+            logger.debug(
+                f"[GraphStructureReorganize] Find {len(raw_nodes)} nodes to optimize"
+                f"which is {[node['id'] for node in raw_nodes]}"
+            )
+
+            def _norm(s):
+                return s.strip().lower() if isinstance(s, str) else s
+
+            filtered_raw = []
+            for n in raw_nodes:
+                tags = (n.get("metadata") or {}).get("tags") or []
+                if not any(_norm(t) == "mode:fast" for t in tags if isinstance(t, str)):
+                    filtered_raw.append(n)
+            dropped = len(raw_nodes) - len(filtered_raw)
+            if dropped:
+                logger.info(
+                    f"[GraphStructureReorganize] Tag filter dropped {dropped} nodes (mode:fast)."
+                )
+            nodes = [GraphDBNode(**n) for n in filtered_raw]
 
             if not nodes:
                 logger.info("[GraphStructureReorganize] No nodes to optimize. Skipping.")
@@ -191,10 +210,9 @@ class GraphStructureReorganizer:
             if _check_deadline("[GraphStructureReorganize] Before partition"):
                 return
             partitioned_groups = self._partition(nodes)
-            logger.info(
+            logger.debug(
                 f"[GraphStructureReorganize] Partitioned into {len(partitioned_groups)} clusters."
             )
-
             if _check_deadline("[GraphStructureReorganize] Before submit partition task"):
                 return
             with ContextThreadPoolExecutor(max_workers=4) as executor:
@@ -244,16 +262,41 @@ class GraphStructureReorganizer:
         sub_clusters = self._local_subcluster(cluster_nodes)
         sub_parents = []
 
-        for sub_nodes in sub_clusters:
-            if len(sub_nodes) < min_cluster_size:
-                continue  # Skip tiny noise
-            sub_parent_node = self._summarize_cluster(sub_nodes, scope)
-            self._create_parent_node(sub_parent_node, user_name)
-            self._link_cluster_nodes(sub_parent_node, sub_nodes, user_name)
-            sub_parents.append(sub_parent_node)
+        def _process_one_subcluster(sub_nodes):
+            try:
+                sub_parent_node = self._summarize_cluster(sub_nodes, scope)
+                self._create_parent_node(sub_parent_node, user_name)
+                self._link_cluster_nodes(sub_parent_node, sub_nodes, user_name)
+                sub_nodes_str = "\n|_____".join([sub_node.memory for sub_node in sub_nodes])
+                logger.debug(
+                    f"Processed a group by nodes. \nThe Structure is: "
+                    f"\n Parent Node: {sub_parent_node.memory}\n"
+                    f"\n Child Node: {sub_nodes_str}"
+                )
+                return sub_parent_node
+            except Exception as e:
+                logger.warning(f"Process sub-cluster failed: {e}", exc_info=True)
+                return None
 
+        valid_sub_clusters = [sc for sc in sub_clusters if len(sc) >= min_cluster_size]
+
+        max_workers = min(4, len(valid_sub_clusters))
+        if max_workers > 0:
+            with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(_process_one_subcluster, sc) for sc in valid_sub_clusters
+                ]
+                for fut in as_completed(futures):
+                    res = fut.result()
+                    if res is not None:
+                        sub_parents.append(res)
+
+        logger.debug(f"len of sub-parents: {len(sub_parents)}")
         if sub_parents and len(sub_parents) >= min_cluster_size:
             cluster_parent_node = self._summarize_cluster(cluster_nodes, scope)
+            logger.debug(
+                f"Find cluster_parent node: {cluster_parent_node.id}: {cluster_parent_node.memory}"
+            )
             self._create_parent_node(cluster_parent_node, user_name)
             for sub_parent in sub_parents:
                 self.graph_store.add_edge(
@@ -363,6 +406,7 @@ class GraphStructureReorganizer:
         messages = [{"role": "user", "content": prompt}]
         response_text = self.llm.generate(messages)
         response_json = _parse_json_result(response_text)
+        logger.debug(f"In Sub-Cluster: \ninput: {prompt}\n output: {response_json}")
         assigned_ids = set()
         result_subclusters = []
 
@@ -411,11 +455,25 @@ class GraphStructureReorganizer:
 
         logger.info(f"[KMeansPartition] Total clusters before filtering: {len(raw_clusters)}")
         for i, cluster in enumerate(raw_clusters):
-            logger.info(f"[KMeansPartition]   Cluster-{i}: {len(cluster)} nodes")
-
-        logger.info(
+            logger.debug(f"[KMeansPartition]   Cluster-{i}: {len(cluster)} nodes")
+        logger.debug(f"[KMeansPartition] Total clusters before filtering: {len(raw_clusters)}")
+        logger.debug(
             f"[KMeansPartition] Clusters after filtering (>{min_cluster_size}): {len(filtered_clusters)}"
         )
+
+        seen_ids = set()
+        duplicate_ids = set()
+
+        for i, cluster in enumerate(raw_clusters):
+            ids = [n.id for n in cluster]
+            mems = [n.memory[:80].replace("\n", " ") + "..." for n in cluster]
+            logger.debug(f"[Cluster-{i}] size={len(cluster)}")
+            for nid, mem in zip(ids, mems, strict=False):
+                logger.debug(f"    - id={nid} | mem={mem}")
+                if nid in seen_ids:
+                    duplicate_ids.add(nid)
+                else:
+                    seen_ids.add(nid)
 
         return filtered_clusters
 
@@ -426,12 +484,30 @@ class GraphStructureReorganizer:
         if not cluster_nodes:
             raise ValueError("Cluster nodes cannot be empty.")
 
-        memories_items_text = "\n\n".join(
-            [
-                f"{i}. key: {n.metadata.key}\nvalue: {n.memory}\nsummary:{n.metadata.background}"
-                for i, n in enumerate(cluster_nodes)
-            ]
-        )
+        memories_items_text = ""
+        for i, n in enumerate(cluster_nodes):
+            # Build raw dialogue excerpt
+            # We won't hard-cut mid-sentence. We'll collect turns until ~300 chars, then stop before breaking.
+            excerpt_parts = []
+            current_len = 0
+            for source_j in n.metadata.sources:
+                turn_text = f'{source_j.role}: "{source_j.content_safe}"'
+                # if adding this turn blows us past ~300, break BEFORE adding
+                if current_len + len(turn_text) > 1500:
+                    break
+                excerpt_parts.append(turn_text)
+                current_len += len(turn_text)
+            excerpt_parts.append("...")
+            raw_dialogue_excerpt = "\n".join(excerpt_parts)
+
+            mem_i = (
+                f"\nChild Memory {i}:\n"
+                f"- canonical_value: {n.memory}\n"
+                f"- user_summary: {n.metadata.background}\n"
+                f"- raw_dialogue_excerpt:\n{raw_dialogue_excerpt if raw_dialogue_excerpt else '(none)'}\n"
+            )
+
+            memories_items_text += mem_i
 
         # Build prompt
         prompt = REORGANIZE_PROMPT.replace("{memory_items_text}", memories_items_text)
