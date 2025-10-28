@@ -197,28 +197,30 @@ class MemosApiOnlineClient:
         self.memos_url = os.getenv("MEMOS_ONLINE_URL")
         self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
 
-    def add(self, messages, user_id, conv_id=None):
+    def add(self, messages, user_id, conv_id=None, batch_size: int = 9999):
         url = f"{self.memos_url}/add/message"
-        payload = json.dumps(
-            {
-                "messages": messages,
-                "user_id": user_id,
-                "conversation_id": conv_id,
-            }
-        )
+        for i in range(0, len(messages), batch_size):
+            batch_messages = messages[i : i + batch_size]
+            payload = json.dumps(
+                {
+                    "messages": batch_messages,
+                    "user_id": user_id,
+                    "conversation_id": conv_id,
+                }
+            )
 
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                response = requests.request("POST", url, data=payload, headers=self.headers)
-                assert response.status_code == 200, response.text
-                assert json.loads(response.text)["message"] == "ok", response.text
-                return response.text
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(2**attempt)
-                else:
-                    raise e
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    response = requests.request("POST", url, data=payload, headers=self.headers)
+                    assert response.status_code == 200, response.text
+                    assert json.loads(response.text)["message"] == "ok", response.text
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+                    else:
+                        raise e
 
     def search(self, query, user_id, top_k):
         """Search memories."""

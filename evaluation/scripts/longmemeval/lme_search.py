@@ -123,6 +123,11 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
 
         client = MemosApiClient()
         context, duration_ms = memos_search(client, question, user_id, top_k)
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
+        context, duration_ms = memos_search(client, question, user_id, top_k)
     elif frame == "memu":
         from utils.client import MemuClient
 
