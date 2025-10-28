@@ -69,18 +69,18 @@ class MemoryManager:
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
 
-        # if mode == "sync":
-        #     for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
-        #         try:
-        #             self.graph_store.remove_oldest_memory(
-        #                 memory_type="WorkingMemory",
-        #                 keep_latest=self.memory_size[mem_type],
-        #                 user_name=user_name,
-        #             )
-        #         except Exception:
-        #             logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
-        #
-        #     self._refresh_memory_size(user_name=user_name)
+        if mode == "sync":
+            for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+                try:
+                    self.graph_store.remove_oldest_memory(
+                        memory_type="WorkingMemory",
+                        keep_latest=self.memory_size[mem_type],
+                        user_name=user_name,
+                    )
+                except Exception:
+                    logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
+
+            self._refresh_memory_size(user_name=user_name)
         return added_ids
 
     def replace_working_memory(
@@ -136,10 +136,10 @@ class MemoryManager:
         futures = []
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            # f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory", user_name)
-            # futures.append(f_working)
+            f_working = ex.submit(self._add_memory_to_db, memory, "WorkingMemory", user_name)
+            futures.append(f_working)
 
-            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory", "WorkingMemory"):
+            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
                     memory=memory,
