@@ -105,12 +105,12 @@ class NaiveAdder(BaseAdder):
         preference_type: str,
     ) -> list[str] | str:
         payload = new_memory.to_dict()["metadata"]
-        fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
+        fields_to_remove = {"dialog_id", "original_text", "embedding"}
         payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
         new_vec_db_item = MilvusVecDBItem(
             id=new_memory.id,
             memory=new_memory.memory,
-            original_text=new_memory.metadata.dialog_str,
+            original_text=new_memory.metadata.original_text,
             vector=new_memory.metadata.embedding,
             payload=payload,
         )
@@ -179,12 +179,12 @@ class NaiveAdder(BaseAdder):
         preference_type: str,
     ) -> str:
         payload = new_memory.to_dict()["metadata"]
-        fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
+        fields_to_remove = {"dialog_id", "original_text", "embedding"}
         payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
         vec_db_item = MilvusVecDBItem(
             id=new_memory.id,
             memory=new_memory.memory,
-            original_text=new_memory.metadata.dialog_str,
+            original_text=new_memory.metadata.original_text,
             vector=new_memory.metadata.embedding,
             payload=payload,
         )
@@ -231,12 +231,12 @@ class NaiveAdder(BaseAdder):
         collection_name: str,
     ) -> str:
         payload = new_memory.to_dict()["metadata"]
-        fields_to_remove = {"dialog_id", "dialog_str", "embedding"}
+        fields_to_remove = {"dialog_id", "original_text", "embedding"}
         payload = {k: v for k, v in payload.items() if k not in fields_to_remove}
         vec_db_item = MilvusVecDBItem(
             id=new_memory.id,
             memory=new_memory.memory,
-            original_text=new_memory.metadata.dialog_str,
+            original_text=new_memory.metadata.original_text,
             vector=new_memory.metadata.embedding,
             payload=payload,
         )

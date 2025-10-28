@@ -43,7 +43,7 @@ class NaiveExtractor(BaseExtractor):
         """Extract basic information from a QA pair (no LLM needed)."""
         basic_info = {
             "dialog_id": str(uuid.uuid4()),
-            "dialog_str": convert_messages_to_string(qa_pair),
+            "original_text": convert_messages_to_string(qa_pair),
             "created_at": datetime.now().isoformat(),
         }
 
@@ -84,10 +84,10 @@ class NaiveExtractor(BaseExtractor):
     ) -> TextualMemoryItem | None:
         """Process a single chunk and return a TextualMemoryItem."""
         basic_info = self.extract_basic_info(chunk)
-        if not basic_info["dialog_str"]:
+        if not basic_info["original_text"]:
             return None
 
-        explicit_pref = self.extract_explicit_preference(basic_info["dialog_str"])
+        explicit_pref = self.extract_explicit_preference(basic_info["original_text"])
         if not explicit_pref:
             return None
 
@@ -113,9 +113,9 @@ class NaiveExtractor(BaseExtractor):
         self, chunk: MessageList, msg_type: str, info: dict[str, Any]
     ) -> TextualMemoryItem | None:
         basic_info = self.extract_basic_info(chunk)
-        if not basic_info["dialog_str"]:
+        if not basic_info["original_text"]:
             return None
-        implicit_pref = self.extract_implicit_preference(basic_info["dialog_str"])
+        implicit_pref = self.extract_implicit_preference(basic_info["original_text"])
         if not implicit_pref:
             return None
 
