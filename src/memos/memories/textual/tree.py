@@ -53,6 +53,7 @@ class TreeTextMemory(BaseTextMemory):
         time_start_gs = time.time()
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
         logger.info(f"time init: graph_store time is: {time.time() - time_start_gs}")
+        self.bm25_retriever = None  # EnhancedBM25()
 
         time_start_rr = time.time()
         if config.reranker is None:
@@ -172,6 +173,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                self.bm25_retriever,
                 internet_retriever=None,
                 moscube=moscube,
             )
@@ -181,6 +183,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
             )

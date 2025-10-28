@@ -1,4 +1,5 @@
 import json
+import os
 import traceback
 
 from datetime import datetime
@@ -9,7 +10,18 @@ from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
+from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
+    detect_lang,
+    parse_json_result,
+)
 from memos.reranker.base import BaseReranker
+from memos.templates.mem_search_prompts import (
+    COT_PROMPT,
+    COT_PROMPT_ZH,
+    SIMPLE_COT_PROMPT,
+    SIMPLE_COT_PROMPT_ZH,
+)
 from memos.utils import timed
 
 from .reasoner import MemoryReasoner
@@ -18,6 +30,10 @@ from .task_goal_parser import TaskGoalParser
 
 
 logger = get_logger(__name__)
+COT_DICT = {
+    "fast": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
+    "fine": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
+}
 
 
 class Searcher:
@@ -27,20 +43,23 @@ class Searcher:
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         reranker: BaseReranker,
+        bm25_retriever: EnhancedBM25 | None,
         internet_retriever: None = None,
         moscube: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
+        self.llm = dispatcher_llm
 
         self.task_goal_parser = TaskGoalParser(dispatcher_llm)
-        self.graph_retriever = GraphMemoryRetriever(self.graph_store, self.embedder)
+        self.graph_retriever = GraphMemoryRetriever(graph_store, embedder, bm25_retriever)
         self.reranker = reranker
         self.reasoner = MemoryReasoner(dispatcher_llm)
 
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
+        self.cot_query_search = os.getenv("MOS_SEARCH_COT", "false") == "true"
 
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
@@ -188,6 +207,12 @@ class Searcher:
     ):
         """Run A/B/C retrieval paths in parallel"""
         tasks = []
+        id_filter = {
+            "user_id": info.get("user_id", None),
+            "session_id": info.get("session_id", None),
+        }
+        id_filter = {k: v for k, v in id_filter.items() if v is not None}
+
         with ContextThreadPoolExecutor(max_workers=3) as executor:
             tasks.append(
                 executor.submit(
@@ -199,6 +224,7 @@ class Searcher:
                     memory_type,
                     search_filter,
                     user_name,
+                    id_filter,
                 )
             )
             tasks.append(
@@ -211,6 +237,7 @@ class Searcher:
                     memory_type,
                     search_filter,
                     user_name,
+                    id_filter,
                 )
             )
             tasks.append(
@@ -256,6 +283,7 @@ class Searcher:
         memory_type,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        id_filter: dict | None = None,
     ):
         """Retrieve and rerank from WorkingMemory"""
         if memory_type not in ["All", "WorkingMemory"]:
@@ -268,6 +296,7 @@ class Searcher:
             memory_scope="WorkingMemory",
             search_filter=search_filter,
             user_name=user_name,
+            id_filter=id_filter,
         )
         return self.reranker.rerank(
             query=query,
@@ -289,10 +318,21 @@ class Searcher:
         memory_type,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        id_filter: dict | None = None,
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
         tasks = []
+
+        # chain of thinking
+        cot_embeddings = []
+        if self.cot_query_search:
+            queries = self._cot_query(query)
+            if len(queries) > 1:
+                cot_embeddings = self.embedder.embed(queries)
+            cot_embeddings.extend(query_embedding)
+        else:
+            cot_embeddings = query_embedding
 
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             if memory_type in ["All", "LongTermMemory"]:
@@ -301,11 +341,12 @@ class Searcher:
                         self.graph_retriever.retrieve,
                         query=query,
                         parsed_goal=parsed_goal,
-                        query_embedding=query_embedding,
+                        query_embedding=cot_embeddings,
                         top_k=top_k * 2,
                         memory_scope="LongTermMemory",
                         search_filter=search_filter,
                         user_name=user_name,
+                        id_filter=id_filter,
                     )
                 )
             if memory_type in ["All", "UserMemory"]:
@@ -314,11 +355,12 @@ class Searcher:
                         self.graph_retriever.retrieve,
                         query=query,
                         parsed_goal=parsed_goal,
-                        query_embedding=query_embedding,
+                        query_embedding=cot_embeddings,
                         top_k=top_k * 2,
                         memory_scope="UserMemory",
                         search_filter=search_filter,
                         user_name=user_name,
+                        id_filter=id_filter,
                     )
                 )
 
@@ -399,6 +441,7 @@ class Searcher:
     @timed
     def _sort_and_trim(self, results, top_k):
         """Sort results by score and trim to top_k"""
+
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
         final_items = []
         for item, score in sorted_results:
@@ -448,3 +491,47 @@ class Searcher:
                 self.graph_store.update_node(item_id, {"usage": usage_list}, user_name=user_name)
         except Exception:
             logger.exception("[USAGE] update usage failed")
+
+    def _cot_query(
+        self,
+        query,
+        mode="fast",
+        split_num: int = 3,
+        context: list[str] | None = None,
+    ) -> list[str]:
+        """Generate chain-of-thought queries"""
+
+        lang = detect_lang(query)
+        if mode == "fine" and context:
+            template = COT_DICT["fine"][lang]
+            prompt = (
+                template.replace("${original_query}", query)
+                .replace("${split_num_threshold}", str(split_num))
+                .replace("${context}", "\n".join(context))
+            )
+        else:
+            template = COT_DICT["fast"][lang]
+            prompt = template.replace("${original_query}", query).replace(
+                "${split_num_threshold}", str(split_num)
+            )
+        logger.info("COT 处理")
+
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response_text = self.llm.customized_generate(messages, temperature=0, top_p=1)
+            response_json = parse_json_result(response_text)
+            if "is_complex" in response_json and not response_json["is_complex"]:
+                return [query]
+            else:
+                assert (
+                    "is_complex" in response_json
+                    and response_json["is_complex"]
+                    and "sub_questions" in response_json
+                )
+                logger.info(
+                    "问题 {} 通过 COT 拆分结果为{}".format(query, response_json["sub_questions"])
+                )
+                return response_json["sub_questions"][:split_num]
+        except Exception as e:
+            logger.error(f"[LLM] Exception during chat generation: {e}")
+            return [query]

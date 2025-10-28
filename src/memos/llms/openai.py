@@ -73,6 +73,27 @@ class OpenAILLM(BaseLLM):
         else:
             return response_content
 
+    def customized_generate(self, messages: MessageList, **kwargs) -> str:
+        """Generate a response from OpenAI LLM."""
+        temperature = kwargs.get("temperature", self.config.temperature)
+        max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
+        top_p = kwargs.get("top_p", self.config.top_p)
+
+        response = self.client.chat.completions.create(
+            model=self.config.model_name_or_path,
+            messages=messages,
+            extra_body=self.config.extra_body,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+        )
+        logger.info(f"Response from OpenAI: {response.model_dump_json()}")
+        response_content = response.choices[0].message.content
+        if self.config.remove_think_prefix:
+            return remove_thinking_tags(response_content)
+        else:
+            return response_content
+
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from OpenAI LLM with optional reasoning support."""
         response = self.client.chat.completions.create(

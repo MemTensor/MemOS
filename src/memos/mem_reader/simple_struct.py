@@ -1,5 +1,4 @@
 import concurrent.futures
-import copy
 import json
 import os
 import re
@@ -283,21 +282,37 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         )
         parser = ParserFactory.from_config(parser_config)
 
+        content_len_thredshold = 1600
         if type == "chat":
             for items in scene_data:
-                result = []
-                for item in items:
-                    # Convert dictionary to string
-                    if "chat_time" in item:
-                        result.append(item)
+                if not items:
+                    continue
+
+                results.append([])
+                current_length = 0
+
+                for _i, item in enumerate(items):
+                    content_length = (
+                        len(item.get("content", "")) if isinstance(item, dict) else len(str(item))
+                    )
+                    if not results[-1]:
+                        results[-1].append(item)
+                        current_length = content_length
+                        continue
+
+                    if current_length + content_length <= content_len_thredshold:
+                        results[-1].append(item)
+                        current_length += content_length
                     else:
-                        result.append(item)
-                    if len(result) >= 10:
-                        results.append(result)
-                        context = copy.deepcopy(result[-2:])
-                        result = context
-                if result:
-                    results.append(result)
+                        overlap_item = results[-1][-1]
+                        overlap_length = (
+                            len(overlap_item.get("content", ""))
+                            if isinstance(overlap_item, dict)
+                            else len(str(overlap_item))
+                        )
+
+                        results.append([overlap_item, item])
+                        current_length = overlap_length + content_length
         elif type == "doc":
             for item in scene_data:
                 try:

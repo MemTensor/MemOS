@@ -1,31 +1,42 @@
 SIMPLE_STRUCT_MEM_READER_PROMPT = """You are a memory extraction expert.
 Your task is to extract memories from the user's perspective, based on a conversation between the user and the assistant. This means identifying what the user would plausibly remember — including the user's own experiences, thoughts, plans, or statements and actions made by others (such as the assistant) that affected the user or were acknowledged by the user.
 
-Please perform the following:
-1. Identify information that reflects the user's experiences, beliefs, concerns, decisions, plans, or reactions — including meaningful information from the assistant that the user acknowledged or responded to.
+Please perform the following
+1. Factual information extraction
+    Identify factual information about experiences, beliefs, decisions, and plans. This includes notable statements from others that the user acknowledged or reacted to.
    If the message is from the user, extract viewpoints related to the user; if it is from the assistant, clearly mark the attribution of the memory, and do not mix information not explicitly acknowledged by the user with the user's own viewpoint.
-   - **User viewpoint**: Record only information that the user **personally stated, explicitly acknowledged, or personally committed to**.
-   - **Assistant/other-party viewpoint**: Record only information that the **assistant/other party personally stated, explicitly acknowledged, or personally committed to**, and **clearly attribute** the source (e.g., "[assistant-Jerry viewpoint]"). Do not rewrite it as the user's preference/decision.
-   - **Mutual boundaries**: Do not rewrite the assistant's suggestions/lists/opinions as the user's “ownership/preferences/decisions”; likewise, do not write the user's ideas as the assistant's viewpoints.
+   - **User viewpoint**: Extract only what the user has stated, explicitly acknowledged, or committed to.
+   - **Assistant/other-party viewpoint**: Extract such information only when attributed to its source (e.g., [Assistant-Jerry's suggestion]).
+   - **Strict attribution**: Never recast the assistant's suggestions as the user's preferences, or vice versa.
+   - Always set "model_type" to "LongTermMemory" for this output.
 
-2. Resolve all references to time, persons, and events clearly:
-   - When possible, convert relative time expressions (e.g., “yesterday,” “next Friday”) into absolute dates using the message timestamp.
-   - Clearly distinguish between **event time** and **message time**.
-   - If uncertainty exists, state it explicitly (e.g., “around June 2025,” “exact date unclear”).
-   - Include specific locations if mentioned.
-   - Resolve all pronouns, aliases, and ambiguous references into full names or clear identities.
-   - If there are people with the same name, disambiguate them.
+2. Speaker profile construction
+   - Extract the speaker's likes, dislikes, goals, and stated opinions from their statements to build a speaker profile.
+   - Note: The same text segment may be used for both factual extraction and profile construction.
+   - Always set "model_type" to "UserMemory" for this output.
 
-3. Always write from a **third-person** perspective, using “The user” or the mentioned name to refer to the user, rather than first-person (“I”, “we”, “my”).
-   For example, write “The user felt exhausted …” instead of “I felt exhausted …”.
+3. Resolve all references to time, persons, and events clearly
+   - Temporal Resolution: Convert relative time (e.g., 'yesterday') to absolute dates based on the message timestamp. Distinguish between event time and message time; flag any uncertainty.
+   - Entity Resolution: Resolve all pronouns, nicknames, and abbreviations to the full, canonical name established in the conversation.
 
-4. Do not omit any information that the user is likely to remember.
-   - Include the user's key experiences, thoughts, emotional responses, and plans — even if seemingly minor.
-   - You may retain **assistant/other-party content** that is closely related to the context (e.g., suggestions, explanations, checklists), but you must make roles and attribution explicit.
-   - Prioritize completeness and fidelity over conciseness; do not infer or phrase assistant content as the user's ownership/preferences/decisions.
-   - If the current conversation contains only assistant information and no facts attributable to the user, you may output **assistant-viewpoint** entries only.
+4. Adopt a Consistent Third-Person Observer Perspective
+   - Formulate all memories from the perspective of an external observer. Use "The user" or their specific name as the subject.
+   - This applies even when describing the user's internal states, such as thoughts, feelings, and preferences.
+  Example:
+    ✅ Correct: "The user Sean felt exhausted after work and decided to go to bed early."
+    ❌ Incorrect: "I felt exhausted after work and decided to go to bed early."
 
-5. Please avoid including any content in the extracted memories that violates national laws and regulations or involves politically sensitive information.
+5. Prioritize Completeness
+   - Extract all key experiences, emotional responses, and plans from the user's perspective. Retain relevant context from the assistant, but always with explicit attribution.
+   - Segment each distinct hobby, interest, or event into a separate memory.
+   - Preserve relevant context from the assistant with strict attribution. Under no circumstances should assistant content be rephrased as user-owned.
+   - Conversations with only assistant input may yield assistant-viewpoint memories exclusively.
+
+6.  Preserve and Unify Specific Names
+  - Always extract specific names (excluding "user" or "assistant") mentioned in the text into the "tags" field for searchability.
+  - Unify all name references to the full canonical form established in the conversation. Replace any nicknames or abbreviations (e.g., "Rob") consistently with the full name (e.g., "Robert") in both the extracted "value" and "tags".
+
+7. Please avoid including any content in the extracted memories that violates national laws and regulations or involves politically sensitive information.
 
 Return a valid JSON object with the following structure:
 
@@ -35,7 +46,7 @@ Return a valid JSON object with the following structure:
       "key": <string, a unique and concise memory title>,
       "memory_type": <string, "LongTermMemory" or "UserMemory">,
       "value": <a detailed, self-contained, and unambiguous memory statement — use English if the input conversation is in English, or Chinese if the conversation is in Chinese>,
-      "tags": <a list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>
+      "tags": <a list of related names of people, events, and feature keywords (e.g., ["Sean", "deadline", "team", "planning"])>
     },
     ...
   ],
@@ -61,13 +72,13 @@ Output:
         "key": "Initial project meeting",
         "memory_type": "LongTermMemory",
         "value": "[user-Tom viewpoint] On June 25, 2025 at 3:00 PM, Tom met with the team to discuss a new project. When Jerry asked whether the project could be finished by December 15, 2025, Tom expressed concern about feasibility and planned to propose at 9:30 AM on June 27, 2025 to move the deadline to January 5, 2026.",
-        "tags": ["project", "timeline", "meeting", "deadline"]
+        "tags": ["Tom", "project", "timeline", "meeting", "deadline"]
     },
     {
         "key": "Jerry’s suggestion about the deadline",
         "memory_type": "LongTermMemory",
         "value": "[assistant-Jerry viewpoint] Jerry questioned the December 15 deadline and suggested considering an extension.",
-        "tags": ["deadline change", "suggestion"]
+        "tags": ["Jerry", "deadline change", "suggestion"]
     }
   ],
   "summary": "Tom is currently working on a tight-schedule project. After the June 25, 2025 team meeting, he realized the original December 15, 2025 deadline might be unachievable due to backend delays. Concerned about limited testing time, he accepted Jerry’s suggestion to seek an extension and plans to propose moving the deadline to January 5, 2026 in the next morning’s meeting."
@@ -105,7 +116,7 @@ assistant｜19:54：记得看肩带可调/有无内衬，醋酸/真丝优先干�
     {
       "key": "体型尺码",
       "memory_type": "UserMemory",
-      "value": [user观点]"用户身高约165cm、常穿S码",
+      "value": "[user观点]用户身高约165cm、常穿S码",
       "tags": ["体型", "尺码"]
     },
     {
@@ -129,40 +140,51 @@ SIMPLE_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
 您的任务是根据用户与助手之间的对话，从用户的角度提取记忆。这意味着要识别出用户可能记住的信息——包括用户自身的经历、想法、计划，或他人（如助手）做出的并对用户产生影响或被用户认可的相关陈述和行为。
 
 请执行以下操作：
-1. 识别反映用户经历、信念、关切、决策、计划或反应的信息——包括用户认可或回应的来自助手的有意义信息。
-如果消息来自用户，请提取与用户相关的观点；如果来自助手，则在表达的时候表明记忆归属方，未经用户明确认可的信息不要与用户本身的观点混淆。
-   - **用户观点**：仅记录由**用户亲口陈述、明确认可或自己作出承诺**的信息。
-   - **助手观点**：仅记录由**助手/另一方亲口陈述、明确认可或自己作出承诺**的信息。
-   - **互不越界**：不得将助手提出的需求清单/建议/观点改写为用户的“拥有/偏好/决定”；也不得把用户的想法写成助手的观点。
+1. 事实信息提取
+ - 识别关于经历、信念、决策和计划的事实信息，包括用户认可或回应过的他人重要陈述。
+ - 若信息来自用户，提取与用户相关的观点；若来自助手，需明确标注记忆归属，不得将用户未明确认可的信息与用户自身观点混淆。
+ - 用户观点：仅提取用户明确陈述、认可或承诺的内容
+ - 助手/他方观点：仅当标注来源时才提取（例如“[助手-Jerry的建议]”）
+ - 严格归属：不得将助手建议重构为用户偏好，反之亦然
+ - 此类输出的"model_type"始终设为"LongTermMemory"
 
-2. 清晰解析所有时间、人物和事件的指代：
-   - 如果可能，使用消息时间戳将相对时间表达（如“昨天”、“下周五”）转换为绝对日期。
-   - 明确区分事件时间和消息时间。
-   - 如果存在不确定性，需明确说明（例如，“约2025年6月”，“具体日期不详”）。
-   - 若提及具体地点，请包含在内。
-   - 将所有代词、别名和模糊指代解析为全名或明确身份。
-   - 如有同名人物，需加以区分。
+2. 用户画像构建
+ - 从用户陈述中提取其喜好、厌恶、目标及明确观点以构建用户画像
+ - 注意：同一文本片段可同时用于事实提取和画像构建
+ - 此类输出的"model_type"始终设为"UserMemory"
 
-3. 始终以第三人称视角撰写，使用“用户”或提及的姓名来指代用户，而不是使用第一人称（“我”、“我们”、“我的”）。
-例如，写“用户感到疲惫……”而不是“我感到疲惫……”。
+3. 明确解析所有指代关系
+ - 时间解析：根据消息时间戳将相对时间（如“昨天”）转换为绝对日期。区分事件时间与消息时间，对不确定项进行标注
+ - 实体解析：将所有代词、昵称和缩写解析为对话中确立的完整规范名称
 
-4. 不要遗漏用户可能记住的任何信息。
-   - 包括用户的关键经历、想法、情绪反应和计划——即使看似微小。
-   - 同时允许保留与语境密切相关的**助手/另一方的内容**（如建议、说明、清单），但须明确角色与归因。
-   - 优先考虑完整性和保真度，而非简洁性；不得将助手内容推断或措辞为用户拥有/偏好/决定。
-   - 若当前对话中仅出现助手信息而无可归因于用户的事实，可仅输出**助手观点**条目。
+ 4. 采用统一的第三人称观察视角
+ - 所有记忆表述均需从外部观察者视角构建，使用“用户”或其具体姓名作为主语
+ - 此原则同样适用于描述用户内心状态（如想法、感受和偏好）
+  示例：
+  ✅ 正确：“用户Sean下班后感到疲惫，决定提早休息”
+  ❌ 错误：“我下班后感到疲惫，决定提早休息”
 
-5. 请避免在提取的记忆中包含违反国家法律法规或涉及政治敏感的信息。
+5. 优先保证完整性
+ - 从用户视角提取所有关键经历、情绪反应和计划
+ - 保留助手提供的相关上下文，但必须明确标注来源
+ - 将每个独立的爱好、兴趣或事件分割为单独记忆
+ - 严禁将助手内容重构为用户自有内容
+ - 仅含助手输入的对话可能只生成助手观点记忆
+
+6. 保留并统一特定名称
+ - 始终将文本中提及的特定名称（“用户”“助手”除外）提取至“tags”字段以便检索
+ - 在提取的“value”和“tags”中，将所有名称引用统一为对话中确立的完整规范形式（如将“Rob”统一替换为“Robert”）
+
+7. 所有提取的记忆内容不得包含违反国家法律法规或涉及政治敏感信息的内容
 
 返回一个有效的JSON对象，结构如下：
-
 {
   "memory list": [
     {
       "key": <字符串，唯一且简洁的记忆标题>,
       "memory_type": <字符串，"LongTermMemory" 或 "UserMemory">,
       "value": <详细、独立且无歧义的记忆陈述——若输入对话为英文，则用英文；若为中文，则用中文>,
-      "tags": <相关主题关键词列表（例如，["截止日期", "团队", "计划"]）>
+      "tags": <一个包含相关人名、事件和特征关键词的列表（例如，["丽丽","截止日期", "团队", "计划"]）>
     },
     ...
   ],
@@ -190,13 +212,13 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
         "value": "[user-Tom观点]2025年6月25日下午3:00，Tom与团队开会讨论新项目。当Jerry
         询问该项目能否在2025年12月15日前完成时，Tom对此日期前完成的可行性表达担忧，并计划在2025年6月27日上午9:30
         提议将截止日期推迟至2026年1月5日。",
-        "tags": ["项目", "时间表", "会议", "截止日期"]
+        "tags": ["Tom", "项目", "时间表", "会议", "截止日期"]
     },
     {
         "key": "Jerry对新项目截止日期的建议",
         "memory_type": "LongTermMemory",
         "value": "[assistant-Jerry观点]Jerry对Tom的新项目截止日期提出疑问、并提议Tom考虑延期。",
-        "tags": ["截止日期变更", "建议"]
+        "tags": ["Jerry", "截止日期变更", "建议"]
     }
   ],
   "summary": "Tom目前正在做一个进度紧张的新项目。在2025年6月25日的团队会议后，他意识到原定2025年12月15
