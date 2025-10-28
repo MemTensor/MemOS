@@ -51,7 +51,8 @@ try:
         _ENC = tiktoken.get_encoding("cl100k_base")
 
     def _count_tokens_text(s: str) -> int:
-        return len(_ENC.encode(s or ""))
+        # allow special tokens like <|endoftext|> instead of raising ValueError
+        return len(_ENC.encode(s or "", disallowed_special=()))
 except Exception:
     # Heuristic fallback: zh chars ~1 token, others ~1 token per ~4 chars
     def _count_tokens_text(s: str) -> int:
@@ -247,7 +248,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 cur_text = "".join(buf)
 
             buf.append(line)
-            sources.append({"type": "chat", "index": idx, "role": role, "chat_time": chat_time})
+            sources.append(
+                {
+                    "type": "chat",
+                    "index": idx,
+                    "role": role,
+                    "content": content,
+                    "chat_time": chat_time,
+                }
+            )
             cur_text = "".join(buf)
 
         if buf:
