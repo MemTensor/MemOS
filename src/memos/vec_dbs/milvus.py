@@ -34,17 +34,28 @@ class MilvusVecDB(BaseVecDB):
 
     def create_schema(self):
         """Create schema for the milvus collection."""
-        from pymilvus import DataType
+        from pymilvus import DataType, Function, FunctionType
 
         schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
         schema.add_field(
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
         )
-        schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535)
+        analyzer_params = {"tokenizer": "standard", "filter": ["lowercase"]}
+        schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535, analyzer_params=analyzer_params, enable_match=True, enable_analyzer=True)
+        schema.add_field(field_name="original_text", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
         )
         schema.add_field(field_name="payload", datatype=DataType.JSON)
+
+        schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)
+        bm25_function = Function(
+            name="bm25",
+            function_type=FunctionType.BM25,
+            input_field_names=["memory"],
+            output_field_names="sparse_vector",
+        )
+        schema.add_function(bm25_function)
 
         return schema
 
@@ -53,6 +64,11 @@ class MilvusVecDB(BaseVecDB):
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="vector", index_type="FLAT", metric_type=self._get_metric_type()
+        )
+        index_params.add_index(
+            field_name="sparse_vector",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="BM25",
         )
 
         return index_params
@@ -102,12 +118,85 @@ class MilvusVecDB(BaseVecDB):
         """Check if a collection exists."""
         return self.client.has_collection(collection_name=name)
 
+    def _dense_search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        top_k: int,
+        filter: str = "",
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Dense search for similar items in the database."""
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query_vector],
+            limit=top_k,
+            filter=filter,
+            output_fields=["*"],
+            anns_field="vector",
+        )
+        return results
+
+    def _sparse_search(
+        self,
+        collection_name: str,
+        query: str,
+        top_k: int,
+        filter: str = "",
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Sparse search for similar items in the database."""
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query],
+            limit=top_k,
+            filter=filter,
+            output_fields=["*"],
+            anns_field="sparse_vector",
+        )
+        return results
+
+    def _hybrid_search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        query: str,
+        top_k: int,
+        filter: str | None = None,
+        ranker_type: str = "rrf",  # rrf, weighted
+        sparse_weight=1.0,
+        dense_weight=1.0,
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Hybrid search for similar items in the database."""
+        from pymilvus import AnnSearchRequest, RRFRanker, WeightedRanker
+        # Set up BM25 search request
+        expr = filter if filter else None
+        sparse_request = AnnSearchRequest(
+            data=[query], anns_field="sparse_vector", param={"metric_type": "BM25"}, limit=top_k, expr=expr
+        )
+        # Set up dense vector search request
+        dense_request = AnnSearchRequest(
+            data=[query_vector], anns_field="vector", param={"metric_type": self._get_metric_type()}, limit=top_k, expr=expr
+        )
+        ranker = RRFRanker() if ranker_type == "rrf" else WeightedRanker(sparse_weight, dense_weight)
+        results = self.client.hybrid_search(
+            collection_name=collection_name,
+            reqs=[sparse_request, dense_request],
+            ranker=ranker,
+            limit=top_k,
+            output_fields=["*"],
+        )
+        return results
+
     def search(
         self,
         query_vector: list[float],
+        query: str,
         collection_name: str,
         top_k: int,
         filter: dict[str, Any] | None = None,
+        search_type: str = "dense",  # dense, sparse, hybrid 
     ) -> list[MilvusVecDBItem]:
         """
         Search for similar items in the database.
@@ -124,13 +213,13 @@ class MilvusVecDB(BaseVecDB):
         # Convert filter to Milvus expression
         expr = self._dict_to_expr(filter) if filter else ""
 
-        results = self.client.search(
-            collection_name=collection_name,
-            data=[query_vector],
-            limit=top_k,
-            filter=expr,
-            output_fields=["*"],  # Return all fields
-        )
+        search_func_map = {
+            "dense": self._dense_search,
+            "sparse": self._sparse_search,
+            "hybrid": self._hybrid_search,
+        }
+
+        results = search_func_map[search_type](collection_name=collection_name, query_vector=query_vector, query=query, top_k=top_k, filter=expr)
 
         items = []
         for hit in results[0]:
@@ -140,6 +229,7 @@ class MilvusVecDB(BaseVecDB):
                 MilvusVecDBItem(
                     id=str(entity.get("id")),
                     memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
                     payload=entity.get("payload", {}),
                     score=1 - float(hit["distance"]),
@@ -196,6 +286,7 @@ class MilvusVecDB(BaseVecDB):
         return MilvusVecDBItem(
             id=entity["id"],
             memory=entity.get("memory"),
+            original_text=entity.get("original_text"),
             vector=entity.get("vector"),
             payload=payload,
         )
@@ -217,6 +308,7 @@ class MilvusVecDB(BaseVecDB):
                 MilvusVecDBItem(
                     id=entity["id"],
                     memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
                     payload=payload,
                 )
@@ -264,6 +356,7 @@ class MilvusVecDB(BaseVecDB):
                         MilvusVecDBItem(
                             id=entity["id"],
                             memory=entity.get("memory"),
+                            original_text=entity.get("original_text"),
                             vector=entity.get("vector"),
                             payload=payload,
                         )
@@ -321,6 +414,7 @@ class MilvusVecDB(BaseVecDB):
             entity = {
                 "id": item.id,
                 "memory": item.memory,
+                "original_text": item.original_text,
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }

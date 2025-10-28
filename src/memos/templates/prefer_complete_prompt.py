@@ -9,9 +9,9 @@ Notes:
 - When the user modifies or updates their preferences for the same topic or event, extract the complete evolution process of their preference changes, including both the original and updated preferences.
 
 Requirements:
-1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume.
-2. Output should be a list of concise natural language summaries and the corresponding context summary, context summary must contain complete information of the conversation fragment that the preference is mentioned.
-3. If multiple preferences are mentioned within the same topic, you need to merge the preferences and context summary.
+1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume. If the user mentions reasons for their preferences, include those reasons as well.
+2. Output should be a list of entries concise natural language summaries and the corresponding context summary, context summary must contain complete information of the conversation fragment that the preference is mentioned.
+3. If multiple preferences are mentioned within the same topic or domain, you MUST combine them into a single entry, keep each entry information complete.
 
 Conversation:
 {qa_pair}
@@ -80,6 +80,43 @@ Please output JSON format:
 {new_information}
 """
 
+NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_FINE = """
+You are a preference memory comparison expert. Analyze if the new preference memory describes the same topic as any retrieved memories by considering BOTH the memory field and preference field. At most one retrieved memory can match the new memory.
+
+**Task:** Compare the new preference memory with retrieved memories to determine if they discuss the same topic and whether an update is needed.
+
+**Comparison Criteria:**
+- **Memory field**: Compare the core topics, scenarios, and contexts described
+- **Preference field**: Compare the actual preference statements, choices, and attitudes expressed
+- **Same topic**: Both memory AND preference content relate to the same subject matter
+- **Different topics**: Either memory OR preference content differs significantly
+- **Content evolution**: Same topic but preference has changed/evolved or memory has been updated
+- **Identical content**: Both memory and preference fields are essentially the same
+
+**Decision Logic:**
+- Same core topic (both memory and preference) = need to check if update is needed
+- Different topics (either memory or preference differs) = no update needed  
+- If same topic but content has changed/evolved = update needed
+- If same topic and content is identical = update needed
+
+**Output JSON:**
+```json
+{
+  "need_update": true/false,
+  "id": "ID of the memory being updated (empty string if no update needed)",
+  "new_memory": "Updated memory field with merged/evolved memory content (empty string if no update needed)",
+  "new_preference": "Updated preference field with merged/evolved preference content (empty string if no update needed)",
+  "reasoning": "Brief explanation of the comparison considering both memory and preference fields"
+}
+```
+
+**New preference memory:**
+{new_memory}
+
+**Retrieved preference memories:**
+{retrieved_memories}
+"""
+
 
 NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE = """
 # User Preference Memory Management Agent
@@ -108,7 +145,7 @@ Retrieved preference memories (retrieved_memories):
 
 1. Analyze each retrieved memory and determine its relationship to the new memory:
    - **Unrelated** → perform `"ADD"` (insert as a new independent memory);
-   - **Related** → perform `"UPDATE"` (refine, supplement, or merge both the `preference` and the `context_summary`);
+   - **Related** → perform `"UPDATE"` (refine, supplement, or merge both the `preference` and the `context_summary`, while preserving change history trajectory information);
    - **Conflicting or outdated** → perform `"DELETE"` (remove obsolete or contradictory memory).
 
 2. If multiple retrieved memories describe the same preference theme, merge them into one updated memory entry, combining both their `preference` information and their `context_summary` in a coherent and concise way.
