@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .base import BaseReranker
-
+from memos.utils import timed
 
 if TYPE_CHECKING:
     from memos.memories.textual.item import TextualMemoryItem
 
 
 class NoopReranker(BaseReranker):
+    @timed
     def rerank(
         self, query: str, graph_results: list, top_k: int, **kwargs
     ) -> list[tuple[TextualMemoryItem, float]]:

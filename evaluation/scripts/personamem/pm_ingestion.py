@@ -1,48 +1,67 @@
 import argparse
-import os
-import sys
 import csv
 import json
+import os
+import sys
+import time
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from tqdm import tqdm
-from utils.client import mem0_client,zep_client,memos_api_client
-from zep_cloud.types import Message
+
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def ingest_session(session, user_id, session_id, frame, client):
     messages = []
     if frame == "zep":
         pass
+    elif "mem0" in frame:
         for idx, msg in enumerate(session):
+            messages.append({"role": msg["role"], "content": msg["content"][:8000]})
             print(
-                f"[{frame}] 💬 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}...")
-            client.memory.add(messages=[Message(role=msg["role"], role_type=msg["role"], content=msg["content"], )], )
-    elif frame == "mem0-local" or frame == "mem0-api":
-        for idx, msg in enumerate(session):
-            messages.append({"role": msg["role"], "content": msg["content"]})
-            print(
-                f"[{frame}] 📝 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}...")
-        if frame == "mem0-local":
-            client.add(messages=messages, user_id=user_id)
-        elif frame == "mem0-api":
-            client.add(messages=messages,
-                       user_id=user_id,
-                       session_id=session_id,
-                       version="v2", )
+                f"[{frame}] 📝 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}..."
+            )
+        timestamp_add = int(time.time() * 100)
+        client.add(messages=messages, user_id=user_id, timestamp=timestamp_add)
         print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
-    elif frame == "memos-local" or frame == "memos-api":
-        if os.getenv("PRE_SPLIT_CHUNK")=="true":
+    elif frame == "memos-api":
+        if os.getenv("PRE_SPLIT_CHUNK") == "true":
             for i in range(0, len(session), 10):
-                messages = session[i: i + 10]
+                messages = session[i : i + 10]
                 client.add(messages=messages, user_id=user_id, conv_id=session_id)
                 print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
         else:
             client.add(messages=session, user_id=user_id, conv_id=session_id)
             print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
+    elif frame == "memobase":
+        for _idx, msg in enumerate(session):
+            if msg["role"] != "system":
+                messages.append(
+                    {
+                        "role": msg["role"],
+                        "content": msg["content"][:8000],
+                        "created_at": datetime.now().isoformat(),
+                    }
+                )
+            client.add(messages, user_id)
+        print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
+    elif frame == "supermemory":
+        for _idx, msg in enumerate(session):
+            messages.append(
+                {
+                    "role": msg["role"],
+                    "content": msg["content"][:8000],
+                    "chat_time": datetime.now().astimezone().isoformat(),
+                }
+            )
+        client.add(messages, user_id)
+    elif frame == "memu":
+        for _idx, msg in enumerate(session):
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        client.add(messages, user_id, datetime.now().astimezone().isoformat())
 
 
 def build_jsonl_index(jsonl_path):
@@ -51,7 +70,7 @@ def build_jsonl_index(jsonl_path):
     Assumes each line is a JSON object with a single key-value pair.
     """
     index = {}
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         while True:
             offset = f.tell()
             line = f.readline()
@@ -63,14 +82,14 @@ def build_jsonl_index(jsonl_path):
 
 
 def load_context_by_id(jsonl_path, offset):
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
+    with open(jsonl_path, encoding="utf-8") as f:
         f.seek(offset)
         item = json.loads(f.readline())
         return next(iter(item.values()))
 
 
 def load_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         for _, row in enumerate(reader, start=1):
             row_data = {}
@@ -82,7 +101,7 @@ def load_rows(csv_path):
 def load_rows_with_context(csv_path, jsonl_path):
     jsonl_index = build_jsonl_index(jsonl_path)
 
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+    with open(csv_path, newline="", encoding="utf-8") as csvfile:
         reader = csv.DictReader(csvfile)
         prev_sid = None
         prev_context = None
@@ -102,13 +121,13 @@ def load_rows_with_context(csv_path, jsonl_path):
 
 
 def count_csv_rows(csv_path):
-    with open(csv_path, mode='r', newline='', encoding='utf-8') as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         return sum(1 for _ in f) - 1
 
 
 def ingest_conv(row_data, context, version, conv_idx, frame):
     end_index_in_shared_context = row_data["end_index_in_shared_context"]
-    context = context[:int(end_index_in_shared_context)]
+    context = context[: int(end_index_in_shared_context)]
     user_id = f"pm_exper_user_{conv_idx}_{version}"
     print(f"👤 User ID: {user_id}")
     print("\n" + "=" * 80)
@@ -116,38 +135,45 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
     print("=" * 80)
 
     if frame == "zep":
-        client = zep_client()
+        from utils.client import ZepClient
+
+        client = ZepClient()
         print("🔌 Using Zep client for ingestion...")
         client.user.delete(user_id)
         print(f"🗑️  Deleted existing user {user_id} from Zep memory...")
         client.user.add(user_id=user_id)
         print(f"➕ Added user {user_id} to Zep memory...")
-    elif frame == "mem0-local":
-        client = mem0_client(mode="local")
-        print("🔌 Using Mem0 Local client for ingestion...")
-        client.delete_all(user_id=user_id)
-        print(f"🗑️  Deleted existing memories for user {user_id}...")
-    elif frame == "mem0-api":
-        client = mem0_client(mode="api")
-        print("🔌 Using Mem0 API client for ingestion...")
-        client.delete_all(user_id=user_id)
-        print(f"🗑️  Deleted existing memories for user {user_id}...")
-    elif frame == "memos-local":
-        client = memos_client(
-            mode="local",
-            db_name=f"pm_{frame}-{version}",
-            user_id=user_id,
-            top_k=20,
-            mem_cube_path=f"results/pm/{frame}-{version}/storages/{user_id}",
-            mem_cube_config_path="configs/mu_mem_cube_config.json",
-            mem_os_config_path="configs/mos_memos_config.json",
-            addorsearch="add",
-        )
-        print("🔌 Using Memos Local client for ingestion...")
-    elif frame == "memos-api":
-        client = memos_api_client()
+    elif frame == "mem0" or frame == "mem0_graph":
+        from utils.client import Mem0Client
 
-    ingest_session(session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client)
+        client = Mem0Client(enable_graph="graph" in frame)
+        print("🔌 Using Mem0 client for ingestion...")
+        client.client.delete_all(user_id=user_id)
+        print(f"🗑️  Deleted existing memories for user {user_id}...")
+
+        print(f"🗑️  Deleted existing memories for user {user_id}...")
+    elif frame == "memos-api":
+        from utils.client import MemosApiClient
+
+        client = MemosApiClient()
+    elif frame == "memobase":
+        from utils.client import MemobaseClient
+
+        client = MemobaseClient()
+        print("🔌 Using Memobase client for ingestion...")
+        client.delte_user(user_id)
+    elif frame == "supermemory":
+        from utils.client import SupermemoryClient
+
+        client = SupermemoryClient()
+    elif frame == "memu":
+        from utils.client import MemuClient
+
+        client = MemuClient()
+
+    ingest_session(
+        session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client
+    )
     print(f"✅ Ingestion of conversation {conv_idx} completed")
     print("=" * 80)
 
@@ -170,16 +196,25 @@ def main(frame, version, num_workers=2):
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_idx = {
-            executor.submit(ingest_conv, row_data=row_data, context=context, version=version, conv_idx=idx,
-                            frame=frame, ): idx
-            for idx, (row_data, context) in enumerate(all_data)}
+            executor.submit(
+                ingest_conv,
+                row_data=row_data,
+                context=context,
+                version=version,
+                conv_idx=idx,
+                frame=frame,
+            ): idx
+            for idx, (row_data, context) in enumerate(all_data)
+        }
 
-        for future in tqdm(as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"):
+        for future in tqdm(
+            as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
+        ):
             idx = future_to_idx[future]
             try:
                 future.result()
             except Exception as exc:
-                print(f'\n❌ Conversation {idx} generated an exception: {exc}')
+                print(f"\n❌ Conversation {idx} generated an exception: {exc}")
 
     end_time = datetime.now()
     elapsed_time = end_time - start_time
@@ -195,10 +230,18 @@ def main(frame, version, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Ingestion Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"],
-                        default='memos-api')
-    parser.add_argument("--version", type=str, default="0925-1", help="Version of the evaluation framework.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory", "zep"],
+        default="memos-api",
+    )
+    parser.add_argument(
+        "--version", type=str, default="0925-1", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3, help="Number of parallel workers for processing users."
+    )
     args = parser.parse_args()
 
     main(frame=args.lib, version=args.version, num_workers=args.workers)

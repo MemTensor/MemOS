@@ -1,23 +1,23 @@
+import argparse
 import asyncio
 import json
-import re
-import argparse
-from typing import Dict, Any
-from collections import Counter
-from tqdm.asyncio import tqdm
 import os
+import re
+
+from collections import Counter
+from typing import Any
+
 import pandas as pd
+
 from dotenv import load_dotenv
 from openai import OpenAI
+from tqdm.asyncio import tqdm
+
 
 load_dotenv()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_URL = os.getenv("OPENAI_BASE_URL")
-
-INPUT_FILE = "./results/prefeval/pref_memos_process.jsonl"
-OUTPUT_FILE = "./results/prefeval/eval_pref_memos.jsonl"
-OUTPUT_EXCEL_FILE = "./results/prefeval/eval_pref_memos_summary.xlsx"
 
 
 async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
@@ -34,7 +34,7 @@ async def call_gpt4o_mini_async(client: OpenAI, prompt: str) -> str:
         )
         return response.choices[0].message.content
     except Exception as e:
-        print(f"API call failed: {str(e)}")
+        print(f"API call failed: {e!s}")
         return ""
 
 
@@ -45,7 +45,7 @@ def parse_xml_response(response: str, tag: str) -> str:
 
 async def evaluate_violate_preference_async(
     client: OpenAI, preference: str, question: str, response: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's response violates the user's stated preference.
 Evaluate the response based on these criteria:
 
@@ -77,8 +77,8 @@ Examine the response meticulously and answer. Answer in this exact XML format:
 
 async def evaluate_acknowledge_preference_async(
     client: OpenAI, question: str, response: str
-) -> Dict[str, str]:
-    prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query. 
+) -> dict[str, str]:
+    prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant acknowledges any user preference in answering the user's query.
 
 Evaluate the response based on these stringent criteria:
 
@@ -86,7 +86,7 @@ Evaluate the response based on these stringent criteria:
 
 Answer "Yes" if:
 
-1. The response explicitly mentions or refers to a user preference in answering the user's question. Examples include: "Based on your previous preference for xxxx"; "Based on your previous preference, I would suggest you xxxx"; "Since you mentioned you prefer/dislike xxxx"; "Since you are a xxxx"; "I will recommend the following given your preference for xxx", etc. You should extract the "xxxx" in your answer. If it only says "Based on our previous conversation, I recommend..." and does not explicitly mention any preference, you should answer 'No'. 
+1. The response explicitly mentions or refers to a user preference in answering the user's question. Examples include: "Based on your previous preference for xxxx"; "Based on your previous preference, I would suggest you xxxx"; "Since you mentioned you prefer/dislike xxxx"; "Since you are a xxxx"; "I will recommend the following given your preference for xxx", etc. You should extract the "xxxx" in your answer. If it only says "Based on our previous conversation, I recommend..." and does not explicitly mention any preference, you should answer 'No'.
 2. The response assumes the user preference in answering the user's question implicitly. For example, when the user asks 'Can you recommend me cars to drive?', if the response is 'Based on your preference, I will recommend non-EV cars, ...', then this indicates the assistant assumes that the user's preference is a dislike of EV cars, and you should answer 'Yes'.
 
 Answer "No" if the response does not mention or refer to any user preference explicitly or implicitly. If you cannot extract the sentence stating what the preference is, answer 'No'.
@@ -107,7 +107,7 @@ Examine the response meticulously and answer. Please answer in this exact XML fo
 
 async def evaluate_hallucinate_preference_async(
     client: OpenAI, preference: str, restatement: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     if not restatement.strip():
         return {"explanation": "No restatement provided by assistant", "answer": "No"}
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant's restatement of the user's stated preference is the same preference. Evaluate the response based on these stringent criteria to answer if the assistant has hallucinated the preference or not:
@@ -124,10 +124,10 @@ Answer "No" if has not hallucinated:
 2. The assistant's restatement is a minor paraphrase that fully preserves the meaning and intent of the original preference.
 3. The restatement is just empty, no hallucination.
 
-Here is the information: 
-Original user preference: "{preference}" 
-Assistant's restatement: "{restatement}" 
-Examine the original preference and the assistant's restatement meticulously and answer. Please answer in this exact XML format without any other additional text: 
+Here is the information:
+Original user preference: "{preference}"
+Assistant's restatement: "{restatement}"
+Examine the original preference and the assistant's restatement meticulously and answer. Please answer in this exact XML format without any other additional text:
 <explanation>[1 short sentence explanation]</explanation>
 <answer>[Yes/No]</answer>"""
 
@@ -140,7 +140,7 @@ Examine the original preference and the assistant's restatement meticulously and
 
 async def evaluate_helpful_response_async(
     client: OpenAI, question: str, response: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     prompt = f"""You will analyze a conversation between a user and an assistant, focusing on whether the assistant provides any substantive response to the user's query.
 Evaluate the response based on these stringent criteria:
 
@@ -178,7 +178,7 @@ Examine the response meticulously and answer. Answer in this exact XML format:
     }
 
 
-def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
+def classify_error_type(evaluation_results: dict[str, Any]) -> str:
     violate = evaluation_results["violate_preference"]["answer"]
     acknowledge = evaluation_results["acknowledge_preference"]["answer"]
     hallucinate = evaluation_results["hallucinate_preference"]["answer"]
@@ -196,7 +196,7 @@ def classify_error_type(evaluation_results: Dict[str, Any]) -> str:
         return "Personalized Response"
 
 
-async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) -> Dict[str, Any]:
+async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) -> dict[str, Any]:
     async with semaphore:
         data = json.loads(line.strip())
         preference = data["preference"]
@@ -227,7 +227,7 @@ async def process_line(line: str, client: OpenAI, semaphore: asyncio.Semaphore) 
         return result
 
 
-def log_summary(error_counter: Counter, total_samples: int) -> Dict[str, Dict[str, float]]:
+def log_summary(error_counter: Counter, total_samples: int) -> dict[str, dict[str, float]]:
     summary_data = {}
     print("\n--- Error Type Summary ---")
 
@@ -251,13 +251,14 @@ def log_summary(error_counter: Counter, total_samples: int) -> Dict[str, Dict[st
 
 
 def generate_excel_summary(
-    summary_results: Dict[str, Dict[str, float]],
+    summary_results: dict[str, dict[str, float]],
     avg_search_time: float,
     avg_context_tokens: float,
     avg_add_time: float,
+    output_excel_file: str,
     model_name: str = "gpt-4o-mini",
 ):
-    print(f"Generating Excel summary at {OUTPUT_EXCEL_FILE}...")
+    print(f"Generating Excel summary at {output_excel_file}...")
 
     def get_pct(key):
         return summary_results.get(key, {}).get("percentage", 0)
@@ -282,7 +283,7 @@ def generate_excel_summary(
 
     df = pd.DataFrame(data)
 
-    with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(output_excel_file, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Summary")
 
         workbook = writer.book
@@ -300,10 +301,10 @@ def generate_excel_summary(
         bold_pct_format = workbook.add_format({"num_format": "0.0%", "bold": True})
         worksheet.set_column("F:F", 18, bold_pct_format)
 
-    print(f"Successfully saved summary to {OUTPUT_EXCEL_FILE}")
+    print(f"Successfully saved summary to {output_excel_file}")
 
 
-async def main(concurrency_limit: int):
+async def main(concurrency_limit: int, input_file: str, output_file: str, output_excel_file: str):
     semaphore = asyncio.Semaphore(concurrency_limit)
     error_counter = Counter()
 
@@ -313,17 +314,17 @@ async def main(concurrency_limit: int):
     total_add_time = 0
 
     print(f"Starting evaluation with a concurrency limit of {concurrency_limit}...")
-    print(f"Input file: {INPUT_FILE}")
-    print(f"Output JSONL: {OUTPUT_FILE}")
-    print(f"Output Excel: {OUTPUT_EXCEL_FILE}")
+    print(f"Input file: {input_file}")
+    print(f"Output JSONL: {output_file}")
+    print(f"Output Excel: {output_excel_file}")
 
     client = OpenAI(api_key=API_KEY, base_url=API_URL)
 
     try:
-        with open(INPUT_FILE, "r", encoding="utf-8") as f:
+        with open(input_file, encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
-        print(f"Error: Input file not found at '{INPUT_FILE}'")
+        print(f"Error: Input file not found at '{input_file}'")
         return
 
     if not lines:
@@ -332,7 +333,7 @@ async def main(concurrency_limit: int):
 
     tasks = [process_line(line, client, semaphore) for line in lines]
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as outfile:
+    with open(output_file, "w", encoding="utf-8") as outfile:
         pbar = tqdm(
             asyncio.as_completed(tasks),
             total=len(tasks),
@@ -382,6 +383,7 @@ async def main(concurrency_limit: int):
             avg_search_time,
             avg_context_tokens,
             avg_add_time,
+            output_excel_file,
         )
     except Exception as e:
         print(f"\nFailed to generate Excel file: {e}")
@@ -389,6 +391,11 @@ async def main(concurrency_limit: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate assistant responses from a JSONL file.")
+
+    parser.add_argument(
+        "--input", type=str, required=True, help="Path to the input JSONL file from pref_memos.py."
+    )
+
     parser.add_argument(
         "--concurrency-limit",
         type=int,
@@ -397,4 +404,17 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    asyncio.run(main(concurrency_limit=args.concurrency_limit))
+    input_path = args.input
+    output_dir = os.path.dirname(input_path)
+
+    output_jsonl_path = os.path.join(output_dir, "eval_pref_memos.jsonl")
+    output_excel_path = os.path.join(output_dir, "eval_pref_memos_summary.xlsx")
+
+    asyncio.run(
+        main(
+            concurrency_limit=args.concurrency_limit,
+            input_file=input_path,
+            output_file=output_jsonl_path,
+            output_excel_file=output_excel_path,
+        )
+    )

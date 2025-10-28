@@ -1,5 +1,3 @@
-from aliyun.opentelemetry.instrumentation.auto_instrumentation import sitecustomize
-
 import logging
 
 from fastapi import FastAPI, HTTPException

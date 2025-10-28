@@ -13,6 +13,7 @@ from memos.mem_scheduler.orm_modules.monitor_models import (
     DBManagerForMemoryMonitorManager,
     DBManagerForQueryMonitorQueue,
 )
+from memos.mem_scheduler.orm_modules.redis_model import RedisDBManager
 from memos.mem_scheduler.schemas.monitor_schemas import (
     MemoryMonitorItem,
     MemoryMonitorManager,
@@ -297,3 +298,150 @@ class TestBaseDBManager:
 
         manager1.close()
         manager2.close()
+
+
+class TestRedisDBManager:
+    """Test class for RedisDBManager functionality"""
+
+    @pytest.fixture
+    def memory_manager_obj(self):
+        """Create a MemoryMonitorManager object for testing"""
+        return MemoryMonitorManager(
+            user_id=TEST_USER_ID,
+            mem_cube_id=TEST_MEM_CUBE_ID,
+            memories=[
+                MemoryMonitorItem(
+                    item_id="redis-test-123",
+                    memory_text="Redis test memory",
+                    tree_memory_item=None,
+                    tree_memory_item_mapping_key="redis_test_key",
+                    keywords_score=0.8,
+                    sorting_score=0.9,
+                    importance_score=0.7,
+                    recording_count=3,
+                )
+            ],
+        )
+
+    @pytest.fixture
+    def mock_redis_client(self):
+        """Create a mock Redis client for testing"""
+        try:
+            from unittest.mock import MagicMock
+
+            # Create a mock Redis client
+            mock_client = MagicMock()
+
+            # Mock Redis data storage
+            mock_data = {}
+
+            def mock_set(key, value, nx=False, ex=None, **kwargs):
+                if nx and key in mock_data:
+                    # NX means "only set if not exists"
+                    return False  # Redis returns False when NX fails
+                mock_data[key] = value
+                return True
+
+            def mock_get(key):
+                return mock_data.get(key)
+
+            def mock_hset(key, mapping=None, **kwargs):
+                if key not in mock_data:
+                    mock_data[key] = {}
+                if mapping:
+                    mock_data[key].update(mapping)
+                if kwargs:
+                    mock_data[key].update(kwargs)
+                return len(mapping) if mapping else len(kwargs)
+
+            def mock_hgetall(key):
+                return mock_data.get(key, {})
+
+            def mock_delete(*keys):
+                deleted = 0
+                for key in keys:
+                    if key in mock_data:
+                        del mock_data[key]
+                        deleted += 1
+                return deleted
+
+            def mock_keys(pattern):
+                import fnmatch
+
+                return [key for key in mock_data if fnmatch.fnmatch(key, pattern)]
+
+            def mock_ping():
+                return True
+
+            def mock_close():
+                pass
+
+            # Configure mock methods
+            mock_client.set = mock_set
+            mock_client.get = mock_get
+            mock_client.hset = mock_hset
+            mock_client.hgetall = mock_hgetall
+            mock_client.delete = mock_delete
+            mock_client.keys = mock_keys
+            mock_client.ping = mock_ping
+            mock_client.close = mock_close
+
+            return mock_client
+
+        except ImportError:
+            pytest.skip("Redis package not available for testing")
+
+    @pytest.fixture
+    def redis_manager(self, mock_redis_client, memory_manager_obj):
+        """Create RedisDBManager instance with mock Redis client"""
+        manager = RedisDBManager(
+            user_id=TEST_USER_ID,
+            mem_cube_id=TEST_MEM_CUBE_ID,
+            obj=memory_manager_obj,
+            lock_timeout=10,
+            redis_client=mock_redis_client,
+        )
+        yield manager
+        manager.close()
+
+    def test_redis_manager_initialization(self, mock_redis_client):
+        """Test RedisDBManager initialization"""
+        manager = RedisDBManager(
+            user_id=TEST_USER_ID, mem_cube_id=TEST_MEM_CUBE_ID, redis_client=mock_redis_client
+        )
+
+        assert manager.user_id == TEST_USER_ID
+        assert manager.mem_cube_id == TEST_MEM_CUBE_ID
+        assert manager.redis_client is mock_redis_client
+        assert manager.orm_class.__name__ == "RedisLockableORM"
+        assert manager.obj_class == MemoryMonitorManager
+
+        manager.close()
+
+    def test_redis_lockable_orm_save_load(self, mock_redis_client):
+        """Test RedisLockableORM save and load operations"""
+        from memos.mem_scheduler.orm_modules.redis_model import RedisLockableORM
+
+        orm = RedisLockableORM(
+            redis_client=mock_redis_client, user_id=TEST_USER_ID, mem_cube_id=TEST_MEM_CUBE_ID
+        )
+
+        # Test save
+        orm.serialized_data = '{"test": "data"}'
+        orm.version_control = "1"
+        orm.lock_acquired = True
+        orm.lock_expiry = datetime.now()
+
+        orm.save()
+
+        # Test load
+        new_orm = RedisLockableORM(
+            redis_client=mock_redis_client, user_id=TEST_USER_ID, mem_cube_id=TEST_MEM_CUBE_ID
+        )
+
+        exists = new_orm.load()
+        assert exists
+        assert new_orm.serialized_data == '{"test": "data"}'
+        assert new_orm.version_control == "1"
+        # Note: lock_acquired is False after load by design - locks are managed separately
+        assert not new_orm.lock_acquired

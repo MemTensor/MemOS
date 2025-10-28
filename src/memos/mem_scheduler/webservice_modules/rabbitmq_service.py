@@ -67,39 +67,42 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         """
         Establish connection to RabbitMQ using pika.
         """
-        from pika.adapters.select_connection import SelectConnection
+        try:
+            from pika.adapters.select_connection import SelectConnection
 
-        if config is None:
-            if config_path is None and AuthConfig.default_config_exists():
-                auth_config = AuthConfig.from_local_config()
-            elif Path(config_path).exists():
-                auth_config = AuthConfig.from_local_config(config_path=config_path)
+            if config is None:
+                if config_path is None and AuthConfig.default_config_exists():
+                    auth_config = AuthConfig.from_local_config()
+                elif Path(config_path).exists():
+                    auth_config = AuthConfig.from_local_config(config_path=config_path)
+                else:
+                    logger.error("Fail to initialize auth_config")
+                    return
+                self.rabbitmq_config = auth_config.rabbitmq
+            elif isinstance(config, RabbitMQConfig):
+                self.rabbitmq_config = config
+            elif isinstance(config, dict):
+                self.rabbitmq_config = AuthConfig.from_dict(config).rabbitmq
             else:
-                logger.error("Fail to initialize auth_config")
-                return
-            self.rabbitmq_config = auth_config.rabbitmq
-        elif isinstance(config, RabbitMQConfig):
-            self.rabbitmq_config = config
-        elif isinstance(config, dict):
-            self.rabbitmq_config = AuthConfig.from_dict(config).rabbitmq
-        else:
-            logger.error("Not implemented")
+                logger.error("Not implemented")
 
-            # Start connection process
-        parameters = self.get_rabbitmq_connection_param()
-        self.rabbitmq_connection = SelectConnection(
-            parameters,
-            on_open_callback=self.on_rabbitmq_connection_open,
-            on_open_error_callback=self.on_rabbitmq_connection_error,
-            on_close_callback=self.on_rabbitmq_connection_closed,
-        )
+                # Start connection process
+            parameters = self.get_rabbitmq_connection_param()
+            self.rabbitmq_connection = SelectConnection(
+                parameters,
+                on_open_callback=self.on_rabbitmq_connection_open,
+                on_open_error_callback=self.on_rabbitmq_connection_error,
+                on_close_callback=self.on_rabbitmq_connection_closed,
+            )
 
-        # Start IOLoop in dedicated thread
-        self._io_loop_thread = threading.Thread(
-            target=self.rabbitmq_connection.ioloop.start, daemon=True
-        )
-        self._io_loop_thread.start()
-        logger.info("RabbitMQ connection process started")
+            # Start IOLoop in dedicated thread
+            self._io_loop_thread = threading.Thread(
+                target=self.rabbitmq_connection.ioloop.start, daemon=True
+            )
+            self._io_loop_thread.start()
+            logger.info("RabbitMQ connection process started")
+        except Exception:
+            logger.error("Fail to initialize auth_config", exc_info=True)
 
     def get_rabbitmq_queue_size(self) -> int:
         """Get the current number of messages in the queue.

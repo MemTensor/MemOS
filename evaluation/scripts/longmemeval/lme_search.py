@@ -3,6 +3,7 @@ import json
 import os
 import sys
 
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,13 +11,12 @@ from datetime import datetime
 from time import time
 
 import pandas as pd
+
 from tqdm import tqdm
 from utils.prompts import (
     MEM0_CONTEXT_TEMPLATE,
     MEM0_GRAPH_CONTEXT_TEMPLATE,
-    MEMOBASE_CONTEXT_TEMPLATE,
     MEMOS_CONTEXT_TEMPLATE,
-    ZEP_CONTEXT_TEMPLATE,
 )
 
 
@@ -44,7 +44,10 @@ def mem0_search(client, query, user_id, top_k):
 def memos_search(client, query, user_id, top_k):
     start = time()
     results = client.search(query=query, user_id=user_id, top_k=top_k)
-    context = "\n".join([i["memory"] for i in results["text_mem"][0]["memories"]])
+    context = (
+        "\n".join([i["memory"] for i in results["text_mem"][0]["memories"]])
+        + f"\n{results['pref_mem']}"
+    )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=context)
     duration_ms = (time() - start) * 1000
     return context, duration_ms
@@ -114,10 +117,6 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        users = client.client.get_all_users(limit=5000)
-        for u in users:
-            if u["additional_fields"]["user_id"] == user_id:
-                user_id = u["id"]
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api":
         from utils.client import MemosApiClient

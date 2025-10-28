@@ -1,10 +1,14 @@
 import argparse
 import os
 import sys
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+
 import pandas as pd
+
 from tqdm import tqdm
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -80,11 +84,7 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"]["user_id"] == user_id:
-                client.client.delete_user(user["id"])
-        user_id = client.client.add_user({"user_id": user_id})
+        client.delete_user(user_id)
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -130,7 +130,7 @@ def main(frame, version, num_workers=2):
     success_records = []
     record_file = f"results/lme/{frame}-{version}/success_records.txt"
     if os.path.exists(record_file):
-        with open(record_file, "r") as f:
+        with open(record_file) as f:
             for i in f.readlines():
                 success_records.append(i.strip())
 

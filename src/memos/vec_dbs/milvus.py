@@ -4,7 +4,7 @@ from memos.configs.vec_db import MilvusVecDBConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.vec_dbs.base import BaseVecDB
-from memos.vec_dbs.item import VecDBItem
+from memos.vec_dbs.item import MilvusVecDBItem
 
 
 logger = get_logger(__name__)
@@ -40,6 +40,7 @@ class MilvusVecDB(BaseVecDB):
         schema.add_field(
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
         )
+        schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
         )
@@ -107,7 +108,7 @@ class MilvusVecDB(BaseVecDB):
         collection_name: str,
         top_k: int,
         filter: dict[str, Any] | None = None,
-    ) -> list[VecDBItem]:
+    ) -> list[MilvusVecDBItem]:
         """
         Search for similar items in the database.
 
@@ -136,8 +137,9 @@ class MilvusVecDB(BaseVecDB):
             entity = hit.get("entity", {})
 
             items.append(
-                VecDBItem(
-                    id=str(hit["id"]),
+                MilvusVecDBItem(
+                    id=str(entity.get("id")),
+                    memory=entity.get("memory"),
                     vector=entity.get("vector"),
                     payload=entity.get("payload", {}),
                     score=1 - float(hit["distance"]),
@@ -178,7 +180,7 @@ class MilvusVecDB(BaseVecDB):
         }
         return metric_map.get(self.config.distance_metric, "L2")
 
-    def get_by_id(self, collection_name: str, id: str) -> VecDBItem | None:
+    def get_by_id(self, collection_name: str, id: str) -> MilvusVecDBItem | None:
         """Get a single item by ID."""
         results = self.client.get(
             collection_name=collection_name,
@@ -191,13 +193,14 @@ class MilvusVecDB(BaseVecDB):
         entity = results[0]
         payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
 
-        return VecDBItem(
+        return MilvusVecDBItem(
             id=entity["id"],
+            memory=entity.get("memory"),
             vector=entity.get("vector"),
             payload=payload,
         )
 
-    def get_by_ids(self, collection_name: str, ids: list[str]) -> list[VecDBItem]:
+    def get_by_ids(self, collection_name: str, ids: list[str]) -> list[MilvusVecDBItem]:
         """Get multiple items by their IDs."""
         results = self.client.get(
             collection_name=collection_name,
@@ -211,8 +214,9 @@ class MilvusVecDB(BaseVecDB):
         for entity in results:
             payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
             items.append(
-                VecDBItem(
+                MilvusVecDBItem(
                     id=entity["id"],
+                    memory=entity.get("memory"),
                     vector=entity.get("vector"),
                     payload=payload,
                 )
@@ -222,7 +226,7 @@ class MilvusVecDB(BaseVecDB):
 
     def get_by_filter(
         self, collection_name: str, filter: dict[str, Any], scroll_limit: int = 100
-    ) -> list[VecDBItem]:
+    ) -> list[MilvusVecDBItem]:
         """
         Retrieve all items that match the given filter criteria using query_iterator.
 
@@ -252,13 +256,14 @@ class MilvusVecDB(BaseVecDB):
                 if not batch_results:
                     break
 
-                # Convert batch results to VecDBItem objects
+                # Convert batch results to MilvusVecDBItem objects
                 for entity in batch_results:
                     # Extract the actual payload from Milvus entity
                     payload = entity.get("payload", {})
                     all_items.append(
-                        VecDBItem(
+                        MilvusVecDBItem(
                             id=entity["id"],
+                            memory=entity.get("memory"),
                             vector=entity.get("vector"),
                             payload=payload,
                         )
@@ -274,7 +279,7 @@ class MilvusVecDB(BaseVecDB):
         logger.info(f"Milvus retrieve by filter completed with {len(all_items)} results.")
         return all_items
 
-    def get_all(self, collection_name: str, scroll_limit=100) -> list[VecDBItem]:
+    def get_all(self, collection_name: str, scroll_limit=100) -> list[MilvusVecDBItem]:
         """Retrieve all items in the vector database."""
         return self.get_by_filter(collection_name, {}, scroll_limit=scroll_limit)
 
@@ -295,13 +300,14 @@ class MilvusVecDB(BaseVecDB):
             # Extract row count from stats - stats is a dict, not a list
             return int(stats.get("row_count", 0))
 
-    def add(self, collection_name: str, data: list[VecDBItem | dict[str, Any]]) -> None:
+    def add(self, collection_name: str, data: list[MilvusVecDBItem | dict[str, Any]]) -> None:
         """
         Add data to the vector database.
 
         Args:
-            data: List of VecDBItem objects or dictionaries containing:
+            data: List of MilvusVecDBItem objects or dictionaries containing:
                 - 'id': unique identifier
+                - 'memory': memory string
                 - 'vector': embedding vector
                 - 'payload': additional fields for filtering/retrieval
         """
@@ -309,11 +315,12 @@ class MilvusVecDB(BaseVecDB):
         for item in data:
             if isinstance(item, dict):
                 item = item.copy()
-                item = VecDBItem.from_dict(item)
+                item = MilvusVecDBItem.from_dict(item)
 
             # Prepare entity data
             entity = {
                 "id": item.id,
+                "memory": item.memory,
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }
@@ -326,11 +333,15 @@ class MilvusVecDB(BaseVecDB):
             data=entities,
         )
 
-    def update(self, collection_name: str, id: str, data: VecDBItem | dict[str, Any]) -> None:
+    def update(self, collection_name: str, id: str, data: MilvusVecDBItem | dict[str, Any]) -> None:
         """Update an item in the vector database."""
+        if id != data.id:
+            raise ValueError(
+                f"The id of the data to update must be the same as the id of the item to update, ID mismatch: expected {id}, got {data.id}"
+            )
         if isinstance(data, dict):
             data = data.copy()
-            data = VecDBItem.from_dict(data)
+            data = MilvusVecDBItem.from_dict(data)
 
         # Use upsert for updates
         self.upsert(collection_name, [data])
@@ -347,7 +358,7 @@ class MilvusVecDB(BaseVecDB):
         # Field indexes are created automatically for scalar fields
         logger.info(f"Milvus automatically indexes scalar fields: {fields}")
 
-    def upsert(self, collection_name: str, data: list[VecDBItem | dict[str, Any]]) -> None:
+    def upsert(self, collection_name: str, data: list[MilvusVecDBItem | dict[str, Any]]) -> None:
         """
         Add or update data in the vector database.
 
