@@ -182,6 +182,7 @@ class MemosApiClient:
                 "conversation_id": "",
                 "top_k": top_k,
                 "mode": "mixture",
+                "handle_pref_mem": True,
             },
             ensure_ascii=False,
         )

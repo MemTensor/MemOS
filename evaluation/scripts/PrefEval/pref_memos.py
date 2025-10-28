@@ -53,9 +53,9 @@ def add_memory_for_line(
             if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
                 for chunk_start in range(0, len(conversation), turns_add * 2):
                     chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None)
+                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None, batch_size=2)
             else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None)
+                mem_client.add(messages=conversation, user_id=user_id, conv_id=None, batch_size=2)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -98,7 +98,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
                 f"- {entry.get('memory', '')}"
                 for entry in relevant_memories["text_mem"][0]["memories"]
             )
-            + f"\n{relevant_memories['pref_mem']}"
+            + f"\n{relevant_memories['pref_string']}"
         )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))

@@ -303,18 +303,15 @@ def _post_process_pref_mem(
     mem_cube_id: str,
     handle_pref_mem: bool,
 ):
-    if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true" and pref_formatted_mem:
-        memories_result["prefs"] = []
-        memories_result["prefs"].append(
+    if handle_pref_mem:
+        memories_result["pref_mem"].append(
             {
                 "cube_id": mem_cube_id,
                 "memories": pref_formatted_mem,
             }
         )
-
-    if handle_pref_mem:
         pref_instruction: str = instruct_completion(pref_formatted_mem)
-        memories_result["pref_mem"] = pref_instruction
+        memories_result["pref_string"] = pref_instruction
 
     return memories_result
 
@@ -333,7 +330,8 @@ def search_memories(search_req: APISearchRequest):
         "text_mem": [],
         "act_mem": [],
         "para_mem": [],
-        "pref_mem": "",
+        "pref_mem": [],
+        "pref_string": "",
     }
 
     search_mode = search_req.mode
