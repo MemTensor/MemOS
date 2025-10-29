@@ -181,7 +181,7 @@ class MemosApiClient:
                 "mem_cube_id": user_id,
                 "conversation_id": "",
                 "top_k": top_k,
-                "mode": "fast",
+                "mode": os.getenv("SEARCH_MODE", "fast"),
                 "handle_pref_mem": False,
             },
             ensure_ascii=False,
@@ -232,7 +232,7 @@ class MemosApiOnlineClient:
                 "query": query,
                 "user_id": user_id,
                 "memory_limit_number": top_k,
-                "mode": "mixture",
+                "mode": os.getenv("SEARCH_MODE", "fast"),
             }
         )
 

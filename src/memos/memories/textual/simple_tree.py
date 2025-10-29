@@ -118,6 +118,34 @@ class SimpleTreeTextMemory(TreeTextMemory):
         """
         return self.memory_manager.get_current_memory_size(user_name=user_name)
 
+    def get_searcher(
+        self,
+        manual_close_internet: bool = False,
+        moscube: bool = False,
+    ):
+        if (self.internet_retriever is not None) and manual_close_internet:
+            logger.warning(
+                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
+            )
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                self.reranker,
+                internet_retriever=None,
+                moscube=moscube,
+            )
+        else:
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                self.reranker,
+                internet_retriever=self.internet_retriever,
+                moscube=moscube,
+            )
+        return searcher
+
     def search(
         self,
         query: str,
