@@ -1,10 +1,14 @@
+import json
 import os
+import time
 import traceback
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from memos.api.config import APIConfig
 from memos.api.product_models import (
@@ -32,8 +36,12 @@ from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.general_schemas import (
+    ADD_LABEL,
+    MEM_READ_LABEL,
+    PREF_ADD_LABEL,
     SearchMode,
 )
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.memories.textual.prefer_text_memory.config import (
     AdderConfigFactory,
     ExtractorConfigFactory,
@@ -233,6 +241,7 @@ def init_server():
         chat_llm=llm,
         process_llm=mem_reader.llm,
         db_engine=BaseDBManager.create_default_sqlite_engine(),
+        mem_reader=mem_reader,
     )
     mem_scheduler.current_mem_cube = naive_mem_cube
     mem_scheduler.start()
@@ -479,6 +488,13 @@ def add_memories(add_req: APIADDRequest):
     if not target_session_id:
         target_session_id = "default_session"
 
+    # If text memory backend works in async mode, submit tasks to scheduler
+    try:
+        sync_mode = getattr(naive_mem_cube.text_mem, "mode", "sync")
+    except Exception:
+        sync_mode = "sync"
+    logger.info(f"Add sync_mode mode is: {sync_mode}")
+
     def _process_text_mem() -> list[dict[str, str]]:
         memories_local = mem_reader.get_memory(
             [add_req.messages],
@@ -487,6 +503,7 @@ def add_memories(add_req: APIADDRequest):
                 "user_id": add_req.user_id,
                 "session_id": target_session_id,
             },
+            mode="fast" if sync_mode == "async" else "fine",
         )
         flattened_local = [mm for m in memories_local for mm in m]
         logger.info(f"Memory extraction completed for user {add_req.user_id}")
@@ -498,6 +515,34 @@ def add_memories(add_req: APIADDRequest):
             f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
             f"in session {add_req.session_id}: {mem_ids_local}"
         )
+        if sync_mode == "async":
+            try:
+                message_item_read = ScheduleMessageItem(
+                    user_id=add_req.user_id,
+                    session_id=target_session_id,
+                    mem_cube_id=add_req.mem_cube_id,
+                    mem_cube=naive_mem_cube,
+                    label=MEM_READ_LABEL,
+                    content=json.dumps(mem_ids_local),
+                    timestamp=datetime.utcnow(),
+                    user_name=add_req.mem_cube_id,
+                )
+                mem_scheduler.submit_messages(messages=[message_item_read])
+                logger.info(f"2105Submit messages!!!!!: {json.dumps(mem_ids_local)}")
+            except Exception as e:
+                logger.error(f"Failed to submit async memory tasks: {e}", exc_info=True)
+        else:
+            message_item_add = ScheduleMessageItem(
+                user_id=add_req.user_id,
+                session_id=target_session_id,
+                mem_cube_id=add_req.mem_cube_id,
+                mem_cube=naive_mem_cube,
+                label=ADD_LABEL,
+                content=json.dumps(mem_ids_local),
+                timestamp=datetime.utcnow(),
+                user_name=add_req.mem_cube_id,
+            )
+            mem_scheduler.submit_messages(messages=[message_item_add])
         return [
             {
                 "memory": memory.memory,
@@ -510,27 +555,46 @@ def add_memories(add_req: APIADDRequest):
     def _process_pref_mem() -> list[dict[str, str]]:
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
-        pref_memories_local = naive_mem_cube.pref_mem.get_memory(
-            [add_req.messages],
-            type="chat",
-            info={
-                "user_id": add_req.user_id,
-                "session_id": target_session_id,
-            },
-        )
-        pref_ids_local: list[str] = naive_mem_cube.pref_mem.add(pref_memories_local)
-        logger.info(
-            f"Added {len(pref_ids_local)} preferences for user {add_req.user_id} "
-            f"in session {add_req.session_id}: {pref_ids_local}"
-        )
-        return [
-            {
-                "memory": memory.memory,
-                "memory_id": memory_id,
-                "memory_type": memory.metadata.preference_type,
-            }
-            for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
-        ]
+        # Follow async behavior similar to core.py: enqueue when async
+        if sync_mode == "async":
+            try:
+                messages_list = [add_req.messages]
+                message_item_pref = ScheduleMessageItem(
+                    user_id=add_req.user_id,
+                    session_id=target_session_id,
+                    mem_cube_id=add_req.mem_cube_id,
+                    mem_cube=naive_mem_cube,
+                    label=PREF_ADD_LABEL,
+                    content=json.dumps(messages_list),
+                    timestamp=datetime.utcnow(),
+                )
+                mem_scheduler.submit_messages(messages=[message_item_pref])
+                logger.info("Submitted preference add to scheduler (async mode)")
+            except Exception as e:
+                logger.error(f"Failed to submit PREF_ADD task: {e}", exc_info=True)
+            return []
+        else:
+            pref_memories_local = naive_mem_cube.pref_mem.get_memory(
+                [add_req.messages],
+                type="chat",
+                info={
+                    "user_id": add_req.user_id,
+                    "session_id": target_session_id,
+                },
+            )
+            pref_ids_local: list[str] = naive_mem_cube.pref_mem.add(pref_memories_local)
+            logger.info(
+                f"Added {len(pref_ids_local)} preferences for user {add_req.user_id} "
+                f"in session {add_req.session_id}: {pref_ids_local}"
+            )
+            return [
+                {
+                    "memory": memory.memory,
+                    "memory_id": memory_id,
+                    "memory_type": memory.metadata.preference_type,
+                }
+                for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
+            ]
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_process_text_mem)
@@ -542,6 +606,155 @@ def add_memories(add_req: APIADDRequest):
         message="Memory added successfully",
         data=text_response_data + pref_response_data,
     )
+
+
+@router.get("/scheduler/status", summary="Get scheduler running task count")
+def scheduler_status():
+    """
+    Return current running tasks count from scheduler dispatcher.
+    Shape is consistent with /scheduler/wait.
+    """
+    try:
+        running = mem_scheduler.dispatcher.get_running_tasks()
+        running_count = len(running)
+        now_ts = time.time()
+
+        return {
+            "message": "ok",
+            "data": {
+                "running_tasks": running_count,
+                "timestamp": now_ts,
+            },
+        }
+
+    except Exception as err:
+        logger.error("Failed to get scheduler status: %s", traceback.format_exc())
+
+        raise HTTPException(status_code=500, detail="Failed to get scheduler status") from err
+
+
+@router.post("/scheduler/wait", summary="Wait until scheduler is idle")
+def scheduler_wait(timeout_seconds: float = 120.0, poll_interval: float = 0.2):
+    """
+    Block until scheduler has no running tasks, or timeout.
+    We return a consistent structured payload so callers can
+    tell whether this was a clean flush or a timeout.
+
+    Args:
+        timeout_seconds: max seconds to wait
+        poll_interval: seconds between polls
+    """
+    start = time.time()
+    try:
+        while True:
+            running = mem_scheduler.dispatcher.get_running_tasks()
+            running_count = len(running)
+            elapsed = time.time() - start
+
+            # success -> scheduler is idle
+            if running_count == 0:
+                return {
+                    "message": "idle",
+                    "data": {
+                        "running_tasks": 0,
+                        "waited_seconds": round(elapsed, 3),
+                        "timed_out": False,
+                    },
+                }
+
+            # timeout check
+            if elapsed > timeout_seconds:
+                return {
+                    "message": "timeout",
+                    "data": {
+                        "running_tasks": running_count,
+                        "waited_seconds": round(elapsed, 3),
+                        "timed_out": True,
+                    },
+                }
+
+            time.sleep(poll_interval)
+
+    except Exception as err:
+        logger.error(
+            "Failed while waiting for scheduler: %s",
+            traceback.format_exc(),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed while waiting for scheduler",
+        ) from err
+
+
+@router.get("/scheduler/wait/stream", summary="Stream scheduler progress (SSE)")
+def scheduler_wait_stream(timeout_seconds: float = 120.0, poll_interval: float = 0.2):
+    """
+    Stream scheduler progress via Server-Sent Events (SSE).
+
+    Contract:
+    - We emit periodic heartbeat frames while tasks are still running.
+    - Each heartbeat frame is JSON, prefixed with "data: ".
+    - On final frame, we include status = "idle" or "timeout" and timed_out flag,
+      with the same semantics as /scheduler/wait.
+
+    Example curl:
+      curl -N "${API_HOST}/product/scheduler/wait/stream?timeout_seconds=10&poll_interval=0.5"
+    """
+
+    def event_generator():
+        start = time.time()
+        try:
+            while True:
+                running = mem_scheduler.dispatcher.get_running_tasks()
+                running_count = len(running)
+                elapsed = time.time() - start
+
+                # heartbeat frame
+                heartbeat_payload = {
+                    "running_tasks": running_count,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "status": "running" if running_count > 0 else "idle",
+                }
+                yield "data: " + json.dumps(heartbeat_payload, ensure_ascii=False) + "\n\n"
+
+                # scheduler is idle -> final frame + break
+                if running_count == 0:
+                    final_payload = {
+                        "running_tasks": 0,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "status": "idle",
+                        "timed_out": False,
+                    }
+                    yield "data: " + json.dumps(final_payload, ensure_ascii=False) + "\n\n"
+                    break
+
+                # timeout -> final frame + break
+                if elapsed > timeout_seconds:
+                    final_payload = {
+                        "running_tasks": running_count,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "status": "timeout",
+                        "timed_out": True,
+                    }
+                    yield "data: " + json.dumps(final_payload, ensure_ascii=False) + "\n\n"
+                    break
+
+                time.sleep(poll_interval)
+
+        except Exception as e:
+            err_payload = {
+                "status": "error",
+                "detail": "stream_failed",
+                "exception": str(e),
+            }
+            logger.error(
+                "Failed streaming scheduler wait: %s: %s",
+                e,
+                traceback.format_exc(),
+            )
+            yield "data: " + json.dumps(err_payload, ensure_ascii=False) + "\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/chat/complete", summary="Chat with MemOS (Complete Response)")
