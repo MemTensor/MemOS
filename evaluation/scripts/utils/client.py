@@ -182,6 +182,7 @@ class MemosApiClient:
                 "conversation_id": "",
                 "top_k": top_k,
                 "mode": os.getenv("SEARCH_MODE", "fast"),
+                "handle_pref_mem": False,
             },
             ensure_ascii=False,
         )

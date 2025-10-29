@@ -149,6 +149,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Args:
             memory_type (str): Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
             keep_latest (int): Number of latest WorkingMemory entries to keep.
+            user_name(str): optional user_name.
         """
         user_name = user_name if user_name else self.config.user_name
         query = f"""

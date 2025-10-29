@@ -1165,6 +1165,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     MATCH(center: Memory)-[r * 1..{depth}]->(neighbor:Memory)
                     WHERE
                     center.id = '{center_id}'
+                    AND center.status = '{center_status}'
+                    AND center.user_name = '{user_name}'
                     RETURN
                     collect(DISTINCT
                     center), collect(DISTINCT
@@ -1241,7 +1243,9 @@ class PolarDBGraphDB(BaseGraphDB):
                                         }
                                     )
 
-                return {"core_node": core_node, "neighbors": neighbors, "edges": edges}
+                return self._convert_graph_edges(
+                    {"core_node": core_node, "neighbors": neighbors, "edges": edges}
+                )
 
         except Exception as e:
             logger.error(f"Failed to get subgraph: {e}", exc_info=True)
@@ -1747,24 +1751,61 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 for row in edge_results:
                     source_agtype, target_agtype, edge_agtype = row
+
+                    # Extract and clean source
+                    source_raw = (
+                        source_agtype.value
+                        if hasattr(source_agtype, "value")
+                        else str(source_agtype)
+                    )
+                    if (
+                        isinstance(source_raw, str)
+                        and source_raw.startswith('"')
+                        and source_raw.endswith('"')
+                    ):
+                        source = source_raw[1:-1]
+                    else:
+                        source = str(source_raw)
+
+                    # Extract and clean target
+                    target_raw = (
+                        target_agtype.value
+                        if hasattr(target_agtype, "value")
+                        else str(target_agtype)
+                    )
+                    if (
+                        isinstance(target_raw, str)
+                        and target_raw.startswith('"')
+                        and target_raw.endswith('"')
+                    ):
+                        target = target_raw[1:-1]
+                    else:
+                        target = str(target_raw)
+
+                    # Extract and clean edge type
+                    type_raw = (
+                        edge_agtype.value if hasattr(edge_agtype, "value") else str(edge_agtype)
+                    )
+                    if (
+                        isinstance(type_raw, str)
+                        and type_raw.startswith('"')
+                        and type_raw.endswith('"')
+                    ):
+                        edge_type = type_raw[1:-1]
+                    else:
+                        edge_type = str(type_raw)
+
                     edges.append(
                         {
-                            "source": source_agtype.value
-                            if hasattr(source_agtype, "value")
-                            else str(source_agtype),
-                            "target": target_agtype.value
-                            if hasattr(target_agtype, "value")
-                            else str(target_agtype),
-                            "type": edge_agtype.value
-                            if hasattr(edge_agtype, "value")
-                            else str(edge_agtype),
+                            "source": source,
+                            "target": target,
+                            "type": edge_type,
                         }
                     )
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - EDGES] Exception: {e}", exc_info=True)
             raise RuntimeError(f"[EXPORT GRAPH - EDGES] Exception: {e}") from e
-
         return {"nodes": nodes, "edges": edges}
 
     @timed
@@ -2725,9 +2766,38 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 edges = []
                 for row in results:
-                    from_id = row[0].value if hasattr(row[0], "value") else row[0]
-                    to_id = row[1].value if hasattr(row[1], "value") else row[1]
-                    edge_type = row[2].value if hasattr(row[2], "value") else row[2]
+                    # Extract and clean from_id
+                    from_id_raw = row[0].value if hasattr(row[0], "value") else row[0]
+                    if (
+                        isinstance(from_id_raw, str)
+                        and from_id_raw.startswith('"')
+                        and from_id_raw.endswith('"')
+                    ):
+                        from_id = from_id_raw[1:-1]
+                    else:
+                        from_id = str(from_id_raw)
+
+                    # Extract and clean to_id
+                    to_id_raw = row[1].value if hasattr(row[1], "value") else row[1]
+                    if (
+                        isinstance(to_id_raw, str)
+                        and to_id_raw.startswith('"')
+                        and to_id_raw.endswith('"')
+                    ):
+                        to_id = to_id_raw[1:-1]
+                    else:
+                        to_id = str(to_id_raw)
+
+                    # Extract and clean edge_type
+                    edge_type_raw = row[2].value if hasattr(row[2], "value") else row[2]
+                    if (
+                        isinstance(edge_type_raw, str)
+                        and edge_type_raw.startswith('"')
+                        and edge_type_raw.endswith('"')
+                    ):
+                        edge_type = edge_type_raw[1:-1]
+                    else:
+                        edge_type = str(edge_type_raw)
 
                     edges.append({"from": from_id, "to": to_id, "type": edge_type})
                 return edges
@@ -2735,3 +2805,25 @@ class PolarDBGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(f"Failed to get edges: {e}", exc_info=True)
             return []
+
+    def _convert_graph_edges(self, core_node: dict) -> dict:
+        import copy
+
+        data = copy.deepcopy(core_node)
+        id_map = {}
+        core_node = data.get("core_node", {})
+        core_meta = core_node.get("metadata", {})
+        if "graph_id" in core_meta and "id" in core_node:
+            id_map[core_meta["graph_id"]] = core_node["id"]
+        for neighbor in data.get("neighbors", []):
+            n_meta = neighbor.get("metadata", {})
+            if "graph_id" in n_meta and "id" in neighbor:
+                id_map[n_meta["graph_id"]] = neighbor["id"]
+        for edge in data.get("edges", []):
+            src = edge.get("source")
+            tgt = edge.get("target")
+            if src in id_map:
+                edge["source"] = id_map[src]
+            if tgt in id_map:
+                edge["target"] = id_map[tgt]
+        return data

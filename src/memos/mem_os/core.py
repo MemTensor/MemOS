@@ -2,13 +2,13 @@ import json
 import os
 import time
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 
 from memos.configs.mem_os import MOSConfig
+from memos.context.context import ContextThreadPoolExecutor
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -665,7 +665,7 @@ class MOSCore:
                 return None
 
             # Execute both search functions in parallel
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with ContextThreadPoolExecutor(max_workers=2) as executor:
                 text_future = executor.submit(search_textual_memory, mem_cube_id, mem_cube)
                 pref_future = executor.submit(search_preference_memory, mem_cube_id, mem_cube)
 
@@ -779,16 +779,16 @@ class MOSCore:
                                 timestamp=datetime.utcnow(),
                             )
                             self.mem_scheduler.submit_messages(messages=[message_item])
-
-                        message_item = ScheduleMessageItem(
-                            user_id=target_user_id,
-                            mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
-                            label=ADD_LABEL,
-                            content=json.dumps(mem_ids),
-                            timestamp=datetime.utcnow(),
-                        )
-                        self.mem_scheduler.submit_messages(messages=[message_item])
+                        else:
+                            message_item = ScheduleMessageItem(
+                                user_id=target_user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=mem_cube,
+                                label=ADD_LABEL,
+                                content=json.dumps(mem_ids),
+                                timestamp=datetime.utcnow(),
+                            )
+                            self.mem_scheduler.submit_messages(messages=[message_item])
 
         def process_preference_memory():
             if (
@@ -824,7 +824,7 @@ class MOSCore:
                     self.mem_scheduler.submit_messages(messages=[message_item])
 
         # Execute both memory processing functions in parallel
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
             text_future = executor.submit(process_textual_memory)
             pref_future = executor.submit(process_preference_memory)
 
@@ -878,15 +878,16 @@ class MOSCore:
                             timestamp=datetime.utcnow(),
                         )
                         self.mem_scheduler.submit_messages(messages=[message_item])
-                    message_item = ScheduleMessageItem(
-                        user_id=target_user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                        label=ADD_LABEL,
-                        content=json.dumps(mem_ids),
-                        timestamp=datetime.utcnow(),
-                    )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
+                    else:
+                        message_item = ScheduleMessageItem(
+                            user_id=target_user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=ADD_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
 
         # user doc input
         if (

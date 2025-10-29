@@ -107,11 +107,11 @@ def memos_api_search(
 
     speaker_a_context = (
         "\n".join([i["memory"] for i in search_a_results["text_mem"][0]["memories"]])
-        + f"\n{search_a_results['pref_mem']}"
+        + f"\n{search_a_results['pref_string']}"
     )
     speaker_b_context = (
         "\n".join([i["memory"] for i in search_b_results["text_mem"][0]["memories"]])
-        + f"\n{search_b_results['pref_mem']}"
+        + f"\n{search_b_results['pref_string']}"
     )
 
     context = TEMPLATE_MEMOS.format(
