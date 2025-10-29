@@ -134,6 +134,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         chat_llm: BaseLLM,
         process_llm: BaseLLM | None = None,
         db_engine: Engine | None = None,
+        mem_reader=None,
     ):
         if process_llm is None:
             process_llm = chat_llm
@@ -149,6 +150,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
             self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
+
+            if mem_reader:
+                self.mem_reader = mem_reader
 
             if self.enable_parallel_dispatch:
                 self.dispatcher_monitor.initialize(dispatcher=self.dispatcher)

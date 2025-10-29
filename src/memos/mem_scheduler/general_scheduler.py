@@ -249,6 +249,7 @@ class GeneralScheduler(BaseScheduler):
                 mem_cube_id = message.mem_cube_id
                 mem_cube = message.mem_cube
                 content = message.content
+                user_name = message.user_name
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
@@ -272,6 +273,7 @@ class GeneralScheduler(BaseScheduler):
                     mem_cube_id=mem_cube_id,
                     mem_cube=mem_cube,
                     text_mem=text_mem,
+                    user_name=user_name,
                 )
 
                 logger.info(
@@ -296,6 +298,7 @@ class GeneralScheduler(BaseScheduler):
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
         text_mem: TreeTextMemory,
+        user_name: str,
     ) -> None:
         """
         Process memories using mem_reader for enhanced memory processing.
@@ -329,6 +332,18 @@ class GeneralScheduler(BaseScheduler):
                 logger.warning("No valid memory items found for processing")
                 return
 
+            # parse working_binding ids from the *original* memory_items (the raw items created in /add)
+            # these still carry metadata.background with "[working_binding:...]" so we can know
+            # which WorkingMemory clones should be cleaned up later.
+            from memos.memories.textual.tree_text_memory.organize.manager import (
+                extract_working_binding_ids,
+            )
+
+            bindings_to_delete = extract_working_binding_ids(memory_items)
+            logger.info(
+                f"Extracted {len(bindings_to_delete)} working_binding ids to cleanup: {list(bindings_to_delete)}"
+            )
+
             # Use mem_reader to process the memories
             logger.info(f"Processing {len(memory_items)} memories with mem_reader")
 
@@ -352,7 +367,7 @@ class GeneralScheduler(BaseScheduler):
 
                 # Add the enhanced memories back to the memory system
                 if flattened_memories:
-                    enhanced_mem_ids = text_mem.add(flattened_memories)
+                    enhanced_mem_ids = text_mem.add(flattened_memories, user_name=user_name)
                     logger.info(
                         f"Added {len(enhanced_mem_ids)} enhanced memories: {enhanced_mem_ids}"
                     )
@@ -361,9 +376,26 @@ class GeneralScheduler(BaseScheduler):
             else:
                 logger.info("mem_reader returned no processed memories")
 
-            text_mem.delete(mem_ids)
-            logger.info("Delete raw mem_ids")
-            text_mem.memory_manager.remove_and_refresh_memory()
+            # build full delete list:
+            # - original raw mem_ids (temporary fast memories)
+            # - any bound working memories referenced by the enhanced memories
+            delete_ids = list(mem_ids)
+            if bindings_to_delete:
+                delete_ids.extend(list(bindings_to_delete))
+            # deduplicate
+            delete_ids = list(dict.fromkeys(delete_ids))
+            if delete_ids:
+                try:
+                    text_mem.delete(delete_ids, user_name=user_name)
+                    logger.info(
+                        f"Delete raw/working mem_ids: {delete_ids} for user_name: {user_name}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to delete some mem_ids {delete_ids}: {e}")
+            else:
+                logger.info("No mem_ids to delete (nothing to cleanup)")
+
+            text_mem.memory_manager.remove_and_refresh_memory(user_name=user_name)
             logger.info("Remove and Refresh Memories")
             logger.debug(f"Finished add {user_id} memory: {mem_ids}")
 
@@ -381,6 +413,7 @@ class GeneralScheduler(BaseScheduler):
                 mem_cube_id = message.mem_cube_id
                 mem_cube = message.mem_cube
                 content = message.content
+                user_name = message.user_name
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
@@ -404,6 +437,7 @@ class GeneralScheduler(BaseScheduler):
                     mem_cube_id=mem_cube_id,
                     mem_cube=mem_cube,
                     text_mem=text_mem,
+                    user_name=user_name,
                 )
 
                 logger.info(
@@ -428,6 +462,7 @@ class GeneralScheduler(BaseScheduler):
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
         text_mem: TreeTextMemory,
+        user_name: str,
     ) -> None:
         """
         Process memories using mem_reorganize for enhanced memory processing.
@@ -454,7 +489,7 @@ class GeneralScheduler(BaseScheduler):
                     memory_item = text_mem.get(mem_id)
                     memory_items.append(memory_item)
                 except Exception as e:
-                    logger.warning(f"Failed to get memory {mem_id}: {e}")
+                    logger.warning(f"Failed to get memory {mem_id}: {e}|{traceback.format_exc()}")
                     continue
 
             if not memory_items:
@@ -463,7 +498,7 @@ class GeneralScheduler(BaseScheduler):
 
             # Use mem_reader to process the memories
             logger.info(f"Processing {len(memory_items)} memories with mem_reader")
-            text_mem.memory_manager.remove_and_refresh_memory()
+            text_mem.memory_manager.remove_and_refresh_memory(user_name=user_name)
             logger.info("Remove and Refresh Memories")
             logger.debug(f"Finished add {user_id} memory: {mem_ids}")
 
