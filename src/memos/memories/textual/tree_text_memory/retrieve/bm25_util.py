@@ -2,10 +2,9 @@ import threading
 
 import numpy as np
 
-from cachetools import LRUCache
-from rank_bm25 import BM25Okapi
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.utils import timed
@@ -13,13 +12,13 @@ from memos.utils import timed
 
 logger = get_logger(__name__)
 # Global model cache
-_BM25_CACHE = LRUCache(maxsize=100)
 _CACHE_LOCK = threading.Lock()
 
 
 class EnhancedBM25:
     """Enhanced BM25 with Spacy tokenization and TF-IDF reranking"""
 
+    @require_python_package(import_name="cachetools", install_command="pip install cachetools")
     def __init__(self, tokenizer=None, en_model="en_core_web_sm", zh_model="zh_core_web_sm"):
         """
         Initialize Enhanced BM25 with memory management
@@ -30,13 +29,21 @@ class EnhancedBM25:
             self.tokenizer = tokenizer
         self._current_tfidf = None
 
+        global _BM25_CACHE
+        from cachetools import LRUCache
+
+        _BM25_CACHE = LRUCache(maxsize=100)
+
     def _tokenize_doc(self, text):
         """
         Tokenize a single document using SpacyTokenizer
         """
         return self.tokenizer.tokenize_mixed(text, lang="auto")
 
+    @require_python_package(import_name="rank_bm25", install_command="pip install rank_bm25")
     def _prepare_corpus_data(self, corpus, corpus_name="default"):
+        from rank_bm25 import BM25Okapi
+
         with _CACHE_LOCK:
             if corpus_name in _BM25_CACHE:
                 print("hit::", corpus_name)

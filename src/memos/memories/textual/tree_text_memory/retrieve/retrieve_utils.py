@@ -3,8 +3,7 @@ import re
 
 from pathlib import Path
 
-import jieba
-
+from memos.dependency import require_python_package
 from memos.log import get_logger
 
 
@@ -326,8 +325,15 @@ class FastTokenizer:
         chinese_chars = sum(1 for char in text if "\u4e00" <= char <= "\u9fff")
         return chinese_chars / max(len(text), 1) > 0.3
 
+    @require_python_package(
+        import_name="jieba",
+        install_command="pip install jieba",
+        install_link="https://github.com/fxsjy/jieba",
+    )
     def _tokenize_chinese(self, text):
         """split zh jieba"""
+        import jieba
+
         tokens = jieba.lcut(text) if self.use_jieba else list(text)
         tokens = [token.strip() for token in tokens if token.strip()]
         if self.use_stopwords:

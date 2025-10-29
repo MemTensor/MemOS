@@ -1,14 +1,11 @@
 import os
-import re
 
 from abc import ABC
 
 from memos import log
 from memos.configs.mem_reader import StrategyStructMemReaderConfig
 from memos.configs.parser import ParserConfigFactory
-from memos.mem_reader.simple_struct import (
-    SimpleStructMemReader,
-)
+from memos.mem_reader.simple_struct import SimpleStructMemReader, detect_lang
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
@@ -23,7 +20,7 @@ from memos.templates.mem_reader_strategy_prompts import (
 
 
 logger = log.get_logger(__name__)
-PROMPT_DICT = {
+STRATEGY_PROMPT_DICT = {
     "chat": {
         "en": STRATEGY_STRUCT_MEM_READER_PROMPT,
         "zh": STRATEGY_STRUCT_MEM_READER_PROMPT_ZH,
@@ -33,26 +30,6 @@ PROMPT_DICT = {
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
 }
 
-try:
-    import tiktoken
-
-    try:
-        _ENC = tiktoken.encoding_for_model("gpt-4o-mini")
-    except Exception:
-        _ENC = tiktoken.get_encoding("cl100k_base")
-
-    def _count_tokens_text(s: str) -> int:
-        return len(_ENC.encode(s or ""))
-except Exception:
-    # Heuristic fallback: zh chars ~1 token, others ~1 token per ~4 chars
-    def _count_tokens_text(s: str) -> int:
-        if not s:
-            return 0
-        zh_chars = re.findall(r"[\u4e00-\u9fff]", s)
-        zh = len(zh_chars)
-        rest = len(s) - zh
-        return zh + max(1, rest // 4)
-
 
 class StrategyStructMemReader(SimpleStructMemReader, ABC):
     """Naive implementation of MemReader."""
@@ -60,6 +37,32 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
     def __init__(self, config: StrategyStructMemReaderConfig):
         super().__init__(config)
         self.chat_chunker = config.chat_chunker["config"]
+
+    def _get_llm_response(self, mem_str: str) -> dict:
+        lang = detect_lang(mem_str)
+        template = STRATEGY_PROMPT_DICT["chat"][lang]
+        examples = STRATEGY_PROMPT_DICT["chat"][f"{lang}_example"]
+        prompt = template.replace("${conversation}", mem_str)
+        if self.config.remove_prompt_example:
+            prompt = prompt.replace(examples, "")
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response_text = self.llm.generate(messages)
+            response_json = self.parse_json_result(response_text)
+        except Exception as e:
+            logger.error(f"[LLM] Exception during chat generation: {e}")
+            response_json = {
+                "memory list": [
+                    {
+                        "key": mem_str[:10],
+                        "memory_type": "UserMemory",
+                        "value": mem_str,
+                        "tags": [],
+                    }
+                ],
+                "summary": mem_str,
+            }
+        return response_json
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
         """

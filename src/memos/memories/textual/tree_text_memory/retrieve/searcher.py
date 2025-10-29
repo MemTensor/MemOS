@@ -522,7 +522,7 @@ class Searcher:
 
         messages = [{"role": "user", "content": prompt}]
         try:
-            response_text = self.llm.customized_generate(messages, temperature=0, top_p=1)
+            response_text = self.llm.generate(messages, temperature=0, top_p=1)
             response_json = parse_json_result(response_text)
             assert "is_complex" in response_json
             if not response_json["is_complex"]:
