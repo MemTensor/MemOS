@@ -95,6 +95,11 @@ class NacosConfigManager:
     _group = None
     _enabled = False
 
+    # Pre-compile regex patterns for better performance
+    _KEY_VALUE_PATTERN = re.compile(r"^([^=]+)=(.*)$")
+    _INTEGER_PATTERN = re.compile(r"^[+-]?\d+$")
+    _FLOAT_PATTERN = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+
     @classmethod
     def _sign(cls, secret_key: str, data: str) -> str:
         """HMAC-SHA1 sgin"""
@@ -102,28 +107,62 @@ class NacosConfigManager:
         return base64.b64encode(signature.digest()).decode()
 
     @staticmethod
+    def _parse_value(value: str) -> Any:
+        """Parse string value to appropriate Python type.
+
+        Supports: bool, int, float, and string.
+        """
+        if not value:
+            return value
+
+        val_lower = value.lower()
+
+        # Boolean
+        if val_lower in ("true", "false"):
+            return val_lower == "true"
+
+        # Integer
+        if NacosConfigManager._INTEGER_PATTERN.match(value):
+            try:
+                return int(value)
+            except (ValueError, OverflowError):
+                return value
+
+        # Float
+        if NacosConfigManager._FLOAT_PATTERN.match(value):
+            try:
+                return float(value)
+            except (ValueError, OverflowError):
+                return value
+
+        # Default to string
+        return value
+
+    @staticmethod
     def parse_properties(content: str) -> dict[str, Any]:
-        """parse properties to dict"""
+        """Parse properties file content to dictionary with type inference.
+
+        Supports:
+        - Comments (lines starting with #)
+        - Key-value pairs (KEY=VALUE)
+        - Type inference (bool, int, float, string)
+        """
         data: dict[str, Any] = {}
+
         for line in content.splitlines():
             line = line.strip()
+
+            # Skip empty lines and comments
             if not line or line.startswith("#"):
                 continue
-            match = re.match(r"^([^=]+)=(.*)$", line)
+
+            # Parse key-value pair
+            match = NacosConfigManager._KEY_VALUE_PATTERN.match(line)
             if match:
                 key = match.group(1).strip()
                 value = match.group(2).strip()
-                val_lower = value.lower()
-                if val_lower in ("true", "false"):
-                    value_parsed: Any = val_lower == "true"
-                elif re.match(r"^[+-]?\d+$", value):
-                    try:
-                        value_parsed = int(value)
-                    except Exception:
-                        value_parsed = value
-                else:
-                    value_parsed = value
-                data[key] = value_parsed
+                data[key] = NacosConfigManager._parse_value(value)
+
         return data
 
     @classmethod
