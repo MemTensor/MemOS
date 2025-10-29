@@ -30,17 +30,27 @@ class NaiveRetriever(BaseRetriever):
         self.vector_db = vector_db
         self.embedder = embedder
 
-    def _naive_reranker(self, query: str, prefs_mem: list[TextualMemoryItem], top_k: int, **kwargs: Any) -> list[TextualMemoryItem]:
+    def _naive_reranker(
+        self, query: str, prefs_mem: list[TextualMemoryItem], top_k: int, **kwargs: Any
+    ) -> list[TextualMemoryItem]:
         if self.reranker:
             prefs_mem = self.reranker.rerank(query, prefs_mem, top_k)
             return [item for item, _ in prefs_mem]
         return prefs_mem
 
-    def _original_text_reranker(self, query: str, prefs_mem: list[TextualMemoryItem], prefs: list[MilvusVecDBItem], top_k: int, **kwargs: Any) -> list[TextualMemoryItem]:
+    def _original_text_reranker(
+        self,
+        query: str,
+        prefs_mem: list[TextualMemoryItem],
+        prefs: list[MilvusVecDBItem],
+        top_k: int,
+        **kwargs: Any,
+    ) -> list[TextualMemoryItem]:
         if self.reranker:
             from copy import deepcopy
+
             prefs_mem_for_reranker = deepcopy(prefs_mem)
-            for pref_mem, pref in zip(prefs_mem_for_reranker, prefs):
+            for pref_mem, pref in zip(prefs_mem_for_reranker, prefs, strict=False):
                 pref_mem.memory = pref_mem.memory + "\n" + pref.original_text
             prefs_mem_for_reranker = self.reranker.rerank(query, prefs_mem_for_reranker, top_k)
             prefs_mem_for_reranker = [item for item, _ in prefs_mem_for_reranker]
@@ -48,7 +58,6 @@ class NaiveRetriever(BaseRetriever):
             prefs_dict = {item.id: item for item in prefs_mem}
             return [prefs_dict[item_id] for item_id in prefs_ids if item_id in prefs_dict]
         return prefs_mem
-            
 
     def retrieve(
         self, query: str, top_k: int, info: dict[str, Any] | None = None
@@ -66,10 +75,20 @@ class NaiveRetriever(BaseRetriever):
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             # Submit all search tasks
             future_explicit = executor.submit(
-                self.vector_db.search, query_embedding, query, "explicit_preference", top_k * 2, info
+                self.vector_db.search,
+                query_embedding,
+                query,
+                "explicit_preference",
+                top_k * 2,
+                info,
             )
             future_implicit = executor.submit(
-                self.vector_db.search, query_embedding, query, "implicit_preference", top_k * 2, info
+                self.vector_db.search,
+                query_embedding,
+                query,
+                "implicit_preference",
+                top_k * 2,
+                info,
             )
 
             # Wait for all results
@@ -100,9 +119,16 @@ class NaiveRetriever(BaseRetriever):
             if pref.payload["implicit_preference"]
         ]
 
-        reranker_map = {"naive": self._naive_reranker, "original_text": self._original_text_reranker}
+        reranker_map = {
+            "naive": self._naive_reranker,
+            "original_text": self._original_text_reranker,
+        }
         reranker_func = reranker_map["naive"]
-        explicit_prefs_mem = reranker_func(query=query, prefs_mem=explicit_prefs_mem, prefs=explicit_prefs, top_k=top_k)
-        implicit_prefs_mem = reranker_func(query=query, prefs_mem=implicit_prefs_mem, prefs=implicit_prefs, top_k=top_k)
+        explicit_prefs_mem = reranker_func(
+            query=query, prefs_mem=explicit_prefs_mem, prefs=explicit_prefs, top_k=top_k
+        )
+        implicit_prefs_mem = reranker_func(
+            query=query, prefs_mem=implicit_prefs_mem, prefs=implicit_prefs, top_k=top_k
+        )
 
         return explicit_prefs_mem + implicit_prefs_mem

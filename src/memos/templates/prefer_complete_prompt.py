@@ -177,7 +177,7 @@ You are a preference memory comparison expert. Analyze if the new preference mem
 
 **Decision Logic:**
 - Same core topic (both memory and preference) = need to check if update is needed
-- Different topics (either memory or preference differs) = no update needed  
+- Different topics (either memory or preference differs) = no update needed
 - If same topic but content has changed/evolved = update needed
 - If same topic and content is identical = update needed
 

@@ -41,7 +41,14 @@ class MilvusVecDB(BaseVecDB):
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
         )
         analyzer_params = {"tokenizer": "standard", "filter": ["lowercase"]}
-        schema.add_field(field_name="memory", datatype=DataType.VARCHAR, max_length=65535, analyzer_params=analyzer_params, enable_match=True, enable_analyzer=True)
+        schema.add_field(
+            field_name="memory",
+            datatype=DataType.VARCHAR,
+            max_length=65535,
+            analyzer_params=analyzer_params,
+            enable_match=True,
+            enable_analyzer=True,
+        )
         schema.add_field(field_name="original_text", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
@@ -170,16 +177,27 @@ class MilvusVecDB(BaseVecDB):
     ) -> list[list[dict]]:
         """Hybrid search for similar items in the database."""
         from pymilvus import AnnSearchRequest, RRFRanker, WeightedRanker
+
         # Set up BM25 search request
         expr = filter if filter else None
         sparse_request = AnnSearchRequest(
-            data=[query], anns_field="sparse_vector", param={"metric_type": "BM25"}, limit=top_k, expr=expr
+            data=[query],
+            anns_field="sparse_vector",
+            param={"metric_type": "BM25"},
+            limit=top_k,
+            expr=expr,
         )
         # Set up dense vector search request
         dense_request = AnnSearchRequest(
-            data=[query_vector], anns_field="vector", param={"metric_type": self._get_metric_type()}, limit=top_k, expr=expr
+            data=[query_vector],
+            anns_field="vector",
+            param={"metric_type": self._get_metric_type()},
+            limit=top_k,
+            expr=expr,
         )
-        ranker = RRFRanker() if ranker_type == "rrf" else WeightedRanker(sparse_weight, dense_weight)
+        ranker = (
+            RRFRanker() if ranker_type == "rrf" else WeightedRanker(sparse_weight, dense_weight)
+        )
         results = self.client.hybrid_search(
             collection_name=collection_name,
             reqs=[sparse_request, dense_request],
@@ -196,7 +214,7 @@ class MilvusVecDB(BaseVecDB):
         collection_name: str,
         top_k: int,
         filter: dict[str, Any] | None = None,
-        search_type: str = "dense",  # dense, sparse, hybrid 
+        search_type: str = "dense",  # dense, sparse, hybrid
     ) -> list[MilvusVecDBItem]:
         """
         Search for similar items in the database.
@@ -219,7 +237,13 @@ class MilvusVecDB(BaseVecDB):
             "hybrid": self._hybrid_search,
         }
 
-        results = search_func_map[search_type](collection_name=collection_name, query_vector=query_vector, query=query, top_k=top_k, filter=expr)
+        results = search_func_map[search_type](
+            collection_name=collection_name,
+            query_vector=query_vector,
+            query=query,
+            top_k=top_k,
+            filter=expr,
+        )
 
         items = []
         for hit in results[0]:

@@ -8,17 +8,17 @@ from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
+from memos.mem_reader.simple_struct import detect_lang
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.prefer_text_memory.spliter import Splitter
 from memos.memories.textual.prefer_text_memory.utils import convert_messages_to_string
 from memos.templates.prefer_complete_prompt import (
     NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT,
-    NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT,
     NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
+    NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT,
     NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
 )
 from memos.types import MessageList
-from memos.mem_reader.simple_struct import detect_lang
 
 
 logger = get_logger(__name__)
