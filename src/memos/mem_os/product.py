@@ -1044,22 +1044,15 @@ class MOSProduct(MOSCore):
                 m.metadata.embedding = []
                 new_memories_list.append(m)
             memories_list = new_memories_list
-        # Build base system prompt without memory
-        system_prompt = self._build_base_system_prompt(base_prompt, mode="base")
 
-        # Build memory context to be included in user message
-        memory_context = self._build_memory_context(memories_list, mode="base")
-
-        # Combine memory context with user query
-        user_content = memory_context + query if memory_context else query
-
+        system_prompt = super()._build_system_prompt(memories_list, base_prompt)
         history_info = []
         if history:
             history_info = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *history_info,
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": query},
         ]
         response = self.chat_llm.generate(current_messages)
         time_end = time.time()
@@ -1129,16 +1122,8 @@ class MOSProduct(MOSCore):
 
         reference = prepare_reference_data(memories_list)
         yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
-
-        # Build base system prompt without memory
-        system_prompt = self._build_base_system_prompt(mode="enhance")
-
-        # Build memory context to be included in user message
-        memory_context = self._build_memory_context(memories_list, mode="enhance")
-
-        # Combine memory context with user query
-        user_content = memory_context + query if memory_context else query
-
+        # Build custom system prompt with relevant memories)
+        system_prompt = self._build_enhance_system_prompt(user_id, memories_list)
         # Get chat history
         if user_id not in self.chat_history_manager:
             self._register_chat_history(user_id, session_id)
@@ -1149,7 +1134,7 @@ class MOSProduct(MOSCore):
         current_messages = [
             {"role": "system", "content": system_prompt},
             *chat_history.chat_history,
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": query},
         ]
         logger.info(
             f"user_id: {user_id}, cube_id: {cube_id}, current_system_prompt: {system_prompt}"

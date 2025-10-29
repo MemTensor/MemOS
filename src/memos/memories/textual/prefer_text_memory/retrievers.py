@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
 
 
@@ -42,7 +42,7 @@ class NaiveRetriever(BaseRetriever):
         query_embedding = query_embeddings[0]  # Get the first (and only) embedding
 
         # Use thread pool to parallelize the searches
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
             # Submit all search tasks
             future_explicit = executor.submit(
                 self.vector_db.search, query_embedding, "explicit_preference", top_k * 2, info
