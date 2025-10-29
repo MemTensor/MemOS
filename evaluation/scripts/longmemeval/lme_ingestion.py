@@ -1,10 +1,14 @@
 import argparse
 import os
 import sys
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+
 import pandas as pd
+
 from tqdm import tqdm
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -14,7 +18,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
     if "mem0" in frame:
         for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
-            client.add(messages, user_id, int(date.timestamp()))
+        client.add(messages, user_id, int(date.timestamp()), batch_size=2)
     elif frame == "memobase":
         for _idx, msg in enumerate(session):
             messages.append(
@@ -24,8 +28,8 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                     "created_at": date.isoformat(),
                 }
             )
-        client.add(messages, user_id)
-    elif frame == "memos-api":
+        client.add(messages, user_id, batch_size=2)
+    elif "memos-api" in frame:
         for msg in session:
             messages.append(
                 {
@@ -35,7 +39,7 @@ def ingest_session(session, date, user_id, session_id, frame, client):
                 }
             )
         if messages:
-            client.add(messages=messages, user_id=user_id, conv_id=session_id)
+            client.add(messages=messages, user_id=user_id, conv_id=session_id, batch_size=2)
     elif frame == "memu":
         for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"][:8000]})
@@ -76,15 +80,15 @@ def ingest_conv(lme_df, version, conv_idx, frame, success_records, f):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
     elif frame == "memobase":
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"]["user_id"] == user_id:
-                client.client.delete_user(user["id"])
-        user_id = client.client.add_user({"user_id": user_id})
+        client.delete_user(user_id)
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -130,7 +134,7 @@ def main(frame, version, num_workers=2):
     success_records = []
     record_file = f"results/lme/{frame}-{version}/success_records.txt"
     if os.path.exists(record_file):
-        with open(record_file, "r") as f:
+        with open(record_file) as f:
             for i in f.readlines():
                 success_records.append(i.strip())
 
@@ -167,7 +171,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(

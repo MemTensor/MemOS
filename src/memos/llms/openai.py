@@ -11,6 +11,7 @@ from memos.llms.base import BaseLLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
 from memos.types import MessageList
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -56,6 +57,7 @@ class OpenAILLM(BaseLLM):
         cls._instances.clear()
         logger.info("OpenAI LLM instance cache cleared")
 
+    @timed(log=True, log_prefix="OpenAI LLM")
     def generate(self, messages: MessageList) -> str:
         """Generate a response from OpenAI LLM."""
         response = self.client.chat.completions.create(
@@ -94,6 +96,7 @@ class OpenAILLM(BaseLLM):
         else:
             return response_content
 
+    @timed(log=True, log_prefix="OpenAI LLM")
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from OpenAI LLM with optional reasoning support."""
         response = self.client.chat.completions.create(

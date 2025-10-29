@@ -36,6 +36,11 @@ class SchedulerDispatcher(BaseSchedulerModule):
         # Main dispatcher thread pool
         self.max_workers = max_workers
 
+        # Get multi-task timeout from config
+        self.multi_task_running_timeout = (
+            self.config.get("multi_task_running_timeout") if self.config else None
+        )
+
         # Only initialize thread pool if in parallel mode
         self.enable_parallel_dispatch = enable_parallel_dispatch
         self.thread_name_prefix = "dispatcher"
@@ -62,6 +67,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
         # Task tracking for monitoring
         self._running_tasks: dict[str, RunningTaskItem] = {}
         self._task_lock = threading.Lock()
+        self._completed_tasks = []
+        self.completed_tasks_max_show_size = 10
 
     def _create_task_wrapper(self, handler: Callable, task_item: RunningTaskItem):
         """
@@ -85,7 +92,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     if task_item.item_id in self._running_tasks:
                         task_item.mark_completed(result)
                         del self._running_tasks[task_item.item_id]
-
+                        self._completed_tasks.append(task_item)
+                        if len(self._completed_tasks) > self.completed_tasks_max_show_size:
+                            self._completed_tasks[-self.completed_tasks_max_show_size :]
                 logger.info(f"Task completed: {task_item.get_execution_info()}")
                 return result
 
@@ -95,21 +104,50 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     if task_item.item_id in self._running_tasks:
                         task_item.mark_failed(str(e))
                         del self._running_tasks[task_item.item_id]
-
+                        if len(self._completed_tasks) > self.completed_tasks_max_show_size:
+                            self._completed_tasks[-self.completed_tasks_max_show_size :]
                 logger.error(f"Task failed: {task_item.get_execution_info()}, Error: {e}")
                 raise
 
         return wrapped_handler
 
-    def get_running_tasks(self) -> dict[str, RunningTaskItem]:
+    def get_running_tasks(
+        self, filter_func: Callable[[RunningTaskItem], bool] | None = None
+    ) -> dict[str, RunningTaskItem]:
         """
-        Get a copy of currently running tasks.
+        Get a copy of currently running tasks, optionally filtered by a custom function.
+
+        Args:
+            filter_func: Optional function that takes a RunningTaskItem and returns True if it should be included.
+                        Common filters can be created using helper methods like filter_by_user_id, filter_by_task_name, etc.
 
         Returns:
             Dictionary of running tasks keyed by task ID
+
+        Examples:
+            # Get all running tasks
+            all_tasks = dispatcher.get_running_tasks()
+
+            # Get tasks for specific user
+            user_tasks = dispatcher.get_running_tasks(lambda task: task.user_id == "user123")
+
+            # Get tasks for specific task name
+            handler_tasks = dispatcher.get_running_tasks(lambda task: task.task_name == "test_handler")
+
+            # Get tasks with multiple conditions
+            filtered_tasks = dispatcher.get_running_tasks(
+                lambda task: task.user_id == "user123" and task.status == "running"
+            )
         """
         with self._task_lock:
-            return self._running_tasks.copy()
+            if filter_func is None:
+                return self._running_tasks.copy()
+
+            return {
+                task_id: task_item
+                for task_id, task_item in self._running_tasks.items()
+                if filter_func(task_item)
+            }
 
     def get_running_task_count(self) -> int:
         """
@@ -328,17 +366,17 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
     def run_multiple_tasks(
         self,
-        tasks: dict[str, tuple[Callable, tuple, dict]],
+        tasks: dict[str, tuple[Callable, tuple]],
         use_thread_pool: bool | None = None,
-        timeout: float | None = 30.0,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """
         Execute multiple tasks concurrently and return all results.
 
         Args:
-            tasks: Dictionary mapping task names to (function, args, kwargs) tuples
+            tasks: Dictionary mapping task names to (task_execution_function, task_execution_parameters) tuples
             use_thread_pool: Whether to use ThreadPoolExecutor. If None, uses dispatcher's parallel mode setting
-            timeout: Maximum time to wait for all tasks to complete (in seconds). None for infinite timeout.
+            timeout: Maximum time to wait for all tasks to complete (in seconds). If None, uses config default.
 
         Returns:
             Dictionary mapping task names to their results
@@ -350,7 +388,13 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if use_thread_pool is None:
             use_thread_pool = self.enable_parallel_dispatch
 
-        logger.info(f"Executing {len(tasks)} tasks concurrently (thread_pool: {use_thread_pool})")
+        # Use config timeout if not explicitly provided
+        if timeout is None:
+            timeout = self.multi_task_running_timeout
+
+        logger.info(
+            f"Executing {len(tasks)} tasks concurrently (thread_pool: {use_thread_pool}, timeout: {timeout})"
+        )
 
         try:
             results = self.thread_manager.run_multiple_tasks(

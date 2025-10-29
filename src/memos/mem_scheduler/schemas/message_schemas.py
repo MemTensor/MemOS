@@ -6,8 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from typing_extensions import TypedDict
 
 from memos.log import get_logger
-from memos.mem_cube.general import GeneralMemCube
+from memos.mem_cube.base import BaseMemCube
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
+from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 from .general_schemas import NOT_INITIALIZED
 
@@ -36,10 +37,14 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     user_id: str = Field(..., description="user id")
     mem_cube_id: str = Field(..., description="memcube id")
     label: str = Field(..., description="Label of the schedule message")
-    mem_cube: GeneralMemCube | str = Field(..., description="memcube for schedule")
+    mem_cube: BaseMemCube | str = Field(..., description="memcube for schedule")
     content: str = Field(..., description="Content of the schedule message")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.utcnow(), description="submit time for schedule_messages"
+        default_factory=get_utc_now, description="submit time for schedule_messages"
+    )
+    user_name: str | None = Field(
+        default=None,
+        description="user name / display name (optional)",
     )
 
     # Pydantic V2 model configuration
@@ -59,16 +64,17 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
                 "mem_cube": "obj of GeneralMemCube",  # Added mem_cube example
                 "content": "sample content",  # Example message content
                 "timestamp": "2024-07-22T12:00:00Z",  # Added timestamp example
+                "user_name": "Alice",  # Added username example
             }
         },
     )
 
     @field_serializer("mem_cube")
-    def serialize_mem_cube(self, cube: GeneralMemCube | str, _info) -> str:
-        """Custom serializer for GeneralMemCube objects to string representation"""
+    def serialize_mem_cube(self, cube: BaseMemCube | str, _info) -> str:
+        """Custom serializer for BaseMemCube objects to string representation"""
         if isinstance(cube, str):
             return cube
-        return f"<GeneralMemCube:{id(cube)}>"
+        return f"<{type(cube).__name__}:{id(cube)}>"
 
     def to_dict(self) -> dict:
         """Convert model to dictionary suitable for Redis Stream"""
@@ -80,6 +86,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "cube": "Not Applicable",  # Custom cube serialization
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
+            "user_name": self.user_name,
         }
 
     @classmethod
@@ -88,11 +95,12 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         return cls(
             item_id=data.get("item_id", str(uuid4())),
             user_id=data["user_id"],
-            cube_id=data["cube_id"],
+            mem_cube_id=data["cube_id"],
             label=data["label"],
-            cube="Not Applicable",  # Custom cube deserialization
+            mem_cube="Not Applicable",  # Custom cube deserialization
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
+            user_name=data.get("user_name"),
         )
 
 
@@ -131,7 +139,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         description="Maximum capacities of memory partitions",
     )
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.utcnow(),
+        default_factory=get_utc_now,
         description="Timestamp indicating when the log entry was created",
     )
 

@@ -4,7 +4,7 @@ from memos.configs.vec_db import MilvusVecDBConfig
 from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.vec_dbs.base import BaseVecDB
-from memos.vec_dbs.item import VecDBItem
+from memos.vec_dbs.item import MilvusVecDBItem
 
 
 logger = get_logger(__name__)
@@ -34,16 +34,35 @@ class MilvusVecDB(BaseVecDB):
 
     def create_schema(self):
         """Create schema for the milvus collection."""
-        from pymilvus import DataType
+        from pymilvus import DataType, Function, FunctionType
 
         schema = self.client.create_schema(auto_id=False, enable_dynamic_field=True)
         schema.add_field(
             field_name="id", datatype=DataType.VARCHAR, max_length=65535, is_primary=True
         )
+        analyzer_params = {"tokenizer": "standard", "filter": ["lowercase"]}
+        schema.add_field(
+            field_name="memory",
+            datatype=DataType.VARCHAR,
+            max_length=65535,
+            analyzer_params=analyzer_params,
+            enable_match=True,
+            enable_analyzer=True,
+        )
+        schema.add_field(field_name="original_text", datatype=DataType.VARCHAR, max_length=65535)
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.config.vector_dimension
         )
         schema.add_field(field_name="payload", datatype=DataType.JSON)
+
+        schema.add_field(field_name="sparse_vector", datatype=DataType.SPARSE_FLOAT_VECTOR)
+        bm25_function = Function(
+            name="bm25",
+            function_type=FunctionType.BM25,
+            input_field_names=["memory"],
+            output_field_names="sparse_vector",
+        )
+        schema.add_function(bm25_function)
 
         return schema
 
@@ -52,6 +71,11 @@ class MilvusVecDB(BaseVecDB):
         index_params = self.client.prepare_index_params()
         index_params.add_index(
             field_name="vector", index_type="FLAT", metric_type=self._get_metric_type()
+        )
+        index_params.add_index(
+            field_name="sparse_vector",
+            index_type="SPARSE_INVERTED_INDEX",
+            metric_type="BM25",
         )
 
         return index_params
@@ -101,13 +125,97 @@ class MilvusVecDB(BaseVecDB):
         """Check if a collection exists."""
         return self.client.has_collection(collection_name=name)
 
+    def _dense_search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        top_k: int,
+        filter: str = "",
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Dense search for similar items in the database."""
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query_vector],
+            limit=top_k,
+            filter=filter,
+            output_fields=["*"],
+            anns_field="vector",
+        )
+        return results
+
+    def _sparse_search(
+        self,
+        collection_name: str,
+        query: str,
+        top_k: int,
+        filter: str = "",
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Sparse search for similar items in the database."""
+        results = self.client.search(
+            collection_name=collection_name,
+            data=[query],
+            limit=top_k,
+            filter=filter,
+            output_fields=["*"],
+            anns_field="sparse_vector",
+        )
+        return results
+
+    def _hybrid_search(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        query: str,
+        top_k: int,
+        filter: str | None = None,
+        ranker_type: str = "rrf",  # rrf, weighted
+        sparse_weight=1.0,
+        dense_weight=1.0,
+        **kwargs: Any,
+    ) -> list[list[dict]]:
+        """Hybrid search for similar items in the database."""
+        from pymilvus import AnnSearchRequest, RRFRanker, WeightedRanker
+
+        # Set up BM25 search request
+        expr = filter if filter else None
+        sparse_request = AnnSearchRequest(
+            data=[query],
+            anns_field="sparse_vector",
+            param={"metric_type": "BM25"},
+            limit=top_k,
+            expr=expr,
+        )
+        # Set up dense vector search request
+        dense_request = AnnSearchRequest(
+            data=[query_vector],
+            anns_field="vector",
+            param={"metric_type": self._get_metric_type()},
+            limit=top_k,
+            expr=expr,
+        )
+        ranker = (
+            RRFRanker() if ranker_type == "rrf" else WeightedRanker(sparse_weight, dense_weight)
+        )
+        results = self.client.hybrid_search(
+            collection_name=collection_name,
+            reqs=[sparse_request, dense_request],
+            ranker=ranker,
+            limit=top_k,
+            output_fields=["*"],
+        )
+        return results
+
     def search(
         self,
         query_vector: list[float],
+        query: str,
         collection_name: str,
         top_k: int,
         filter: dict[str, Any] | None = None,
-    ) -> list[VecDBItem]:
+        search_type: str = "dense",  # dense, sparse, hybrid
+    ) -> list[MilvusVecDBItem]:
         """
         Search for similar items in the database.
 
@@ -123,12 +231,18 @@ class MilvusVecDB(BaseVecDB):
         # Convert filter to Milvus expression
         expr = self._dict_to_expr(filter) if filter else ""
 
-        results = self.client.search(
+        search_func_map = {
+            "dense": self._dense_search,
+            "sparse": self._sparse_search,
+            "hybrid": self._hybrid_search,
+        }
+
+        results = search_func_map[search_type](
             collection_name=collection_name,
-            data=[query_vector],
-            limit=top_k,
+            query_vector=query_vector,
+            query=query,
+            top_k=top_k,
             filter=expr,
-            output_fields=["*"],  # Return all fields
         )
 
         items = []
@@ -136,8 +250,10 @@ class MilvusVecDB(BaseVecDB):
             entity = hit.get("entity", {})
 
             items.append(
-                VecDBItem(
-                    id=str(hit["id"]),
+                MilvusVecDBItem(
+                    id=str(entity.get("id")),
+                    memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
                     payload=entity.get("payload", {}),
                     score=1 - float(hit["distance"]),
@@ -178,7 +294,7 @@ class MilvusVecDB(BaseVecDB):
         }
         return metric_map.get(self.config.distance_metric, "L2")
 
-    def get_by_id(self, collection_name: str, id: str) -> VecDBItem | None:
+    def get_by_id(self, collection_name: str, id: str) -> MilvusVecDBItem | None:
         """Get a single item by ID."""
         results = self.client.get(
             collection_name=collection_name,
@@ -191,13 +307,15 @@ class MilvusVecDB(BaseVecDB):
         entity = results[0]
         payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
 
-        return VecDBItem(
+        return MilvusVecDBItem(
             id=entity["id"],
+            memory=entity.get("memory"),
+            original_text=entity.get("original_text"),
             vector=entity.get("vector"),
             payload=payload,
         )
 
-    def get_by_ids(self, collection_name: str, ids: list[str]) -> list[VecDBItem]:
+    def get_by_ids(self, collection_name: str, ids: list[str]) -> list[MilvusVecDBItem]:
         """Get multiple items by their IDs."""
         results = self.client.get(
             collection_name=collection_name,
@@ -211,8 +329,10 @@ class MilvusVecDB(BaseVecDB):
         for entity in results:
             payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
             items.append(
-                VecDBItem(
+                MilvusVecDBItem(
                     id=entity["id"],
+                    memory=entity.get("memory"),
+                    original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
                     payload=payload,
                 )
@@ -222,7 +342,7 @@ class MilvusVecDB(BaseVecDB):
 
     def get_by_filter(
         self, collection_name: str, filter: dict[str, Any], scroll_limit: int = 100
-    ) -> list[VecDBItem]:
+    ) -> list[MilvusVecDBItem]:
         """
         Retrieve all items that match the given filter criteria using query_iterator.
 
@@ -252,13 +372,15 @@ class MilvusVecDB(BaseVecDB):
                 if not batch_results:
                     break
 
-                # Convert batch results to VecDBItem objects
+                # Convert batch results to MilvusVecDBItem objects
                 for entity in batch_results:
                     # Extract the actual payload from Milvus entity
                     payload = entity.get("payload", {})
                     all_items.append(
-                        VecDBItem(
+                        MilvusVecDBItem(
                             id=entity["id"],
+                            memory=entity.get("memory"),
+                            original_text=entity.get("original_text"),
                             vector=entity.get("vector"),
                             payload=payload,
                         )
@@ -274,7 +396,7 @@ class MilvusVecDB(BaseVecDB):
         logger.info(f"Milvus retrieve by filter completed with {len(all_items)} results.")
         return all_items
 
-    def get_all(self, collection_name: str, scroll_limit=100) -> list[VecDBItem]:
+    def get_all(self, collection_name: str, scroll_limit=100) -> list[MilvusVecDBItem]:
         """Retrieve all items in the vector database."""
         return self.get_by_filter(collection_name, {}, scroll_limit=scroll_limit)
 
@@ -295,13 +417,14 @@ class MilvusVecDB(BaseVecDB):
             # Extract row count from stats - stats is a dict, not a list
             return int(stats.get("row_count", 0))
 
-    def add(self, collection_name: str, data: list[VecDBItem | dict[str, Any]]) -> None:
+    def add(self, collection_name: str, data: list[MilvusVecDBItem | dict[str, Any]]) -> None:
         """
         Add data to the vector database.
 
         Args:
-            data: List of VecDBItem objects or dictionaries containing:
+            data: List of MilvusVecDBItem objects or dictionaries containing:
                 - 'id': unique identifier
+                - 'memory': memory string
                 - 'vector': embedding vector
                 - 'payload': additional fields for filtering/retrieval
         """
@@ -309,11 +432,13 @@ class MilvusVecDB(BaseVecDB):
         for item in data:
             if isinstance(item, dict):
                 item = item.copy()
-                item = VecDBItem.from_dict(item)
+                item = MilvusVecDBItem.from_dict(item)
 
             # Prepare entity data
             entity = {
                 "id": item.id,
+                "memory": item.memory,
+                "original_text": item.original_text,
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }
@@ -326,11 +451,15 @@ class MilvusVecDB(BaseVecDB):
             data=entities,
         )
 
-    def update(self, collection_name: str, id: str, data: VecDBItem | dict[str, Any]) -> None:
+    def update(self, collection_name: str, id: str, data: MilvusVecDBItem | dict[str, Any]) -> None:
         """Update an item in the vector database."""
+        if id != data.id:
+            raise ValueError(
+                f"The id of the data to update must be the same as the id of the item to update, ID mismatch: expected {id}, got {data.id}"
+            )
         if isinstance(data, dict):
             data = data.copy()
-            data = VecDBItem.from_dict(data)
+            data = MilvusVecDBItem.from_dict(data)
 
         # Use upsert for updates
         self.upsert(collection_name, [data])
@@ -347,7 +476,7 @@ class MilvusVecDB(BaseVecDB):
         # Field indexes are created automatically for scalar fields
         logger.info(f"Milvus automatically indexes scalar fields: {fields}")
 
-    def upsert(self, collection_name: str, data: list[VecDBItem | dict[str, Any]]) -> None:
+    def upsert(self, collection_name: str, data: list[MilvusVecDBItem | dict[str, Any]]) -> None:
         """
         Add or update data in the vector database.
 

@@ -27,6 +27,7 @@ LME_ANSWER_PROMPT = """
     Answer:
     """
 
+
 PM_ANSWER_PROMPT = """
     You are a helpful assistant tasked with selecting the best answer to a user question, based solely on summarized conversation memories.
 
@@ -55,6 +56,13 @@ PM_ANSWER_PROMPT = """
 
     Final Answer:
     <final_answer>
+"""
+
+
+PREFEVAL_ANSWER_PROMPT = """
+    You are a helpful AI. Answer the question based on the query and the following memories:
+    User Memories:
+    {context}
 """
 
 

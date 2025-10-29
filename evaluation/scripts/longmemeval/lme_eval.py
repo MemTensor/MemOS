@@ -26,6 +26,7 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.prompts import LME_JUDGE_MODEL_TEMPLATE
 
+
 encoding = tiktoken.get_encoding("cl100k_base")
 logging.basicConfig(level=logging.CRITICAL)
 transformers.logging.set_verbosity_error()
@@ -343,7 +344,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
@@ -354,7 +363,7 @@ if __name__ == "__main__":
         type=str,
         nargs="+",
         default=["lexical"],
-        choices=["lexical", "semantic"],
+        choices=["lexical"],
         help="NLP options to use for evaluation.",
     )
     parser.add_argument(

@@ -232,6 +232,7 @@ class GraphMemoryRetriever:
         memory_scope: str,
         top_k: int = 20,
         max_num: int = 5,
+        status: str = "activated",
         cube_name: str | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
@@ -248,6 +249,7 @@ class GraphMemoryRetriever:
                 self.graph_store.search_by_embedding(
                     vector=vec,
                     top_k=top_k,
+                    status=status,
                     scope=memory_scope,
                     cube_name=cube_name,
                     search_filter=filt,

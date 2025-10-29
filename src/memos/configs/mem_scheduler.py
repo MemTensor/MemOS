@@ -11,8 +11,15 @@ from memos.mem_scheduler.general_modules.misc import DictConversionMixin, EnvCon
 from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
+    DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
+    DEFAULT_CONTEXT_WINDOW_SIZE,
+    DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+    DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
     DEFAULT_THREAD_POOL_MAX_WORKERS,
+    DEFAULT_TOP_K,
+    DEFAULT_USE_REDIS_QUEUE,
+    DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
 )
 
 
@@ -20,7 +27,8 @@ class BaseSchedulerConfig(BaseConfig):
     """Base configuration class for mem_scheduler."""
 
     top_k: int = Field(
-        default=10, description="Number of top candidates to consider in initial retrieval"
+        default=DEFAULT_TOP_K,
+        description="Number of top candidates to consider in initial retrieval",
     )
     enable_parallel_dispatch: bool = Field(
         default=True, description="Whether to enable parallel message processing using thread pool"
@@ -28,18 +36,33 @@ class BaseSchedulerConfig(BaseConfig):
     thread_pool_max_workers: int = Field(
         default=DEFAULT_THREAD_POOL_MAX_WORKERS,
         gt=1,
-        lt=20,
         description=f"Maximum worker threads in pool (default: {DEFAULT_THREAD_POOL_MAX_WORKERS})",
     )
     consume_interval_seconds: float = Field(
         default=DEFAULT_CONSUME_INTERVAL_SECONDS,
         gt=0,
-        le=60,
         description=f"Interval for consuming messages from queue in seconds (default: {DEFAULT_CONSUME_INTERVAL_SECONDS})",
     )
     auth_config_path: str | None = Field(
         default=None,
         description="Path to the authentication configuration file containing private credentials",
+    )
+    # Redis queue configuration
+    use_redis_queue: bool = Field(
+        default=DEFAULT_USE_REDIS_QUEUE,
+        description="Whether to use Redis queue instead of local memory queue",
+    )
+    redis_config: dict[str, Any] = Field(
+        default_factory=lambda: {"host": "localhost", "port": 6379, "db": 0},
+        description="Redis connection configuration",
+    )
+    max_internal_message_queue_size: int = Field(
+        default=DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+        description="Maximum size of internal message queue when not using Redis",
+    )
+    multi_task_running_timeout: int = Field(
+        default=DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
+        description="Default timeout for multi-task running operations in seconds",
     )
 
 
@@ -49,7 +72,8 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=300, description="Interval in seconds for updating activation memory"
     )
     context_window_size: int | None = Field(
-        default=10, description="Size of the context window for conversation history"
+        default=DEFAULT_CONTEXT_WINDOW_SIZE,
+        description="Size of the context window for conversation history",
     )
     act_mem_dump_path: str | None = Field(
         default=DEFAULT_ACT_MEM_DUMP_PATH,  # Replace with DEFAULT_ACT_MEM_DUMP_PATH
@@ -59,10 +83,12 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=False, description="Whether to enable automatic activation memory updates"
     )
     working_mem_monitor_capacity: int = Field(
-        default=30, description="Capacity of the working memory monitor"
+        default=DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
+        description="Capacity of the working memory monitor",
     )
     activation_mem_monitor_capacity: int = Field(
-        default=20, description="Capacity of the activation memory monitor"
+        default=DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
+        description="Capacity of the activation memory monitor",
     )
 
     # Database configuration for ORM persistence
@@ -79,6 +105,14 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
     )
 
 
+class OptimizedSchedulerConfig(GeneralSchedulerConfig):
+    """Configuration for the optimized scheduler.
+
+    This class inherits all fields from `GeneralSchedulerConfig`
+    and is used to distinguish optimized scheduling logic via type.
+    """
+
+
 class SchedulerConfigFactory(BaseConfig):
     """Factory class for creating scheduler configurations."""
 
@@ -88,7 +122,7 @@ class SchedulerConfigFactory(BaseConfig):
     model_config = ConfigDict(extra="forbid", strict=True)
     backend_to_class: ClassVar[dict[str, Any]] = {
         "general_scheduler": GeneralSchedulerConfig,
-        "optimized_scheduler": GeneralSchedulerConfig,  # optimized_scheduler uses same config as general_scheduler
+        "optimized_scheduler": OptimizedSchedulerConfig,  # optimized_scheduler uses same config as general_scheduler
     }
 
     @field_validator("backend")

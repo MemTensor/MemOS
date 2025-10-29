@@ -61,6 +61,8 @@ class NaiveTextMemory(BaseTextMemory):
 
     def __init__(self, config: NaiveTextMemoryConfig):
         """Initialize memory with the given configuration."""
+        # Set mode from class default or override if needed
+        self.mode = getattr(self.__class__, "mode", "sync")
         self.config = config
         self.extractor_llm = LLMFactory.from_config(config.extractor_llm)
         self.memories = []

@@ -41,3 +41,10 @@ class VecDBItem(BaseModel):
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary format."""
         return self.model_dump(exclude_none=True)
+
+
+class MilvusVecDBItem(VecDBItem):
+    """Represents a single item in the Milvus vector database."""
+
+    memory: str | None = Field(default=None, description="Memory string")
+    original_text: str | None = Field(default=None, description="Original text content")
