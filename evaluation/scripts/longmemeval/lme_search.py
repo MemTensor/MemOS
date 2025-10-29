@@ -123,6 +123,11 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
 
         client = MemosApiClient()
         context, duration_ms = memos_search(client, question, user_id, top_k)
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
+        context, duration_ms = memos_search(client, question, user_id, top_k)
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -218,7 +223,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
