@@ -1,6 +1,7 @@
 """Defines memory item types for textual memory."""
 
 import json
+import logging
 import uuid
 
 from datetime import datetime
@@ -123,6 +124,25 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     def coerce_sources(cls, v):
         if v is None:
             return v
+            # Handle string representation of sources (e.g., from PostgreSQL array or malformed data)
+        if isinstance(v, str):
+            logging.info(f"[coerce_sources] v: {v} type: {type(v)}")
+            # If it's a string that looks like a list representation, try to parse it
+            # This handles cases like: "[uuid1, uuid2, uuid3]" or "[item1, item2]"
+            v_stripped = v.strip()
+            if v_stripped.startswith("[") and v_stripped.endswith("]"):
+                # Remove brackets and split by comma
+                content = v_stripped[1:-1].strip()
+                if content:
+                    # Split by comma and clean up each item
+                    items = [item.strip() for item in content.split(",")]
+                    # Convert to list of strings
+                    v = items
+                else:
+                    v = []
+            else:
+                # Single string, wrap in list
+                v = [v]
         if not isinstance(v, list):
             raise TypeError("sources must be a list")
         out = []

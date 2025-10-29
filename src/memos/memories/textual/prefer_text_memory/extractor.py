@@ -2,10 +2,11 @@ import json
 import uuid
 
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from datetime import datetime
 from typing import Any
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.prefer_text_memory.spliter import Splitter
@@ -163,7 +164,7 @@ class NaiveExtractor(BaseExtractor):
             return []
 
         memories = []
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
+        with ContextThreadPoolExecutor(max_workers=min(max_workers, len(chunks))) as executor:
             futures = {
                 executor.submit(self._process_single_chunk_explicit, chunk, msg_type, info): (
                     "explicit",

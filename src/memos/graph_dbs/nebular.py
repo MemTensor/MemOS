@@ -1551,7 +1551,7 @@ class NebulaGraphDB(BaseGraphDB):
             """
             self.execute_query(create_tag, auto_set_db=False)
         else:
-            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name};"
+            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name}"
             desc_result = self.execute_query(describe_query, auto_set_db=False)
 
             memory_fields = []

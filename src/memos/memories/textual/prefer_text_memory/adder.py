@@ -1,10 +1,11 @@
 import json
 
 from abc import ABC, abstractmethod
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from typing import Any
 
 from datetime import datetime
+from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.prefer_complete_prompt import (
@@ -173,7 +174,7 @@ class NaiveAdder(BaseAdder):
                 self.vector_db.delete(collection_name, [op["target_id"]])
                 return None
 
-        with ThreadPoolExecutor(max_workers=min(len(rsp["trace"]), 5)) as executor:
+        with ContextThreadPoolExecutor(max_workers=min(len(rsp["trace"]), 5)) as executor:
             future_to_op = {executor.submit(execute_op, op, new_mem_db_item_map, retrieved_mem_db_item_map): op for op in rsp["trace"]}
             added_ids = []
             for future in as_completed(future_to_op):
@@ -321,7 +322,7 @@ class NaiveAdder(BaseAdder):
                 "explicit_preference": "explicit_preference",
                 "implicit_preference": "implicit_preference",
             }
-        
+
         explicit_new_mems = []
         implicit_new_mems = []
         explicit_recalls = []
@@ -343,7 +344,7 @@ class NaiveAdder(BaseAdder):
             elif preference_type == "implicit_preference":
                 implicit_recalls.extend(search_results)
                 implicit_new_mems.append(memory)
-        
+
         explicit_recalls = list({recall.id: recall for recall in explicit_recalls}.values())
         implicit_recalls = list({recall.id: recall for recall in implicit_recalls}.values())
 
@@ -353,7 +354,7 @@ class NaiveAdder(BaseAdder):
 
     def process_memory_single(self, memories: list[TextualMemoryItem], max_workers: int = 8, *args, **kwargs) -> list[str]:
         added_ids: list[str] = []
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(memories))) as executor:
+        with ContextThreadPoolExecutor(max_workers=min(max_workers, len(memories))) as executor:
             future_to_memory = {
                 executor.submit(self._process_single_memory, memory): memory for memory in memories
             }

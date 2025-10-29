@@ -1,7 +1,6 @@
 import os
 import traceback
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException
@@ -22,6 +21,7 @@ from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
@@ -368,7 +368,7 @@ def search_memories(search_req: APISearchRequest):
         )
         return [_format_memory_item(data) for data in results]
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ContextThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_search_text)
         pref_future = executor.submit(_search_pref)
         text_formatted_memories = text_future.result()
@@ -530,7 +530,7 @@ def add_memories(add_req: APIADDRequest):
             for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
         ]
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ContextThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_process_text_mem)
         pref_future = executor.submit(_process_pref_mem)
         text_response_data = text_future.result()
