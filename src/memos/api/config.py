@@ -23,7 +23,7 @@ class APIConfig:
         return {
             "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "gpt-4o-mini"),
             "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
-            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "1024")),
+            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "8000")),
             "top_p": float(os.getenv("MOS_TOP_P", "0.9")),
             "top_k": int(os.getenv("MOS_TOP_K", "50")),
             "remove_think_prefix": True,
