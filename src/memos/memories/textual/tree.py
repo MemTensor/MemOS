@@ -34,6 +34,8 @@ class TreeTextMemory(BaseTextMemory):
         """Initialize memory with the given configuration."""
         # Set mode from class default or override if needed
         self.mode = config.mode
+        logger.info(f"Tree mode is {self.mode}")
+
         self.config: TreeTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm

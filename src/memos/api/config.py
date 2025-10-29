@@ -672,6 +672,7 @@ class APIConfig:
                                 "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
                             },
+                            "mode": os.getenv("ASYNC_MODE", "sync"),
                         },
                     },
                     "act_mem": {}

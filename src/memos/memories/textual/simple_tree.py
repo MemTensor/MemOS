@@ -45,6 +45,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         time_start = time.time()
         self.config: TreeTextMemoryConfig = config
         self.mode = self.config.mode
+        logger.info(f"Tree mode is {self.mode}")
 
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = llm
         logger.info(f"time init: extractor_llm time is: {time.time() - time_start}")
