@@ -31,10 +31,10 @@ def ingest_session(session, user_id, session_id, frame, client):
         if os.getenv("PRE_SPLIT_CHUNK") == "true":
             for i in range(0, len(session), 10):
                 messages = session[i : i + 10]
-                client.add(messages=messages, user_id=user_id, conv_id=session_id)
+                client.add(messages=messages, user_id=user_id, conv_id=session_id, batch_size=2)
                 print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
         else:
-            client.add(messages=session, user_id=user_id, conv_id=session_id)
+            client.add(messages=session, user_id=user_id, conv_id=session_id, batch_size=2)
             print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
     elif frame == "memobase":
         for _idx, msg in enumerate(session):
