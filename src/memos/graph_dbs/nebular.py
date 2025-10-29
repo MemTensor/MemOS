@@ -439,6 +439,7 @@ class NebulaGraphDB(BaseGraphDB):
         Args:
             memory_type (str): Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
             keep_latest (int): Number of latest WorkingMemory entries to keep.
+            user_name(str): optional user_name.
         """
         try:
             user_name = user_name if user_name else self.config.user_name
@@ -685,14 +686,14 @@ class NebulaGraphDB(BaseGraphDB):
         Returns:
             dict: Node properties as key-value pairs, or None if not found.
         """
-        user_name = user_name if user_name else self.config.user_name
-        filter_clause = f'n.user_name = "{user_name}" AND n.id = "{id}"'
+        filter_clause = f'n.id = "{id}"'
         return_fields = self._build_return_fields(include_embedding)
         gql = f"""
             MATCH (n@Memory)
             WHERE {filter_clause}
             RETURN {return_fields}
         """
+        logger.info(f"in get node: {filter_clause}")
 
         try:
             result = self.execute_query(gql)
@@ -730,16 +731,13 @@ class NebulaGraphDB(BaseGraphDB):
         """
         if not ids:
             return []
-
-        user_name = user_name if user_name else self.config.user_name
-        where_user = f" AND n.user_name = '{user_name}'"
         # Safe formatting of the ID list
         id_list = ",".join(f'"{_id}"' for _id in ids)
 
         return_fields = self._build_return_fields(include_embedding)
         query = f"""
             MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
-            WHERE n.id IN [{id_list}] {where_user}
+            WHERE n.id IN [{id_list}]
             RETURN {return_fields}
         """
         nodes = []
@@ -1497,10 +1495,10 @@ class NebulaGraphDB(BaseGraphDB):
             return
 
         try:
-            res = tmp_client.execute("SHOW GRAPHS;")
+            res = tmp_client.execute("SHOW GRAPHS")
             existing = {row.values()[0].as_string() for row in res}
             if db_name not in existing:
-                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type;")
+                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type")
                 logger.info(f"✅ Graph `{db_name}` created before session binding.")
             else:
                 logger.debug(f"Graph `{db_name}` already exists.")
@@ -1551,7 +1549,7 @@ class NebulaGraphDB(BaseGraphDB):
             """
             self.execute_query(create_tag, auto_set_db=False)
         else:
-            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name};"
+            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name}"
             desc_result = self.execute_query(describe_query, auto_set_db=False)
 
             memory_fields = []
