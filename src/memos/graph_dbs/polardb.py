@@ -1775,24 +1775,61 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 for row in edge_results:
                     source_agtype, target_agtype, edge_agtype = row
+
+                    # Extract and clean source
+                    source_raw = (
+                        source_agtype.value
+                        if hasattr(source_agtype, "value")
+                        else str(source_agtype)
+                    )
+                    if (
+                        isinstance(source_raw, str)
+                        and source_raw.startswith('"')
+                        and source_raw.endswith('"')
+                    ):
+                        source = source_raw[1:-1]
+                    else:
+                        source = str(source_raw)
+
+                    # Extract and clean target
+                    target_raw = (
+                        target_agtype.value
+                        if hasattr(target_agtype, "value")
+                        else str(target_agtype)
+                    )
+                    if (
+                        isinstance(target_raw, str)
+                        and target_raw.startswith('"')
+                        and target_raw.endswith('"')
+                    ):
+                        target = target_raw[1:-1]
+                    else:
+                        target = str(target_raw)
+
+                    # Extract and clean edge type
+                    type_raw = (
+                        edge_agtype.value if hasattr(edge_agtype, "value") else str(edge_agtype)
+                    )
+                    if (
+                        isinstance(type_raw, str)
+                        and type_raw.startswith('"')
+                        and type_raw.endswith('"')
+                    ):
+                        edge_type = type_raw[1:-1]
+                    else:
+                        edge_type = str(type_raw)
+
                     edges.append(
                         {
-                            "source": source_agtype.value
-                            if hasattr(source_agtype, "value")
-                            else str(source_agtype),
-                            "target": target_agtype.value
-                            if hasattr(target_agtype, "value")
-                            else str(target_agtype),
-                            "type": edge_agtype.value
-                            if hasattr(edge_agtype, "value")
-                            else str(edge_agtype),
+                            "source": source,
+                            "target": target,
+                            "type": edge_type,
                         }
                     )
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - EDGES] Exception: {e}", exc_info=True)
             raise RuntimeError(f"[EXPORT GRAPH - EDGES] Exception: {e}") from e
-
         return {"nodes": nodes, "edges": edges}
 
     @timed
@@ -2764,9 +2801,38 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 edges = []
                 for row in results:
-                    from_id = row[0].value if hasattr(row[0], "value") else row[0]
-                    to_id = row[1].value if hasattr(row[1], "value") else row[1]
-                    edge_type = row[2].value if hasattr(row[2], "value") else row[2]
+                    # Extract and clean from_id
+                    from_id_raw = row[0].value if hasattr(row[0], "value") else row[0]
+                    if (
+                        isinstance(from_id_raw, str)
+                        and from_id_raw.startswith('"')
+                        and from_id_raw.endswith('"')
+                    ):
+                        from_id = from_id_raw[1:-1]
+                    else:
+                        from_id = str(from_id_raw)
+
+                    # Extract and clean to_id
+                    to_id_raw = row[1].value if hasattr(row[1], "value") else row[1]
+                    if (
+                        isinstance(to_id_raw, str)
+                        and to_id_raw.startswith('"')
+                        and to_id_raw.endswith('"')
+                    ):
+                        to_id = to_id_raw[1:-1]
+                    else:
+                        to_id = str(to_id_raw)
+
+                    # Extract and clean edge_type
+                    edge_type_raw = row[2].value if hasattr(row[2], "value") else row[2]
+                    if (
+                        isinstance(edge_type_raw, str)
+                        and edge_type_raw.startswith('"')
+                        and edge_type_raw.endswith('"')
+                    ):
+                        edge_type = edge_type_raw[1:-1]
+                    else:
+                        edge_type = str(edge_type_raw)
 
                     edges.append({"from": from_id, "to": to_id, "type": edge_type})
                 return edges
