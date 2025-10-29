@@ -81,12 +81,18 @@ class TreeTextMemory(BaseTextMemory):
         else:
             logger.info("No internet retriever configured")
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
+    def add(
+        self,
+        memories: list[TextualMemoryItem | dict[str, Any]],
+        user_name: str | None = None,
+        **kwargs,
+    ) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
+            user_name: optional user_name
         """
-        return self.memory_manager.add(memories, mode=self.mode)
+        return self.memory_manager.add(memories, user_name=user_name, mode=self.mode)
 
     def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
         self.memory_manager.replace_working_memory(memories)
@@ -262,21 +268,21 @@ class TreeTextMemory(BaseTextMemory):
     def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
         raise NotImplementedError
 
-    def get_all(self) -> dict:
+    def get_all(self, user_name: str | None = None) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph()
+        all_items = self.graph_store.export_graph(user_name=user_name)
         return all_items
 
-    def delete(self, memory_ids: list[str]) -> None:
+    def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
         if not memory_ids:
             return
         for mid in memory_ids:
             try:
-                self.graph_store.delete_node(mid)
+                self.graph_store.delete_node(mid, user_name=user_name)
             except Exception as e:
                 logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
 
