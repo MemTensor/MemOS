@@ -238,7 +238,8 @@ class MemoryManager:
         node_id = str(uuid.uuid4())
         # Step 2: Add new node to graph
         metadata_dict = memory.metadata.model_dump(exclude_none=True)
-        if working_binding and ("mode:fast" in metadata_dict["tags"]):
+        tags = metadata_dict.get("tags") or []
+        if working_binding and ("mode:fast" in tags):
             prev_bg = metadata_dict.get("background", "") or ""
             binding_line = f"[working_binding:{working_binding}] direct built from raw inputs"
             if prev_bg:

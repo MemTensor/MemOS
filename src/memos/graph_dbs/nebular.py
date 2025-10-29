@@ -693,7 +693,6 @@ class NebulaGraphDB(BaseGraphDB):
             WHERE {filter_clause}
             RETURN {return_fields}
         """
-        logger.info(f"in get node: {filter_clause}")
 
         try:
             result = self.execute_query(gql)
