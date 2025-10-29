@@ -21,7 +21,7 @@ class GraphMemoryRetriever:
         self,
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
-        bm25_retriever: EnhancedBM25 | None,
+        bm25_retriever: EnhancedBM25 | None = None,
     ):
         self.graph_store = graph_store
         self.embedder = embedder

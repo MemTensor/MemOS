@@ -37,7 +37,7 @@ class BaseMemReaderConfig(BaseConfig):
     )
 
     chat_chunker: dict[str, Any] = Field(
-        ..., description="Configuration for the MemReader chat chunk strategy"
+        default=None, description="Configuration for the MemReader chat chunk strategy"
     )
 
 
