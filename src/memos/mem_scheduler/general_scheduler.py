@@ -3,6 +3,7 @@ import json
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
+from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.base_scheduler import BaseScheduler
@@ -283,7 +284,7 @@ class GeneralScheduler(BaseScheduler):
             except Exception as e:
                 logger.error(f"Error processing mem_read message: {e}", exc_info=True)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+        with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
             futures = [executor.submit(process_message, msg) for msg in messages]
             for future in concurrent.futures.as_completed(futures):
                 try:
@@ -447,7 +448,7 @@ class GeneralScheduler(BaseScheduler):
             except Exception as e:
                 logger.error(f"Error processing mem_read message: {e}", exc_info=True)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+        with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
             futures = [executor.submit(process_message, msg) for msg in messages]
             for future in concurrent.futures.as_completed(futures):
                 try:
@@ -541,7 +542,7 @@ class GeneralScheduler(BaseScheduler):
             except Exception as e:
                 logger.error(f"Error processing pref_add message: {e}", exc_info=True)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
+        with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
             futures = [executor.submit(process_message, msg) for msg in messages]
             for future in concurrent.futures.as_completed(futures):
                 try:

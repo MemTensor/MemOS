@@ -44,26 +44,33 @@ def ingest_session(client, session, frame, version, metadata):
             speaker_a_messages.append({"role": "assistant", "content": data})
             speaker_b_messages.append({"role": "user", "content": data})
 
-    if frame == "memos-api":
+    if "memos-api" in frame:
         for m in speaker_a_messages:
             m["chat_time"] = iso_date
         for m in speaker_b_messages:
             m["chat_time"] = iso_date
-        client.add(speaker_a_messages, speaker_a_user_id, f"{conv_id}_{metadata['session_key']}")
-        client.add(speaker_b_messages, speaker_b_user_id, f"{conv_id}_{metadata['session_key']}")
+        client.add(
+            speaker_a_messages,
+            speaker_a_user_id,
+            f"{conv_id}_{metadata['session_key']}",
+            batch_size=2,
+        )
+        client.add(
+            speaker_b_messages,
+            speaker_b_user_id,
+            f"{conv_id}_{metadata['session_key']}",
+            batch_size=2,
+        )
     elif "mem0" in frame:
-        for i in range(0, len(speaker_a_messages), 2):
-            batch_messages_a = speaker_a_messages[i : i + 2]
-            batch_messages_b = speaker_b_messages[i : i + 2]
-            client.add(batch_messages_a, speaker_a_user_id, timestamp)
-            client.add(batch_messages_b, speaker_b_user_id, timestamp)
+        client.add(speaker_a_messages, speaker_a_user_id, timestamp, batch_size=2)
+        client.add(speaker_b_messages, speaker_b_user_id, timestamp, batch_size=2)
     elif frame == "memobase":
         for m in speaker_a_messages:
             m["created_at"] = iso_date
         for m in speaker_b_messages:
             m["created_at"] = iso_date
-        client.add(speaker_a_messages, speaker_a_user_id)
-        client.add(speaker_b_messages, speaker_b_user_id)
+        client.add(speaker_a_messages, speaker_a_user_id, batch_size=2)
+        client.add(speaker_b_messages, speaker_b_user_id, batch_size=2)
     elif frame == "memu":
         client.add(speaker_a_messages, speaker_a_user_id, iso_date)
         client.add(speaker_b_messages, speaker_b_user_id, iso_date)
@@ -103,6 +110,10 @@ def process_user(conv_idx, frame, locomo_df, version):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
     elif frame == "memobase":
         from utils.client import MemobaseClient
 
@@ -187,7 +198,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(

@@ -107,11 +107,11 @@ def memos_api_search(
 
     speaker_a_context = (
         "\n".join([i["memory"] for i in search_a_results["text_mem"][0]["memories"]])
-        + f"\n{search_a_results['pref_mem']}"
+        + f"\n{search_a_results['pref_string']}"
     )
     speaker_b_context = (
         "\n".join([i["memory"] for i in search_b_results["text_mem"][0]["memories"]])
-        + f"\n{search_b_results['pref_mem']}"
+        + f"\n{search_b_results['pref_string']}"
     )
 
     context = TEMPLATE_MEMOS.format(
@@ -198,7 +198,7 @@ def search_query(client, query, metadata, frame, version, top_k=20):
         context, duration_ms = mem0_graph_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
         )
-    elif frame == "memos-api":
+    elif "memos-api" in frame:
         context, duration_ms = memos_api_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
         )
@@ -257,6 +257,10 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
     elif frame == "memobase":
         from utils.client import MemobaseClient
 
@@ -336,7 +340,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(

@@ -22,17 +22,32 @@ This repository provides tools and scripts for evaluating the LoCoMo dataset usi
 2. Copy the `configs-example/` directory to a new directory named `configs/`, and modify the configuration files inside it as needed. This directory contains model and API-specific settings.
 
 ## Setup MemOS
+### local server
 ```bash
-#start server
+# modify {project_dir}/.env file and start server
 uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 8
 
-# modify .env file
+# configure {project_dir}/evaluation/.env file
 MEMOS_URL="http://127.0.0.1:8001"
 ```
+### online service
+```bash
+# get your api key at https://memos-dashboard.openmem.net/cn/quickstart/
+# configure {project_dir}/evaluation/.env file
+MEMOS_KEY="Token mpg-xxxxx"
+MEMOS_ONLINE_URL="https://memos.memtensor.cn/api/openmem/v1"
+
+```
+
+## Supported frameworks
+We support `memos-api` and `memos-api-online` in our scripts.
+And give unofficial implementations for the following memory frameworks:`zep`, `mem0`, `memobase`, `supermemory`, `memu`.
+
+
 ## Evaluation Scripts
 
 ### LoCoMo Evaluation
-⚙️ To evaluate the **LoCoMo** dataset using one of the supported memory frameworks — `memos`, `mem0`, or `zep` — run the following [script](./scripts/run_locomo_eval.sh):
+⚙️ To evaluate the **LoCoMo** dataset using one of the supported memory frameworks — run the following [script](./scripts/run_locomo_eval.sh):
 
 ```bash
 # Edit the configuration in ./scripts/run_locomo_eval.sh
@@ -53,7 +68,7 @@ First prepare the dataset `longmemeval_s` from https://huggingface.co/datasets/x
 ```
 
 ### PrefEval Evaluation
-To evaluate the **Prefeval** dataset using one of the supported memory frameworks — `memos`, `mem0`, or `zep` — run the following [script](./scripts/run_prefeval_eval.sh):
+To evaluate the **Prefeval** dataset using one of the supported memory frameworks — run the following [script](./scripts/run_prefeval_eval.sh):
 
 ```bash
 # Edit the configuration in ./scripts/run_prefeval_eval.sh

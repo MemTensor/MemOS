@@ -46,7 +46,7 @@ def memos_search(client, query, user_id, top_k):
     results = client.search(query=query, user_id=user_id, top_k=top_k)
     context = (
         "\n".join([i["memory"] for i in results["text_mem"][0]["memories"]])
-        + f"\n{results['pref_mem']}"
+        + f"\n{results['pref_string']}"
     )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=context)
     duration_ms = (time() - start) * 1000
@@ -122,6 +122,11 @@ def process_user(lme_df, conv_idx, frame, version, top_k=20):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+        context, duration_ms = memos_search(client, question, user_id, top_k)
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
         context, duration_ms = memos_search(client, question, user_id, top_k)
     elif frame == "memu":
         from utils.client import MemuClient
@@ -218,7 +223,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
