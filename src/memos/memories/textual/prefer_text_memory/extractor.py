@@ -13,8 +13,11 @@ from memos.memories.textual.prefer_text_memory.utils import convert_messages_to_
 from memos.templates.prefer_complete_prompt import (
     NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT,
     NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT,
+    NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
+    NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
 )
 from memos.types import MessageList
+from memos.mem_reader.simple_struct import detect_lang
 
 
 logger = get_logger(__name__)
@@ -52,7 +55,12 @@ class NaiveExtractor(BaseExtractor):
     def extract_explicit_preference(self, qa_pair: MessageList | str) -> dict[str, Any] | None:
         """Extract explicit preference from a QA pair."""
         qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, list) else qa_pair
-        prompt = NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pair}", qa_pair_str)
+        lang = detect_lang(qa_pair_str)
+        _map = {
+            "zh": NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
+            "en": NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT,
+        }
+        prompt = _map[lang].replace("{qa_pair}", qa_pair_str)
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
@@ -68,7 +76,12 @@ class NaiveExtractor(BaseExtractor):
         if not qa_pair:
             return None
         qa_pair_str = convert_messages_to_string(qa_pair) if isinstance(qa_pair, list) else qa_pair
-        prompt = NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT.replace("{qa_pair}", qa_pair_str)
+        lang = detect_lang(qa_pair_str)
+        _map = {
+            "zh": NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH,
+            "en": NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT,
+        }
+        prompt = _map[lang].replace("{qa_pair}", qa_pair_str)
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
