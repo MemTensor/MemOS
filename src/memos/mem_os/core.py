@@ -779,16 +779,16 @@ class MOSCore:
                                 timestamp=datetime.utcnow(),
                             )
                             self.mem_scheduler.submit_messages(messages=[message_item])
-
-                        message_item = ScheduleMessageItem(
-                            user_id=target_user_id,
-                            mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
-                            label=ADD_LABEL,
-                            content=json.dumps(mem_ids),
-                            timestamp=datetime.utcnow(),
-                        )
-                        self.mem_scheduler.submit_messages(messages=[message_item])
+                        else:
+                            message_item = ScheduleMessageItem(
+                                user_id=target_user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=mem_cube,
+                                label=ADD_LABEL,
+                                content=json.dumps(mem_ids),
+                                timestamp=datetime.utcnow(),
+                            )
+                            self.mem_scheduler.submit_messages(messages=[message_item])
 
         def process_preference_memory():
             if (
@@ -878,15 +878,16 @@ class MOSCore:
                             timestamp=datetime.utcnow(),
                         )
                         self.mem_scheduler.submit_messages(messages=[message_item])
-                    message_item = ScheduleMessageItem(
-                        user_id=target_user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                        label=ADD_LABEL,
-                        content=json.dumps(mem_ids),
-                        timestamp=datetime.utcnow(),
-                    )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
+                    else:
+                        message_item = ScheduleMessageItem(
+                            user_id=target_user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            label=ADD_LABEL,
+                            content=json.dumps(mem_ids),
+                            timestamp=datetime.utcnow(),
+                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
 
         # user doc input
         if (
