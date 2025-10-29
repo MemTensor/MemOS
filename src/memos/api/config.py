@@ -203,12 +203,12 @@ class NacosConfigManager:
                 logger.info("✅ parse Nacos setting is Properties ")
             except Exception as e:
                 logger.error(f"⚠️ Nacos parse fail（not JSON/YAML/Properties）: {e}")
-                raise Exception(f"Nacos configuration parsing failed: {e}")
+                raise Exception(f"Nacos configuration parsing failed: {e}") from e
 
 
         except Exception as e:
             logger.error(f"❌ Nacos AK/SK init fail: {e}")
-            raise Exception(f"❌ Nacos AK/SK init fail: {e}")
+            raise Exception(f"❌ Nacos AK/SK init fail: {e}") from e
 
 
 # init Nacos
