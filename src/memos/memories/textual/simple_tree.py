@@ -12,6 +12,7 @@ from memos.mem_reader.base import BaseMemReader
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.base import BaseReranker
 from memos.types import MessageList
@@ -59,6 +60,19 @@ class SimpleTreeTextMemory(TreeTextMemory):
         time_start_gs = time.time()
         self.graph_store: Neo4jGraphDB = graph_db
         logger.info(f"time init: graph_store time is: {time.time() - time_start_gs}")
+
+        time_start_bm = time.time()
+        self.search_strategy = config.search_strategy
+        self.bm25_retriever = (
+            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+        )
+        logger.info(f"time init: bm25_retriever time is: {time.time() - time_start_bm}")
+
+        self.vec_cot = (
+            self.search_strategy["cot"]
+            if self.search_strategy and "cot" in self.search_strategy
+            else False
+        )
 
         time_start_rr = time.time()
         self.reranker = reranker
@@ -159,8 +173,10 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                bm25_retriever=self.bm25_retriever,
                 internet_retriever=None,
                 moscube=moscube,
+                vec_cot=self.vec_cot,
             )
         else:
             searcher = Searcher(
@@ -168,8 +184,10 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                bm25_retriever=self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
+                vec_cot=self.vec_cot,
             )
         return searcher.search(
             query, top_k, info, mode, memory_type, search_filter, user_name=user_name

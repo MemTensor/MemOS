@@ -36,9 +36,17 @@ class BaseMemReaderConfig(BaseConfig):
         description="whether remove example in memory extraction prompt to save token",
     )
 
+    chat_chunker: dict[str, Any] = Field(
+        ..., description="Configuration for the MemReader chat chunk strategy"
+    )
+
 
 class SimpleStructMemReaderConfig(BaseMemReaderConfig):
     """SimpleStruct MemReader configuration class."""
+
+
+class StrategyStructMemReaderConfig(BaseMemReaderConfig):
+    """StrategyStruct MemReader configuration class."""
 
 
 class MemReaderConfigFactory(BaseConfig):
@@ -49,6 +57,7 @@ class MemReaderConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "simple_struct": SimpleStructMemReaderConfig,
+        "strategy_struct": StrategyStructMemReaderConfig,
     }
 
     @field_validator("backend")

@@ -85,7 +85,6 @@ class EnhancedBM25:
             cleanup: Whether to cleanup memory after search (default: True)
         """
         if not corpus:
-            logger.warning("Empty corpus provided")
             return []
 
         logger.info(f"Searching {len(corpus)} documents for query: '{query}'")

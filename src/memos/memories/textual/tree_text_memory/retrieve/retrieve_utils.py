@@ -42,7 +42,7 @@ class StopwordManager:
                 stopwords = {line.strip() for line in f if line.strip()}
             logger.info("Stopwords loaded successfully.")
         except Exception as e:
-            logger.warning(f"Error loading stopwords: {e}")
+            logger.warning(f"Error loading stopwords: {e}, using default stopwords.")
             stopwords = cls._load_default_stopwords()
 
         cls._stopwords = stopwords

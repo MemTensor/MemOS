@@ -28,7 +28,7 @@ class GraphMemoryRetriever:
         self.bm25_retriever = bm25_retriever
         self.max_workers = 10
         self.filter_weight = 0.6
-        self.use_bm25 = False
+        self.use_bm25 = bool(self.bm25_retriever)
 
     def retrieve(
         self,
@@ -67,7 +67,7 @@ class GraphMemoryRetriever:
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=3) as executor:
             # Structured graph-based retrieval
             future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope, user_name)
             # Vector similarity search

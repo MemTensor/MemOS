@@ -179,6 +179,13 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ),
     )
 
+    search_strategy: dict[str, bool] | None = Field(
+        default=None,
+        description=(
+            'Set search strategy for this memory configuration.{"bm25": true, "cot": false}'
+        ),
+    )
+
 
 class SimpleTreeTextMemoryConfig(TreeTextMemoryConfig):
     """Simple tree text memory configuration class."""

@@ -160,8 +160,22 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_reader_config() -> dict[str, Any]:
+        """Get reader configuration."""
+        return {
+            "backend": os.getenv("MEM_READER_BACKEND", "simple_struct"),
+            "config": {
+                "chunk_type": os.getenv("MEM_READER_CHAT_CHUNK_TYPE", "default"),
+                "chunk_length": int(os.getenv("MEM_READER_CHAT_CHUNK_TOKEN_SIZE", 1600)),
+                "chunk_session": int(os.getenv("MEM_READER_CHAT_CHUNK_SESS_SIZE", 20)),
+                "chunk_overlap": int(os.getenv("MEM_READER_CHAT_CHUNK_OVERLAP", 2)),
+            },
+        }
+
+    @staticmethod
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
+        reader_config = APIConfig.get_reader_config()
         return {
             "backend": "bocha",
             "config": {
@@ -169,7 +183,7 @@ class APIConfig:
                 "max_results": 15,
                 "num_per_request": 10,
                 "reader": {
-                    "backend": "simple_struct",
+                    "backend": reader_config["backend"],
                     "config": {
                         "llm": {
                             "backend": "openai",
@@ -195,6 +209,7 @@ class APIConfig:
                                 "min_sentences_per_chunk": 1,
                             },
                         },
+                        "chat_chunker": reader_config,
                     },
                 },
             },
@@ -356,6 +371,8 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        reader_config = APIConfig.get_reader_config()
+
         backend_model = {
             "openai": openai_config,
             "huggingface": qwen_config,
@@ -367,7 +384,7 @@ class APIConfig:
             "user_id": os.getenv("MOS_USER_ID", "root"),
             "chat_model": {"backend": backend, "config": backend_model[backend]},
             "mem_reader": {
-                "backend": "simple_struct",
+                "backend": reader_config["backend"],
                 "config": {
                     "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
@@ -380,6 +397,7 @@ class APIConfig:
                             "min_sentences_per_chunk": 1,
                         },
                     },
+                    "chat_chunker": reader_config,
                 },
             },
             "enable_textual_memory": True,
@@ -446,6 +464,7 @@ class APIConfig:
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
         mysql_config = APIConfig.get_mysql_config()
+        reader_config = APIConfig.get_reader_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         backend_model = {
             "openai": openai_config,
@@ -460,7 +479,7 @@ class APIConfig:
                 "config": backend_model[backend],
             },
             "mem_reader": {
-                "backend": "simple_struct",
+                "backend": reader_config["backend"],
                 "config": {
                     "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
@@ -473,6 +492,7 @@ class APIConfig:
                             "min_sentences_per_chunk": 1,
                         },
                     },
+                    "chat_chunker": reader_config,
                 },
             },
             "enable_textual_memory": True,
@@ -537,6 +557,10 @@ class APIConfig:
                                 "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
                             },
+                            "search_strategy": {
+                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                            },
                         },
                     },
                     "act_mem": {}
@@ -598,6 +622,10 @@ class APIConfig:
                                 "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
                                 "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                            },
+                            "search_strategy": {
+                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
                         },
                     },

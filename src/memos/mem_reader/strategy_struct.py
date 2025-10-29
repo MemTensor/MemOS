@@ -1,5 +1,4 @@
 import concurrent.futures
-import copy
 import json
 import os
 import re
@@ -11,7 +10,7 @@ from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
-from memos.configs.mem_reader import SimpleStructMemReaderConfig
+from memos.configs.mem_reader import StrategyStructMemReaderConfig
 from memos.configs.parser import ParserConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
@@ -24,8 +23,10 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
-    SIMPLE_STRUCT_MEM_READER_PROMPT,
-    SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
+)
+from memos.templates.mem_reader_strategy_prompts import (
+    STRATEGY_STRUCT_MEM_READER_PROMPT,
+    STRATEGY_STRUCT_MEM_READER_PROMPT_ZH,
 )
 from memos.utils import timed
 
@@ -33,8 +34,8 @@ from memos.utils import timed
 logger = log.get_logger(__name__)
 PROMPT_DICT = {
     "chat": {
-        "en": SIMPLE_STRUCT_MEM_READER_PROMPT,
-        "zh": SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
+        "en": STRATEGY_STRUCT_MEM_READER_PROMPT,
+        "zh": STRATEGY_STRUCT_MEM_READER_PROMPT_ZH,
         "en_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE,
         "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     },
@@ -112,12 +113,12 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
         return None
 
 
-class SimpleStructMemReader(BaseMemReader, ABC):
-    """Naive implementation of MemReader."""
+class StrategyStructMemReader(BaseMemReader, ABC):
+    """Strategy implementation of MemReader."""
 
-    def __init__(self, config: SimpleStructMemReaderConfig):
+    def __init__(self, config: StrategyStructMemReaderConfig):
         """
-        Initialize the NaiveMemReader with configuration.
+        Initialize the StrategyMemReader with configuration.
 
         Args:
             config: Configuration object for the reader
@@ -126,6 +127,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.llm = LLMFactory.from_config(config.llm)
         self.embedder = EmbedderFactory.from_config(config.embedder)
         self.chunker = ChunkerFactory.from_config(config.chunker)
+        self.chat_chunker = config.chat_chunker["config"]
 
     @timed
     def _process_chat_data(self, scene_data_info, info):
@@ -259,9 +261,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             for future in concurrent.futures.as_completed(futures):
                 res_memory = future.result()
                 memory_list.append(res_memory)
-        print()
-        print("memory_list:", memory_list)
-        print()
+
         return memory_list
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
@@ -286,20 +286,52 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         parser = ParserFactory.from_config(parser_config)
 
         if type == "chat":
-            for items in scene_data:
-                result = []
-                for item in items:
-                    # Convert dictionary to string
-                    if "chat_time" in item:
-                        result.append(item)
-                    else:
-                        result.append(item)
-                    if len(result) >= 10:
-                        results.append(result)
-                        context = copy.deepcopy(result[-2:])
-                        result = context
-                if result:
-                    results.append(result)
+            if self.chat_chunker["chunk_type"] == "content_length":
+                content_len_thredshold = self.chat_chunker["chunk_length"]
+                for items in scene_data:
+                    if not items:
+                        continue
+
+                    results.append([])
+                    current_length = 0
+
+                    for _i, item in enumerate(items):
+                        content_length = (
+                            len(item.get("content", ""))
+                            if isinstance(item, dict)
+                            else len(str(item))
+                        )
+                        if not results[-1]:
+                            results[-1].append(item)
+                            current_length = content_length
+                            continue
+
+                        if current_length + content_length <= content_len_thredshold:
+                            results[-1].append(item)
+                            current_length += content_length
+                        else:
+                            overlap_item = results[-1][-1]
+                            overlap_length = (
+                                len(overlap_item.get("content", ""))
+                                if isinstance(overlap_item, dict)
+                                else len(str(overlap_item))
+                            )
+
+                            results.append([overlap_item, item])
+                            current_length = overlap_length + content_length
+            else:
+                cut_size, cut_overlap = (
+                    self.chat_chunker["chunk_session"],
+                    self.chat_chunker["chunk_overlap"],
+                )
+                if type == "chat":
+                    for items in scene_data:
+                        step = cut_size - cut_overlap
+                        end = len(items) - cut_overlap
+                        if end <= 0:
+                            results.extend([items[:]])
+                        else:
+                            results.extend([items[i : i + cut_size] for i in range(0, end, step)])
         elif type == "doc":
             for item in scene_data:
                 try:

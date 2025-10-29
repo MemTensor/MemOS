@@ -1,5 +1,4 @@
 import json
-import os
 import traceback
 
 from datetime import datetime
@@ -43,9 +42,10 @@ class Searcher:
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         reranker: BaseReranker,
-        bm25_retriever: EnhancedBM25 | None,
+        bm25_retriever: EnhancedBM25 | None = None,
         internet_retriever: None = None,
         moscube: bool = False,
+        vec_cot: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -59,7 +59,7 @@ class Searcher:
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
-        self.cot_query_search = os.getenv("MOS_SEARCH_COT", "false") == "true"
+        self.vec_cot = vec_cot
 
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
@@ -326,7 +326,7 @@ class Searcher:
 
         # chain of thinking
         cot_embeddings = []
-        if self.cot_query_search:
+        if self.vec_cot:
             queries = self._cot_query(query)
             if len(queries) > 1:
                 cot_embeddings = self.embedder.embed(queries)
@@ -514,23 +514,18 @@ class Searcher:
             prompt = template.replace("${original_query}", query).replace(
                 "${split_num_threshold}", str(split_num)
             )
-        logger.info("COT 处理")
+        logger.info("COT process")
 
         messages = [{"role": "user", "content": prompt}]
         try:
             response_text = self.llm.customized_generate(messages, temperature=0, top_p=1)
             response_json = parse_json_result(response_text)
-            if "is_complex" in response_json and not response_json["is_complex"]:
+            assert "is_complex" in response_json
+            if not response_json["is_complex"]:
                 return [query]
             else:
-                assert (
-                    "is_complex" in response_json
-                    and response_json["is_complex"]
-                    and "sub_questions" in response_json
-                )
-                logger.info(
-                    "问题 {} 通过 COT 拆分结果为{}".format(query, response_json["sub_questions"])
-                )
+                assert "sub_questions" in response_json
+                logger.info("Query: {} COT: {}".format(query, response_json["sub_questions"]))
                 return response_json["sub_questions"][:split_num]
         except Exception as e:
             logger.error(f"[LLM] Exception during chat generation: {e}")
