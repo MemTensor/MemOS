@@ -26,6 +26,7 @@ from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
@@ -312,18 +313,15 @@ def _post_process_pref_mem(
     mem_cube_id: str,
     handle_pref_mem: bool,
 ):
-    if os.getenv("RETURN_ORIGINAL_PREF_MEM", "false").lower() == "true" and pref_formatted_mem:
-        memories_result["prefs"] = []
-        memories_result["prefs"].append(
+    if handle_pref_mem:
+        memories_result["pref_mem"].append(
             {
                 "cube_id": mem_cube_id,
                 "memories": pref_formatted_mem,
             }
         )
-
-    if handle_pref_mem:
         pref_instruction: str = instruct_completion(pref_formatted_mem)
-        memories_result["pref_mem"] = pref_instruction
+        memories_result["pref_string"] = pref_instruction
 
     return memories_result
 
@@ -342,7 +340,8 @@ def search_memories(search_req: APISearchRequest):
         "text_mem": [],
         "act_mem": [],
         "para_mem": [],
-        "pref_mem": "",
+        "pref_mem": [],
+        "pref_string": "",
     }
 
     search_mode = search_req.mode
@@ -379,7 +378,7 @@ def search_memories(search_req: APISearchRequest):
         )
         return [_format_memory_item(data) for data in results]
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ContextThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_search_text)
         pref_future = executor.submit(_search_pref)
         text_formatted_memories = text_future.result()
@@ -596,7 +595,7 @@ def add_memories(add_req: APIADDRequest):
                 for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
             ]
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ContextThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_process_text_mem)
         pref_future = executor.submit(_process_pref_mem)
         text_response_data = text_future.result()
