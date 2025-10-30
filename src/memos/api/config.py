@@ -599,7 +599,7 @@ class APIConfig:
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
                 "thread_pool_max_workers": int(
-                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
+                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10000")
                 ),
                 "consume_interval_seconds": float(
                     os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "0.01")
