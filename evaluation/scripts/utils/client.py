@@ -246,7 +246,7 @@ class MemosApiOnlineClient:
                 res = json.loads(response.text)["data"]["memory_detail_list"]
                 for i in res:
                     i.update({"memory": i.pop("memory_value")})
-                return {"text_mem": [{"memories": res}], "pref_mem": ""}
+                return {"text_mem": [{"memories": res}], "pref_str": ""}
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)
