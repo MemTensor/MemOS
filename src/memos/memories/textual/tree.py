@@ -197,7 +197,6 @@ class TreeTextMemory(BaseTextMemory):
                 bm25_retriever=self.bm25_retriever,
                 internet_retriever=None,
                 moscube=moscube,
-                vec_cot=self.vec_cot,
             )
         else:
             searcher = Searcher(
@@ -208,7 +207,6 @@ class TreeTextMemory(BaseTextMemory):
                 bm25_retriever=self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
-                vec_cot=self.vec_cot,
             )
         return searcher.search(query, top_k, info, mode, memory_type, search_filter)
 
