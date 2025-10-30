@@ -15,10 +15,6 @@ from memos.utils import timed
 
 logger = get_logger(__name__)
 
-# Graph database configuration
-GRAPH_NAME = "test_memos_graph"
-
-
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     node_id = item["id"]
     memory = item["memory"]
