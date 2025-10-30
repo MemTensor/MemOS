@@ -49,7 +49,6 @@ from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerM
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.memos_tools.notification_utils import send_online_bot_notification
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 
 
@@ -126,20 +125,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._consume_interval = self.config.get(
             "consume_interval_seconds", DEFAULT_CONSUME_INTERVAL_SECONDS
         )
-
-        # queue monitor (optional)
-        self._queue_monitor_thread: threading.Thread | None = None
-        self._queue_monitor_running: bool = False
-        self.queue_monitor_interval_seconds: float = self.config.get(
-            "queue_monitor_interval_seconds", 60.0
-        )
-        self.queue_monitor_warn_utilization: float = self.config.get(
-            "queue_monitor_warn_utilization", 0.7
-        )
-        self.queue_monitor_crit_utilization: float = self.config.get(
-            "queue_monitor_crit_utilization", 0.9
-        )
-        self.enable_queue_monitor: bool = self.config.get("enable_queue_monitor", False)
 
         # other attributes
         self._context_lock = threading.Lock()
@@ -712,13 +697,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
 
-        # optionally start queue monitor if enabled and bot callable present
-        if self.enable_queue_monitor and self._online_bot_callable is not None:
-            try:
-                self.start_queue_monitor(self._online_bot_callable)
-            except Exception as e:
-                logger.warning(f"Failed to start queue monitor: {e}")
-
     def stop(self) -> None:
         """Stop all scheduler components gracefully.
 
@@ -767,9 +745,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Clean up queues
         self._cleanup_queues()
         logger.info("Memory Scheduler stopped completely")
-
-        # Stop queue monitor
-        self.stop_queue_monitor()
 
     @property
     def handlers(self) -> dict[str, Callable]:
