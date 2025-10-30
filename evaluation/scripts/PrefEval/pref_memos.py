@@ -98,7 +98,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
                 f"- {entry.get('memory', '')}"
                 for entry in relevant_memories["text_mem"][0]["memories"]
             )
-            + f"\n{relevant_memories['pref_string']}"
+            + f"\n{relevant_memories.get('pref_string', '')}"
         )
 
         memory_tokens_used = len(tokenizer.encode(memories_str))

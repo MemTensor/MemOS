@@ -181,8 +181,9 @@ class MemosApiClient:
                 "mem_cube_id": user_id,
                 "conversation_id": "",
                 "top_k": top_k,
-                "mode": "mixture",
-                "handle_pref_mem": False,
+                "mode": "fast",
+                "include_preference": True,
+                "pref_top_k": 6,
             },
             ensure_ascii=False,
         )
@@ -344,9 +345,10 @@ if __name__ == "__main__":
     query = "杭州西湖有什么"
     top_k = 5
 
-    # MEMOBASE
-    client = MemobaseClient()
+    # MEMOS-API
+    client = MemosApiClient()
     for m in messages:
         m["created_at"] = iso_date
-    client.add(messages, user_id)
+    client.add(messages, user_id, user_id)
     memories = client.search(query, user_id, top_k)
+    print(memories)

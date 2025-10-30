@@ -84,7 +84,7 @@ def memos_search(client, user_id, query, top_k):
     results = client.search(query=query, user_id=user_id, top_k=top_k)
     search_memories = (
         "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
-        + f"\n{results['pref_string']}"
+        + f"\n{results.get('pref_string', '')}"
     )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 

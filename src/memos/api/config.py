@@ -114,7 +114,7 @@ class APIConfig:
         return {
             "backend": "pref_text",
             "config": {
-                "extractor_llm": {"backend": "openai", "config": APIConfig.get_openai_config()},
+                "extractor_llm": APIConfig.get_memreader_config(),
                 "vector_db": {
                     "backend": "milvus",
                     "config": APIConfig.get_milvus_config(),
