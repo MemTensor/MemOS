@@ -47,15 +47,9 @@ def add_memory_for_line(
         elif num_irrelevant_turns == 300:
             conversation = conversation + irre_300
 
-        turns_add = 5
         start_time_add = time.monotonic()
         if conversation:
-            if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
-                for chunk_start in range(0, len(conversation), turns_add * 2):
-                    chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id, conv_id=None, batch_size=2)
-            else:
-                mem_client.add(messages=conversation, user_id=user_id, conv_id=None, batch_size=2)
+            mem_client.add(messages=conversation, user_id=user_id, conv_id=None, batch_size=2)
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -195,7 +189,7 @@ def main():
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["memos-api", "memos-local"],
+        choices=["memos-api", "memos-api-online"],
         default="memos-api",
         help="Which MemOS library to use (used in 'add' mode).",
     )
@@ -218,9 +212,12 @@ def main():
         print(f"Error: Input file '{args.input}' not found")
         return
 
-    from utils.client import MemosApiClient
+    from utils.client import MemosApiClient, MemosApiOnlineClient
 
-    mem_client = MemosApiClient()
+    if args.lib == "memos-api":
+        mem_client = MemosApiClient()
+    elif args.lib == "memos-api-online":
+        mem_client = MemosApiOnlineClient()
 
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")

@@ -10,7 +10,6 @@ from datetime import datetime
 
 from tqdm import tqdm
 
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -25,28 +24,22 @@ def ingest_session(session, user_id, session_id, frame, client):
                 f"[{frame}] 📝 Session [{session_id}: [{idx + 1}/{len(session)}] Ingesting message: {msg['role']} - {msg['content'][:50]}..."
             )
         timestamp_add = int(time.time() * 100)
-        client.add(messages=messages, user_id=user_id, timestamp=timestamp_add)
+        client.add(messages=messages, user_id=user_id, timestamp=timestamp_add, batch_size=10)
         print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
     elif frame == "memos-api":
-        if os.getenv("PRE_SPLIT_CHUNK") == "true":
-            for i in range(0, len(session), 10):
-                messages = session[i : i + 10]
-                client.add(messages=messages, user_id=user_id, conv_id=session_id, batch_size=2)
-                print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
-        else:
-            client.add(messages=session, user_id=user_id, conv_id=session_id, batch_size=2)
-            print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
+        client.add(messages=session, user_id=user_id, conv_id=session_id, batch_size=10)
+        print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(session)} messages")
     elif frame == "memobase":
         for _idx, msg in enumerate(session):
             if msg["role"] != "system":
                 messages.append(
                     {
                         "role": msg["role"],
-                        "content": msg["content"][:8000],
+                        "content": msg["content"],
                         "created_at": datetime.now().isoformat(),
                     }
                 )
-            client.add(messages, user_id)
+        client.add(messages, user_id, batch_size=10)
         print(f"[{frame}] ✅ Session [{session_id}]: Ingested {len(messages)} messages")
     elif frame == "supermemory":
         for _idx, msg in enumerate(session):
@@ -62,6 +55,8 @@ def ingest_session(session, user_id, session_id, frame, client):
         for _idx, msg in enumerate(session):
             messages.append({"role": msg["role"], "content": msg["content"]})
         client.add(messages, user_id, datetime.now().astimezone().isoformat())
+    elif frame == "memos-api-online":
+        client.add(messages, user_id, session_id, batch_size=10)
 
 
 def build_jsonl_index(jsonl_path):
@@ -160,8 +155,7 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        print("🔌 Using Memobase client for ingestion...")
-        client.delte_user(user_id)
+        client.delete_user(user_id)
     elif frame == "supermemory":
         from utils.client import SupermemoryClient
 
@@ -170,10 +164,11 @@ def ingest_conv(row_data, context, version, conv_idx, frame):
         from utils.client import MemuClient
 
         client = MemuClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
 
-    ingest_session(
-        session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client
-    )
+        client = MemosApiOnlineClient()
+    ingest_session(session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client)
     print(f"✅ Ingestion of conversation {conv_idx} completed")
     print("=" * 80)
 
@@ -208,7 +203,7 @@ def main(frame, version, num_workers=2):
         }
 
         for future in tqdm(
-            as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
+                as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
         ):
             idx = future_to_idx[future]
             try:
@@ -230,18 +225,12 @@ def main(frame, version, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Ingestion Script")
-    parser.add_argument(
-        "--lib",
-        type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory", "zep"],
-        default="memos-api",
-    )
-    parser.add_argument(
-        "--version", type=str, default="0925-1", help="Version of the evaluation framework."
-    )
-    parser.add_argument(
-        "--workers", type=int, default=3, help="Number of parallel workers for processing users."
-    )
+    parser.add_argument("--lib", type=str,
+                        choices=["memos-api-online", "mem0", "mem0_graph", "memos-api", "memobase", "memu",
+                                 "supermemory", "zep"],
+                        default='memos-api')
+    parser.add_argument("--version", type=str, default="0925-1", help="Version of the evaluation framework.")
+    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
     args = parser.parse_args()
 
     main(frame=args.lib, version=args.version, num_workers=args.workers)

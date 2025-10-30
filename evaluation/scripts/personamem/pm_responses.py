@@ -185,21 +185,10 @@ def main(frame, version, num_runs=3, num_workers=4):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Response Generation Script")
-    parser.add_argument(
-        "--lib",
-        type=str,
-        choices=["zep", "mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
-        default="memos-api",
-    )
-    parser.add_argument(
-        "--version", type=str, default="0925", help="Version of the evaluation framework."
-    )
-    parser.add_argument(
-        "--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
-    )
-    parser.add_argument(
-        "--workers", type=int, default=3, help="Number of worker threads to use for processing."
-    )
+    parser.add_argument("--lib", type=str, choices=["memos-api-online","zep","mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"], default='memos-api')
+    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
+    parser.add_argument("--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation.")
+    parser.add_argument("--workers", type=int, default=3, help="Number of worker threads to use for processing.")
 
     args = parser.parse_args()
     main(frame=args.lib, version=args.version, num_runs=args.num_runs, num_workers=args.workers)
