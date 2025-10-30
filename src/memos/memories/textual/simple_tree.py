@@ -70,12 +70,6 @@ class SimpleTreeTextMemory(TreeTextMemory):
         )
         logger.info(f"time init: bm25_retriever time is: {time.time() - time_start_bm}")
 
-        self.vec_cot = (
-            self.search_strategy["cot"]
-            if self.search_strategy and "cot" in self.search_strategy
-            else False
-        )
-
         time_start_rr = time.time()
         self.reranker = reranker
         logger.info(f"time init: reranker time is: {time.time() - time_start_rr}")
@@ -189,7 +183,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 bm25_retriever=self.bm25_retriever,
                 internet_retriever=None,
                 moscube=moscube,
-                vec_cot=self.vec_cot,
+                search_strategy=self.search_strategy,
             )
         else:
             searcher = Searcher(
@@ -200,7 +194,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 bm25_retriever=self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
-                vec_cot=self.vec_cot,
+                search_strategy=self.search_strategy,
             )
         return searcher.search(
             query, top_k, info, mode, memory_type, search_filter, user_name=user_name

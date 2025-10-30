@@ -51,11 +51,6 @@ class TreeTextMemory(BaseTextMemory):
         self.bm25_retriever = (
             EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
         )
-        self.vec_cot = (
-            self.search_strategy["cot"]
-            if self.search_strategy and "cot" in self.search_strategy
-            else False
-        )
 
         if config.reranker is None:
             default_cfg = RerankerConfigFactory.model_validate(
@@ -143,6 +138,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.reranker,
                 internet_retriever=None,
                 moscube=moscube,
+                search_strategy=self.search_strategy,
             )
         else:
             searcher = Searcher(
@@ -152,6 +148,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.reranker,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
+                search_strategy=self.search_strategy,
             )
         return searcher
 
