@@ -58,18 +58,15 @@ class OpenAILLM(BaseLLM):
         logger.info("OpenAI LLM instance cache cleared")
 
     @timed(log=True, log_prefix="OpenAI LLM")
-    def generate(self, messages: MessageList, **kwargs) -> str:
-        """Generate a response from OpenAI LLM, optionally overriding generation params."""
-        temperature = kwargs.get("temperature", self.config.temperature)
-        max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
-        top_p = kwargs.get("top_p", self.config.top_p)
+    def generate(self, messages: MessageList) -> str:
+        """Generate a response from OpenAI LLM."""
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
             messages=messages,
             extra_body=self.config.extra_body,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            top_p=self.config.top_p,
         )
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
         response_content = response.choices[0].message.content
