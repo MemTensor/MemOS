@@ -324,7 +324,7 @@ class APIConfig:
             "config": {
                 "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
                 "temperature": 0.6,
-                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "5000")),
+                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
                 "top_p": 0.95,
                 "top_k": 20,
                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
