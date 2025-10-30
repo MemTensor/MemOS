@@ -1,3 +1,4 @@
+import contextlib
 import multiprocessing
 import queue
 import threading
@@ -6,6 +7,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.engine import Engine
 
@@ -47,7 +49,12 @@ from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerM
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.memos_tools.notification_utils import send_online_bot_notification
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
+
+
+if TYPE_CHECKING:
+    from memos.mem_cube.base import BaseMemCube
 
 
 logger = get_logger(__name__)
@@ -120,11 +127,26 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             "consume_interval_seconds", DEFAULT_CONSUME_INTERVAL_SECONDS
         )
 
+        # queue monitor (optional)
+        self._queue_monitor_thread: threading.Thread | None = None
+        self._queue_monitor_running: bool = False
+        self.queue_monitor_interval_seconds: float = self.config.get(
+            "queue_monitor_interval_seconds", 60.0
+        )
+        self.queue_monitor_warn_utilization: float = self.config.get(
+            "queue_monitor_warn_utilization", 0.7
+        )
+        self.queue_monitor_crit_utilization: float = self.config.get(
+            "queue_monitor_crit_utilization", 0.9
+        )
+        self.enable_queue_monitor: bool = self.config.get("enable_queue_monitor", False)
+        self._online_bot_callable = None  # type: ignore[var-annotated]
+
         # other attributes
         self._context_lock = threading.Lock()
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
-        self.current_mem_cube: GeneralMemCube | None = None
+        self.current_mem_cube: BaseMemCube | None = None
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
@@ -134,6 +156,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         chat_llm: BaseLLM,
         process_llm: BaseLLM | None = None,
         db_engine: Engine | None = None,
+        mem_reader=None,
     ):
         if process_llm is None:
             process_llm = chat_llm
@@ -149,6 +172,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
             self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
+
+            if mem_reader:
+                self.mem_reader = mem_reader
 
             if self.enable_parallel_dispatch:
                 self.dispatcher_monitor.initialize(dispatcher=self.dispatcher)
@@ -178,6 +204,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             # Clean up any partially initialized resources
             self._cleanup_on_init_failure()
             raise
+
+        # start queue monitor if enabled and a bot is set later
 
     def _cleanup_on_init_failure(self):
         """Clean up resources if initialization fails."""
@@ -678,6 +706,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
 
+        # optionally start queue monitor if enabled and bot callable present
+        if self.enable_queue_monitor and self._online_bot_callable is not None:
+            try:
+                self.start_queue_monitor(self._online_bot_callable)
+            except Exception as e:
+                logger.warning(f"Failed to start queue monitor: {e}")
+
     def stop(self) -> None:
         """Stop all scheduler components gracefully.
 
@@ -726,6 +761,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Clean up queues
         self._cleanup_queues()
         logger.info("Memory Scheduler stopped completely")
+
+        # Stop queue monitor
+        self.stop_queue_monitor()
 
     @property
     def handlers(self) -> dict[str, Callable]:
@@ -958,3 +996,119 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 return False
 
         return True
+
+    # ---------------- Queue monitor & notifications ----------------
+    def set_notification_bots(self, online_bot=None):
+        """
+        Set external notification callables.
+
+        Args:
+            online_bot: a callable matching dinding_report_bot.online_bot signature
+        """
+        self._online_bot_callable = online_bot
+
+    def _gather_queue_stats(self) -> dict:
+        """Collect queue/dispatcher stats for reporting."""
+        stats: dict[str, int | float | str] = {}
+        stats["use_redis_queue"] = bool(self.use_redis_queue)
+        # local queue metrics
+        if not self.use_redis_queue:
+            try:
+                stats["qsize"] = int(self.memos_message_queue.qsize())
+            except Exception:
+                stats["qsize"] = -1
+            # unfinished_tasks if available
+            try:
+                stats["unfinished_tasks"] = int(
+                    getattr(self.memos_message_queue, "unfinished_tasks", 0) or 0
+                )
+            except Exception:
+                stats["unfinished_tasks"] = -1
+            stats["maxsize"] = int(self.max_internal_message_queue_size)
+            try:
+                maxsize = int(self.max_internal_message_queue_size) or 1
+                qsize = int(stats.get("qsize", 0))
+                stats["utilization"] = min(1.0, max(0.0, qsize / maxsize))
+            except Exception:
+                stats["utilization"] = 0.0
+        # dispatcher stats
+        try:
+            d_stats = self.dispatcher.stats()
+            stats.update(
+                {
+                    "running": int(d_stats.get("running", 0)),
+                    "inflight": int(d_stats.get("inflight", 0)),
+                    "handlers": int(d_stats.get("handlers", 0)),
+                }
+            )
+        except Exception:
+            stats.update({"running": 0, "inflight": 0, "handlers": 0})
+        return stats
+
+    def _queue_monitor_loop(self, online_bot) -> None:
+        logger.info(f"Queue monitor started (interval={self.queue_monitor_interval_seconds}s)")
+        self._queue_monitor_running = True
+        while self._queue_monitor_running:
+            time.sleep(self.queue_monitor_interval_seconds)
+            try:
+                stats = self._gather_queue_stats()
+                # decide severity based on utilization if local queue
+                title_color = "#00956D"
+                subtitle = "Scheduler"
+                if not stats.get("use_redis_queue"):
+                    util = float(stats.get("utilization", 0.0))
+                    if util >= self.queue_monitor_crit_utilization:
+                        title_color = "#C62828"  # red
+                        subtitle = "Scheduler (CRITICAL)"
+                    elif util >= self.queue_monitor_warn_utilization:
+                        title_color = "#E65100"  # orange
+                        subtitle = "Scheduler (WARNING)"
+
+                other_data1 = {
+                    "use_redis_queue": stats.get("use_redis_queue"),
+                    "handlers": stats.get("handlers"),
+                    "running": stats.get("running"),
+                    "inflight": stats.get("inflight"),
+                }
+                if not stats.get("use_redis_queue"):
+                    other_data2 = {
+                        "qsize": stats.get("qsize"),
+                        "unfinished_tasks": stats.get("unfinished_tasks"),
+                        "maxsize": stats.get("maxsize"),
+                        "utilization": f"{float(stats.get('utilization', 0.0)):.2%}",
+                    }
+                else:
+                    other_data2 = {
+                        "redis_mode": True,
+                    }
+
+                send_online_bot_notification(
+                    online_bot=online_bot,
+                    header_name="Scheduler Queue",
+                    sub_title_name=subtitle,
+                    title_color=title_color,
+                    other_data1=other_data1,
+                    other_data2=other_data2,
+                    emoji={"Runtime": "🧠", "Queue": "📬"},
+                )
+            except Exception as e:
+                logger.warning(f"Queue monitor iteration failed: {e}")
+        logger.info("Queue monitor stopped")
+
+    def start_queue_monitor(self, online_bot) -> None:
+        if self._queue_monitor_thread and self._queue_monitor_thread.is_alive():
+            return
+        self._online_bot_callable = online_bot
+        self._queue_monitor_thread = threading.Thread(
+            target=self._queue_monitor_loop,
+            args=(online_bot,),
+            daemon=True,
+            name="QueueMonitorThread",
+        )
+        self._queue_monitor_thread.start()
+
+    def stop_queue_monitor(self) -> None:
+        self._queue_monitor_running = False
+        if self._queue_monitor_thread and self._queue_monitor_thread.is_alive():
+            with contextlib.suppress(Exception):
+                self._queue_monitor_thread.join(timeout=2.0)

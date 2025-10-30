@@ -5,6 +5,7 @@ from string import Template
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.memories.textual.tree_text_memory.retrieve.utils import TASK_PARSE_PROMPT
 
 
@@ -20,6 +21,7 @@ class TaskGoalParser:
 
     def __init__(self, llm=BaseLLM):
         self.llm = llm
+        self.tokenizer = FastTokenizer()
 
     def parse(
         self,
@@ -27,6 +29,7 @@ class TaskGoalParser:
         context: str = "",
         conversation: list[dict] | None = None,
         mode: str = "fast",
+        **kwargs,
     ) -> ParsedTaskGoal:
         """
         Parse user input into structured semantic layers.
@@ -36,7 +39,7 @@ class TaskGoalParser:
         - mode == 'fine': use LLM to parse structured topic/keys/tags
         """
         if mode == "fast":
-            return self._parse_fast(task_description)
+            return self._parse_fast(task_description, **kwargs)
         elif mode == "fine":
             if not self.llm:
                 raise ValueError("LLM not provided for slow mode.")
@@ -44,18 +47,30 @@ class TaskGoalParser:
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-    def _parse_fast(self, task_description: str, limit_num: int = 5) -> ParsedTaskGoal:
+    def _parse_fast(self, task_description: str, **kwargs) -> ParsedTaskGoal:
         """
         Fast mode: simple jieba word split.
         """
-        return ParsedTaskGoal(
-            memories=[task_description],
-            keys=[task_description],
-            tags=[],
-            goal_type="default",
-            rephrased_query=task_description,
-            internet_search=False,
-        )
+        use_fast_graph = kwargs.get("use_fast_graph", False)
+        if use_fast_graph:
+            desc_tokenized = self.tokenizer.tokenize_mixed(task_description)
+            return ParsedTaskGoal(
+                memories=[task_description],
+                keys=desc_tokenized,
+                tags=desc_tokenized,
+                goal_type="default",
+                rephrased_query=task_description,
+                internet_search=False,
+            )
+        else:
+            return ParsedTaskGoal(
+                memories=[task_description],
+                keys=[task_description],
+                tags=[],
+                goal_type="default",
+                rephrased_query=task_description,
+                internet_search=False,
+            )
 
     def _parse_fine(
         self, query: str, context: str = "", conversation: list[dict] | None = None
