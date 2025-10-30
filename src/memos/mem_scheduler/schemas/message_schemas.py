@@ -46,6 +46,10 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         default=None,
         description="user name / display name (optional)",
     )
+    session_id: str | None = Field(
+        default=None,
+        description="session_id (optional)",
+    )
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(

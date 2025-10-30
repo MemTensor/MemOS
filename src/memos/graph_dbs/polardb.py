@@ -2389,6 +2389,8 @@ class PolarDBGraphDB(BaseGraphDB):
         self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
         """Add a memory node to the graph."""
+        logger.info(f"In add node polardb: id-{id} memory-{memory}")
+
         # user_name comes from metadata; fallback to config if missing
         metadata["user_name"] = user_name if user_name else self.config.user_name
 
@@ -2481,6 +2483,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     cursor.execute(insert_query, (id, json.dumps(properties)))
                     logger.info(f"Added node {id} to graph '{self.db_name}_graph'.")
         finally:
+            logger.info(f"In add node polardb: id-{id} memory-{memory} query-{insert_query}")
             self._return_connection(conn)
 
     def _build_node_from_agtype(self, node_agtype, embedding=None):
