@@ -866,6 +866,7 @@ class APIConfig:
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
                             },
                             "search_strategy": {
+                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
@@ -937,6 +938,7 @@ class APIConfig:
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
                             },
                             "search_strategy": {
+                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },

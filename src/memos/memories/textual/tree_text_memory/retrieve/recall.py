@@ -1,5 +1,4 @@
 import concurrent.futures
-import os
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
@@ -41,6 +40,7 @@ class GraphMemoryRetriever:
         search_filter: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        use_fast_graph: bool = False,
     ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
@@ -70,7 +70,13 @@ class GraphMemoryRetriever:
 
         with ContextThreadPoolExecutor(max_workers=3) as executor:
             # Structured graph-based retrieval
-            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope, user_name)
+            future_graph = executor.submit(
+                self._graph_recall,
+                parsed_goal,
+                memory_scope,
+                user_name,
+                use_fast_graph=use_fast_graph,
+            )
             # Vector similarity search
             future_vector = executor.submit(
                 self._vector_recall,
@@ -156,7 +162,7 @@ class GraphMemoryRetriever:
         return list(combined.values())
 
     def _graph_recall(
-        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str | None = None
+        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str | None = None, **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Perform structured node-based retrieval from Neo4j.
@@ -164,6 +170,7 @@ class GraphMemoryRetriever:
         - tags must overlap with at least 2 input tags
         - scope filters by memory_type if provided
         """
+        use_fast_graph = kwargs.get("use_fast_graph", False)
 
         def process_node(node):
             meta = node.get("metadata", {})
@@ -185,7 +192,7 @@ class GraphMemoryRetriever:
                 return TextualMemoryItem.from_dict(node)
             return None
 
-        if os.getenv("FAST_GRAPH", "false") == "true":
+        if not use_fast_graph:
             candidate_ids = set()
 
             # 1) key-based OR branch

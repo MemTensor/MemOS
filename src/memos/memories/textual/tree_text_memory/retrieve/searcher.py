@@ -45,7 +45,7 @@ class Searcher:
         bm25_retriever: EnhancedBM25 | None = None,
         internet_retriever: None = None,
         moscube: bool = False,
-        vec_cot: bool = False,
+        search_strategy: dict | None = None,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -59,7 +59,9 @@ class Searcher:
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
-        self.vec_cot = vec_cot
+        self.use_fast_graph = (
+            search_strategy.get("fast_graph", "false") == "true" if search_strategy else False
+        )
 
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
@@ -226,6 +228,7 @@ class Searcher:
             context="\n".join(context),
             conversation=info.get("chat_history", []),
             mode=mode,
+            use_fast_graph=self.use_fast_graph,
         )
 
         query = parsed_goal.rephrased_query or query
@@ -340,6 +343,7 @@ class Searcher:
             search_filter=search_filter,
             user_name=user_name,
             id_filter=id_filter,
+            use_fast_graph=self.use_fast_graph,
         )
         return self.reranker.rerank(
             query=query,
@@ -369,7 +373,7 @@ class Searcher:
 
         # chain of thinking
         cot_embeddings = []
-        if self.vec_cot:
+        if self.search_strategy["vec_cot"]:
             queries = self._cot_query(query)
             if len(queries) > 1:
                 cot_embeddings = self.embedder.embed(queries)
@@ -390,6 +394,7 @@ class Searcher:
                         search_filter=search_filter,
                         user_name=user_name,
                         id_filter=id_filter,
+                        use_fast_graph=self.use_fast_graph,
                     )
                 )
             if memory_type in ["All", "UserMemory"]:
@@ -404,6 +409,7 @@ class Searcher:
                         search_filter=search_filter,
                         user_name=user_name,
                         id_filter=id_filter,
+                        use_fast_graph=self.use_fast_graph,
                     )
                 )
 
