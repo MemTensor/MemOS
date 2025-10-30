@@ -15,6 +15,7 @@ from memos.utils import timed
 
 logger = get_logger(__name__)
 
+
 def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     node_id = item["id"]
     memory = item["memory"]
@@ -149,7 +150,7 @@ class PolarDBGraphDB(BaseGraphDB):
             port=port,
             user=user,
             password=password,
-            dbname=self.db_name
+            dbname=self.db_name,
         )
 
         # Keep a reference to the pool for cleanup
@@ -829,7 +830,11 @@ class PolarDBGraphDB(BaseGraphDB):
                             logger.warning(f"Failed to parse embedding for node {id}")
 
                     return self._parse_node(
-                        {"id": id, "memory": json.loads(properties[1]).get("memory", ""), **json.loads(properties[1])}
+                        {
+                            "id": id,
+                            "memory": json.loads(properties[1]).get("memory", ""),
+                            **json.loads(properties[1]),
+                        }
                     )
                 return None
 
@@ -1418,7 +1423,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 """
         params = [vector]
 
-
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
@@ -1441,7 +1445,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 return output[:top_k]
         finally:
             self._return_connection(conn)
-
 
     @timed
     def get_by_metadata(
@@ -1719,8 +1722,6 @@ class PolarDBGraphDB(BaseGraphDB):
             return []
         finally:
             self._return_connection(conn)
-
-
 
     def deduplicate_nodes(self) -> None:
         """Deduplicate redundant or semantically similar nodes."""
