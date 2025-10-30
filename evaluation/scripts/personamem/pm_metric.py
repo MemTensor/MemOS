@@ -353,12 +353,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=["zep", "mem0", "mem0_graph", "memos-api", "memos-api-online", "memobase", "memu", "supermemory"],
         required=True,
         help="Memory library to evaluate",
         default="memos-api",
     )
-    parser.add_argument("--version", type=str, default="0925", help="Evaluation framework version")
+    parser.add_argument("--version", type=str, default="default", help="Evaluation framework version")
 
     args = parser.parse_args()
     lib, version = args.lib, args.version

@@ -324,7 +324,7 @@ class APIConfig:
             "config": {
                 "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
                 "temperature": 0.6,
-                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "5000")),
+                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
                 "top_p": 0.95,
                 "top_k": 20,
                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
@@ -354,7 +354,7 @@ class APIConfig:
         return {
             "backend": "pref_text",
             "config": {
-                "extractor_llm": {"backend": "openai", "config": APIConfig.get_openai_config()},
+                "extractor_llm": APIConfig.get_memreader_config(),
                 "vector_db": {
                     "backend": "milvus",
                     "config": APIConfig.get_milvus_config(),
@@ -614,7 +614,7 @@ class APIConfig:
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
                 "thread_pool_max_workers": int(
-                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
+                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10000")
                 ),
                 "consume_interval_seconds": float(
                     os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "0.01")
