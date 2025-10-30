@@ -1,3 +1,4 @@
+import os
 import traceback
 
 from string import Template
@@ -50,15 +51,25 @@ class TaskGoalParser:
         """
         Fast mode: simple jieba word split.
         """
-        desc_tokenized = self.tokenizer.tokenize_mixed(task_description)
-        return ParsedTaskGoal(
-            memories=[task_description],
-            keys=desc_tokenized,
-            tags=desc_tokenized,
-            goal_type="default",
-            rephrased_query=task_description,
-            internet_search=False,
-        )
+        if os.getenv("FAST_GRAPH", "false") == "true":
+            desc_tokenized = self.tokenizer.tokenize_mixed(task_description)
+            return ParsedTaskGoal(
+                memories=[task_description],
+                keys=desc_tokenized,
+                tags=desc_tokenized,
+                goal_type="default",
+                rephrased_query=task_description,
+                internet_search=False,
+            )
+        else:
+            return ParsedTaskGoal(
+                memories=[task_description],
+                keys=[task_description],
+                tags=[],
+                goal_type="default",
+                rephrased_query=task_description,
+                internet_search=False,
+            )
 
     def _parse_fine(
         self, query: str, context: str = "", conversation: list[dict] | None = None
