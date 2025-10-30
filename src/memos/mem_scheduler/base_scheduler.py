@@ -138,6 +138,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.queue_monitor_crit_utilization: float = self.config.get(
             "queue_monitor_crit_utilization", 0.9
         )
+        self.enable_queue_monitor: bool = self.config.get("enable_queue_monitor", False)
 
         # other attributes
         self._context_lock = threading.Lock()
