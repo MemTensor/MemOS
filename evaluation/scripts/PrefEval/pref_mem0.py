@@ -56,7 +56,7 @@ def add_memory_for_line(
 
         for idx, _ in enumerate(conversation[::2]):
             msg_idx = idx * 2
-            record_id = f"{lib}_user_pref_eval_{i}_{version}_{str(msg_idx)}"
+            record_id = f"{lib}_user_pref_eval_{i}_{version}_{msg_idx!s}"
             timestamp_add = int(time.time() * 100)
 
             if record_id not in success_records:
