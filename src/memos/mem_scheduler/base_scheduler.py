@@ -49,7 +49,6 @@ from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerM
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.memos_tools.notification_utils import send_online_bot_notification
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 
 
@@ -126,21 +125,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._consume_interval = self.config.get(
             "consume_interval_seconds", DEFAULT_CONSUME_INTERVAL_SECONDS
         )
-
-        # queue monitor (optional)
-        self._queue_monitor_thread: threading.Thread | None = None
-        self._queue_monitor_running: bool = False
-        self.queue_monitor_interval_seconds: float = self.config.get(
-            "queue_monitor_interval_seconds", 60.0
-        )
-        self.queue_monitor_warn_utilization: float = self.config.get(
-            "queue_monitor_warn_utilization", 0.7
-        )
-        self.queue_monitor_crit_utilization: float = self.config.get(
-            "queue_monitor_crit_utilization", 0.9
-        )
-        self.enable_queue_monitor: bool = self.config.get("enable_queue_monitor", False)
-        self._online_bot_callable = None  # type: ignore[var-annotated]
 
         # other attributes
         self._context_lock = threading.Lock()
@@ -541,6 +525,10 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.error(error_msg)
                 raise TypeError(error_msg)
 
+            if getattr(message, "timestamp", None) is None:
+                with contextlib.suppress(Exception):
+                    message.timestamp = datetime.utcnow()
+
             if self.disable_handlers and message.label in self.disable_handlers:
                 logger.info(f"Skipping disabled handler: {message.label} - {message.content}")
                 continue
@@ -555,6 +543,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 logger.info(
                     f"Submitted message to local queue: {message.label} - {message.content}"
                 )
+        with contextlib.suppress(Exception):
+            if messages:
+                self.dispatcher.on_messages_enqueued(messages)
 
     def _submit_web_logs(
         self, messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem]
@@ -706,13 +697,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
 
-        # optionally start queue monitor if enabled and bot callable present
-        if self.enable_queue_monitor and self._online_bot_callable is not None:
-            try:
-                self.start_queue_monitor(self._online_bot_callable)
-            except Exception as e:
-                logger.warning(f"Failed to start queue monitor: {e}")
-
     def stop(self) -> None:
         """Stop all scheduler components gracefully.
 
@@ -761,9 +745,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Clean up queues
         self._cleanup_queues()
         logger.info("Memory Scheduler stopped completely")
-
-        # Stop queue monitor
-        self.stop_queue_monitor()
 
     @property
     def handlers(self) -> dict[str, Callable]:
@@ -997,16 +978,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         return True
 
-    # ---------------- Queue monitor & notifications ----------------
-    def set_notification_bots(self, online_bot=None):
-        """
-        Set external notification callables.
-
-        Args:
-            online_bot: a callable matching dinding_report_bot.online_bot signature
-        """
-        self._online_bot_callable = online_bot
-
     def _gather_queue_stats(self) -> dict:
         """Collect queue/dispatcher stats for reporting."""
         stats: dict[str, int | float | str] = {}
@@ -1044,71 +1015,3 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         except Exception:
             stats.update({"running": 0, "inflight": 0, "handlers": 0})
         return stats
-
-    def _queue_monitor_loop(self, online_bot) -> None:
-        logger.info(f"Queue monitor started (interval={self.queue_monitor_interval_seconds}s)")
-        self._queue_monitor_running = True
-        while self._queue_monitor_running:
-            time.sleep(self.queue_monitor_interval_seconds)
-            try:
-                stats = self._gather_queue_stats()
-                # decide severity based on utilization if local queue
-                title_color = "#00956D"
-                subtitle = "Scheduler"
-                if not stats.get("use_redis_queue"):
-                    util = float(stats.get("utilization", 0.0))
-                    if util >= self.queue_monitor_crit_utilization:
-                        title_color = "#C62828"  # red
-                        subtitle = "Scheduler (CRITICAL)"
-                    elif util >= self.queue_monitor_warn_utilization:
-                        title_color = "#E65100"  # orange
-                        subtitle = "Scheduler (WARNING)"
-
-                other_data1 = {
-                    "use_redis_queue": stats.get("use_redis_queue"),
-                    "handlers": stats.get("handlers"),
-                    "running": stats.get("running"),
-                    "inflight": stats.get("inflight"),
-                }
-                if not stats.get("use_redis_queue"):
-                    other_data2 = {
-                        "qsize": stats.get("qsize"),
-                        "unfinished_tasks": stats.get("unfinished_tasks"),
-                        "maxsize": stats.get("maxsize"),
-                        "utilization": f"{float(stats.get('utilization', 0.0)):.2%}",
-                    }
-                else:
-                    other_data2 = {
-                        "redis_mode": True,
-                    }
-
-                send_online_bot_notification(
-                    online_bot=online_bot,
-                    header_name="Scheduler Queue",
-                    sub_title_name=subtitle,
-                    title_color=title_color,
-                    other_data1=other_data1,
-                    other_data2=other_data2,
-                    emoji={"Runtime": "🧠", "Queue": "📬"},
-                )
-            except Exception as e:
-                logger.warning(f"Queue monitor iteration failed: {e}")
-        logger.info("Queue monitor stopped")
-
-    def start_queue_monitor(self, online_bot) -> None:
-        if self._queue_monitor_thread and self._queue_monitor_thread.is_alive():
-            return
-        self._online_bot_callable = online_bot
-        self._queue_monitor_thread = threading.Thread(
-            target=self._queue_monitor_loop,
-            args=(online_bot,),
-            daemon=True,
-            name="QueueMonitorThread",
-        )
-        self._queue_monitor_thread.start()
-
-    def stop_queue_monitor(self) -> None:
-        self._queue_monitor_running = False
-        if self._queue_monitor_thread and self._queue_monitor_thread.is_alive():
-            with contextlib.suppress(Exception):
-                self._queue_monitor_thread.join(timeout=2.0)

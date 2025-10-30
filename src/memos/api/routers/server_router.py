@@ -653,6 +653,11 @@ def scheduler_status(user_name: str | None = None):
                 cube = getattr(task, "mem_cube_id", "unknown")
                 task_count_per_user[cube] = task_count_per_user.get(cube, 0) + 1
 
+            try:
+                metrics_snapshot = mem_scheduler.dispatcher.metrics.snapshot()
+            except Exception:
+                metrics_snapshot = {}
+
             return {
                 "message": "ok",
                 "data": {
@@ -661,6 +666,7 @@ def scheduler_status(user_name: str | None = None):
                     "task_count_per_user": task_count_per_user,
                     "timestamp": time.time(),
                     "instance_id": INSTANCE_ID,
+                    "metrics": metrics_snapshot,
                 },
             }
     except Exception as err:
