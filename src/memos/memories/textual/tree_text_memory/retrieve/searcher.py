@@ -45,6 +45,49 @@ class Searcher:
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
     @timed
+    def retrieve(
+        self,
+        query: str,
+        top_k: int,
+        info=None,
+        mode="fast",
+        memory_type="All",
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        **kwargs,
+    ) -> list[TextualMemoryItem]:
+        logger.info(
+            f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
+        )
+        parsed_goal, query_embedding, context, query = self._parse_task(
+            query, info, mode, search_filter=search_filter, user_name=user_name
+        )
+        results = self._retrieve_paths(
+            query,
+            parsed_goal,
+            query_embedding,
+            info,
+            top_k,
+            mode,
+            memory_type,
+            search_filter,
+            user_name,
+        )
+        return results
+
+    def post_retrieve(
+        self,
+        retrieved_results: list[TextualMemoryItem],
+        top_k: int,
+        user_name: str | None = None,
+        info=None,
+    ):
+        deduped = self._deduplicate_results(retrieved_results)
+        final_results = self._sort_and_trim(deduped, top_k)
+        self._update_usage_history(final_results, info, user_name)
+        return final_results
+
+    @timed
     def search(
         self,
         query: str,
@@ -72,9 +115,6 @@ class Searcher:
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        logger.info(
-            f"[SEARCH] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
-        )
         if not info:
             logger.warning(
                 "Please input 'info' when use tree.search so that "
@@ -84,23 +124,22 @@ class Searcher:
         else:
             logger.debug(f"[SEARCH] Received info dict: {info}")
 
-        parsed_goal, query_embedding, context, query = self._parse_task(
-            query, info, mode, search_filter=search_filter, user_name=user_name
+        retrieved_results = self.retrieve(
+            query=query,
+            top_k=top_k,
+            info=info,
+            mode=mode,
+            memory_type=memory_type,
+            search_filter=search_filter,
+            user_name=user_name,
         )
-        results = self._retrieve_paths(
-            query,
-            parsed_goal,
-            query_embedding,
-            info,
-            top_k,
-            mode,
-            memory_type,
-            search_filter,
-            user_name,
+
+        final_results = self.post_retrieve(
+            retrieved_results=retrieved_results,
+            top_k=top_k,
+            user_name=user_name,
+            info=None,
         )
-        deduped = self._deduplicate_results(results)
-        final_results = self._sort_and_trim(deduped, top_k)
-        self._update_usage_history(final_results, info, user_name)
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
         res_results = ""

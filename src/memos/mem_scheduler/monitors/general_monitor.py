@@ -76,8 +76,8 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         ] = {}
 
         # Lifecycle monitor
-        self.last_activation_mem_update_time = datetime.min
-        self.last_query_consume_time = datetime.min
+        self.last_activation_mem_update_time = get_utc_now()
+        self.last_query_consume_time = get_utc_now()
 
         self._register_lock = Lock()
         self._process_llm = process_llm

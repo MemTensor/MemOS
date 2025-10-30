@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sqlalchemy.engine import Engine
 
@@ -48,6 +49,10 @@ from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
+
+
+if TYPE_CHECKING:
+    from memos.mem_cube.base import BaseMemCube
 
 
 logger = get_logger(__name__)
@@ -124,7 +129,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._context_lock = threading.Lock()
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
-        self.current_mem_cube: GeneralMemCube | None = None
+        self.current_mem_cube: BaseMemCube | None = None
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None

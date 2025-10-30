@@ -1072,7 +1072,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
             with self.driver.session(database=self.system_db_name) as session:
                 session.run(f"DROP DATABASE {self.db_name} IF EXISTS")
-                print(f"Database '{self.db_name}' has been dropped.")
+                logger.info(f"Database '{self.db_name}' has been dropped.")
         else:
             raise ValueError(
                 f"Refusing to drop protected database: {self.db_name} in "
