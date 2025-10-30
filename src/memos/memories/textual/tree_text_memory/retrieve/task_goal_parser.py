@@ -5,6 +5,7 @@ from string import Template
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.memories.textual.tree_text_memory.retrieve.utils import TASK_PARSE_PROMPT
 
 
@@ -20,6 +21,7 @@ class TaskGoalParser:
 
     def __init__(self, llm=BaseLLM):
         self.llm = llm
+        self.tokenizer = FastTokenizer()
 
     def parse(
         self,
@@ -48,10 +50,11 @@ class TaskGoalParser:
         """
         Fast mode: simple jieba word split.
         """
+        desc_tokenized = self.tokenizer.tokenize_mixed(task_description)
         return ParsedTaskGoal(
             memories=[task_description],
-            keys=[task_description],
-            tags=[],
+            keys=desc_tokenized,
+            tags=desc_tokenized,
             goal_type="default",
             rephrased_query=task_description,
             internet_search=False,
