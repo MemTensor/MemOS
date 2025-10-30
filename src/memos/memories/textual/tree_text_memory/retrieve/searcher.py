@@ -59,6 +59,9 @@ class Searcher:
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
+        self.vec_cot = (
+            search_strategy.get("vec_cot", "false") == "true" if search_strategy else False
+        )
         self.use_fast_graph = (
             search_strategy.get("fast_graph", "false") == "true" if search_strategy else False
         )
@@ -373,7 +376,7 @@ class Searcher:
 
         # chain of thinking
         cot_embeddings = []
-        if self.search_strategy["vec_cot"]:
+        if self.vec_cot:
             queries = self._cot_query(query)
             if len(queries) > 1:
                 cot_embeddings = self.embedder.embed(queries)
