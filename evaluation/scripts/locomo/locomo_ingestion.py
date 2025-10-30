@@ -88,7 +88,7 @@ def ingest_session(client, session, frame, version, metadata):
     return elapsed_time
 
 
-def process_user(conv_idx, frame, locomo_df, version):
+def process_user(conv_idx, frame, locomo_df, version, success_records, f):
     conversation = locomo_df["conversation"].iloc[conv_idx]
     max_session_count = 35
     start_time = time.time()
@@ -149,11 +149,15 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     print(f"Processing {valid_sessions} sessions for user {conv_idx}")
 
-    for session, metadata in sessions_to_process:
-        session_time = ingest_session(client, session, frame, version, metadata)
-        total_session_time += session_time
-        print(f"User {conv_idx}, {metadata['session_key']} processed in {session_time} seconds")
-
+    for session_idx, (session, metadata) in enumerate(sessions_to_process):
+        if f"{conv_idx}_{session_idx}" not in success_records:
+            session_time = ingest_session(client, session, frame, version, metadata)
+            total_session_time += session_time
+            print(f"User {conv_idx}, {metadata['session_key']} processed in {session_time} seconds")
+            f.write(f"{conv_idx}_{session_idx}\n")
+            f.flush()
+        else:
+            print(f"Session {conv_idx}_{session_idx} already ingested")
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
     print(f"User {conv_idx} processed successfully in {elapsed_time} seconds")
@@ -170,9 +174,17 @@ def main(frame, version="default", num_workers=4):
     print(
         f"Starting processing for {num_users} users in serial mode, each user using {num_workers} workers for sessions..."
     )
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+    os.makedirs(f"results/locomo/{frame}-{version}/", exist_ok=True)
+    success_records = []
+    record_file = f"results/locomo/{frame}-{version}/success_records.txt"
+    if os.path.exists(record_file):
+        with open(record_file) as f:
+            for i in f.readlines():
+                success_records.append(i.strip())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor, open(record_file, "a+") as f:
         futures = [
-            executor.submit(process_user, user_id, frame, locomo_df, version)
+            executor.submit(process_user, user_id, frame, locomo_df, version, success_records, f)
             for user_id in range(num_users)
         ]
         for future in concurrent.futures.as_completed(futures):
@@ -216,7 +228,7 @@ if __name__ == "__main__":
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     args = parser.parse_args()
     lib = args.lib
