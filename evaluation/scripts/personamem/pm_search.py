@@ -3,10 +3,12 @@ import csv
 import json
 import os
 import sys
+
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from time import time
+
 from tqdm import tqdm
 
 
@@ -81,8 +83,8 @@ def memos_search(client, user_id, query, top_k):
     start = time()
     results = client.search(query=query, user_id=user_id, top_k=top_k)
     search_memories = (
-            "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
-            + f"\n{results['pref_string']}"
+        "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
+        + f"\n{results.get('pref_string', '')}"
     )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
@@ -232,6 +234,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         context, duration_ms = memobase_search(client, question, user_id, top_k)
     elif frame == "memos-api-online":
         from utils.client import MemosApiOnlineClient
+
         client = MemosApiOnlineClient()
         print("🔌 Using memos-api-online client for search...")
         context, duration_ms = memos_search(client, question, user_id, top_k)
@@ -253,7 +256,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
 
     os.makedirs(f"results/pm/{frame}-{version}/tmp", exist_ok=True)
     with open(
-            f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{conv_idx}.json", "w"
+        f"results/pm/{frame}-{version}/tmp/{frame}_pm_search_results_{conv_idx}.json", "w"
     ) as f:
         json.dump(search_results, f, indent=4)
     print(f"💾 Search results for conversation {conv_idx} saved...")
@@ -278,7 +281,7 @@ def main(frame, version, top_k=20, num_workers=2):
     print(f"🔍 PERSONAMEM SEARCH - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
-    question_csv_path = "data/personamem/questions_32k copy.csv"
+    question_csv_path = "data/personamem/questions_32k.csv"
     context_jsonl_path = "data/personamem/shared_contexts_32k.jsonl"
     total_rows = count_csv_rows(question_csv_path)
 
@@ -304,7 +307,7 @@ def main(frame, version, top_k=20, num_workers=2):
         }
 
         for future in tqdm(
-                as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
+            as_completed(future_to_idx), total=len(future_to_idx), desc="Processing conversations"
         ):
             idx = future_to_idx[future]
             try:
@@ -333,13 +336,29 @@ def main(frame, version, top_k=20, num_workers=2):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Search Script")
-    parser.add_argument("--lib", type=str,
-                        choices=["memos-api-online", "mem0", "mem0_graph", "memos-api", "memobase", "memu",
-                                 "supermemory"],
-                        default='memos-api')
-    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
-    parser.add_argument("--top_k", type=int, default=20, help="Number of top results to retrieve from the search.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=[
+            "memos-api-online",
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
+        default="memos-api",
+    )
+    parser.add_argument(
+        "--version", type=str, default="default", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--top_k", type=int, default=20, help="Number of top results to retrieve from the search."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3, help="Number of parallel workers for processing users."
+    )
 
     args = parser.parse_args()
 
