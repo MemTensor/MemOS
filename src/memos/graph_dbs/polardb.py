@@ -91,6 +91,7 @@ def clean_properties(props):
         return {}
     return {k: v for k, v in props.items() if k not in vector_keys}
 
+global_connection_pool = None
 
 class PolarDBGraphDB(BaseGraphDB):
     """PolarDB-based implementation using Apache AGE graph database extension."""
@@ -137,11 +138,20 @@ class PolarDBGraphDB(BaseGraphDB):
             port = config.port
             user = config.user
             password = config.password
-
+        """
         # Create connection
         self.connection = psycopg2.connect(
+            host=host, port=port, user=user, password=password, dbname=self.db_name,minconn=10, maxconn=2000
+        )
+        """
+
+        import psycopg2.pool
+        global global_connection_pool
+        global_connection_pool = psycopg2.pool.SimpleConnectionPool(
+            10, 2000,
             host=host, port=port, user=user, password=password, dbname=self.db_name
         )
+        self.connection = global_connection_pool.getconn()
         self.connection.autocommit = True
 
         """
@@ -736,9 +746,9 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 if result:
                     if include_embedding:
-                        node_id, properties_json, embedding_json = result
+                        properties_json, embedding_json = result
                     else:
-                        node_id, properties_json = result
+                        properties_json = result
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -1727,9 +1737,9 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 for row in node_results:
                     if include_embedding:
-                        node_id, properties_json, embedding_json = row
+                        properties_json, embedding_json = row
                     else:
-                        node_id, properties_json = row
+                        properties_json = row
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
