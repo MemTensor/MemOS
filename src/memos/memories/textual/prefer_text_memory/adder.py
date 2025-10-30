@@ -326,7 +326,7 @@ class NaiveAdder(BaseAdder):
             search_results.sort(key=lambda x: x.score, reverse=True)
 
             return self._update_memory(
-                memory, search_results, collection_name, preference_type, update_mode="fine"
+                memory, search_results, collection_name, preference_type, update_mode="fast"
             )
 
         except Exception as e:
