@@ -406,7 +406,10 @@ def search_memories(search_req: APISearchRequest):
     )
 
     memories_result = _post_process_pref_mem(
-        memories_result, pref_formatted_memories, search_req.mem_cube_id, search_req.include_preference
+        memories_result,
+        pref_formatted_memories,
+        search_req.mem_cube_id,
+        search_req.include_preference,
     )
 
     return SearchResponse(
