@@ -774,7 +774,7 @@ class PolarDBGraphDB(BaseGraphDB):
                             logger.warning(f"Failed to parse embedding for node {id}")
 
                     return self._parse_node(
-                        {"id": id, "memory": properties.get("memory", ""), **properties}
+                        {"id": id, "memory": json.loads(properties[1]).get("memory", ""), **json.loads(properties[1])}
                     )
                 return None
 
