@@ -6,7 +6,7 @@ from memos.templates.prefer_complete_prompt import PREF_INSTRUCTIONS, PREF_INSTR
 
 def instruct_completion(
     memories: list[dict[str, Any]] | None = None,
-) -> str:
+) -> [str, str]:
     """Create instruction following the preferences."""
     explicit_pref = []
     implicit_pref = []
@@ -49,10 +49,16 @@ def instruct_completion(
     lang = detect_lang(explicit_pref_str + implicit_pref_str)
 
     if not explicit_pref_str and not implicit_pref_str:
-        return ""
+        return "", ""
     if not explicit_pref_str:
-        return implicit_pref_str + "\n" + _prompt_map[lang].replace(_remove_exp_map[lang], "")
+        pref_note = _prompt_map[lang].replace(_remove_exp_map[lang], "")
+        pref_string = implicit_pref_str + "\n" + pref_note
+        return pref_string, pref_note
     if not implicit_pref_str:
-        return explicit_pref_str + "\n" + _prompt_map[lang].replace(_remove_imp_map[lang], "")
+        pref_note = _prompt_map[lang].replace(_remove_imp_map[lang], "")
+        pref_string = explicit_pref_str + "\n" + pref_note
+        return pref_string, pref_note
 
-    return explicit_pref_str + "\n" + implicit_pref_str + "\n" + _prompt_map[lang]
+    pref_note = _prompt_map[lang]
+    pref_string = explicit_pref_str + "\n" + implicit_pref_str + "\n" + pref_note
+    return pref_string, pref_note
