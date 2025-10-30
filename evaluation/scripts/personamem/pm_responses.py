@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
 
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import re
 
@@ -154,9 +153,9 @@ def main(frame, version, num_runs=3, num_workers=4):
             future_to_user_id[future] = user_id
 
         for future in tqdm(
-            as_completed(future_to_user_id),
-            total=len(future_to_user_id),
-            desc="📝 Generating responses",
+                as_completed(future_to_user_id),
+                total=len(future_to_user_id),
+                desc="📝 Generating responses",
         ):
             user_id = future_to_user_id[future]
             try:
@@ -185,10 +184,12 @@ def main(frame, version, num_runs=3, num_workers=4):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Response Generation Script")
-    parser.add_argument("--lib", type=str, choices=["memos-api-online","zep","mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"], default='memos-api')
-    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
+    parser.add_argument("--lib", type=str,
+                        choices=["memos-api-online", "zep", "mem0", "mem0_graph", "memos-api", "memobase", "memu",
+                                 "supermemory"], default='memos-api')
+    parser.add_argument("--version", type=str, default="default", help="Version of the evaluation framework.")
     parser.add_argument("--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of worker threads to use for processing.")
+    parser.add_argument("--workers", type=int, default=10, help="Number of worker threads to use for processing.")
 
     args = parser.parse_args()
     main(frame=args.lib, version=args.version, num_runs=args.num_runs, num_workers=args.workers)
