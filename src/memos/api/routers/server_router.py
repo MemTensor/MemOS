@@ -360,7 +360,7 @@ def search_memories(search_req: APISearchRequest):
             return []
         results = naive_mem_cube.pref_mem.search(
             query=search_req.query,
-            top_k=6,
+            top_k=search_req.pref_top_k,
             info={
                 "user_id": search_req.user_id,
                 "session_id": search_req.session_id,
