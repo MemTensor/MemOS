@@ -182,7 +182,10 @@ def main(frame, version="default", num_workers=4):
             for i in f.readlines():
                 success_records.append(i.strip())
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor, open(record_file, "a+") as f:
+    with (
+        concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor,
+        open(record_file, "a+") as f,
+    ):
         futures = [
             executor.submit(process_user, user_id, frame, locomo_df, version, success_records, f)
             for user_id in range(num_users)
