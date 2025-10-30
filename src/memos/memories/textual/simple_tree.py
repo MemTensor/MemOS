@@ -12,6 +12,7 @@ from memos.mem_reader.base import BaseMemReader
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.base import BaseReranker
 from memos.types import MessageList
@@ -62,6 +63,13 @@ class SimpleTreeTextMemory(TreeTextMemory):
         self.graph_store: Neo4jGraphDB = graph_db
         logger.info(f"time init: graph_store time is: {time.time() - time_start_gs}")
 
+        time_start_bm = time.time()
+        self.search_strategy = config.search_strategy
+        self.bm25_retriever = (
+            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+        )
+        logger.info(f"time init: bm25_retriever time is: {time.time() - time_start_bm}")
+
         time_start_rr = time.time()
         self.reranker = reranker
         logger.info(f"time init: reranker time is: {time.time() - time_start_rr}")
@@ -104,6 +112,34 @@ class SimpleTreeTextMemory(TreeTextMemory):
         """
         return self.memory_manager.get_current_memory_size(user_name=user_name)
 
+    def get_searcher(
+        self,
+        manual_close_internet: bool = False,
+        moscube: bool = False,
+    ):
+        if (self.internet_retriever is not None) and manual_close_internet:
+            logger.warning(
+                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
+            )
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                self.reranker,
+                internet_retriever=None,
+                moscube=moscube,
+            )
+        else:
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                self.reranker,
+                internet_retriever=self.internet_retriever,
+                moscube=moscube,
+            )
+        return searcher
+
     def search(
         self,
         query: str,
@@ -144,8 +180,10 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                bm25_retriever=self.bm25_retriever,
                 internet_retriever=None,
                 moscube=moscube,
+                search_strategy=self.search_strategy,
             )
         else:
             searcher = Searcher(
@@ -153,8 +191,10 @@ class SimpleTreeTextMemory(TreeTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                bm25_retriever=self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
+                search_strategy=self.search_strategy,
             )
         return searcher.search(
             query, top_k, info, mode, memory_type, search_filter, user_name=user_name

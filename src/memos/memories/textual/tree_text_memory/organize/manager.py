@@ -351,9 +351,10 @@ class MemoryManager:
         """
         cleanup_threshold = 0.8  # Clean up when 80% full
 
+        logger.info(f"self.memory_size: {self.memory_size}")
         for memory_type, limit in self.memory_size.items():
             current_count = self.current_memory_size.get(memory_type, 0)
-            threshold = int(limit * cleanup_threshold)
+            threshold = int(int(limit) * cleanup_threshold)
 
             # Only clean up if we're at or above the threshold
             if current_count >= threshold:

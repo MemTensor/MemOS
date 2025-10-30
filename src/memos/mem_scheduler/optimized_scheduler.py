@@ -1,11 +1,14 @@
 import json
+import os
 
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from memos.api.product_models import APISearchRequest
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
+from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_scheduler.general_modules.api_misc import SchedulerAPIModule
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -23,6 +26,7 @@ from memos.types import UserContext
 
 if TYPE_CHECKING:
     from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
     from memos.reranker.http_bge import HTTPBGEReranker
 
 
@@ -34,54 +38,33 @@ class OptimizedScheduler(GeneralScheduler):
 
     def __init__(self, config: GeneralSchedulerConfig):
         super().__init__(config)
-        self.api_module = SchedulerAPIModule()
+        self.window_size = int(os.getenv("API_SEARCH_WINDOW_SIZE", 5))
+        self.history_memory_turns = int(os.getenv("API_SEARCH_HISTORY_TURNS", 5))
+        self.session_counter = OrderedDict()
+        self.max_session_history = 5
+
+        self.api_module = SchedulerAPIModule(
+            window_size=self.window_size,
+            history_memory_turns=self.history_memory_turns,
+        )
         self.register_handlers(
             {
                 API_MIX_SEARCH_LABEL: self._api_mix_search_message_consumer,
             }
         )
 
-    def search_memories(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-        mem_cube: GeneralMemCube,
-        mode: SearchMode,
-    ):
-        """Fine search memories function copied from server_router to avoid circular import"""
-        target_session_id = search_req.session_id
-        if not target_session_id:
-            target_session_id = "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        # Create MemCube and perform search
-        search_results = mem_cube.text_mem.search(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
-            mode=mode,
-            manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
-            search_filter=search_filter,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": target_session_id,
-                "chat_history": search_req.chat_history,
-            },
-        )
-        return search_results
-
     def submit_memory_history_async_task(
         self,
         search_req: APISearchRequest,
         user_context: UserContext,
+        session_id: str | None = None,
     ):
         # Create message for async fine search
         message_content = {
             "search_req": {
                 "query": search_req.query,
                 "user_id": search_req.user_id,
-                "session_id": search_req.session_id,
+                "session_id": session_id,
                 "top_k": search_req.top_k,
                 "internet_search": search_req.internet_search,
                 "moscube": search_req.moscube,
@@ -110,6 +93,36 @@ class OptimizedScheduler(GeneralScheduler):
         logger.info(f"Submitted async fine search task for user {search_req.user_id}")
         return async_task_id
 
+    def search_memories(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+        mem_cube: NaiveMemCube,
+        mode: SearchMode,
+    ):
+        """Fine search memories function copied from server_router to avoid circular import"""
+        target_session_id = search_req.session_id
+        if not target_session_id:
+            target_session_id = "default_session"
+        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+
+        # Create MemCube and perform search
+        search_results = mem_cube.text_mem.search(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=mode,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            info={
+                "user_id": search_req.user_id,
+                "session_id": target_session_id,
+                "chat_history": search_req.chat_history,
+            },
+        )
+        return search_results
+
     def mix_search_memories(
         self,
         search_req: APISearchRequest,
@@ -122,82 +135,115 @@ class OptimizedScheduler(GeneralScheduler):
         # Get mem_cube for fast search
         mem_cube = self.current_mem_cube
 
-        # Perform fast search
-        fast_memories = self.search_memories(
-            search_req=search_req,
-            user_context=user_context,
-            mem_cube=mem_cube,
-            mode=SearchMode.FAST,
-        )
-
-        self.submit_memory_history_async_task(
-            search_req=search_req,
-            user_context=user_context,
-        )
-
-        # Try to get pre-computed fine memories if available
-        pre_fine_memories = self.api_module.get_pre_memories(
-            user_id=search_req.user_id, mem_cube_id=user_context.mem_cube_id
-        )
-        if not pre_fine_memories:
-            # Format fast memories for return
-            formatted_memories = [format_textual_memory_item(data) for data in fast_memories]
-            return formatted_memories
-
-        # Merge fast and pre-computed fine memories (both are TextualMemoryItem objects)
-        combined_memories = fast_memories + pre_fine_memories
-        # Remove duplicates based on memory content
-        seen_contents = set()
-        unique_memories = []
-        for memory in combined_memories:
-            # Both fast_memories and pre_fine_memories are TextualMemoryItem objects
-            content_key = memory.memory  # Use .memory attribute instead of .get("content", "")
-            if content_key not in seen_contents:
-                seen_contents.add(content_key)
-                unique_memories.append(memory)
-
-        # Rerank Memories - reranker expects TextualMemoryItem objects
-        reranker: HTTPBGEReranker = mem_cube.text_mem.reranker
-
-        # Use search_req parameters for reranking
         target_session_id = search_req.session_id
         if not target_session_id:
             target_session_id = "default_session"
         search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
 
-        sorted_results = reranker.rerank(
+        text_mem: TreeTextMemory = mem_cube.text_mem
+        searcher: Searcher = text_mem.get_searcher(
+            manual_close_internet=not search_req.internet_search,
+            moscube=False,
+        )
+        # Rerank Memories - reranker expects TextualMemoryItem objects
+        reranker: HTTPBGEReranker = text_mem.reranker
+        info = {
+            "user_id": search_req.user_id,
+            "session_id": target_session_id,
+            "chat_history": search_req.chat_history,
+        }
+
+        fast_retrieved_memories = searcher.retrieve(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=SearchMode.FAST,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            info=info,
+        )
+
+        self.submit_memory_history_async_task(
+            search_req=search_req,
+            user_context=user_context,
+            session_id=search_req.session_id,
+        )
+
+        # Try to get pre-computed fine memories if available
+        history_memories = self.api_module.get_history_memories(
+            user_id=search_req.user_id,
+            mem_cube_id=user_context.mem_cube_id,
+            turns=self.history_memory_turns,
+        )
+
+        if not history_memories:
+            fast_memories = searcher.post_retrieve(
+                retrieved_results=fast_retrieved_memories,
+                top_k=search_req.top_k,
+                user_name=user_context.mem_cube_id,
+                info=info,
+            )
+            # Format fast memories for return
+            formatted_memories = [format_textual_memory_item(data) for data in fast_memories]
+            return formatted_memories
+
+        sorted_history_memories = reranker.rerank(
             query=search_req.query,  # Use search_req.query instead of undefined query
-            graph_results=unique_memories,  # Pass TextualMemoryItem objects directly
+            graph_results=history_memories,  # Pass TextualMemoryItem objects directly
             top_k=search_req.top_k,  # Use search_req.top_k instead of undefined top_k
             search_filter=search_filter,
         )
 
+        sorted_results = fast_retrieved_memories + sorted_history_memories
+        final_results = searcher.post_retrieve(
+            retrieved_results=sorted_results,
+            top_k=search_req.top_k,
+            user_name=user_context.mem_cube_id,
+            info=info,
+        )
+
         formatted_memories = [
-            format_textual_memory_item(item) for item, score in sorted_results[: search_req.top_k]
+            format_textual_memory_item(item) for item in final_results[: search_req.top_k]
         ]
 
         return formatted_memories
 
     def update_search_memories_to_redis(
         self,
-        user_id: str,
-        mem_cube_id: str,
         messages: list[ScheduleMessageItem],
     ):
-        mem_cube = messages[0].mem_cube
+        mem_cube: NaiveMemCube = self.current_mem_cube
 
         for msg in messages:
             content_dict = json.loads(msg.content)
             search_req = content_dict["search_req"]
             user_context = content_dict["user_context"]
 
-            fine_memories: list[TextualMemoryItem] = self.search_memories(
+            session_id = search_req.get("session_id")
+            if session_id:
+                if session_id not in self.session_counter:
+                    self.session_counter[session_id] = 0
+                else:
+                    self.session_counter[session_id] += 1
+                session_turn = self.session_counter[session_id]
+
+                # Move the current session to the end to mark it as recently used
+                self.session_counter.move_to_end(session_id)
+
+                # If the counter exceeds the max size, remove the oldest item
+                if len(self.session_counter) > self.max_session_history:
+                    self.session_counter.popitem(last=False)
+            else:
+                session_turn = 0
+
+            memories: list[TextualMemoryItem] = self.search_memories(
                 search_req=APISearchRequest(**content_dict["search_req"]),
                 user_context=UserContext(**content_dict["user_context"]),
                 mem_cube=mem_cube,
-                mode=SearchMode.FINE,
+                mode=SearchMode.FAST,
             )
-            formatted_memories = [format_textual_memory_item(data) for data in fine_memories]
+            formatted_memories = [format_textual_memory_item(data) for data in memories]
 
             # Sync search data to Redis
             self.api_module.sync_search_data(
@@ -205,8 +251,10 @@ class OptimizedScheduler(GeneralScheduler):
                 user_id=search_req["user_id"],
                 mem_cube_id=user_context["mem_cube_id"],
                 query=search_req["query"],
-                memories=fine_memories,
+                memories=memories,
                 formatted_memories=formatted_memories,
+                session_id=session_id,
+                conversation_turn=session_turn,
             )
 
     def _api_mix_search_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
@@ -228,9 +276,7 @@ class OptimizedScheduler(GeneralScheduler):
                 messages = grouped_messages[user_id][mem_cube_id]
                 if len(messages) == 0:
                     return
-                self.update_search_memories_to_redis(
-                    user_id=user_id, mem_cube_id=mem_cube_id, messages=messages
-                )
+                self.update_search_memories_to_redis(messages=messages)
 
     def replace_working_memory(
         self,

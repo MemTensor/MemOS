@@ -324,7 +324,7 @@ class APIConfig:
             "config": {
                 "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
                 "temperature": 0.6,
-                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "5000")),
+                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
                 "top_p": 0.95,
                 "top_k": 20,
                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
@@ -420,8 +420,22 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_reader_config() -> dict[str, Any]:
+        """Get reader configuration."""
+        return {
+            "backend": os.getenv("MEM_READER_BACKEND", "simple_struct"),
+            "config": {
+                "chunk_type": os.getenv("MEM_READER_CHAT_CHUNK_TYPE", "default"),
+                "chunk_length": int(os.getenv("MEM_READER_CHAT_CHUNK_TOKEN_SIZE", 1600)),
+                "chunk_session": int(os.getenv("MEM_READER_CHAT_CHUNK_SESS_SIZE", 20)),
+                "chunk_overlap": int(os.getenv("MEM_READER_CHAT_CHUNK_OVERLAP", 2)),
+            },
+        }
+
+    @staticmethod
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
+        reader_config = APIConfig.get_reader_config()
         return {
             "backend": "bocha",
             "config": {
@@ -429,7 +443,7 @@ class APIConfig:
                 "max_results": 15,
                 "num_per_request": 10,
                 "reader": {
-                    "backend": "simple_struct",
+                    "backend": reader_config["backend"],
                     "config": {
                         "llm": {
                             "backend": "openai",
@@ -455,6 +469,7 @@ class APIConfig:
                                 "min_sentences_per_chunk": 1,
                             },
                         },
+                        "chat_chunker": reader_config,
                     },
                 },
             },
@@ -599,7 +614,7 @@ class APIConfig:
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
                 "thread_pool_max_workers": int(
-                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
+                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10000")
                 ),
                 "consume_interval_seconds": float(
                     os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "0.01")
@@ -656,6 +671,8 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        reader_config = APIConfig.get_reader_config()
+
         backend_model = {
             "openai": openai_config,
             "huggingface": qwen_config,
@@ -667,7 +684,7 @@ class APIConfig:
             "user_id": os.getenv("MOS_USER_ID", "root"),
             "chat_model": {"backend": backend, "config": backend_model[backend]},
             "mem_reader": {
-                "backend": "simple_struct",
+                "backend": reader_config["backend"],
                 "config": {
                     "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
@@ -680,6 +697,7 @@ class APIConfig:
                             "min_sentences_per_chunk": 1,
                         },
                     },
+                    "chat_chunker": reader_config,
                 },
             },
             "enable_textual_memory": True,
@@ -750,6 +768,7 @@ class APIConfig:
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
         mysql_config = APIConfig.get_mysql_config()
+        reader_config = APIConfig.get_reader_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         backend_model = {
             "openai": openai_config,
@@ -764,7 +783,7 @@ class APIConfig:
                 "config": backend_model[backend],
             },
             "mem_reader": {
-                "backend": "simple_struct",
+                "backend": reader_config["backend"],
                 "config": {
                     "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
@@ -777,6 +796,7 @@ class APIConfig:
                             "min_sentences_per_chunk": 1,
                         },
                     },
+                    "chat_chunker": reader_config,
                 },
             },
             "enable_textual_memory": True,
@@ -845,6 +865,11 @@ class APIConfig:
                                 "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
                             },
+                            "search_strategy": {
+                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                            },
                         },
                     },
                     "act_mem": {}
@@ -911,6 +936,11 @@ class APIConfig:
                                 "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
                                 "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
                                 "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                            },
+                            "search_strategy": {
+                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
                             "mode": os.getenv("ASYNC_MODE", "sync"),
                         },
