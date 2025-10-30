@@ -607,13 +607,14 @@ def add_memories(add_req: APIADDRequest):
 
 
 @router.get("/scheduler/status", summary="Get scheduler running task count")
-def scheduler_status():
+def scheduler_status(user_name: str):
     """
-    Return current running tasks count from scheduler dispatcher.
-    Shape is consistent with /scheduler/wait.
+    Return current running tasks count for a specific user_name (mem_cube_id).
     """
     try:
-        running = mem_scheduler.dispatcher.get_running_tasks()
+        running = mem_scheduler.dispatcher.get_running_tasks(
+            lambda task: task.mem_cube_id == user_name
+        )
         running_count = len(running)
         now_ts = time.time()
 
@@ -622,30 +623,30 @@ def scheduler_status():
             "data": {
                 "running_tasks": running_count,
                 "timestamp": now_ts,
+                "user_name": user_name,
             },
         }
 
     except Exception as err:
         logger.error("Failed to get scheduler status: %s", traceback.format_exc())
-
         raise HTTPException(status_code=500, detail="Failed to get scheduler status") from err
 
 
-@router.post("/scheduler/wait", summary="Wait until scheduler is idle")
-def scheduler_wait(timeout_seconds: float = 120.0, poll_interval: float = 0.2):
+@router.post("/scheduler/wait", summary="Wait until scheduler is idle for a specific user")
+def scheduler_wait(
+    user_name: str,
+    timeout_seconds: float = 120.0,
+    poll_interval: float = 0.2,
+):
     """
-    Block until scheduler has no running tasks, or timeout.
-    We return a consistent structured payload so callers can
-    tell whether this was a clean flush or a timeout.
-
-    Args:
-        timeout_seconds: max seconds to wait
-        poll_interval: seconds between polls
+    Block until scheduler has no running tasks for the given user_name, or timeout.
     """
     start = time.time()
     try:
         while True:
-            running = mem_scheduler.dispatcher.get_running_tasks()
+            running = mem_scheduler.dispatcher.get_running_tasks(
+                lambda task: task.mem_cube_id == user_name
+            )
             running_count = len(running)
             elapsed = time.time() - start
 
@@ -657,6 +658,7 @@ def scheduler_wait(timeout_seconds: float = 120.0, poll_interval: float = 0.2):
                         "running_tasks": 0,
                         "waited_seconds": round(elapsed, 3),
                         "timed_out": False,
+                        "user_name": user_name,
                     },
                 }
 
@@ -668,24 +670,23 @@ def scheduler_wait(timeout_seconds: float = 120.0, poll_interval: float = 0.2):
                         "running_tasks": running_count,
                         "waited_seconds": round(elapsed, 3),
                         "timed_out": True,
+                        "user_name": user_name,
                     },
                 }
 
             time.sleep(poll_interval)
 
     except Exception as err:
-        logger.error(
-            "Failed while waiting for scheduler: %s",
-            traceback.format_exc(),
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Failed while waiting for scheduler",
-        ) from err
+        logger.error("Failed while waiting for scheduler: %s", traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Failed while waiting for scheduler") from err
 
 
-@router.get("/scheduler/wait/stream", summary="Stream scheduler progress (SSE)")
-def scheduler_wait_stream(timeout_seconds: float = 120.0, poll_interval: float = 0.2):
+@router.get("/scheduler/wait/stream", summary="Stream scheduler progress for a user")
+def scheduler_wait_stream(
+    user_name: str,
+    timeout_seconds: float = 120.0,
+    poll_interval: float = 0.2,
+):
     """
     Stream scheduler progress via Server-Sent Events (SSE).
 
@@ -703,38 +704,24 @@ def scheduler_wait_stream(timeout_seconds: float = 120.0, poll_interval: float =
         start = time.time()
         try:
             while True:
-                running = mem_scheduler.dispatcher.get_running_tasks()
+                running = mem_scheduler.dispatcher.get_running_tasks(
+                    lambda task: task.mem_cube_id == user_name
+                )
                 running_count = len(running)
                 elapsed = time.time() - start
 
-                # heartbeat frame
-                heartbeat_payload = {
+                payload = {
+                    "user_name": user_name,
                     "running_tasks": running_count,
                     "elapsed_seconds": round(elapsed, 3),
                     "status": "running" if running_count > 0 else "idle",
                 }
-                yield "data: " + json.dumps(heartbeat_payload, ensure_ascii=False) + "\n\n"
+                yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
-                # scheduler is idle -> final frame + break
-                if running_count == 0:
-                    final_payload = {
-                        "running_tasks": 0,
-                        "elapsed_seconds": round(elapsed, 3),
-                        "status": "idle",
-                        "timed_out": False,
-                    }
-                    yield "data: " + json.dumps(final_payload, ensure_ascii=False) + "\n\n"
-                    break
-
-                # timeout -> final frame + break
-                if elapsed > timeout_seconds:
-                    final_payload = {
-                        "running_tasks": running_count,
-                        "elapsed_seconds": round(elapsed, 3),
-                        "status": "timeout",
-                        "timed_out": True,
-                    }
-                    yield "data: " + json.dumps(final_payload, ensure_ascii=False) + "\n\n"
+                if running_count == 0 or elapsed > timeout_seconds:
+                    payload["status"] = "idle" if running_count == 0 else "timeout"
+                    payload["timed_out"] = running_count > 0
+                    yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
                     break
 
                 time.sleep(poll_interval)
@@ -744,12 +731,9 @@ def scheduler_wait_stream(timeout_seconds: float = 120.0, poll_interval: float =
                 "status": "error",
                 "detail": "stream_failed",
                 "exception": str(e),
+                "user_name": user_name,
             }
-            logger.error(
-                "Failed streaming scheduler wait: %s: %s",
-                e,
-                traceback.format_exc(),
-            )
+            logger.error(f"Scheduler stream error for {user_name}: {traceback.format_exc()}")
             yield "data: " + json.dumps(err_payload, ensure_ascii=False) + "\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
