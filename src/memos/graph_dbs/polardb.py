@@ -2859,6 +2859,8 @@ class PolarDBGraphDB(BaseGraphDB):
         data = copy.deepcopy(core_node)
         id_map = {}
         core_node = data.get("core_node", {})
+        if not core_node:
+            return core_node
         core_meta = core_node.get("metadata", {})
         if "graph_id" in core_meta and "id" in core_node:
             id_map[core_meta["graph_id"]] = core_node["id"]
