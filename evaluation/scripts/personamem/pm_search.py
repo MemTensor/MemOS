@@ -3,13 +3,12 @@ import csv
 import json
 import os
 import sys
-
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from time import time
-
 from tqdm import tqdm
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -83,7 +82,7 @@ def memos_search(client, user_id, query, top_k):
     results = client.search(query=query, user_id=user_id, top_k=top_k)
     search_memories = (
             "\n".join(item["memory"] for cube in results["text_mem"] for item in cube["memories"])
-            + f"\n{results['pref_mem']}"
+            + f"\n{results['pref_string']}"
     )
     context = MEMOS_CONTEXT_TEMPLATE.format(user_id=user_id, memories=search_memories)
 
@@ -102,14 +101,6 @@ def memu_search(client, query, user_id, top_k):
     start = time()
     results = client.search(query, user_id, top_k)
     context = "\n".join(results)
-    duration_ms = (time() - start) * 1000
-    return context, duration_ms
-
-
-def memos_api_online_search(client, query, user_id, top_k):
-    start = time()
-    results = client.search(query, user_id, top_k)
-    context = "\n".join(item['memory'] for cube in results['text_mem'] for item in cube['memories'])
     duration_ms = (time() - start) * 1000
     return context, duration_ms
 
@@ -243,7 +234,7 @@ def process_user(row_data, conv_idx, frame, version, top_k=20):
         from utils.client import MemosApiOnlineClient
         client = MemosApiOnlineClient()
         print("🔌 Using memos-api-online client for search...")
-        context, duration_ms = memos_api_online_search(client, question, user_id, top_k)
+        context, duration_ms = memos_search(client, question, user_id, top_k)
 
     search_results[user_id].append(
         {
@@ -287,7 +278,7 @@ def main(frame, version, top_k=20, num_workers=2):
     print(f"🔍 PERSONAMEM SEARCH - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
-    question_csv_path = "data/personamem/questions_32k.csv"
+    question_csv_path = "data/personamem/questions_32k copy.csv"
     context_jsonl_path = "data/personamem/shared_contexts_32k.jsonl"
     total_rows = count_csv_rows(question_csv_path)
 
