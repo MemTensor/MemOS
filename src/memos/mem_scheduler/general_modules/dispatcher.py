@@ -224,6 +224,31 @@ class SchedulerDispatcher(BaseSchedulerModule):
         logger.info(f"Unregistered handlers for {len(labels)} labels")
         return results
 
+    def stats(self) -> dict[str, int]:
+        """
+        Lightweight runtime stats for monitoring.
+
+        Returns:
+            {
+                'running': <number of running tasks>,
+                'inflight': <number of futures tracked (pending+running)>,
+                'handlers': <registered handler count>,
+            }
+        """
+        try:
+            running = self.get_running_task_count()
+        except Exception:
+            running = 0
+        try:
+            inflight = len(self._futures)
+        except Exception:
+            inflight = 0
+        try:
+            handlers = len(self.handlers)
+        except Exception:
+            handlers = 0
+        return {"running": running, "inflight": inflight, "handlers": handlers}
+
     def _default_message_handler(self, messages: list[ScheduleMessageItem]) -> None:
         logger.debug(f"Using _default_message_handler to deal with messages: {messages}")
 
