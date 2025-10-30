@@ -1,8 +1,11 @@
 import json
 import os
+import random as _random
+import socket
 import time
 import traceback
 
+from collections.abc import Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -69,6 +72,16 @@ from memos.vec_dbs.factory import VecDBFactory
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/product", tags=["Server API"])
+INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}:{_random.randint(1000, 9999)}"
+
+
+def _to_iter(running: Any) -> Iterable:
+    """Normalize running tasks to an iterable of task objects."""
+    if running is None:
+        return []
+    if isinstance(running, dict):
+        return running.values()
+    return running  # assume it's already an iterable (e.g., list)
 
 
 def _build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
@@ -606,27 +619,45 @@ def add_memories(add_req: APIADDRequest):
     )
 
 
-@router.get("/scheduler/status", summary="Get scheduler running task count")
-def scheduler_status(user_name: str):
-    """
-    Return current running tasks count for a specific user_name (mem_cube_id).
-    """
+@router.get("/scheduler/status", summary="Get scheduler running status")
+def scheduler_status(user_name: str | None = None):
     try:
-        running = mem_scheduler.dispatcher.get_running_tasks(
-            lambda task: task.mem_cube_id == user_name
-        )
-        running_count = len(running)
-        now_ts = time.time()
+        if user_name:
+            running = mem_scheduler.dispatcher.get_running_tasks(
+                lambda task: getattr(task, "mem_cube_id", None) == user_name
+            )
+            tasks_iter = list(_to_iter(running))
+            running_count = len(tasks_iter)
+            return {
+                "message": "ok",
+                "data": {
+                    "scope": "user",
+                    "user_name": user_name,
+                    "running_tasks": running_count,
+                    "timestamp": time.time(),
+                    "instance_id": INSTANCE_ID,
+                },
+            }
+        else:
+            running_all = mem_scheduler.dispatcher.get_running_tasks(lambda _t: True)
+            tasks_iter = list(_to_iter(running_all))
+            running_count = len(tasks_iter)
 
-        return {
-            "message": "ok",
-            "data": {
-                "running_tasks": running_count,
-                "timestamp": now_ts,
-                "user_name": user_name,
-            },
-        }
+            task_count_per_user: dict[str, int] = {}
+            for task in tasks_iter:
+                cube = getattr(task, "mem_cube_id", "unknown")
+                task_count_per_user[cube] = task_count_per_user.get(cube, 0) + 1
 
+            return {
+                "message": "ok",
+                "data": {
+                    "scope": "global",
+                    "running_tasks": running_count,
+                    "task_count_per_user": task_count_per_user,
+                    "timestamp": time.time(),
+                    "instance_id": INSTANCE_ID,
+                },
+            }
     except Exception as err:
         logger.error("Failed to get scheduler status: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Failed to get scheduler status") from err
@@ -715,6 +746,7 @@ def scheduler_wait_stream(
                     "running_tasks": running_count,
                     "elapsed_seconds": round(elapsed, 3),
                     "status": "running" if running_count > 0 else "idle",
+                    "instance_id": INSTANCE_ID,
                 }
                 yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
