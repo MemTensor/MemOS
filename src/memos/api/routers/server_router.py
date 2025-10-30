@@ -324,17 +324,18 @@ def _post_process_pref_mem(
     memories_result: list[dict[str, Any]],
     pref_formatted_mem: list[dict[str, Any]],
     mem_cube_id: str,
-    handle_pref_mem: bool,
+    include_preference: bool,
 ):
-    if handle_pref_mem:
+    if include_preference:
         memories_result["pref_mem"].append(
             {
                 "cube_id": mem_cube_id,
                 "memories": pref_formatted_mem,
             }
         )
-        pref_instruction: str = instruct_completion(pref_formatted_mem)
+        pref_instruction, pref_note = instruct_completion(pref_formatted_mem)
         memories_result["pref_string"] = pref_instruction
+        memories_result["pref_note"] = pref_note
 
     return memories_result
 
@@ -354,7 +355,7 @@ def search_memories(search_req: APISearchRequest):
         "act_mem": [],
         "para_mem": [],
         "pref_mem": [],
-        "pref_string": "",
+        "pref_note": "",
     }
 
     search_mode = search_req.mode
@@ -382,7 +383,7 @@ def search_memories(search_req: APISearchRequest):
             return []
         results = naive_mem_cube.pref_mem.search(
             query=search_req.query,
-            top_k=search_req.top_k,
+            top_k=search_req.pref_top_k,
             info={
                 "user_id": search_req.user_id,
                 "session_id": search_req.session_id,
@@ -405,7 +406,10 @@ def search_memories(search_req: APISearchRequest):
     )
 
     memories_result = _post_process_pref_mem(
-        memories_result, pref_formatted_memories, search_req.mem_cube_id, search_req.handle_pref_mem
+        memories_result,
+        pref_formatted_memories,
+        search_req.mem_cube_id,
+        search_req.include_preference,
     )
 
     return SearchResponse(

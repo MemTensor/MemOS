@@ -49,6 +49,7 @@ from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerM
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.memos_tools.notification_utils import send_online_bot_notification
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 
 
@@ -710,6 +711,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
+
+        # optionally start queue monitor if enabled and bot callable present
+        if self.enable_queue_monitor and self._online_bot_callable is not None:
+            try:
+                self.start_queue_monitor(self._online_bot_callable)
+            except Exception as e:
+                logger.warning(f"Failed to start queue monitor: {e}")
 
     def stop(self) -> None:
         """Stop all scheduler components gracefully.
