@@ -183,7 +183,10 @@ class PolarDBGraphDB(BaseGraphDB):
         """Get a connection from the pool."""
         if self._pool_closed:
             raise RuntimeError("Connection pool has been closed")
-        return self.connection_pool.getconn()
+        conn = self.connection_pool.getconn()
+        # Set autocommit for PolarDB compatibility
+        conn.autocommit = True
+        return conn
 
     def _return_connection(self, connection):
         """Return a connection to the pool."""
