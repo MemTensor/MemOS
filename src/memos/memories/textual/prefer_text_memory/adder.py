@@ -288,7 +288,7 @@ class NaiveAdder(BaseAdder):
         retrieved_memories: list[MilvusVecDBItem],
         collection_name: str,
         preference_type: str,
-        update_mode: str = "fine",
+        update_mode: str = "fast",
     ) -> list[str] | str | None:
         """Update the memory.
         Args:
