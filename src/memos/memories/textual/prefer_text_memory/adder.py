@@ -327,7 +327,11 @@ class NaiveAdder(BaseAdder):
             search_results.sort(key=lambda x: x.score, reverse=True)
 
             return self._update_memory(
-                memory, search_results, collection_name, preference_type, update_mode=os.getenv("PREFERENCE_ADDER_MODE", "fast")
+                memory,
+                search_results,
+                collection_name,
+                preference_type,
+                update_mode=os.getenv("PREFERENCE_ADDER_MODE", "fast"),
             )
 
         except Exception as e:
