@@ -250,17 +250,31 @@ class MemosApiOnlineClient:
                 for i in text_mem_res:
                     i.update({"memory": i.pop("memory_value")})
 
-                explicit_prefs = [p['preference'] for p in pref_mem_res if p.get('preference_type', '') == 'explicit_preference']
-                implicit_prefs = [p['preference'] for p in pref_mem_res if p.get('preference_type', '') == 'implicit_preference']
-                
+                explicit_prefs = [
+                    p["preference"]
+                    for p in pref_mem_res
+                    if p.get("preference_type", "") == "explicit_preference"
+                ]
+                implicit_prefs = [
+                    p["preference"]
+                    for p in pref_mem_res
+                    if p.get("preference_type", "") == "implicit_preference"
+                ]
+
                 pref_parts = []
                 if explicit_prefs:
-                    pref_parts.append("Explicit Preference:\n" + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(explicit_prefs)))
+                    pref_parts.append(
+                        "Explicit Preference:\n"
+                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(explicit_prefs))
+                    )
                 if implicit_prefs:
-                    pref_parts.append("Implicit Preference:\n" + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs)))
-                
+                    pref_parts.append(
+                        "Implicit Preference:\n"
+                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs))
+                    )
+
                 pref_string = "\n".join(pref_parts)
-                
+
                 return {"text_mem": [{"memories": text_mem_res}], "pref_string": pref_string}
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -352,7 +366,7 @@ class MemuClient:
 if __name__ == "__main__":
     messages = [
         {"role": "user", "content": "杭州西湖有什么好玩的,我喜欢动物"},
-        {"role": "assistant", "content": "杭州西湖有好多松鼠, 你喜欢动物的话可以去看松鼠"},
+        {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"},
     ]
     user_id = "test_user"
     iso_date = "2023-05-01T00:00:00.000Z"
