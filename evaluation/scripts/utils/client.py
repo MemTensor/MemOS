@@ -234,6 +234,8 @@ class MemosApiOnlineClient:
                 "user_id": user_id,
                 "memory_limit_number": top_k,
                 "mode": os.getenv("SEARCH_MODE", "fast"),
+                "include_preference": True,
+                "pref_top_k": 6,
             }
         )
 
@@ -243,10 +245,23 @@ class MemosApiOnlineClient:
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
                 assert json.loads(response.text)["message"] == "ok", response.text
-                res = json.loads(response.text)["data"]["memory_detail_list"]
-                for i in res:
+                text_mem_res = json.loads(response.text)["data"]["memory_detail_list"]
+                pref_mem_res = json.loads(response.text)["data"]["preference_detail_list"]
+                for i in text_mem_res:
                     i.update({"memory": i.pop("memory_value")})
-                return {"text_mem": [{"memories": res}], "pref_str": ""}
+
+                explicit_prefs = [p['preference'] for p in pref_mem_res if p.get('preference_type', '') == 'explicit_preference']
+                implicit_prefs = [p['preference'] for p in pref_mem_res if p.get('preference_type', '') == 'implicit_preference']
+                
+                pref_parts = []
+                if explicit_prefs:
+                    pref_parts.append("Explicit Preference:\n" + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(explicit_prefs)))
+                if implicit_prefs:
+                    pref_parts.append("Implicit Preference:\n" + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs)))
+                
+                pref_string = "\n".join(pref_parts)
+                
+                return {"text_mem": [{"memories": text_mem_res}], "pref_string": pref_string}
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)
@@ -336,19 +351,23 @@ class MemuClient:
 
 if __name__ == "__main__":
     messages = [
-        {"role": "user", "content": "杭州西湖有什么好玩的"},
-        {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"},
+        # {"role": "user", "content": "杭州西湖有什么好玩的,我喜欢动物"},
+        # {"role": "assistant", "content": "杭州西湖有好多松鼠, 你喜欢动物的话可以去看松鼠"},
+        {"role": "user", "content": "我暑假定好去广州旅游，住宿的话有哪些连锁酒店可选？"},
+        {"role": "assistant", "content": "您可以考虑【七天、全季、希尔顿】等等"},
+        {"role": "user", "content": "我选七天"},
+        {"role": "assistant", "content": "好的，有其他问题再问我。"},
     ]
-    user_id = "test_user"
+    user_id = "test_user2"
     iso_date = "2023-05-01T00:00:00.000Z"
     timestamp = 1682899200
     query = "杭州西湖有什么"
     top_k = 5
 
     # MEMOS-API
-    client = MemosApiClient()
+    client = MemosApiOnlineClient()
     for m in messages:
         m["created_at"] = iso_date
-    client.add(messages, user_id, user_id)
+    # client.add(messages, user_id, user_id)
     memories = client.search(query, user_id, top_k)
     print(memories)
