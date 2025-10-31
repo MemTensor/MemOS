@@ -365,7 +365,7 @@ class MemuClient:
 
 if __name__ == "__main__":
     messages = [
-        {"role": "user", "content": "杭州西湖有什么好玩的,我喜欢动物"},
+        {"role": "user", "content": "杭州西湖有什么好玩的"},
         {"role": "assistant", "content": "杭州西湖有好多松鼠，还有断桥"},
     ]
     user_id = "test_user"
