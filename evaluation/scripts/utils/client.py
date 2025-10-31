@@ -351,23 +351,19 @@ class MemuClient:
 
 if __name__ == "__main__":
     messages = [
-        # {"role": "user", "content": "杭州西湖有什么好玩的,我喜欢动物"},
-        # {"role": "assistant", "content": "杭州西湖有好多松鼠, 你喜欢动物的话可以去看松鼠"},
-        {"role": "user", "content": "我暑假定好去广州旅游，住宿的话有哪些连锁酒店可选？"},
-        {"role": "assistant", "content": "您可以考虑【七天、全季、希尔顿】等等"},
-        {"role": "user", "content": "我选七天"},
-        {"role": "assistant", "content": "好的，有其他问题再问我。"},
+        {"role": "user", "content": "杭州西湖有什么好玩的,我喜欢动物"},
+        {"role": "assistant", "content": "杭州西湖有好多松鼠, 你喜欢动物的话可以去看松鼠"},
     ]
-    user_id = "test_user2"
+    user_id = "test_user"
     iso_date = "2023-05-01T00:00:00.000Z"
     timestamp = 1682899200
     query = "杭州西湖有什么"
     top_k = 5
 
     # MEMOS-API
-    client = MemosApiOnlineClient()
+    client = MemosApiClient()
     for m in messages:
         m["created_at"] = iso_date
-    # client.add(messages, user_id, user_id)
+    client.add(messages, user_id, user_id)
     memories = client.search(query, user_id, top_k)
     print(memories)
