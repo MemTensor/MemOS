@@ -247,15 +247,9 @@ class MemosApiOnlineClient:
                 assert json.loads(response.text)["message"] == "ok", response.text
                 text_mem_res = json.loads(response.text)["data"]["memory_detail_list"]
                 pref_mem_res = json.loads(response.text)["data"]["preference_detail_list"]
+                preference_note = json.loads(response.text)["data"]["preference_note"]
                 for i in text_mem_res:
                     i.update({"memory": i.pop("memory_value")})
-
-                pref_instructions = """
-# Note:
-Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
-Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
-When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
-"""
 
                 explicit_prefs = [
                     p["preference"]
@@ -280,7 +274,7 @@ When encountering preference conflicts, the priority is: explicit preference > i
                         + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs))
                     )
 
-                pref_string = "\n".join(pref_parts) + pref_instructions
+                pref_string = "\n".join(pref_parts) + preference_note
 
                 return {"text_mem": [{"memories": text_mem_res}], "pref_string": pref_string}
             except Exception as e:
