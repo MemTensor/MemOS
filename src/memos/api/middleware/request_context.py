@@ -162,6 +162,17 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     3. Ensures the context is available throughout the request lifecycle
     """
 
+    def __init__(self, app, source: str | None = None):
+        """
+        Initialize the middleware.
+
+        Args:
+            app: The ASGI application
+            source: Source identifier (e.g., 'product' or 'server') to distinguish request origin
+        """
+        super().__init__(app)
+        self.source = source
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Extract or generate trace_id
         trace_id = extract_trace_id_from_headers(request) or generate_trace_id()
@@ -178,6 +189,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             env=env,
             user_type=user_type,
             user_name=user_name,
+            source=self.source,
         )
         set_request_context(context)
 
@@ -198,8 +210,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 logger.error(f"Failed to recreate request receive function: {e}")
                 # Continue without restoring body, downstream handlers will handle it
 
+        source_info = f", source: {self.source}" if self.source else ""
         logger.info(
-            f"Request started, method: {request.method}, path: {request.url.path}, "
+            f"Request started, method: {request.method}, path: {request.url.path}{source_info}, "
             f"request params: {params_log}, headers: {request.headers}"
         )
 
@@ -207,18 +220,20 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             end_time = time.time()
+            source_info = f", source: {self.source}" if self.source else ""
             if response.status_code == 200:
                 logger.info(
-                    f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                    f"Request completed: {request.url.path}{source_info}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
                 )
             else:
                 logger.error(
-                    f"Request Failed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                    f"Request Failed: {request.url.path}{source_info}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
                 )
         except Exception as e:
             end_time = time.time()
+            source_info = f", source: {self.source}" if self.source else ""
             logger.error(
-                f"Request Exception Error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Exception Error: {e}{source_info}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
             raise e
 
