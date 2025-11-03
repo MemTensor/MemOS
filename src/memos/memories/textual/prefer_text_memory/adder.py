@@ -125,7 +125,8 @@ class NaiveAdder(BaseAdder):
                 "context_summary": new_memory.memory,
                 "preference": new_memory.payload["preference"],
             }
-            for new_memory in new_vec_db_items if new_memory.payload.get("preference", None)
+            for new_memory in new_vec_db_items
+            if new_memory.payload.get("preference", None)
         ]
         retrieved_mem_inputs = [
             {
@@ -133,7 +134,8 @@ class NaiveAdder(BaseAdder):
                 "context_summary": mem.memory,
                 "preference": mem.payload["preference"],
             }
-            for mem in retrieved_memories if mem.payload.get("preference", None)
+            for mem in retrieved_memories
+            if mem.payload.get("preference", None)
         ]
 
         rsp = self._judge_update_or_add_trace_op(
@@ -209,17 +211,15 @@ class NaiveAdder(BaseAdder):
             payload=payload,
         )
 
-        new_mem_input = {
-            "memory": new_memory.memory,
-            "preference": new_memory.metadata.preference
-        }
+        new_mem_input = {"memory": new_memory.memory, "preference": new_memory.metadata.preference}
         retrieved_mem_inputs = [
             {
                 "id": mem.id,
                 "memory": mem.memory,
                 "preference": mem.payload["preference"],
             }
-            for mem in retrieved_memories if mem.payload.get("preference", None)
+            for mem in retrieved_memories
+            if mem.payload.get("preference", None)
         ]
         rsp = self._judge_update_or_add_fine(
             new_mem=json.dumps(new_mem_input),
@@ -295,9 +295,7 @@ class NaiveAdder(BaseAdder):
         if update_mode == "fast":
             return self._update_memory_fast(new_memory, retrieved_memories, collection_name)
         elif update_mode == "fine":
-            return self._update_memory_fine(
-                new_memory, retrieved_memories, collection_name
-            )
+            return self._update_memory_fine(new_memory, retrieved_memories, collection_name)
         else:
             raise ValueError(f"Invalid update mode: {update_mode}")
 
@@ -376,10 +374,10 @@ class NaiveAdder(BaseAdder):
                 implicit_recalls,
                 pref_type_collection_map["implicit_preference"],
             )
-            
+
             explicit_added_ids = explicit_future.result()
             implicit_added_ids = implicit_future.result()
-        
+
         return explicit_added_ids + implicit_added_ids
 
     def process_memory_single(

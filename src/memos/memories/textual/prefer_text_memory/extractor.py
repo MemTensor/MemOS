@@ -68,7 +68,7 @@ class NaiveExtractor(BaseExtractor):
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             for d in result:
-                d['preference'] = d.pop('explicit_preference')
+                d["preference"] = d.pop("explicit_preference")
             return result
         except Exception as e:
             logger.error(f"Error extracting explicit preference: {e}, return None")
@@ -90,7 +90,7 @@ class NaiveExtractor(BaseExtractor):
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
-            result['preference'] = result.pop('implicit_preference')
+            result["preference"] = result.pop("implicit_preference")
             return result
         except Exception as e:
             logger.error(f"Error extracting implicit preferences: {e}, return None")
