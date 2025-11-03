@@ -71,11 +71,7 @@ class MOSServer:
                 m.metadata.embedding = []
                 new_memories_list.append(m)
             memories_list = new_memories_list
-        system_prompt = self._build_base_system_prompt(base_prompt, mode="base")
-
-        memory_context = self._build_memory_context(memories_list, mode="base")
-
-        user_content = memory_context + query if memory_context else query
+        system_prompt = self._build_system_prompt(memories_list, base_prompt)
 
         history_info = []
         if history:
@@ -83,7 +79,7 @@ class MOSServer:
         current_messages = [
             {"role": "system", "content": system_prompt},
             *history_info,
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": query},
         ]
         response = self.chat_llm.generate(current_messages)
         time_end = time.time()
@@ -186,6 +182,42 @@ class MOSServer:
         sys_body = get_memos_prompt(date=formatted_date, tone=tone, verbosity=verbosity, mode=mode)
         prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
         return prefix + sys_body
+
+    def _build_system_prompt(
+        self,
+        memories: list[TextualMemoryItem] | list[str] | None = None,
+        base_prompt: str | None = None,
+        **kwargs,
+    ) -> str:
+        """Build system prompt with optional memories context."""
+        if base_prompt is None:
+            base_prompt = (
+                "You are a knowledgeable and helpful AI assistant. "
+                "You have access to conversation memories that help you provide more personalized responses. "
+                "Use the memories to understand the user's context, preferences, and past interactions. "
+                "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
+            )
+
+        memory_context = ""
+        if memories:
+            memory_list = []
+            for i, memory in enumerate(memories, 1):
+                if isinstance(memory, TextualMemoryItem):
+                    text_memory = memory.memory
+                else:
+                    if not isinstance(memory, str):
+                        logger.error("Unexpected memory type.")
+                    text_memory = memory
+                memory_list.append(f"{i}. {text_memory}")
+            memory_context = "\n".join(memory_list)
+
+        if "{memories}" in base_prompt:
+            return base_prompt.format(memories=memory_context)
+        elif base_prompt and memories:
+            # For backward compatibility, append memories if no placeholder is found
+            memory_context_with_header = "\n\n## Memories:\n" + memory_context
+            return base_prompt + memory_context_with_header
+        return base_prompt
 
     def _build_memory_context(
         self,
