@@ -210,9 +210,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 logger.error(f"Failed to recreate request receive function: {e}")
                 # Continue without restoring body, downstream handlers will handle it
 
-        source_info = f", source: {self.source}" if self.source else ""
         logger.info(
-            f"Request started, method: {request.method}, path: {request.url.path}{source_info}, "
+            f"Request started, source: {self.source}, method: {request.method}, path: {request.url.path}, "
             f"request params: {params_log}, headers: {request.headers}"
         )
 
@@ -220,20 +219,18 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             end_time = time.time()
-            source_info = f", source: {self.source}" if self.source else ""
             if response.status_code == 200:
                 logger.info(
-                    f"Request completed: {request.url.path}{source_info}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                    f"Request completed: source: {self.source}, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
                 )
             else:
                 logger.error(
-                    f"Request Failed: {request.url.path}{source_info}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                    f"Request Failed: source: {self.source}, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
                 )
         except Exception as e:
             end_time = time.time()
-            source_info = f", source: {self.source}" if self.source else ""
             logger.error(
-                f"Request Exception Error: {e}{source_info}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Exception Error: source: {self.source}, path: {request.url.path}, error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
             raise e
 
