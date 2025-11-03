@@ -196,9 +196,8 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     dialog_id: str | None = Field(default=None, description="ID of the dialog.")
     original_text: str | None = Field(default=None, description="String of the dialog.")
     embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")
-    explicit_preference: str | None = Field(default=None, description="Explicit preference.")
+    preference: str | None = Field(default=None, description="Preference.")
     created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
-    implicit_preference: str | None = Field(default=None, description="Implicit preference.")
 
 
 class TextualMemoryItem(BaseModel):
