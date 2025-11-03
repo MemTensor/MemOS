@@ -1,8 +1,10 @@
 import concurrent
 import threading
+import time
 
 from collections import defaultdict
 from collections.abc import Callable
+from datetime import timezone
 from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
@@ -11,6 +13,7 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
+from memos.mem_scheduler.utils.metrics import MetricsRegistry
 
 
 logger = get_logger(__name__)
@@ -70,6 +73,19 @@ class SchedulerDispatcher(BaseSchedulerModule):
         self._completed_tasks = []
         self.completed_tasks_max_show_size = 10
 
+        self.metrics = MetricsRegistry(
+            topk_per_label=(self.config or {}).get("metrics_topk_per_label", 50)
+        )
+
+    def on_messages_enqueued(self, msgs: list[ScheduleMessageItem]) -> None:
+        if not msgs:
+            return
+        now = time.time()
+        for m in msgs:
+            self.metrics.on_enqueue(
+                label=m.label, mem_cube_id=m.mem_cube_id, inst_rate=1.0, now=now
+            )
+
     def _create_task_wrapper(self, handler: Callable, task_item: RunningTaskItem):
         """
         Create a wrapper around the handler to track task execution and capture results.
@@ -84,9 +100,37 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         def wrapped_handler(messages: list[ScheduleMessageItem]):
             try:
+                # --- mark start: record queuing time(now - enqueue_ts)---
+                now = time.time()
+                for m in messages:
+                    enq_ts = getattr(m, "timestamp", None)
+
+                    # Path 1: epoch seconds (preferred)
+                    if isinstance(enq_ts, int | float):
+                        enq_epoch = float(enq_ts)
+
+                    # Path 2: datetime -> normalize to UTC epoch
+                    elif hasattr(enq_ts, "timestamp"):
+                        dt = enq_ts
+                        if dt.tzinfo is None:
+                            # treat naive as UTC to neutralize +8h skew
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        enq_epoch = dt.timestamp()
+                    else:
+                        # fallback: treat as "just now"
+                        enq_epoch = now
+
+                    wait_sec = max(0.0, now - enq_epoch)
+                    self.metrics.on_start(
+                        label=m.label, mem_cube_id=m.mem_cube_id, wait_sec=wait_sec, now=now
+                    )
+
                 # Execute the original handler
                 result = handler(messages)
 
+                # --- mark done ---
+                for m in messages:
+                    self.metrics.on_done(label=m.label, mem_cube_id=m.mem_cube_id, now=time.time())
                 # Mark task as completed and remove from tracking
                 with self._task_lock:
                     if task_item.item_id in self._running_tasks:
@@ -99,6 +143,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 return result
 
             except Exception as e:
+                # Mark task as failed and remove from tracking
+                for m in messages:
+                    self.metrics.on_done(label=m.label, mem_cube_id=m.mem_cube_id, now=time.time())
                 # Mark task as failed and remove from tracking
                 with self._task_lock:
                     if task_item.item_id in self._running_tasks:
@@ -223,6 +270,31 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         logger.info(f"Unregistered handlers for {len(labels)} labels")
         return results
+
+    def stats(self) -> dict[str, int]:
+        """
+        Lightweight runtime stats for monitoring.
+
+        Returns:
+            {
+                'running': <number of running tasks>,
+                'inflight': <number of futures tracked (pending+running)>,
+                'handlers': <registered handler count>,
+            }
+        """
+        try:
+            running = self.get_running_task_count()
+        except Exception:
+            running = 0
+        try:
+            inflight = len(self._futures)
+        except Exception:
+            inflight = 0
+        try:
+            handlers = len(self.handlers)
+        except Exception:
+            handlers = 0
+        return {"running": running, "inflight": inflight, "handlers": handlers}
 
     def _default_message_handler(self, messages: list[ScheduleMessageItem]) -> None:
         logger.debug(f"Using _default_message_handler to deal with messages: {messages}")

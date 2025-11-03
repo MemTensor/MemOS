@@ -42,6 +42,14 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     timestamp: datetime = Field(
         default_factory=get_utc_now, description="submit time for schedule_messages"
     )
+    user_name: str | None = Field(
+        default=None,
+        description="user name / display name (optional)",
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="session_id (optional)",
+    )
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(
@@ -60,6 +68,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
                 "mem_cube": "obj of GeneralMemCube",  # Added mem_cube example
                 "content": "sample content",  # Example message content
                 "timestamp": "2024-07-22T12:00:00Z",  # Added timestamp example
+                "user_name": "Alice",  # Added username example
             }
         },
     )
@@ -81,6 +90,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "cube": "Not Applicable",  # Custom cube serialization
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
+            "user_name": self.user_name,
         }
 
     @classmethod
@@ -94,6 +104,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             mem_cube="Not Applicable",  # Custom cube deserialization
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
+            user_name=data.get("user_name"),
         )
 
 
