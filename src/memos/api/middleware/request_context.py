@@ -2,6 +2,7 @@
 Request context middleware for automatic trace_id injection.
 """
 
+import json
 import time
 
 from collections.abc import Callable
@@ -24,6 +25,43 @@ def extract_trace_id_from_headers(request: Request) -> str | None:
         if trace_id := request.headers.get(header):
             return trace_id
     return None
+
+
+async def get_request_params(request: Request) -> tuple[dict, bytes | None]:
+    """
+    Extract request parameters (query params and body) for logging.
+
+    Args:
+        request: The incoming request object
+
+    Returns:
+        Tuple of (params_dict, body_bytes). body_bytes is None if body was not read.
+    """
+    params_log = {}
+
+    # Get query parameters
+    if request.query_params:
+        params_log["query_params"] = dict(request.query_params)
+
+    # Get request body for requests with body
+    body_bytes = None
+    content_type = request.headers.get("content-type", "")
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") and content_type:
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                if "application/json" in content_type.lower():
+                    try:
+                        params_log["body"] = json.loads(body_bytes)
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        params_log["body"] = f"<unable to parse JSON: {e!s}>"
+                else:
+                    # For non-JSON requests, log body size only
+                    params_log["body_size"] = len(body_bytes)
+        except Exception as e:
+            logger.error(f"Failed to read request body: {e}")
+
+    return params_log, body_bytes
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):
@@ -55,14 +93,22 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         )
         set_request_context(context)
 
-        # Log request start with parameters
-        params_log = {}
+        # Get request parameters for logging
+        params_log, body_bytes = await get_request_params(request)
 
-        # Get query parameters
-        if request.query_params:
-            params_log["query_params"] = dict(request.query_params)
+        # Re-create the request receive function if body was read
+        # This ensures downstream handlers can still read the body
+        if body_bytes is not None:
 
-        logger.info(f"Request started, params: {params_log}, headers: {request.headers}")
+            async def receive():
+                return {"type": "http.request", "body": body_bytes, "more_body": False}
+
+            request._receive = receive
+
+        logger.info(
+            f"Request started, method: {request.method}, path: {request.url.path}, "
+            f"request params: {params_log}, headers: {request.headers}"
+        )
 
         # Process the request
         try:
