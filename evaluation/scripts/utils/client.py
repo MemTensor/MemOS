@@ -234,6 +234,8 @@ class MemosApiOnlineClient:
                 "user_id": user_id,
                 "memory_limit_number": top_k,
                 "mode": os.getenv("SEARCH_MODE", "fast"),
+                "include_preference": True,
+                "pref_top_k": 6,
             }
         )
 
@@ -243,10 +245,38 @@ class MemosApiOnlineClient:
                 response = requests.request("POST", url, data=payload, headers=self.headers)
                 assert response.status_code == 200, response.text
                 assert json.loads(response.text)["message"] == "ok", response.text
-                res = json.loads(response.text)["data"]["memory_detail_list"]
-                for i in res:
+                text_mem_res = json.loads(response.text)["data"]["memory_detail_list"]
+                pref_mem_res = json.loads(response.text)["data"]["preference_detail_list"]
+                preference_note = json.loads(response.text)["data"]["preference_note"]
+                for i in text_mem_res:
                     i.update({"memory": i.pop("memory_value")})
-                return {"text_mem": [{"memories": res}], "pref_str": ""}
+
+                explicit_prefs = [
+                    p["preference"]
+                    for p in pref_mem_res
+                    if p.get("preference_type", "") == "explicit_preference"
+                ]
+                implicit_prefs = [
+                    p["preference"]
+                    for p in pref_mem_res
+                    if p.get("preference_type", "") == "implicit_preference"
+                ]
+
+                pref_parts = []
+                if explicit_prefs:
+                    pref_parts.append(
+                        "Explicit Preference:\n"
+                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(explicit_prefs))
+                    )
+                if implicit_prefs:
+                    pref_parts.append(
+                        "Implicit Preference:\n"
+                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs))
+                    )
+
+                pref_string = "\n".join(pref_parts) + preference_note
+
+                return {"text_mem": [{"memories": text_mem_res}], "pref_string": pref_string}
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)

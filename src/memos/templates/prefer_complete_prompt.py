@@ -62,17 +62,24 @@ NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT = """
 You are a preference inference assistant. Please extract **implicit preferences** from the following conversation
-(preferences that the user did not explicitly state but can be reasonably inferred from context, behavior, frequency, comparisons, exclusions, or scenario choices).
+(preferences that the user did not explicitly state but can be reasonably inferred from their underlying motivations, behavioral patterns, decision-making logic, and latent needs).
 
 Notes:
-- Implicit preferences refer to user inclinations or choices that are not directly expressed, but can be reasonably inferred from factual cues in the conversation.
+- Implicit preferences refer to user inclinations or choices that are not directly expressed, but can be deeply inferred by analyzing:
+  * **Hidden motivations**: What underlying needs or goals might drive the user's behavior?
+  * **Behavioral patterns**: What recurring patterns or tendencies can be observed?
+  * **Decision-making logic**: What reasoning or trade-offs might the user be considering?
+  * **Latent preferences**: What preferences might the user have but haven't yet articulated?
+  * **Contextual signals**: What do the user's choices, comparisons, exclusions, or scenario selections reveal about their deeper preferences?
 - Do not treat explicitly stated preferences as implicit preferences; this prompt is only for inferring preferences that are not directly mentioned.
+- Go beyond surface-level facts to understand the user's hidden possibilities and underlying logic.
 
 Requirements:
 1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
 2. Inferred implicit preferences must not conflict with explicit preferences.
 3. For implicit_preference: only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information. Put all reasoning and explanation in the reasoning field.
-4. If no implicit preference can be reasonably inferred, leave the implicit_preference field empty (do not output anything else).
+4. In the reasoning field, explicitly explain the underlying logic and hidden motivations you identified.
+5. If no implicit preference can be reasonably inferred, leave the implicit_preference field empty (do not output anything else).
 
 Conversation:
 {qa_pair}
@@ -82,7 +89,7 @@ Output format:
 {
   "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string",
   "context_summary": "The corresponding context summary, which is a summary of the corresponding conversation, do not lack any scenario information",
-  "reasoning": "Briefly explain the reasoning process for the implicit preference"
+  "reasoning": "Explain the underlying logic, hidden motivations, and behavioral patterns that led to this inference"
 }
 ```
 Don't output anything except the JSON.
@@ -91,17 +98,24 @@ Don't output anything except the JSON.
 
 NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 你是一个偏好推理助手。请从以下对话中提取**隐式偏好**
-（用户没有明确表述，但可以从上下文、行为、频率、比较、排除或场景选择中合理推断出的偏好）。
+（用户没有明确表述，但可以通过分析其潜在动机、行为模式、决策逻辑和隐藏需求深度推断出的偏好）。
 
 注意事项：
-- 隐式偏好是指用户未直接表达，但可以从对话中的事实线索合理推断出的倾向或选择。
+- 隐式偏好是指用户未直接表达，但可以通过深入分析以下方面推断出的倾向或选择：
+  * **隐藏动机**：什么样的潜在需求或目标可能驱动用户的行为？
+  * **行为模式**：可以观察到什么样的重复模式或倾向？
+  * **决策逻辑**：用户可能在考虑什么样的推理或权衡？
+  * **潜在偏好**：用户可能有但尚未明确表达的偏好是什么？
+  * **情境信号**：用户的选择、比较、排除或场景选择揭示了什么样的深层偏好？
 - 不要将明确陈述的偏好视为隐式偏好；此提示仅用于推断未直接提及的偏好。
+- 超越表面事实，理解用户的隐藏可能性和背后的逻辑。
 
 要求：
 1. 仅在对话中有充分证据时进行推断；避免无根据或牵强的猜测。
 2. 推断的隐式偏好不得与显式偏好冲突。
 3. 对于 implicit_preference：仅输出偏好陈述本身；不要包含任何额外的解释、推理或置信度信息。将所有推理和解释放在 reasoning 字段中。
-4. 如果无法合理推断出隐式偏好，则将 implicit_preference 字段留空（不要输出其他任何内容）。
+4. 在 reasoning 字段中，明确解释你识别出的底层逻辑和隐藏动机。
+5. 如果无法合理推断出隐式偏好，则将 implicit_preference 字段留空（不要输出其他任何内容）。
 
 对话：
 {qa_pair}
@@ -111,7 +125,7 @@ NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 {
   "implicit_preference": "从对话中合理推断出的隐式偏好的简洁自然语言陈述，或空字符串",
   "context_summary": "对应的上下文摘要，即对应对话的摘要，不要遗漏任何场景信息",
-  "reasoning": "简要解释隐式偏好的推理过程"
+  "reasoning": "解释推断出该偏好的底层逻辑、隐藏动机和行为模式"
 }
 ```
 除JSON外不要输出任何其他内容。

@@ -1,4 +1,5 @@
 import json
+import os
 
 from abc import ABC, abstractmethod
 from concurrent.futures import as_completed
@@ -287,7 +288,7 @@ class NaiveAdder(BaseAdder):
         retrieved_memories: list[MilvusVecDBItem],
         collection_name: str,
         preference_type: str,
-        update_mode: str = "fine",
+        update_mode: str = "fast",
     ) -> list[str] | str | None:
         """Update the memory.
         Args:
@@ -326,7 +327,11 @@ class NaiveAdder(BaseAdder):
             search_results.sort(key=lambda x: x.score, reverse=True)
 
             return self._update_memory(
-                memory, search_results, collection_name, preference_type, update_mode="fast"
+                memory,
+                search_results,
+                collection_name,
+                preference_type,
+                update_mode=os.getenv("PREFERENCE_ADDER_MODE", "fast"),
             )
 
         except Exception as e:
