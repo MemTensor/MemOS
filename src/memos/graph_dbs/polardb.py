@@ -151,6 +151,10 @@ class PolarDBGraphDB(BaseGraphDB):
             user=user,
             password=password,
             dbname=self.db_name,
+            connect_timeout=60,  # Connection timeout in seconds
+            keepalives_idle=40,  # Seconds of inactivity before sending keepalive (should be < server idle timeout)
+            keepalives_interval=15,  # Seconds between keepalive retries
+            keepalives_count=5,  # Number of keepalive retries before considering connection dead
         )
 
         # Keep a reference to the pool for cleanup
@@ -179,7 +183,7 @@ class PolarDBGraphDB(BaseGraphDB):
         else:
             return getattr(self.config, key, default)
 
-    def _get_connection(self):
+    def _get_connection_old(self):
         """Get a connection from the pool."""
         if self._pool_closed:
             raise RuntimeError("Connection pool has been closed")
@@ -188,7 +192,60 @@ class PolarDBGraphDB(BaseGraphDB):
         conn.autocommit = True
         return conn
 
+    def _get_connection(self):
+        """Get a connection from the pool."""
+        if self._pool_closed:
+            raise RuntimeError("Connection pool has been closed")
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                conn = self.connection_pool.getconn()
+
+                # Check if connection is closed
+                if conn.closed != 0:
+                    # Connection is closed, close it explicitly and try again
+                    try:
+                        conn.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to close connection: {e}")
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        raise RuntimeError("Pool returned a closed connection")
+
+                # Set autocommit for PolarDB compatibility
+                conn.autocommit = True
+                return conn
+            except Exception as e:
+                if attempt >= max_retries - 1:
+                    raise RuntimeError(f"Failed to get a valid connection from pool: {e}") from e
+                continue
+
     def _return_connection(self, connection):
+        """Return a connection to the pool."""
+        if not self._pool_closed and connection:
+            try:
+                # Check if connection is closed
+                if hasattr(connection, "closed") and connection.closed != 0:
+                    # Connection is closed, just close it and don't return to pool
+                    try:
+                        connection.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to close connection: {e}")
+                    return
+
+                # Connection is valid, return to pool
+                self.connection_pool.putconn(connection)
+            except Exception as e:
+                # If putconn fails, close the connection
+                logger.warning(f"Failed to return connection to pool: {e}")
+                try:
+                    connection.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close connection: {e}")
+
+    def _return_connection_old(self, connection):
         """Return a connection to the pool."""
         if not self._pool_closed and connection:
             self.connection_pool.putconn(connection)
