@@ -12,14 +12,13 @@ def instruct_completion(
     implicit_pref = []
     for memory in memories:
         pref_type = memory.get("metadata", {}).get("preference_type")
+        pref = memory.get("metadata", {}).get("preference", None)
+        if not pref:
+            continue
         if pref_type == "explicit_preference":
-            pref = memory.get("metadata", {}).get("explicit_preference", None)
-            if pref:
-                explicit_pref.append(pref)
+            explicit_pref.append(pref)
         elif pref_type == "implicit_preference":
-            pref = memory.get("metadata", {}).get("implicit_preference", None)
-            if pref:
-                implicit_pref.append(pref)
+            implicit_pref.append(pref)
 
     explicit_pref_str = (
         "Explicit Preference:\n"
