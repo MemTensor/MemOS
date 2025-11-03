@@ -171,7 +171,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             source: Source identifier (e.g., 'product' or 'server') to distinguish request origin
         """
         super().__init__(app)
-        self.source = source
+        self.source = source or "api"
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Extract or generate trace_id
