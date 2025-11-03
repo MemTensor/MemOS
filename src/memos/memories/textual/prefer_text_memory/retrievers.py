@@ -106,7 +106,7 @@ class NaiveRetriever(BaseRetriever):
                 metadata=PreferenceTextualMemoryMetadata(**pref.payload),
             )
             for pref in explicit_prefs
-            if pref.payload["explicit_preference"]
+            if pref.payload.get("preference", None)
         ]
 
         implicit_prefs_mem = [
@@ -116,7 +116,7 @@ class NaiveRetriever(BaseRetriever):
                 metadata=PreferenceTextualMemoryMetadata(**pref.payload),
             )
             for pref in implicit_prefs
-            if pref.payload["implicit_preference"]
+            if pref.payload.get("preference", None)
         ]
 
         reranker_map = {
