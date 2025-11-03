@@ -1834,7 +1834,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     if include_embedding and embedding_json is not None:
                         properties["embedding"] = embedding_json
 
-                    nodes.append(self._parse_node(properties))
+                    nodes.append(self._parse_node(json.loads(properties[1])))
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - NODES] Exception: {e}", exc_info=True)
