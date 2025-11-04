@@ -885,7 +885,9 @@ class PolarDBGraphDB(BaseGraphDB):
                             properties["embedding"] = embedding
                         except (json.JSONDecodeError, TypeError):
                             logger.warning(f"Failed to parse embedding for node {id}")
-
+                    properties.pop('id')
+                    properties.pop('memory')
+                    properties.pop("user_name", None)
                     return self._parse_node(
                         {
                             "id": id,
