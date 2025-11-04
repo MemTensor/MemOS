@@ -30,8 +30,8 @@ from .task_goal_parser import TaskGoalParser
 
 logger = get_logger(__name__)
 COT_DICT = {
-    "fast": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
-    "fine": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
+    "fine": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
+    "fast": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
 }
 
 
@@ -59,12 +59,8 @@ class Searcher:
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
-        self.vec_cot = (
-            search_strategy.get("vec_cot", "false") == "true" if search_strategy else False
-        )
-        self.use_fast_graph = (
-            search_strategy.get("fast_graph", "false") == "true" if search_strategy else False
-        )
+        self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
+        self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
 
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
@@ -287,6 +283,7 @@ class Searcher:
                     search_filter,
                     user_name,
                     id_filter,
+                    mode=mode,
                 )
             )
             tasks.append(
@@ -369,6 +366,7 @@ class Searcher:
         search_filter: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        mode: str = "fast",
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
@@ -377,7 +375,7 @@ class Searcher:
         # chain of thinking
         cot_embeddings = []
         if self.vec_cot:
-            queries = self._cot_query(query)
+            queries = self._cot_query(query, mode=mode, context=parsed_goal.context)
             if len(queries) > 1:
                 cot_embeddings = self.embedder.embed(queries)
             cot_embeddings.extend(query_embedding)
@@ -567,6 +565,8 @@ class Searcher:
                 "${split_num_threshold}", str(split_num)
             )
         logger.info("COT process")
+        print("---------------prompt-------------")
+        print(prompt, mode)
 
         messages = [{"role": "user", "content": prompt}]
         try:

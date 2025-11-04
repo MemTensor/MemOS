@@ -38,14 +38,14 @@ Please perform the following
 
 7. Please avoid including any content in the extracted memories that violates national laws and regulations or involves politically sensitive information.
 
-Return a valid JSON object with the following structure:
 
+Return a valid JSON object with the following structure:
 {
   "memory list": [
     {
       "key": <string, a unique and concise memory title>,
       "memory_type": <string, "LongTermMemory" or "UserMemory">,
-      "value": <a detailed, self-contained, and unambiguous memory statement — use English if the input conversation is in English, or Chinese if the conversation is in Chinese>,
+      "value": <a detailed, self-contained, and unambiguous memory statement>,
       "tags": <a list of related names of people, events, and feature keywords (e.g., ["Sean", "deadline", "team", "planning"])>
     },
     ...
@@ -54,11 +54,11 @@ Return a valid JSON object with the following structure:
 }
 
 Language rules:
-- The `key`, `value`, `tags`, and `summary` fields must match the primary language of the input conversation. **If the input is Chinese, output in Chinese.**
-- Keep `memory_type` in English.
+- The `key`, `value`, `tags`, `summary` and `memory_type` fields must be in English.
 
-Example:
-Conversation:
+
+Example1:
+Conversations:
 user: [June 26, 2025 at 3:00 PM]: Hi Jerry! Yesterday at 3 PM I had a meeting with my team about the new project.
 assistant: Oh Tom! Do you think the team can finish by December 15?
 user: [June 26, 2025 at 3:00 PM]: I’m worried. The backend won’t be done until December 10, so testing will be tight.
@@ -84,52 +84,50 @@ Output:
   "summary": "Tom is currently working on a tight-schedule project. After the June 25, 2025 team meeting, he realized the original December 15, 2025 deadline might be unachievable due to backend delays. Concerned about limited testing time, he accepted Jerry’s suggestion to seek an extension and plans to propose moving the deadline to January 5, 2026 in the next morning’s meeting."
 }
 
-Another Example in Chinese (Note: when the user's language is Chinese, you must also output in Chinese):
-
-对话（节选）：
-user｜2025-07-12 19:30：下个月同事婚礼，要买条裙子，预算1500内，别太暴露。
+Example2:
+Conversations (excerpt):
+user｜2025-07-12 19:30：A colleague's wedding is next month, need to buy a dress, budget within 1500, not too revealing.
 assistant｜19:32
-：了解～婚礼场合建议中长款，端庄一些。可以看法式茶歇/直筒/裹身三路。颜色上，奶油白、浅粉、雾霾蓝都适合；面料可看醋酸/真丝混纺（垂感好但需干洗）。品牌与商场：COS/ Massimo Dutti / & Other Stories / Mango 比较好逛；想更法式可以看 Sandro / Maje。 我记得你很喜欢Maje？
-user｜19:35：不喜欢亮色。国贸方便。
-assistant｜19:37：那亮度就压低些：雾霾蓝、藕粉、燕麦米白更稳。国贸有 COS / Massimo Dutti / &OS；可以先看 COS 直筒或裹身，再去 MD 看藕粉/雾霾蓝。搭配上，薄披肩/小西装都能压场。
-user｜19:40：165cm，S码；最好有口袋。
-assistant｜19:42：OK。版型避开大摆+高开衩，选直筒或轻A字更稳；若要口袋，COS直筒一些款有；开衩别太高，及小腿肚附近即可。鞋包：中跟裸色鞋 + 小号手拿包。
-user｜19:47：本来想茶歇A字，但雾霾蓝直筒也行。
-assistant｜19:49：可以先锁定：COS 雾霾蓝直筒中长为主选，MD 藕粉中长做备选；再看 & Other Stories 是否有合身的裹身款。
-user｜19:52：行，周六（7/19）去国贸试，合适就买。
-assistant｜19:54：记得看肩带可调/有无内衬，醋酸/真丝优先干洗；准备同色安全裤/防走光贴。如果当天没货，可下单调货或线上下单门店自提。
+：Got it～ For a wedding occasion, midi length is suggested, more elegant. You can consider three styles: French tea-length / straight / wrap. For colors, cream white, light pink, or dusty blue are suitable; for fabrics, consider acetate/silk blends (good drape but requires dry cleaning). Brands & stores: COS/ Massimo Dutti / & Other Stories / Mango are good options; for more French style, check Sandro / Maje. I remember you really like Maje?
+user｜19:35：Don't like bright colors. China World Summit Wing is convenient.
+assistant｜19:37：Then lower the brightness: dusty blue, dusty pink, oat beige are more subdued. China World Summit Wing has COS / Massimo Dutti / &OS; you can check COS straight or wrap styles first, then go to MD for dusty pink/dusty blue. For pairing, a thin shawl/blazer can elevate the look.
+user｜19:40：165cm, S size; preferably with pockets.
+assistant｜19:42：OK. For silhouette, avoid full skirts + high slits, choose straight or slight A-line for a more stable look; if pockets are needed, some COS straight styles have them; slits shouldn't be too high, around mid-calf is fine. Shoes & bag: mid-heel nude shoes + small clutch.
+user｜19:47：Originally thought about tea-length A-line, but dusty blue straight is also okay.
+assistant｜19:49：You can focus on: COS dusty blue straight midi as the primary choice, MD dusty pink midi as the backup; then check if & Other Stories has any well-fitting wrap styles.
+user｜19:52：Okay, going to China World Summit Wing on Saturday (7/19) to try, will buy if suitable.
+assistant｜19:54：Remember to check if straps are adjustable / if there's a lining, acetate/silk preferably dry cleaned; prepare same-color safety shorts / anti-wardrobe malfunction tape. If out of stock that day, you can place an order for transfer or order online for store pickup.
 
 {
-  "memory list": [
-    {
-      "key": "参加婚礼购买裙子",
-      "memory_type": "UserMemory",
-      "value": "[user观点]用户计划于约2025年8月参加同事婚礼（具体日期不详），预算不超过1500元，整体风格不宜暴露；用户已决定在2025-07-19于国贸试穿并视合适即购买。",
-      "tags": ["婚礼", "预算", "国贸", "计划"]
-    },
-    {
-      "key": "审美与版型偏好",
-      "memory_type": "UserMemory",
-      "value": "[user观点]用户不喜欢亮色，倾向低亮度色系；裙装偏好端庄的中长款，接受直筒或轻A字。",
-      "tags": ["偏好", "颜色", "版型"]
-    },
-    {
-      "key": "体型尺码",
-      "memory_type": "UserMemory",
-      "value": "[user观点]用户身高约165cm、常穿S码",
-      "tags": ["体型", "尺码"]
-    },
-    {
-      "key": "关于用户选购裙子的建议",
-      "memory_type": "LongTermMemory",
-      "value": "[assistant观点]assistant在用户询问婚礼穿着时，建议在国贸优先逛COS查看雾霾蓝直筒中长为主选，Massimo Dutti藕粉中长为备选；该建议与用户“国贸方便”“雾霾蓝直筒也行”的回应相一致，另外assistant也提到user喜欢Maje，但User并未回应或证实该说法。",
-      "tags": ["婚礼穿着", "门店", "选购路线"]
-    }
-  ],
-  "summary": "用户计划在约2025年8月参加同事婚礼，预算≤1500并偏好端庄的中长款；确定于2025-07-19在国贸试穿。其长期画像显示：不喜欢亮色、偏好低亮度色系与不过分暴露的版型，身高约165cm、S码且偏好裙装带口袋。助手提出的国贸选购路线以COS雾霾蓝直筒中长为主选、MD藕粉中长为备选，且与用户回应一致，为线下试穿与购买提供了明确路径。"
+"memory list": [
+{
+"key": "Attending wedding to purchase dress",
+"memory_type": "UserMemory",
+"value": "[User's perspective] User plans to attend a colleague's wedding around August 2025 (specific date unknown), budget not exceeding 1500 yuan, overall style should not be too revealing; user has decided to try on dresses at China World Summit Wing on 2025-07-19 and purchase if suitable.",
+"tags": ["Wedding", "Budget", "China World Summit Wing", "Plan"]
+},
+{
+"key": "Aesthetics & Silhouette Preference",
+"memory_type": "UserMemory",
+"value": "[User's perspective] User does not like bright colors, prefers low-brightness color schemes; dress preference is elegant midi length, accepts straight or slight A-line.",
+"tags": ["Preference", "Color", "Silhouette"]
+},
+{
+"key": "Body Size",
+"memory_type": "UserMemory",
+"value": "[User's perspective] User height approximately 165cm, usually wears S size",
+"tags": ["Body Type", "Size"]
+},
+{
+"key": "Advice regarding user's dress selection",
+"memory_type": "LongTermMemory",
+"value": "[Assistant's perspective] When the user inquired about wedding attire, the assistant suggested prioritizing a visit to COS at China World Summit Wing to view dusty blue straight midi dresses as the primary choice, with Massimo Dutti dusty pink midi as the backup; this suggestion is consistent with the user's responses of 'China World Summit Wing is convenient' and 'dusty blue straight is also okay'. Additionally, the assistant mentioned the user likes Maje, but the User did not respond to or confirm this statement.",
+"tags": ["Wedding Attire", "Store", "Selection Route"]
+}
+],
+"summary": "User plans to attend a colleague's wedding around August 2025, budget ≤1500 and prefers elegant midi length; confirmed trying on at China World Summit Wing on 2025-07-19. Their long-term profile shows: dislikes bright colors, prefers low-brightness color schemes and non-revealing silhouettes, height approximately 165cm, S size, and prefers dresses with pockets. The assistant's suggested shopping route at China World Summit Wing, with COS dusty blue straight midi as the primary choice and MD dusty pink midi as the backup, is consistent with the user's responses, providing a clear path for trying on and purchasing in-store."
 }
 
-Always respond in the same language as the conversation.
 
 Conversation:
 ${conversation}
@@ -183,7 +181,7 @@ STRATEGY_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
     {
       "key": <字符串，唯一且简洁的记忆标题>,
       "memory_type": <字符串，"LongTermMemory" 或 "UserMemory">,
-      "value": <详细、独立且无歧义的记忆陈述——若输入对话为英文，则用英文；若为中文，则用中文>,
+      "value": <详细、独立且无歧义的记忆陈述>,
       "tags": <一个包含相关人名、事件和特征关键词的列表（例如，["丽丽","截止日期", "团队", "计划"]）>
     },
     ...
@@ -192,10 +190,10 @@ STRATEGY_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
 }
 
 语言规则：
-- `key`、`value`、`tags`、`summary` 字段必须与输入对话的主要语言一致。**如果输入是中文，请输出中文**
-- `memory_type` 保持英文。
+- `key`、`value`、`tags`、`summary` 、`memory_type` 字段必须输出中文
 
-示例：
+
+示例1：
 对话：
 user: [2025年6月26日下午3:00]：嗨Jerry！昨天下午3点我和团队开了个会，讨论新项目。
 assistant: 哦Tom！你觉得团队能在12月15日前完成吗？
@@ -226,8 +224,7 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
   年1月5日。"
 }
 
-另一个中文示例（注意：当用户语言为中文时，您也需输出中文）：
-
+示例2：
 对话（节选）：
 user｜2025-07-12 19:30：下个月同事婚礼，要买条裙子，预算1500内，别太暴露。
 assistant｜19:32
@@ -271,7 +268,6 @@ assistant｜19:54：记得看肩带可调/有无内衬，醋酸/真丝优先干�
   "summary": "用户计划在约2025年8月参加同事婚礼，预算≤1500并偏好端庄的中长款；确定于2025-07-19在国贸试穿。其长期画像显示：不喜欢亮色、偏好低亮度色系与不过分暴露的版型，身高约165cm、S码且偏好裙装带口袋。助手提出的国贸选购路线以COS雾霾蓝直筒中长为主选、MD藕粉中长为备选，且与用户回应一致，为线下试穿与购买提供了明确路径。"
 }
 
-请始终使用与对话相同的语言进行回复。
 
 对话：
 ${conversation}
