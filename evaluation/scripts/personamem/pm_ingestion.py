@@ -10,6 +10,7 @@ from datetime import datetime
 
 from tqdm import tqdm
 
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -171,7 +172,9 @@ def ingest_conv(row_data, context, version, conv_idx, frame, success_records, f)
         client = MemosApiOnlineClient()
 
     try:
-        ingest_session(session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client)
+        ingest_session(
+            session=context, user_id=user_id, session_id=conv_idx, frame=frame, client=client
+        )
         print(f"✅ Ingestion of conversation {conv_idx} completed")
         print("=" * 80)
 
@@ -187,10 +190,9 @@ def main(frame, version, num_workers=2, clear=False):
     os.makedirs(f"results/pm/{frame}-{version}/", exist_ok=True)
     record_file = f"results/pm/{frame}-{version}/success_records.txt"
 
-    if clear:
-        if os.path.exists(record_file):
-            os.remove(record_file)
-            print("🧹 Cleared progress records")
+    if clear and os.path.exists(record_file):
+        os.remove(record_file)
+        print("🧹 Cleared progress records")
 
     print("\n" + "=" * 80)
     print(f"🚀 PERSONAMEM INGESTION - {frame.upper()} v{version}".center(80))
@@ -205,15 +207,20 @@ def main(frame, version, num_workers=2, clear=False):
 
     success_records = set()
     if os.path.exists(record_file):
-        with open(record_file, "r") as f:
-            success_records = set(line.strip() for line in f)
-        print(f"📊 Found {len(success_records)} completed conversations, {total_rows - len(success_records)} remaining")
+        with open(record_file) as f:
+            success_records = {line.strip() for line in f}
+        print(
+            f"📊 Found {len(success_records)} completed conversations, {total_rows - len(success_records)} remaining"
+        )
 
     start_time = datetime.now()
     all_data = list(load_rows_with_context(question_csv_path, context_jsonl_path))
 
-    pending_data = [(idx, row_data, context) for idx, (row_data, context) in enumerate(all_data)
-                    if str(idx) not in success_records]
+    pending_data = [
+        (idx, row_data, context)
+        for idx, (row_data, context) in enumerate(all_data)
+        if str(idx) not in success_records
+    ]
 
     if not pending_data:
         print("✅ All conversations have been processed!")
@@ -232,16 +239,16 @@ def main(frame, version, num_workers=2, clear=False):
                 conv_idx=idx,
                 frame=frame,
                 success_records=success_records,
-                f=f
+                f=f,
             )
             futures.append(future)
 
         completed_count = 0
         for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Processing conversations"
+            as_completed(futures), total=len(futures), desc="Processing conversations"
         ):
             try:
-                result = future.result()
+                future.result()
                 completed_count += 1
             except Exception as exc:
                 print(f"\n❌ Conversation generated an exception: {exc}")
@@ -261,12 +268,27 @@ def main(frame, version, num_workers=2, clear=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Ingestion Script")
-    parser.add_argument("--lib", type=str,
-                        choices=["memos-api-online", "mem0", "mem0_graph", "memos-api", "memobase", "memu",
-                                 "supermemory", "zep"],
-                        default='memos-api')
-    parser.add_argument("--version", type=str, default="default", help="Version of the evaluation framework.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of parallel workers for processing users.")
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=[
+            "memos-api-online",
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memobase",
+            "memu",
+            "supermemory",
+            "zep",
+        ],
+        default="memos-api",
+    )
+    parser.add_argument(
+        "--version", type=str, default="default", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=3, help="Number of parallel workers for processing users."
+    )
     parser.add_argument("--clear", action="store_true", help="Clear progress and start fresh")
     args = parser.parse_args()
 

@@ -36,12 +36,14 @@ class RequestContext:
         env: str | None = None,
         user_type: str | None = None,
         user_name: str | None = None,
+        source: str | None = None,
     ):
         self.trace_id = trace_id or "trace-id"
         self.api_path = api_path
         self.env = env
         self.user_type = user_type
         self.user_name = user_name
+        self.source = source
         self._data: dict[str, Any] = {}
 
     def set(self, key: str, value: Any) -> None:
@@ -59,6 +61,7 @@ class RequestContext:
             "env",
             "user_type",
             "user_name",
+            "source",
         ):
             super().__setattr__(name, value)
         else:
@@ -80,6 +83,7 @@ class RequestContext:
             "env": self.env,
             "user_type": self.user_type,
             "user_name": self.user_name,
+            "source": self.source,
             "data": self._data.copy(),
         }
 
@@ -146,6 +150,16 @@ def get_current_user_name() -> str | None:
     return "memos"
 
 
+def get_current_source() -> str | None:
+    """
+    Get the current request's source (e.g., 'product_api' or 'server_api').
+    """
+    context = _request_context.get()
+    if context:
+        return context.get("source")
+    return None
+
+
 def get_current_context() -> RequestContext | None:
     """
     Get the current request context.
@@ -161,6 +175,7 @@ def get_current_context() -> RequestContext | None:
             env=context_dict.get("env"),
             user_type=context_dict.get("user_type"),
             user_name=context_dict.get("user_name"),
+            source=context_dict.get("source"),
         )
         ctx._data = context_dict.get("data", {}).copy()
         return ctx

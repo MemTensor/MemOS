@@ -12,6 +12,7 @@ from irrelevant_conv import irre_10, irre_300
 from openai import OpenAI
 from tqdm import tqdm
 
+
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
@@ -49,7 +50,7 @@ def add_memory_for_line(
 
         for idx, _ in enumerate(conversation[::2]):
             msg_idx = idx * 2
-            record_id = f"{lib}_user_pref_eval_{i}_{version}_{str(msg_idx)}"
+            record_id = f"{lib}_user_pref_eval_{i}_{version}_{msg_idx!s}"
 
             if record_id not in success_records:
                 mem_client.add(

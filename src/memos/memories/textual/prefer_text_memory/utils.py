@@ -46,10 +46,8 @@ def deduplicate_preferences(
 
     for i, pref in enumerate(prefs):
         # Extract preference text
-        if hasattr(pref.metadata, "implicit_preference") and pref.metadata.implicit_preference:
-            text = pref.metadata.implicit_preference
-        elif hasattr(pref.metadata, "explicit_preference") and pref.metadata.explicit_preference:
-            text = pref.metadata.explicit_preference
+        if hasattr(pref.metadata, "preference") and pref.metadata.preference:
+            text = pref.metadata.preference
         else:
             text = pref.memory
 
