@@ -103,7 +103,6 @@ class NaiveAdder(BaseAdder):
         new_memories: list[TextualMemoryItem],
         retrieved_memories: list[MilvusVecDBItem],
         collection_name: str,
-        preference_type: str,
     ) -> list[str] | str:
         # create new vec db items
         new_vec_db_items: list[MilvusVecDBItem] = []
@@ -124,17 +123,19 @@ class NaiveAdder(BaseAdder):
             {
                 "id": new_memory.id,
                 "context_summary": new_memory.memory,
-                "preference": new_memory.payload[preference_type],
+                "preference": new_memory.payload["preference"],
             }
             for new_memory in new_vec_db_items
+            if new_memory.payload.get("preference", None)
         ]
         retrieved_mem_inputs = [
             {
                 "id": mem.id,
                 "context_summary": mem.memory,
-                "preference": mem.payload[preference_type],
+                "preference": mem.payload["preference"],
             }
             for mem in retrieved_memories
+            if mem.payload.get("preference", None)
         ]
 
         rsp = self._judge_update_or_add_trace_op(
@@ -168,7 +169,7 @@ class NaiveAdder(BaseAdder):
             elif op_type == "update":
                 if op["target_id"] in retrieved_mem_db_item_map:
                     update_mem_db_item = retrieved_mem_db_item_map[op["target_id"]]
-                    update_mem_db_item.payload[preference_type] = op["new_preference"]
+                    update_mem_db_item.payload["preference"] = op["new_preference"]
                     update_mem_db_item.payload["updated_at"] = datetime.now().isoformat()
                     update_mem_db_item.memory = op["new_context_summary"]
                     update_mem_db_item.original_text = op["new_context_summary"]
@@ -198,7 +199,6 @@ class NaiveAdder(BaseAdder):
         new_memory: TextualMemoryItem,
         retrieved_memories: list[MilvusVecDBItem],
         collection_name: str,
-        preference_type: str,
     ) -> str:
         payload = new_memory.to_dict()["metadata"]
         fields_to_remove = {"dialog_id", "original_text", "embedding"}
@@ -211,19 +211,15 @@ class NaiveAdder(BaseAdder):
             payload=payload,
         )
 
-        new_mem_input = {
-            "memory": new_memory.memory,
-            "preference": new_memory.metadata.explicit_preference
-            if preference_type == "explicit_preference"
-            else new_memory.metadata.implicit_preference,
-        }
+        new_mem_input = {"memory": new_memory.memory, "preference": new_memory.metadata.preference}
         retrieved_mem_inputs = [
             {
                 "id": mem.id,
                 "memory": mem.memory,
-                "preference": mem.payload[preference_type],
+                "preference": mem.payload["preference"],
             }
             for mem in retrieved_memories
+            if mem.payload.get("preference", None)
         ]
         rsp = self._judge_update_or_add_fine(
             new_mem=json.dumps(new_mem_input),
@@ -240,7 +236,7 @@ class NaiveAdder(BaseAdder):
         )
         if need_update and update_item and rsp:
             update_vec_db_item = update_item[0]
-            update_vec_db_item.payload[preference_type] = rsp["new_preference"]
+            update_vec_db_item.payload["preference"] = rsp["new_preference"]
             update_vec_db_item.payload["updated_at"] = vec_db_item.payload["updated_at"]
             update_vec_db_item.memory = rsp["new_memory"]
             update_vec_db_item.original_text = vec_db_item.original_text
@@ -287,7 +283,6 @@ class NaiveAdder(BaseAdder):
         new_memory: TextualMemoryItem,
         retrieved_memories: list[MilvusVecDBItem],
         collection_name: str,
-        preference_type: str,
         update_mode: str = "fast",
     ) -> list[str] | str | None:
         """Update the memory.
@@ -295,15 +290,12 @@ class NaiveAdder(BaseAdder):
             new_memory: TextualMemoryItem
             retrieved_memories: list[MilvusVecDBItem]
             collection_name: str
-            preference_type: str
             update_mode: str, "fast" or "fine"
         """
         if update_mode == "fast":
             return self._update_memory_fast(new_memory, retrieved_memories, collection_name)
         elif update_mode == "fine":
-            return self._update_memory_fine(
-                new_memory, retrieved_memories, collection_name, preference_type
-            )
+            return self._update_memory_fine(new_memory, retrieved_memories, collection_name)
         else:
             raise ValueError(f"Invalid update mode: {update_mode}")
 
@@ -330,7 +322,6 @@ class NaiveAdder(BaseAdder):
                 memory,
                 search_results,
                 collection_name,
-                preference_type,
                 update_mode=os.getenv("PREFERENCE_ADDER_MODE", "fast"),
             )
 
@@ -369,18 +360,24 @@ class NaiveAdder(BaseAdder):
         explicit_recalls = list({recall.id: recall for recall in explicit_recalls}.values())
         implicit_recalls = list({recall.id: recall for recall in implicit_recalls}.values())
 
-        explicit_added_ids = self._update_memory_op_trace(
-            explicit_new_mems,
-            explicit_recalls,
-            pref_type_collection_map["explicit_preference"],
-            "explicit_preference",
-        )
-        implicit_added_ids = self._update_memory_op_trace(
-            implicit_new_mems,
-            implicit_recalls,
-            pref_type_collection_map["implicit_preference"],
-            "implicit_preference",
-        )
+        # 使用线程池并行处理显式和隐式偏好
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
+            explicit_future = executor.submit(
+                self._update_memory_op_trace,
+                explicit_new_mems,
+                explicit_recalls,
+                pref_type_collection_map["explicit_preference"],
+            )
+            implicit_future = executor.submit(
+                self._update_memory_op_trace,
+                implicit_new_mems,
+                implicit_recalls,
+                pref_type_collection_map["implicit_preference"],
+            )
+
+            explicit_added_ids = explicit_future.result()
+            implicit_added_ids = implicit_future.result()
+
         return explicit_added_ids + implicit_added_ids
 
     def process_memory_single(
