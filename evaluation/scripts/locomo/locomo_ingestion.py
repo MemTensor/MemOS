@@ -1,11 +1,15 @@
-import os
-import sys
 import argparse
 import concurrent.futures
+import os
+import sys
 import time
+
 from datetime import datetime, timezone
+
 import pandas as pd
+
 from dotenv import load_dotenv
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,26 +44,33 @@ def ingest_session(client, session, frame, version, metadata):
             speaker_a_messages.append({"role": "assistant", "content": data})
             speaker_b_messages.append({"role": "user", "content": data})
 
-    if frame == "memos-api":
+    if "memos-api" in frame:
         for m in speaker_a_messages:
             m["chat_time"] = iso_date
         for m in speaker_b_messages:
             m["chat_time"] = iso_date
-        client.add(speaker_a_messages, speaker_a_user_id, f"{conv_id}_{metadata['session_key']}")
-        client.add(speaker_b_messages, speaker_b_user_id, f"{conv_id}_{metadata['session_key']}")
+        client.add(
+            speaker_a_messages,
+            speaker_a_user_id,
+            f"{conv_id}_{metadata['session_key']}",
+            batch_size=2,
+        )
+        client.add(
+            speaker_b_messages,
+            speaker_b_user_id,
+            f"{conv_id}_{metadata['session_key']}",
+            batch_size=2,
+        )
     elif "mem0" in frame:
-        for i in range(0, len(speaker_a_messages), 2):
-            batch_messages_a = speaker_a_messages[i : i + 2]
-            batch_messages_b = speaker_b_messages[i : i + 2]
-            client.add(batch_messages_a, speaker_a_user_id, timestamp)
-            client.add(batch_messages_b, speaker_b_user_id, timestamp)
+        client.add(speaker_a_messages, speaker_a_user_id, timestamp, batch_size=2)
+        client.add(speaker_b_messages, speaker_b_user_id, timestamp, batch_size=2)
     elif frame == "memobase":
         for m in speaker_a_messages:
             m["created_at"] = iso_date
         for m in speaker_b_messages:
             m["created_at"] = iso_date
-        client.add(speaker_a_messages, speaker_a_user_id)
-        client.add(speaker_b_messages, speaker_b_user_id)
+        client.add(speaker_a_messages, speaker_a_user_id, batch_size=2)
+        client.add(speaker_b_messages, speaker_b_user_id, batch_size=2)
     elif frame == "memu":
         client.add(speaker_a_messages, speaker_a_user_id, iso_date)
         client.add(speaker_b_messages, speaker_b_user_id, iso_date)
@@ -77,7 +88,7 @@ def ingest_session(client, session, frame, version, metadata):
     return elapsed_time
 
 
-def process_user(conv_idx, frame, locomo_df, version):
+def process_user(conv_idx, frame, locomo_df, version, success_records, f):
     conversation = locomo_df["conversation"].iloc[conv_idx]
     max_session_count = 35
     start_time = time.time()
@@ -88,8 +99,8 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     client = None
     if frame == "mem0" or frame == "mem0_graph":
-        from utils.client import Mem0Client
         from prompts import custom_instructions
+        from utils.client import Mem0Client
 
         client = Mem0Client(enable_graph="graph" in frame)
         client.client.update_project(custom_instructions=custom_instructions)
@@ -99,16 +110,16 @@ def process_user(conv_idx, frame, locomo_df, version):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
     elif frame == "memobase":
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        all_users = client.client.get_all_users(limit=5000)
-        for user in all_users:
-            if user["additional_fields"]["user_id"] in [speaker_a_user_id, speaker_b_user_id]:
-                client.client.delete_user(user["id"])
-        speaker_a_user_id = client.client.add_user({"user_id": speaker_a_user_id})
-        speaker_b_user_id = client.client.add_user({"user_id": speaker_b_user_id})
+        client.delete_user(speaker_a_user_id)
+        client.delete_user(speaker_b_user_id)
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -138,11 +149,15 @@ def process_user(conv_idx, frame, locomo_df, version):
 
     print(f"Processing {valid_sessions} sessions for user {conv_idx}")
 
-    for session, metadata in sessions_to_process:
-        session_time = ingest_session(client, session, frame, version, metadata)
-        total_session_time += session_time
-        print(f"User {conv_idx}, {metadata['session_key']} processed in {session_time} seconds")
-
+    for session_idx, (session, metadata) in enumerate(sessions_to_process):
+        if f"{conv_idx}_{session_idx}" not in success_records:
+            session_time = ingest_session(client, session, frame, version, metadata)
+            total_session_time += session_time
+            print(f"User {conv_idx}, {metadata['session_key']} processed in {session_time} seconds")
+            f.write(f"{conv_idx}_{session_idx}\n")
+            f.flush()
+        else:
+            print(f"Session {conv_idx}_{session_idx} already ingested")
     end_time = time.time()
     elapsed_time = round(end_time - start_time, 2)
     print(f"User {conv_idx} processed successfully in {elapsed_time} seconds")
@@ -159,9 +174,20 @@ def main(frame, version="default", num_workers=4):
     print(
         f"Starting processing for {num_users} users in serial mode, each user using {num_workers} workers for sessions..."
     )
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+    os.makedirs(f"results/locomo/{frame}-{version}/", exist_ok=True)
+    success_records = []
+    record_file = f"results/locomo/{frame}-{version}/success_records.txt"
+    if os.path.exists(record_file):
+        with open(record_file) as f:
+            for i in f.readlines():
+                success_records.append(i.strip())
+
+    with (
+        concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor,
+        open(record_file, "a+") as f,
+    ):
         futures = [
-            executor.submit(process_user, user_id, frame, locomo_df, version)
+            executor.submit(process_user, user_id, frame, locomo_df, version, success_records, f)
             for user_id in range(num_users)
         ]
         for future in concurrent.futures.as_completed(futures):
@@ -187,17 +213,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
         "--version",
         type=str,
-        default="default1",
+        default="default",
         help="Version identifier for saving results (e.g., 1010)",
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of parallel workers to process users"
+        "--workers", type=int, default=10, help="Number of parallel workers to process users"
     )
     args = parser.parse_args()
     lib = args.lib

@@ -2,12 +2,49 @@ import re
 
 from typing import Any
 
+from memos.memories.textual.item import SourceMessage
+
 
 _TAG1 = re.compile(r"^\s*\[[^\]]*\]\s*")
 
 
+def get_encoded_tokens(content: str) -> int:
+    """
+    Get encoded tokens.
+    Args:
+        content: str
+    Returns:
+        int: Encoded tokens.
+    """
+    return len(content)
+
+
+def truncate_data(data: list[str | dict[str, Any] | Any], max_tokens: int) -> list[str]:
+    """
+    Truncate data to max tokens.
+    Args:
+        data: List of strings or dictionaries.
+        max_tokens: Maximum number of tokens.
+    Returns:
+        str: Truncated string.
+    """
+    truncated_string = ""
+    for item in data:
+        if isinstance(item, SourceMessage):
+            content = getattr(item, "content", "")
+            chat_time = getattr(item, "chat_time", "")
+            if not content:
+                continue
+            truncated_string += f"[{chat_time}]: {content}\n"
+            if get_encoded_tokens(truncated_string) > max_tokens:
+                break
+    return truncated_string
+
+
 def process_source(
-    items: list[tuple[Any, str | dict[str, Any] | list[Any]]] | None = None, recent_num: int = 3
+    items: list[tuple[Any, str | dict[str, Any] | list[Any]]] | None = None,
+    recent_num: int = 10,
+    max_tokens: int = 2048,
 ) -> str:
     """
     Args:
@@ -23,19 +60,16 @@ def process_source(
     memory = None
     for item in items:
         memory, source = item
-        for content in source:
-            if isinstance(content, str):
-                if "assistant:" in content:
-                    continue
-                concat_data.append(content)
+        concat_data.extend(source[-recent_num:])
+    truncated_string = truncate_data(concat_data, max_tokens)
     if memory is not None:
-        concat_data = [memory, *concat_data]
-    return "\n".join(concat_data)
+        truncated_string = f"{memory}\n{truncated_string}"
+    return truncated_string
 
 
 def concat_original_source(
     graph_results: list,
-    merge_field: list[str] | None = None,
+    rerank_source: str | None = None,
 ) -> list[str]:
     """
     Merge memory items with original dialogue.
@@ -45,14 +79,16 @@ def concat_original_source(
     Returns:
         list[str]: List of memory and concat orginal memory.
     """
-    if merge_field is None:
-        merge_field = ["sources"]
+    merge_field = []
+    merge_field = ["sources"] if rerank_source is None else rerank_source.split(",")
     documents = []
     for item in graph_results:
         memory = _TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m
         sources = []
         for field in merge_field:
-            source = getattr(item.metadata, field, "")
+            source = getattr(item.metadata, field, None)
+            if source is None:
+                continue
             sources.append((memory, source))
         concat_string = process_source(sources)
         documents.append(concat_string)

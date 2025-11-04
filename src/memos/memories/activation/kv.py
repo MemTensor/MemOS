@@ -231,31 +231,35 @@ class KVCacheMemory(BaseActMemory):
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
     """
+    Move DynamicCache from CPU to GPU device.
+    Compatible with both old and new transformers versions.
+
     In SimpleMemChat.run(), if self.config.enable_activation_memory is enabled,
     we load serialized kv cache from a [class KVCacheMemory] object, which has a kv_cache_memories on CPU.
     So before inferring with DynamicCache, we should move it to GPU in-place first.
     """
-    # Currently, we put this function outside [class KVCacheMemory]
-    # Support both old API (key_cache/value_cache) and new API (layers with keys/values)
-    if hasattr(dynamic_cache, "layers") and dynamic_cache.layers is not None:
-        for i, layer in enumerate(dynamic_cache.layers):
-            # Each layer is expected to have `.keys` and `.values` tensors
-            if hasattr(layer, "keys") and layer.keys is not None:
-                layer.keys = layer.keys.to(device, non_blocking=True)
-            if hasattr(layer, "values") and layer.values is not None:
-                layer.values = layer.values.to(device, non_blocking=True)
-    else:
-        # Fallback to legacy attributes
-        for i in range(len(getattr(dynamic_cache, "key_cache", []))):
+    # Handle compatibility between old and new transformers versions
+    if hasattr(dynamic_cache, "layers"):
+        # New version: use layers attribute
+        for layer in dynamic_cache.layers:
+            if hasattr(layer, "key_cache") and layer.key_cache is not None:
+                layer.key_cache = layer.key_cache.to(device, non_blocking=True)
+            if hasattr(layer, "value_cache") and layer.value_cache is not None:
+                layer.value_cache = layer.value_cache.to(device, non_blocking=True)
+            elif hasattr(layer, "keys") and hasattr(layer, "values"):
+                # Alternative attribute names in some versions
+                if layer.keys is not None:
+                    layer.keys = layer.keys.to(device, non_blocking=True)
+                if layer.values is not None:
+                    layer.values = layer.values.to(device, non_blocking=True)
+    elif hasattr(dynamic_cache, "key_cache") and hasattr(dynamic_cache, "value_cache"):
+        # Old version: use key_cache and value_cache attributes
+        for i in range(len(dynamic_cache.key_cache)):
             if dynamic_cache.key_cache[i] is not None:
                 dynamic_cache.key_cache[i] = dynamic_cache.key_cache[i].to(
                     device, non_blocking=True
                 )
-            if (
-                hasattr(dynamic_cache, "value_cache")
-                and i < len(dynamic_cache.value_cache)
-                and dynamic_cache.value_cache[i] is not None
-            ):
+            if dynamic_cache.value_cache[i] is not None:
                 dynamic_cache.value_cache[i] = dynamic_cache.value_cache[i].to(
                     device, non_blocking=True
                 )

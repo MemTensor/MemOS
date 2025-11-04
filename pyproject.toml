@@ -88,6 +88,12 @@ mem-reader = [
     "markitdown[docx,pdf,pptx,xls,xlsx] (>=0.1.1,<0.2.0)",  # Markdown parser for various file formats
 ]
 
+# PreferenceTextMemory
+pref-mem = [
+    "pymilvus (>=2.6.1,<3.0.0)",  # Milvus Vector DB
+    "datasketch (>=1.6.5,<2.0.0)",  # MinHash library
+]
+
 # All optional dependencies
 # Allow users to install with `pip install MemoryOS[all]`
 all = [
@@ -99,7 +105,11 @@ all = [
     "pymysql (>=1.1.0,<2.0.0)",
     "chonkie (>=1.0.7,<2.0.0)",
     "markitdown[docx,pdf,pptx,xls,xlsx] (>=0.1.1,<0.2.0)",
-
+    "pymilvus (>=2.6.1,<3.0.0)",
+    "datasketch (>=1.6.5,<2.0.0)",
+    "jieba (>=0.38.1,<0.42.1)",
+    "rank-bm25 (>=0.2.2)",
+    "cachetools (>=6.0.0)",
     # NOT exist in the above optional groups
     # Because they are either huge-size dependencies or infrequently used dependencies.
     # We kindof don't want users to install them.

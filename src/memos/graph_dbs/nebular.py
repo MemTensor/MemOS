@@ -439,21 +439,24 @@ class NebulaGraphDB(BaseGraphDB):
         Args:
             memory_type (str): Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
             keep_latest (int): Number of latest WorkingMemory entries to keep.
+            user_name(str): optional user_name.
         """
-        optional_condition = ""
-
-        user_name = user_name if user_name else self.config.user_name
-
-        optional_condition = f"AND n.user_name = '{user_name}'"
-        query = f"""
-            MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
-            WHERE n.memory_type = '{memory_type}'
-            {optional_condition}
-            ORDER BY n.updated_at DESC
-            OFFSET {int(keep_latest)}
-            DETACH DELETE n
-        """
-        self.execute_query(query)
+        try:
+            user_name = user_name if user_name else self.config.user_name
+            optional_condition = f"AND n.user_name = '{user_name}'"
+            count = self.count_nodes(memory_type, user_name)
+            if count > keep_latest:
+                delete_query = f"""
+                    MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
+                    WHERE n.memory_type = '{memory_type}'
+                    {optional_condition}
+                    ORDER BY n.updated_at DESC
+                    OFFSET {int(keep_latest)}
+                    DETACH DELETE n
+                """
+                self.execute_query(delete_query)
+        except Exception as e:
+            logger.warning(f"Delete old mem error: {e}")
 
     @timed
     def add_node(
@@ -683,8 +686,7 @@ class NebulaGraphDB(BaseGraphDB):
         Returns:
             dict: Node properties as key-value pairs, or None if not found.
         """
-        user_name = user_name if user_name else self.config.user_name
-        filter_clause = f'n.user_name = "{user_name}" AND n.id = "{id}"'
+        filter_clause = f'n.id = "{id}"'
         return_fields = self._build_return_fields(include_embedding)
         gql = f"""
             MATCH (n@Memory)
@@ -728,16 +730,13 @@ class NebulaGraphDB(BaseGraphDB):
         """
         if not ids:
             return []
-
-        user_name = user_name if user_name else self.config.user_name
-        where_user = f" AND n.user_name = '{user_name}'"
         # Safe formatting of the ID list
         id_list = ",".join(f'"{_id}"' for _id in ids)
 
         return_fields = self._build_return_fields(include_embedding)
         query = f"""
             MATCH (n@Memory /*+ INDEX(idx_memory_user_name) */)
-            WHERE n.id IN [{id_list}] {where_user}
+            WHERE n.id IN [{id_list}]
             RETURN {return_fields}
         """
         nodes = []
@@ -1175,7 +1174,6 @@ class NebulaGraphDB(BaseGraphDB):
             MATCH (n /*+ INDEX(idx_memory_user_name) */)
             {where_clause}
             RETURN {", ".join(return_fields)}, COUNT(n) AS count
-            GROUP BY {", ".join(group_by_fields)}
             """
         result = self.execute_query(gql)  # Pure GQL string execution
 
@@ -1496,10 +1494,10 @@ class NebulaGraphDB(BaseGraphDB):
             return
 
         try:
-            res = tmp_client.execute("SHOW GRAPHS;")
+            res = tmp_client.execute("SHOW GRAPHS")
             existing = {row.values()[0].as_string() for row in res}
             if db_name not in existing:
-                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type;")
+                tmp_client.execute(f"CREATE GRAPH IF NOT EXISTS `{db_name}` TYPED MemOSBgeM3Type")
                 logger.info(f"✅ Graph `{db_name}` created before session binding.")
             else:
                 logger.debug(f"Graph `{db_name}` already exists.")
@@ -1550,7 +1548,7 @@ class NebulaGraphDB(BaseGraphDB):
             """
             self.execute_query(create_tag, auto_set_db=False)
         else:
-            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name};"
+            describe_query = f"DESCRIBE NODE TYPE Memory OF {graph_type_name}"
             desc_result = self.execute_query(describe_query, auto_set_db=False)
 
             memory_fields = []
@@ -1620,7 +1618,13 @@ class NebulaGraphDB(BaseGraphDB):
         Create standard B-tree indexes on user_name when use Shared Database
         Multi-Tenant Mode.
         """
-        fields = ["status", "memory_type", "created_at", "updated_at", "user_name"]
+        fields = [
+            "status",
+            "memory_type",
+            "created_at",
+            "updated_at",
+            "user_name",
+        ]
 
         for field in fields:
             index_name = f"idx_memory_{field}"

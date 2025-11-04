@@ -1,13 +1,17 @@
-import os
-import sys
 import argparse
 import json
+import os
+import sys
+
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time
+
 import pandas as pd
+
 from dotenv import load_dotenv
 from tqdm import tqdm
+
 
 ROOT_DIR = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,11 +104,14 @@ def memos_api_search(
     start = time()
     search_a_results = client.search(query=query, user_id=speaker_a_user_id, top_k=top_k)
     search_b_results = client.search(query=query, user_id=speaker_b_user_id, top_k=top_k)
-    speaker_a_context = "\n".join(
-        [i["memory"] for i in search_a_results["text_mem"][0]["memories"]]
+
+    speaker_a_context = (
+        "\n".join([i["memory"] for i in search_a_results["text_mem"][0]["memories"]])
+        + f"\n{search_a_results.get('pref_string', '')}"
     )
-    speaker_b_context = "\n".join(
-        [i["memory"] for i in search_b_results["text_mem"][0]["memories"]]
+    speaker_b_context = (
+        "\n".join([i["memory"] for i in search_b_results["text_mem"][0]["memories"]])
+        + f"\n{search_b_results.get('pref_string', '')}"
     )
 
     context = TEMPLATE_MEMOS.format(
@@ -191,7 +198,7 @@ def search_query(client, query, metadata, frame, version, top_k=20):
         context, duration_ms = mem0_graph_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
         )
-    elif frame == "memos-api":
+    elif "memos-api" in frame:
         context, duration_ms = memos_api_search(
             client, query, speaker_a_user_id, speaker_b_user_id, top_k, speaker_a, speaker_b
         )
@@ -250,16 +257,14 @@ def process_user(conv_idx, locomo_df, frame, version, top_k=20, num_workers=1):
         from utils.client import MemosApiClient
 
         client = MemosApiClient()
+    elif frame == "memos-api-online":
+        from utils.client import MemosApiOnlineClient
+
+        client = MemosApiOnlineClient()
     elif frame == "memobase":
         from utils.client import MemobaseClient
 
         client = MemobaseClient()
-        users = client.client.get_all_users(limit=5000)
-        for u in users:
-            if u["additional_fields"]["user_id"] == speaker_a_user_id:
-                speaker_a_user_id = u["id"]
-            if u["additional_fields"]["user_id"] == speaker_b_user_id:
-                speaker_b_user_id = u["id"]
     elif frame == "memu":
         from utils.client import MemuClient
 
@@ -335,7 +340,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "memos-api", "memobase", "memu", "supermemory"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(
@@ -348,7 +361,7 @@ if __name__ == "__main__":
         "--workers", type=int, default=5, help="Number of parallel workers to process users"
     )
     parser.add_argument(
-        "--top_k", type=int, default=20, help="Number of results to retrieve in search queries"
+        "--top_k", type=int, default=15, help="Number of results to retrieve in search queries"
     )
     args = parser.parse_args()
     lib = args.lib

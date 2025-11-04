@@ -58,6 +58,10 @@ class MOSConfig(BaseConfig):
         default=False,
         description="Enable parametric memory for the MemChat",
     )
+    enable_preference_memory: bool = Field(
+        default=False,
+        description="Enable preference memory for the MemChat",
+    )
     enable_mem_scheduler: bool = Field(
         default=False,
         description="Enable memory scheduler for automated memory management",

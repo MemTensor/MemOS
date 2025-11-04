@@ -10,20 +10,21 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from tqdm import tqdm
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.prompts import PM_ANSWER_PROMPT
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import re
+
+from utils.prompts import PM_ANSWER_PROMPT
 
 
 def extract_choice_answer(predicted_answer, correct_answer):
     def _extract_only_options(text):
         text = text.lower()
-        in_parens = re.findall(r'\(([a-d])\)', text)
+        in_parens = re.findall(r"\(([a-d])\)", text)
         if in_parens:
             return set(in_parens)
         else:
-            return set(re.findall(r'\b([a-d])\b', text))
+            return set(re.findall(r"\b([a-d])\b", text))
 
     correct = correct_answer.lower().strip("() ")
 
@@ -33,7 +34,7 @@ def extract_choice_answer(predicted_answer, correct_answer):
     if "<final_answer>" in predicted_answer:
         predicted_answer = predicted_answer.split("<final_answer>")[-1].strip()
     if predicted_answer.endswith("</final_answer>"):
-        predicted_answer = predicted_answer[:-len("</final_answer>")].strip()
+        predicted_answer = predicted_answer[: -len("</final_answer>")].strip()
 
     pred_options = _extract_only_options(predicted_answer)
 
@@ -79,12 +80,14 @@ def process_qa(user_id, search_result, num_runs, llm_client):
         is_correct, answer = extract_choice_answer(answer, search_result.get("golden_answer", ""))
         response_duration_ms = (time() - start) * 1000
 
-        run_results.append({
-            "run_id": idx + 1,
-            "answer": answer,
-            "is_correct": is_correct,
-            "response_duration_ms": response_duration_ms,
-        })
+        run_results.append(
+            {
+                "run_id": idx + 1,
+                "answer": answer,
+                "is_correct": is_correct,
+                "response_duration_ms": response_duration_ms,
+            }
+        )
 
     response_duration_ms = sum(result["response_duration_ms"] for result in run_results) / num_runs
 
@@ -95,8 +98,11 @@ def process_qa(user_id, search_result, num_runs, llm_client):
     print(f"💡 Golden Answer: {search_result.get('golden_answer', 'N/A')}")
     for idx, result in enumerate(run_results, start=1):
         print(f"\n🔄 Run {idx}/{num_runs}:")
-        print(f"💬 Run Answer: {result['answer'][:150]}..." if len(
-            result['answer']) > 150 else f"💬 Run Answer: {result['answer']}")
+        print(
+            f"💬 Run Answer: {result['answer'][:150]}..."
+            if len(result["answer"]) > 150
+            else f"💬 Run Answer: {result['answer']}"
+        )
         print(f"✅ Run Is Correct: {result['is_correct']}")
         print(f"⏱️  Run Duration: {result['response_duration_ms']:.2f} ms")
     print("-" * 80)
@@ -122,7 +128,9 @@ def main(frame, version, num_runs=3, num_workers=4):
 
     load_dotenv()
 
-    oai_client = OpenAI(api_key=os.getenv("CHAT_MODEL_API_KEY"), base_url=os.getenv("CHAT_MODEL_BASE_URL"))
+    oai_client = OpenAI(
+        api_key=os.getenv("CHAT_MODEL_API_KEY"), base_url=os.getenv("CHAT_MODEL_BASE_URL")
+    )
     print(f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}")
 
     search_path = f"results/pm/{frame}-{version}/{frame}_pm_search_results.json"
@@ -146,9 +154,9 @@ def main(frame, version, num_runs=3, num_workers=4):
             future_to_user_id[future] = user_id
 
         for future in tqdm(
-                as_completed(future_to_user_id),
-                total=len(future_to_user_id),
-                desc="📝 Generating responses",
+            as_completed(future_to_user_id),
+            total=len(future_to_user_id),
+            desc="📝 Generating responses",
         ):
             user_id = future_to_user_id[future]
             try:
@@ -177,10 +185,30 @@ def main(frame, version, num_runs=3, num_workers=4):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PersonaMem Response Generation Script")
-    parser.add_argument("--lib", type=str, choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep"], default='memos-api')
-    parser.add_argument("--version", type=str, default="0925", help="Version of the evaluation framework.")
-    parser.add_argument("--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation.")
-    parser.add_argument("--workers", type=int, default=3, help="Number of worker threads to use for processing.")
+    parser.add_argument(
+        "--lib",
+        type=str,
+        choices=[
+            "memos-api-online",
+            "zep",
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
+        default="memos-api",
+    )
+    parser.add_argument(
+        "--version", type=str, default="default", help="Version of the evaluation framework."
+    )
+    parser.add_argument(
+        "--num_runs", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
+    )
+    parser.add_argument(
+        "--workers", type=int, default=10, help="Number of worker threads to use for processing."
+    )
 
     args = parser.parse_args()
     main(frame=args.lib, version=args.version, num_runs=args.num_runs, num_workers=args.workers)

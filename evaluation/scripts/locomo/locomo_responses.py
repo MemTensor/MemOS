@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 
 from time import time
 
@@ -11,6 +12,15 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from prompts import ANSWER_PROMPT_MEM0, ANSWER_PROMPT_MEMOS, ANSWER_PROMPT_ZEP
 from tqdm import tqdm
+
+
+ROOT_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+EVAL_SCRIPTS_DIR = os.path.join(ROOT_DIR, "evaluation", "scripts")
+
+sys.path.insert(0, ROOT_DIR)
+sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 
 async def locomo_response(frame, llm_client, context: str, question: str) -> str:
@@ -47,7 +57,9 @@ async def process_qa(frame, qa, search_result, oai_client):
     gold_answer = qa.get("answer")
     qa_category = qa.get("category")
 
-    answer = await locomo_response(frame, oai_client, search_result.get("context"), query)
+    context = search_result.get("context")
+
+    answer = await locomo_response(frame, oai_client, context, query)
 
     response_duration_ms = (time() - start) * 1000
 
@@ -122,7 +134,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
         default="memos-api",
     )
     parser.add_argument(

@@ -54,22 +54,20 @@
 
 ## 📈 Performance Benchmark
 
-MemOS demonstrates significant improvements over baseline memory solutions in multiple reasoning tasks.
+MemOS demonstrates significant improvements over baseline memory solutions in multiple memory tasks,
+showcasing its capabilities in **information extraction**, **temporal and cross-session reasoning**, and **personalized preference responses**.
 
-| Model       | Avg. Score | Multi-Hop | Open Domain | Single-Hop | Temporal Reasoning |
-|-------------|------------|-----------|-------------|------------|---------------------|
-| **OpenAI**  | 0.5275     | 0.6028    | 0.3299      | 0.6183     | 0.2825              |
-| **MemOS**   | **0.7331** | **0.6430** | **0.5521**   | **0.7844** | **0.7321**          |
-| **Improvement** | **+38.98%** | **+6.67%** | **+67.35%** | **+26.86%** | **+159.15%**       |
+| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  | 
+|-----------------|-------------|-------------|-------------|-------------|
+| **GPT-4o-mini** | 52.75       | 55.4        | 2.8         | 43.46       |
+| **MemOS**       | **75.80**   | **77.80**   | **71.90**   | **61.17**   |
+| **Improvement** | **+43.70%** | **+40.43%** | **+2568%**  | **+40.75%** |
 
-> 💡 **Temporal reasoning accuracy improved by 159% compared to the OpenAI baseline.**
-
-### Details of End-to-End Evaluation on LOCOMO
-
-> [!NOTE]
-> Comparison of LLM Judge Scores across five major tasks in the LOCOMO benchmark. Each bar shows the mean evaluation score judged by LLMs for a given method-task pair, with standard deviation as error bars. MemOS-0630 consistently outperforms baseline methods (LangMem, Zep, OpenAI, Mem0) across all task types, especially in multi-hop and temporal reasoning scenarios.
-
-<img src="https://statics.memtensor.com.cn/memos/score_all_end2end.jpg" alt="END2END SCORE">
+### Detailed Evaluation Results
+- We use gpt-4o-mini as the processing and judging LLM and bge-m3 as embedding model in MemOS evaluation.
+- The evaluation was conducted under conditions that align various settings as closely as possible. Reproduce the results with our scripts at [`evaluation`](./evaluation).
+- Check the full search and response details at huggingface https://huggingface.co/datasets/MemTensor/MemOS_eval_result.
+> 💡 **MemOS outperforms all other methods (Mem0, Zep, Memobase, SuperMemory et al.) across all benchmarks!**
 
 ## ✨ Key Features
 

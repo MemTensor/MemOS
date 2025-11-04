@@ -1,8 +1,10 @@
 import concurrent
 import threading
+import time
 
 from collections import defaultdict
 from collections.abc import Callable
+from datetime import timezone
 from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
@@ -11,6 +13,7 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
+from memos.mem_scheduler.utils.metrics import MetricsRegistry
 
 
 logger = get_logger(__name__)
@@ -35,6 +38,11 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         # Main dispatcher thread pool
         self.max_workers = max_workers
+
+        # Get multi-task timeout from config
+        self.multi_task_running_timeout = (
+            self.config.get("multi_task_running_timeout") if self.config else None
+        )
 
         # Only initialize thread pool if in parallel mode
         self.enable_parallel_dispatch = enable_parallel_dispatch
@@ -62,6 +70,21 @@ class SchedulerDispatcher(BaseSchedulerModule):
         # Task tracking for monitoring
         self._running_tasks: dict[str, RunningTaskItem] = {}
         self._task_lock = threading.Lock()
+        self._completed_tasks = []
+        self.completed_tasks_max_show_size = 10
+
+        self.metrics = MetricsRegistry(
+            topk_per_label=(self.config or {}).get("metrics_topk_per_label", 50)
+        )
+
+    def on_messages_enqueued(self, msgs: list[ScheduleMessageItem]) -> None:
+        if not msgs:
+            return
+        now = time.time()
+        for m in msgs:
+            self.metrics.on_enqueue(
+                label=m.label, mem_cube_id=m.mem_cube_id, inst_rate=1.0, now=now
+            )
 
     def _create_task_wrapper(self, handler: Callable, task_item: RunningTaskItem):
         """
@@ -77,39 +100,101 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         def wrapped_handler(messages: list[ScheduleMessageItem]):
             try:
+                # --- mark start: record queuing time(now - enqueue_ts)---
+                now = time.time()
+                for m in messages:
+                    enq_ts = getattr(m, "timestamp", None)
+
+                    # Path 1: epoch seconds (preferred)
+                    if isinstance(enq_ts, int | float):
+                        enq_epoch = float(enq_ts)
+
+                    # Path 2: datetime -> normalize to UTC epoch
+                    elif hasattr(enq_ts, "timestamp"):
+                        dt = enq_ts
+                        if dt.tzinfo is None:
+                            # treat naive as UTC to neutralize +8h skew
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        enq_epoch = dt.timestamp()
+                    else:
+                        # fallback: treat as "just now"
+                        enq_epoch = now
+
+                    wait_sec = max(0.0, now - enq_epoch)
+                    self.metrics.on_start(
+                        label=m.label, mem_cube_id=m.mem_cube_id, wait_sec=wait_sec, now=now
+                    )
+
                 # Execute the original handler
                 result = handler(messages)
 
+                # --- mark done ---
+                for m in messages:
+                    self.metrics.on_done(label=m.label, mem_cube_id=m.mem_cube_id, now=time.time())
                 # Mark task as completed and remove from tracking
                 with self._task_lock:
                     if task_item.item_id in self._running_tasks:
                         task_item.mark_completed(result)
                         del self._running_tasks[task_item.item_id]
-
+                        self._completed_tasks.append(task_item)
+                        if len(self._completed_tasks) > self.completed_tasks_max_show_size:
+                            self._completed_tasks[-self.completed_tasks_max_show_size :]
                 logger.info(f"Task completed: {task_item.get_execution_info()}")
                 return result
 
             except Exception as e:
                 # Mark task as failed and remove from tracking
+                for m in messages:
+                    self.metrics.on_done(label=m.label, mem_cube_id=m.mem_cube_id, now=time.time())
+                # Mark task as failed and remove from tracking
                 with self._task_lock:
                     if task_item.item_id in self._running_tasks:
                         task_item.mark_failed(str(e))
                         del self._running_tasks[task_item.item_id]
-
+                        if len(self._completed_tasks) > self.completed_tasks_max_show_size:
+                            self._completed_tasks[-self.completed_tasks_max_show_size :]
                 logger.error(f"Task failed: {task_item.get_execution_info()}, Error: {e}")
                 raise
 
         return wrapped_handler
 
-    def get_running_tasks(self) -> dict[str, RunningTaskItem]:
+    def get_running_tasks(
+        self, filter_func: Callable[[RunningTaskItem], bool] | None = None
+    ) -> dict[str, RunningTaskItem]:
         """
-        Get a copy of currently running tasks.
+        Get a copy of currently running tasks, optionally filtered by a custom function.
+
+        Args:
+            filter_func: Optional function that takes a RunningTaskItem and returns True if it should be included.
+                        Common filters can be created using helper methods like filter_by_user_id, filter_by_task_name, etc.
 
         Returns:
             Dictionary of running tasks keyed by task ID
+
+        Examples:
+            # Get all running tasks
+            all_tasks = dispatcher.get_running_tasks()
+
+            # Get tasks for specific user
+            user_tasks = dispatcher.get_running_tasks(lambda task: task.user_id == "user123")
+
+            # Get tasks for specific task name
+            handler_tasks = dispatcher.get_running_tasks(lambda task: task.task_name == "test_handler")
+
+            # Get tasks with multiple conditions
+            filtered_tasks = dispatcher.get_running_tasks(
+                lambda task: task.user_id == "user123" and task.status == "running"
+            )
         """
         with self._task_lock:
-            return self._running_tasks.copy()
+            if filter_func is None:
+                return self._running_tasks.copy()
+
+            return {
+                task_id: task_item
+                for task_id, task_item in self._running_tasks.items()
+                if filter_func(task_item)
+            }
 
     def get_running_task_count(self) -> int:
         """
@@ -185,6 +270,31 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         logger.info(f"Unregistered handlers for {len(labels)} labels")
         return results
+
+    def stats(self) -> dict[str, int]:
+        """
+        Lightweight runtime stats for monitoring.
+
+        Returns:
+            {
+                'running': <number of running tasks>,
+                'inflight': <number of futures tracked (pending+running)>,
+                'handlers': <registered handler count>,
+            }
+        """
+        try:
+            running = self.get_running_task_count()
+        except Exception:
+            running = 0
+        try:
+            inflight = len(self._futures)
+        except Exception:
+            inflight = 0
+        try:
+            handlers = len(self.handlers)
+        except Exception:
+            handlers = 0
+        return {"running": running, "inflight": inflight, "handlers": handlers}
 
     def _default_message_handler(self, messages: list[ScheduleMessageItem]) -> None:
         logger.debug(f"Using _default_message_handler to deal with messages: {messages}")
@@ -328,17 +438,17 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
     def run_multiple_tasks(
         self,
-        tasks: dict[str, tuple[Callable, tuple, dict]],
+        tasks: dict[str, tuple[Callable, tuple]],
         use_thread_pool: bool | None = None,
-        timeout: float | None = 30.0,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """
         Execute multiple tasks concurrently and return all results.
 
         Args:
-            tasks: Dictionary mapping task names to (function, args, kwargs) tuples
+            tasks: Dictionary mapping task names to (task_execution_function, task_execution_parameters) tuples
             use_thread_pool: Whether to use ThreadPoolExecutor. If None, uses dispatcher's parallel mode setting
-            timeout: Maximum time to wait for all tasks to complete (in seconds). None for infinite timeout.
+            timeout: Maximum time to wait for all tasks to complete (in seconds). If None, uses config default.
 
         Returns:
             Dictionary mapping task names to their results
@@ -350,7 +460,13 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if use_thread_pool is None:
             use_thread_pool = self.enable_parallel_dispatch
 
-        logger.info(f"Executing {len(tasks)} tasks concurrently (thread_pool: {use_thread_pool})")
+        # Use config timeout if not explicitly provided
+        if timeout is None:
+            timeout = self.multi_task_running_timeout
+
+        logger.info(
+            f"Executing {len(tasks)} tasks concurrently (thread_pool: {use_thread_pool}, timeout: {timeout})"
+        )
 
         try:
             results = self.thread_manager.run_multiple_tasks(

@@ -2,9 +2,15 @@ import json
 import os
 import sys
 import time
+import uuid
+
+from contextlib import suppress
 from datetime import datetime
-from dotenv import load_dotenv
+
 import requests
+
+from dotenv import load_dotenv
+
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
@@ -17,7 +23,7 @@ class ZepClient:
         api_key = os.getenv("ZEP_API_KEY")
         self.client = Zep(api_key=api_key)
 
-    def add(self, messages, user_id, conv_id, timestamp):
+    def add(self, messages, user_id, timestamp):
         iso_date = datetime.fromtimestamp(timestamp).isoformat()
         for msg in messages:
             self.client.graph.add(
@@ -49,39 +55,40 @@ class Mem0Client:
         self.client = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         self.enable_graph = enable_graph
 
-    def add(self, messages, user_id, timestamp):
-        if self.enable_graph:
-            self.client.add(
-                messages=messages,
-                timestamp=timestamp,
-                user_id=user_id,
-                output_format="v1.1",
-                version="v2",
-                enable_graph=True,
-            )
-        else:
-            self.client.add(messages=messages, timestamp=timestamp, user_id=user_id, version="v2")
+    def add(self, messages, user_id, timestamp, batch_size=2):
+        max_retries = 5
+        for i in range(0, len(messages), batch_size):
+            batch_messages = messages[i : i + batch_size]
+            for attempt in range(max_retries):
+                try:
+                    if self.enable_graph:
+                        self.client.add(
+                            messages=batch_messages,
+                            timestamp=timestamp,
+                            user_id=user_id,
+                            enable_graph=True,
+                        )
+                    else:
+                        self.client.add(
+                            messages=batch_messages,
+                            timestamp=timestamp,
+                            user_id=user_id,
+                        )
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+                    else:
+                        raise e
 
     def search(self, query, user_id, top_k):
-        if self.enable_graph:
-            res = self.client.search(
-                query=query,
-                top_k=top_k,
-                user_id=user_id,
-                output_format="v1.1",
-                version="v2",
-                enable_graph=True,
-                filters={"AND": [{"user_id": f"{user_id}"}, {"run_id": "*"}]},
-            )
-        else:
-            res = self.client.search(
-                query=query,
-                top_k=top_k,
-                user_id=user_id,
-                output_format="v1.1",
-                version="v2",
-                filters={"AND": [{"user_id": f"{user_id}"}, {"run_id": "*"}]},
-            )
+        res = self.client.search(
+            query=query,
+            top_k=top_k,
+            user_id=user_id,
+            enable_graph=self.enable_graph,
+            filters={"AND": [{"user_id": f"{user_id}"}]},
+        )
         return res
 
 
@@ -93,18 +100,29 @@ class MemobaseClient:
             project_url=os.getenv("MEMOBASE_PROJECT_URL"), api_key=os.getenv("MEMOBASE_API_KEY")
         )
 
-    def add(self, messages, user_id):
-        from memobase import ChatBlob
-
+    def add(self, messages, user_id, batch_size=2):
         """
-        user_id: memobase user_id
         messages = [{"role": "assistant", "content": data, "created_at": iso_date}]
         """
-        user = self.client.get_user(user_id, no_get=True)
-        user.insert(ChatBlob(messages=messages), sync=True)
+        from memobase import ChatBlob
+
+        real_uid = self.string_to_uuid(user_id)
+        user = self.client.get_or_create_user(real_uid)
+        for i in range(0, len(messages), batch_size):
+            batch_messages = messages[i : i + batch_size]
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    _ = user.insert(ChatBlob(messages=batch_messages), sync=True)
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+                    else:
+                        raise e
 
     def search(self, query, user_id, top_k):
-        user = self.client.get_user(user_id, no_get=True)
+        real_uid = self.string_to_uuid(user_id)
+        user = self.client.get_user(real_uid, no_get=True)
         memories = user.context(
             max_token_size=top_k * 100,
             chats=[{"role": "user", "content": query}],
@@ -113,26 +131,45 @@ class MemobaseClient:
         )
         return memories
 
+    def delete_user(self, user_id):
+        from memobase.error import ServerError
+
+        real_uid = self.string_to_uuid(user_id)
+        with suppress(ServerError):
+            self.client.delete_user(real_uid)
+
+    def string_to_uuid(self, s: str, salt="memobase_client"):
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, s + salt))
+
 
 class MemosApiClient:
     def __init__(self):
         self.memos_url = os.getenv("MEMOS_URL")
         self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
 
-    def add(self, messages, user_id, conv_id):
+    def add(self, messages, user_id, conv_id, batch_size: int = 9999):
+        """
+        messages = [{"role": "assistant", "content": data, "chat_time": date_str}]
+        """
         url = f"{self.memos_url}/product/add"
-        payload = json.dumps(
-            {
-                "messages": messages,
-                "user_id": user_id,
-                "mem_cube_id": user_id,
-                "conversation_id": conv_id,
-            }
-        )
-        response = requests.request("POST", url, data=payload, headers=self.headers)
-        assert response.status_code == 200, response.text
-        assert json.loads(response.text)["message"] == "Memory added successfully", response.text
-        return response.text
+        added_memories = []
+        for i in range(0, len(messages), batch_size):
+            batch_messages = messages[i : i + batch_size]
+            payload = json.dumps(
+                {
+                    "messages": batch_messages,
+                    "user_id": user_id,
+                    "mem_cube_id": user_id,
+                    "conversation_id": conv_id,
+                }
+            )
+            response = requests.request("POST", url, data=payload, headers=self.headers)
+            assert response.status_code == 200, response.text
+            assert json.loads(response.text)["message"] == "Memory added successfully", (
+                response.text
+            )
+            added_memories += json.loads(response.text)["data"]
+        return added_memories
 
     def search(self, query, user_id, top_k):
         """Search memories."""
@@ -144,6 +181,9 @@ class MemosApiClient:
                 "mem_cube_id": user_id,
                 "conversation_id": "",
                 "top_k": top_k,
+                "mode": os.getenv("SEARCH_MODE", "fast"),
+                "include_preference": True,
+                "pref_top_k": 6,
             },
             ensure_ascii=False,
         )
@@ -153,6 +193,95 @@ class MemosApiClient:
             response.text
         )
         return json.loads(response.text)["data"]
+
+
+class MemosApiOnlineClient:
+    def __init__(self):
+        self.memos_url = os.getenv("MEMOS_ONLINE_URL")
+        self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
+
+    def add(self, messages, user_id, conv_id=None, batch_size: int = 9999):
+        url = f"{self.memos_url}/add/message"
+        for i in range(0, len(messages), batch_size):
+            batch_messages = messages[i : i + batch_size]
+            payload = json.dumps(
+                {
+                    "messages": batch_messages,
+                    "user_id": user_id,
+                    "conversation_id": conv_id,
+                }
+            )
+
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    response = requests.request("POST", url, data=payload, headers=self.headers)
+                    assert response.status_code == 200, response.text
+                    assert json.loads(response.text)["message"] == "ok", response.text
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        time.sleep(2**attempt)
+                    else:
+                        raise e
+
+    def search(self, query, user_id, top_k):
+        """Search memories."""
+        url = f"{self.memos_url}/search/memory"
+        payload = json.dumps(
+            {
+                "query": query,
+                "user_id": user_id,
+                "memory_limit_number": top_k,
+                "mode": os.getenv("SEARCH_MODE", "fast"),
+                "include_preference": True,
+                "pref_top_k": 6,
+            }
+        )
+
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                response = requests.request("POST", url, data=payload, headers=self.headers)
+                assert response.status_code == 200, response.text
+                assert json.loads(response.text)["message"] == "ok", response.text
+                text_mem_res = json.loads(response.text)["data"]["memory_detail_list"]
+                pref_mem_res = json.loads(response.text)["data"]["preference_detail_list"]
+                preference_note = json.loads(response.text)["data"]["preference_note"]
+                for i in text_mem_res:
+                    i.update({"memory": i.pop("memory_value")})
+
+                explicit_prefs = [
+                    p["preference"]
+                    for p in pref_mem_res
+                    if p.get("preference_type", "") == "explicit_preference"
+                ]
+                implicit_prefs = [
+                    p["preference"]
+                    for p in pref_mem_res
+                    if p.get("preference_type", "") == "implicit_preference"
+                ]
+
+                pref_parts = []
+                if explicit_prefs:
+                    pref_parts.append(
+                        "Explicit Preference:\n"
+                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(explicit_prefs))
+                    )
+                if implicit_prefs:
+                    pref_parts.append(
+                        "Implicit Preference:\n"
+                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs))
+                    )
+
+                pref_string = "\n".join(pref_parts) + preference_note
+
+                return {"text_mem": [{"memories": text_mem_res}], "pref_string": pref_string}
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)
+                else:
+                    raise e
 
 
 class SupermemoryClient:
@@ -172,7 +301,7 @@ class SupermemoryClient:
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2**attempt)  # 指数退避
+                    time.sleep(2**attempt)
                 else:
                     raise e
 
@@ -192,7 +321,7 @@ class SupermemoryClient:
                 return context
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(2**attempt)  # 指数退避
+                    time.sleep(2**attempt)
                 else:
                     raise e
 
@@ -216,7 +345,7 @@ class MemuClient:
                 agent_name=self.agent_id,
                 session_date=iso_date,
             )
-            self.wait_for_completion(response.task_id)
+            self.wait_for_completion(response.item_id)
         except Exception as error:
             print("❌ Error saving conversation:", error)
 
@@ -245,3 +374,11 @@ if __name__ == "__main__":
     timestamp = 1682899200
     query = "杭州西湖有什么"
     top_k = 5
+
+    # MEMOS-API
+    client = MemosApiClient()
+    for m in messages:
+        m["created_at"] = iso_date
+    client.add(messages, user_id, user_id)
+    memories = client.search(query, user_id, top_k)
+    print(memories)

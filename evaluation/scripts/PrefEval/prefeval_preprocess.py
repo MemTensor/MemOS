@@ -1,6 +1,7 @@
-from datasets import load_dataset
 import json
 import os
+
+from datasets import load_dataset
 
 
 def convert_dataset_to_jsonl(dataset_name, output_dir="./scripts/PrefEval"):
@@ -64,7 +65,7 @@ def process_jsonl_file(input_filepath, output_filepath):
         line_count = 0
         print(f"Start processing file: {input_filepath}")
         with (
-            open(input_filepath, "r", encoding="utf-8") as infile,
+            open(input_filepath, encoding="utf-8") as infile,
             open(output_filepath, "w", encoding="utf-8") as outfile,
         ):
             for line in infile:
@@ -93,6 +94,7 @@ def process_jsonl_file(input_filepath, output_filepath):
 def main():
     huggingface_dataset_name = "siyanzhao/prefeval_implicit_persona"
     output_directory = "./data/prefeval"
+    os.makedirs(output_directory, exist_ok=True)
     input_file_path = os.path.join(output_directory, "train.jsonl")
     processed_file_path = os.path.join(output_directory, "pref_processed.jsonl")
 
