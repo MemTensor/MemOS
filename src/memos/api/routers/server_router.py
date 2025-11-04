@@ -412,6 +412,8 @@ def search_memories(search_req: APISearchRequest):
         search_req.include_preference,
     )
 
+    logger.info(f"Search memories result: {memories_result}")
+
     return SearchResponse(
         message="Search completed successfully",
         data=memories_result,
@@ -617,6 +619,9 @@ def add_memories(add_req: APIADDRequest):
         pref_future = executor.submit(_process_pref_mem)
         text_response_data = text_future.result()
         pref_response_data = pref_future.result()
+
+    logger.info(f"add_memories Text response data: {text_response_data}")
+    logger.info(f"add_memories Pref response data: {pref_response_data}")
 
     return MemoryResponse(
         message="Memory added successfully",

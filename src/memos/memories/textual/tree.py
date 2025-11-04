@@ -260,7 +260,7 @@ class TreeTextMemory(BaseTextMemory):
                 center_id=core_id, depth=depth, center_status=center_status
             )
 
-            if not subgraph["core_node"]:
+            if subgraph is None or not subgraph["core_node"]:
                 logger.info(f"Skipping node {core_id} (inactive or not found).")
                 continue
 
@@ -281,9 +281,9 @@ class TreeTextMemory(BaseTextMemory):
                 {"id": core_id, "score": score, "core_node": core_node, "neighbors": neighbors}
             )
 
-        top_core = cores[0]
+        top_core = cores[0] if cores else None
         return {
-            "core_id": top_core["id"],
+            "core_id": top_core["id"] if top_core else None,
             "nodes": list(all_nodes.values()),
             "edges": [{"source": f, "target": t, "type": ty} for (f, t, ty) in all_edges],
         }

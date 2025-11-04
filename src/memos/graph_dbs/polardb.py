@@ -151,6 +151,10 @@ class PolarDBGraphDB(BaseGraphDB):
             user=user,
             password=password,
             dbname=self.db_name,
+            connect_timeout=60,  # Connection timeout in seconds
+            keepalives_idle=40,  # Seconds of inactivity before sending keepalive (should be < server idle timeout)
+            keepalives_interval=15,  # Seconds between keepalive retries
+            keepalives_count=5,  # Number of keepalive retries before considering connection dead
         )
 
         # Keep a reference to the pool for cleanup
@@ -179,7 +183,7 @@ class PolarDBGraphDB(BaseGraphDB):
         else:
             return getattr(self.config, key, default)
 
-    def _get_connection(self):
+    def _get_connection_old(self):
         """Get a connection from the pool."""
         if self._pool_closed:
             raise RuntimeError("Connection pool has been closed")
@@ -188,7 +192,60 @@ class PolarDBGraphDB(BaseGraphDB):
         conn.autocommit = True
         return conn
 
+    def _get_connection(self):
+        """Get a connection from the pool."""
+        if self._pool_closed:
+            raise RuntimeError("Connection pool has been closed")
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                conn = self.connection_pool.getconn()
+
+                # Check if connection is closed
+                if conn.closed != 0:
+                    # Connection is closed, close it explicitly and try again
+                    try:
+                        conn.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to close connection: {e}")
+                    if attempt < max_retries - 1:
+                        continue
+                    else:
+                        raise RuntimeError("Pool returned a closed connection")
+
+                # Set autocommit for PolarDB compatibility
+                conn.autocommit = True
+                return conn
+            except Exception as e:
+                if attempt >= max_retries - 1:
+                    raise RuntimeError(f"Failed to get a valid connection from pool: {e}") from e
+                continue
+
     def _return_connection(self, connection):
+        """Return a connection to the pool."""
+        if not self._pool_closed and connection:
+            try:
+                # Check if connection is closed
+                if hasattr(connection, "closed") and connection.closed != 0:
+                    # Connection is closed, just close it and don't return to pool
+                    try:
+                        connection.close()
+                    except Exception as e:
+                        logger.warning(f"Failed to close connection: {e}")
+                    return
+
+                # Connection is valid, return to pool
+                self.connection_pool.putconn(connection)
+            except Exception as e:
+                # If putconn fails, close the connection
+                logger.warning(f"Failed to return connection to pool: {e}")
+                try:
+                    connection.close()
+                except Exception as e:
+                    logger.warning(f"Failed to close connection: {e}")
+
+    def _return_connection_old(self, connection):
         """Return a connection to the pool."""
         if not self._pool_closed and connection:
             self.connection_pool.putconn(connection)
@@ -306,7 +363,7 @@ class PolarDBGraphDB(BaseGraphDB):
             WHERE ag_catalog.agtype_access_operator(properties, '"memory_type"'::agtype) = %s::agtype
         """
         query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-        params = [f'"{memory_type}"', f'"{user_name}"']
+        params = [self.format_param_value(memory_type), self.format_param_value(user_name)]
 
         # Get a connection from the pool
         conn = self._get_connection()
@@ -332,7 +389,7 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
         query += "\nLIMIT 1"
-        params = [f'"{scope}"', f'"{user_name}"']
+        params = [self.format_param_value(scope), self.format_param_value(user_name)]
 
         # Get a connection from the pool
         conn = self._get_connection()
@@ -370,7 +427,11 @@ class PolarDBGraphDB(BaseGraphDB):
             ORDER BY ag_catalog.agtype_access_operator(properties, '"updated_at"'::agtype) DESC
             OFFSET %s
         """
-        select_params = [f'"{memory_type}"', f'"{user_name}"', keep_latest]
+        select_params = [
+            self.format_param_value(memory_type),
+            self.format_param_value(user_name),
+            keep_latest,
+        ]
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
@@ -444,19 +505,23 @@ class PolarDBGraphDB(BaseGraphDB):
                 SET properties = %s, embedding = %s
                 WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
             """
-            params = [json.dumps(properties), json.dumps(embedding_vector), f'"{id}"']
+            params = [
+                json.dumps(properties),
+                json.dumps(embedding_vector),
+                self.format_param_value(id),
+            ]
         else:
             query = f"""
                 UPDATE "{self.db_name}_graph"."Memory"
                 SET properties = %s
                 WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
             """
-            params = [json.dumps(properties), f'"{id}"']
+            params = [json.dumps(properties), self.format_param_value(id)]
 
         # Only add user filter when user_name is provided
         if user_name is not None:
             query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-            params.append(f'"{user_name}"')
+            params.append(self.format_param_value(user_name))
 
         # Get a connection from the pool
         conn = self._get_connection()
@@ -481,12 +546,12 @@ class PolarDBGraphDB(BaseGraphDB):
             DELETE FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
         """
-        params = [f'"{id}"']
+        params = [self.format_param_value(id)]
 
         # Only add user filter when user_name is provided
         if user_name is not None:
             query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-            params.append(f'"{user_name}"')
+            params.append(self.format_param_value(user_name))
 
         # Get a connection from the pool
         conn = self._get_connection()
@@ -774,28 +839,17 @@ class PolarDBGraphDB(BaseGraphDB):
 
         select_fields = "id, properties, embedding" if include_embedding else "id, properties"
 
-        # Helper function to format parameter value
-        def format_param_value(value: str) -> str:
-            """Format parameter value to handle both quoted and unquoted formats"""
-            # Remove outer quotes if they exist
-            if value.startswith('"') and value.endswith('"'):
-                # Already has double quotes, return as is
-                return value
-            else:
-                # Add double quotes
-                return f'"{value}"'
-
         query = f"""
             SELECT {select_fields}
             FROM "{self.db_name}_graph"."Memory"
             WHERE ag_catalog.agtype_access_operator(properties, '"id"'::agtype) = %s::agtype
         """
-        params = [format_param_value(id)]
+        params = [self.format_param_value(id)]
 
         # Only add user filter when user_name is provided
         if user_name is not None:
             query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-            params.append(format_param_value(user_name))
+            params.append(self.format_param_value(user_name))
 
         conn = self._get_connection()
         try:
@@ -873,7 +927,7 @@ class PolarDBGraphDB(BaseGraphDB):
             where_conditions.append(
                 "ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = %s::agtype"
             )
-            params.append(f"{id_val}")
+            params.append(self.format_param_value(id_val))
 
         where_clause = " OR ".join(where_conditions)
 
@@ -885,7 +939,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         user_name = user_name if user_name else self.config.user_name
         query += " AND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-        params.append(f'"{user_name}"')
+        params.append(self.format_param_value(user_name))
 
         conn = self._get_connection()
         try:
@@ -1834,7 +1888,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     if include_embedding and embedding_json is not None:
                         properties["embedding"] = embedding_json
 
-                    nodes.append(self._parse_node(properties))
+                    nodes.append(self._parse_node(json.loads(properties[1])))
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - NODES] Exception: {e}", exc_info=True)
@@ -2559,7 +2613,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 exclude_conditions.append(
                     "ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) != %s::agtype"
                 )
-                params.append(f'"{exclude_id}"')
+                params.append(self.format_param_value(exclude_id))
             where_clauses.append(f"({' AND '.join(exclude_conditions)})")
 
         # Status filter - keep only 'activated'
@@ -2576,7 +2630,7 @@ class PolarDBGraphDB(BaseGraphDB):
         where_clauses.append(
             "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
         )
-        params.append(f'"{user_name}"')
+        params.append(self.format_param_value(user_name))
 
         # Testing showed no data; annotate.
         where_clauses.append(
@@ -2965,3 +3019,18 @@ class PolarDBGraphDB(BaseGraphDB):
             if tgt in id_map:
                 edge["target"] = id_map[tgt]
         return data
+
+    def format_param_value(self, value: str | None) -> str:
+        """Format parameter value to handle both quoted and unquoted formats"""
+        # Handle None value
+        if value is None:
+            logger.warning("format_param_value: value is None")
+            return "null"
+
+        # Remove outer quotes if they exist
+        if value.startswith('"') and value.endswith('"'):
+            # Already has double quotes, return as is
+            return value
+        else:
+            # Add double quotes
+            return f'"{value}"'
