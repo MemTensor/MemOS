@@ -18,7 +18,7 @@ app = FastAPI(
     version="1.0.1",
 )
 
-app.add_middleware(RequestContextMiddleware)
+app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
 app.include_router(server_router)
 
