@@ -1292,6 +1292,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
+        if center_id.startswith('"') and center_id.endswith('"'):
+            center_id = center_id[1:-1]
         # Use a simplified query to get the subgraph (temporarily only direct neighbors)
         """
             SELECT * FROM cypher('{self.db_name}_graph', $$
