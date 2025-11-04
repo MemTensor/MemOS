@@ -16,8 +16,13 @@ Please perform the following
    - Always set "model_type" to "UserMemory" for this output.
 
 3. Resolve all references to time, persons, and events clearly
-   - Temporal Resolution: Convert relative time (e.g., 'yesterday') to absolute dates based on the message timestamp. Distinguish between event time and message time; flag any uncertainty.
+   - Temporal Resolution: Convert relative time (e.g., "yesterday") to absolute dates based on the message timestamp. Distinguish between event time and message time; flag any uncertainty.
+    > Where feasible, use the message timestamp to convert relative time expressions into absolute dates (e.g., "yesterday" in a message dated January 15, 2023, can be converted to "January 14, 2023," and "last week" can be described as "the week preceding January 15, 2023").
+    > Explicitly differentiate between the time when the event occurred and the time the message was sent.
+    > Clearly indicate any uncertainty (e.g., "approximately June 2025", "exact date unknown").
    - Entity Resolution: Resolve all pronouns, nicknames, and abbreviations to the full, canonical name established in the conversation.
+    > For example, "Melanie" uses the abbreviated name "Mel" in the paragraph; when extracting her name in the "value" field, it should be restored to "Melanie".
+   - Location resolution: If specific locations are mentioned, include them explicitly.
 
 4. Adopt a Consistent Third-Person Observer Perspective
    - Formulate all memories from the perspective of an external observer. Use "The user" or their specific name as the subject.
@@ -57,7 +62,7 @@ Language rules:
 - The `key`, `value`, `tags`, `summary` and `memory_type` fields must be in English.
 
 
-Example1:
+Example:
 Conversations:
 user: [June 26, 2025 at 3:00 PM]: Hi Jerry! Yesterday at 3 PM I had a meeting with my team about the new project.
 assistant: Oh Tom! Do you think the team can finish by December 15?
@@ -71,61 +76,17 @@ Output:
     {
         "key": "Initial project meeting",
         "memory_type": "LongTermMemory",
-        "value": "[user-Tom viewpoint] On June 25, 2025 at 3:00 PM, Tom met with the team to discuss a new project. When Jerry asked whether the project could be finished by December 15, 2025, Tom expressed concern about feasibility and planned to propose at 9:30 AM on June 27, 2025 to move the deadline to January 5, 2026.",
+        "value": "[user-Tom viewpoint] On June 25, 2025 at 3:00 PM, Tom held a meeting with their team to discuss a new project. The conversation covered the timeline and raised concerns about the feasibility of the December 15, 2025 deadline.",
         "tags": ["Tom", "project", "timeline", "meeting", "deadline"]
     },
     {
-        "key": "Jerry’s suggestion about the deadline",
-        "memory_type": "LongTermMemory",
-        "value": "[assistant-Jerry viewpoint] Jerry questioned the December 15 deadline and suggested considering an extension.",
-        "tags": ["Jerry", "deadline change", "suggestion"]
+        "key": "Planned scope adjustment",
+        "memory_type": "UserMemory",
+        "value": "Tom planned to suggest in a meeting on June 27, 2025 at 9:30 AM that the team should prioritize features and propose shifting the project deadline to January 5, 2026.",
+        "tags": ["Tom", "planning", "deadline change", "feature prioritization"]
     }
   ],
-  "summary": "Tom is currently working on a tight-schedule project. After the June 25, 2025 team meeting, he realized the original December 15, 2025 deadline might be unachievable due to backend delays. Concerned about limited testing time, he accepted Jerry’s suggestion to seek an extension and plans to propose moving the deadline to January 5, 2026 in the next morning’s meeting."
-}
-
-Example2:
-Conversations (excerpt):
-user｜2025-07-12 19:30：A colleague's wedding is next month, need to buy a dress, budget within 1500, not too revealing.
-assistant｜19:32
-：Got it～ For a wedding occasion, midi length is suggested, more elegant. You can consider three styles: French tea-length / straight / wrap. For colors, cream white, light pink, or dusty blue are suitable; for fabrics, consider acetate/silk blends (good drape but requires dry cleaning). Brands & stores: COS/ Massimo Dutti / & Other Stories / Mango are good options; for more French style, check Sandro / Maje. I remember you really like Maje?
-user｜19:35：Don't like bright colors. China World Summit Wing is convenient.
-assistant｜19:37：Then lower the brightness: dusty blue, dusty pink, oat beige are more subdued. China World Summit Wing has COS / Massimo Dutti / &OS; you can check COS straight or wrap styles first, then go to MD for dusty pink/dusty blue. For pairing, a thin shawl/blazer can elevate the look.
-user｜19:40：165cm, S size; preferably with pockets.
-assistant｜19:42：OK. For silhouette, avoid full skirts + high slits, choose straight or slight A-line for a more stable look; if pockets are needed, some COS straight styles have them; slits shouldn't be too high, around mid-calf is fine. Shoes & bag: mid-heel nude shoes + small clutch.
-user｜19:47：Originally thought about tea-length A-line, but dusty blue straight is also okay.
-assistant｜19:49：You can focus on: COS dusty blue straight midi as the primary choice, MD dusty pink midi as the backup; then check if & Other Stories has any well-fitting wrap styles.
-user｜19:52：Okay, going to China World Summit Wing on Saturday (7/19) to try, will buy if suitable.
-assistant｜19:54：Remember to check if straps are adjustable / if there's a lining, acetate/silk preferably dry cleaned; prepare same-color safety shorts / anti-wardrobe malfunction tape. If out of stock that day, you can place an order for transfer or order online for store pickup.
-
-{
-"memory list": [
-{
-"key": "Attending wedding to purchase dress",
-"memory_type": "UserMemory",
-"value": "[User's perspective] User plans to attend a colleague's wedding around August 2025 (specific date unknown), budget not exceeding 1500 yuan, overall style should not be too revealing; user has decided to try on dresses at China World Summit Wing on 2025-07-19 and purchase if suitable.",
-"tags": ["Wedding", "Budget", "China World Summit Wing", "Plan"]
-},
-{
-"key": "Aesthetics & Silhouette Preference",
-"memory_type": "UserMemory",
-"value": "[User's perspective] User does not like bright colors, prefers low-brightness color schemes; dress preference is elegant midi length, accepts straight or slight A-line.",
-"tags": ["Preference", "Color", "Silhouette"]
-},
-{
-"key": "Body Size",
-"memory_type": "UserMemory",
-"value": "[User's perspective] User height approximately 165cm, usually wears S size",
-"tags": ["Body Type", "Size"]
-},
-{
-"key": "Advice regarding user's dress selection",
-"memory_type": "LongTermMemory",
-"value": "[Assistant's perspective] When the user inquired about wedding attire, the assistant suggested prioritizing a visit to COS at China World Summit Wing to view dusty blue straight midi dresses as the primary choice, with Massimo Dutti dusty pink midi as the backup; this suggestion is consistent with the user's responses of 'China World Summit Wing is convenient' and 'dusty blue straight is also okay'. Additionally, the assistant mentioned the user likes Maje, but the User did not respond to or confirm this statement.",
-"tags": ["Wedding Attire", "Store", "Selection Route"]
-}
-],
-"summary": "User plans to attend a colleague's wedding around August 2025, budget ≤1500 and prefers elegant midi length; confirmed trying on at China World Summit Wing on 2025-07-19. Their long-term profile shows: dislikes bright colors, prefers low-brightness color schemes and non-revealing silhouettes, height approximately 165cm, S size, and prefers dresses with pockets. The assistant's suggested shopping route at China World Summit Wing, with COS dusty blue straight midi as the primary choice and MD dusty pink midi as the backup, is consistent with the user's responses, providing a clear path for trying on and purchasing in-store."
+  "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
 
@@ -153,7 +114,11 @@ STRATEGY_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
 
 3. 明确解析所有指代关系
  - 时间解析：根据消息时间戳将相对时间（如“昨天”）转换为绝对日期。区分事件时间与消息时间，对不确定项进行标注
+   # 条件允许则使用消息时间戳将相对时间表达转换为绝对日期（如：2023年1月15日的“昨天”则转换为2023年1月14日）；“上周”则转换为2023年1月15日前一周）。
+   # 明确区分事件时间和消息时间。
+   # 如果存在不确定性，需明确说明（例如，“约2025年6月”，“具体日期不详”）。
  - 实体解析：将所有代词、昵称和缩写解析为对话中确立的完整规范名称
+ - 地点解析：若提及具体地点，请包含在内。
 
  4. 采用统一的第三人称观察视角
  - 所有记忆表述均需从外部观察者视角构建，使用“用户”或其具体姓名作为主语
@@ -207,21 +172,17 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
     {
         "key": "项目初期会议",
         "memory_type": "LongTermMemory",
-        "value": "[user-Tom观点]2025年6月25日下午3:00，Tom与团队开会讨论新项目。当Jerry
-        询问该项目能否在2025年12月15日前完成时，Tom对此日期前完成的可行性表达担忧，并计划在2025年6月27日上午9:30
-        提议将截止日期推迟至2026年1月5日。",
-        "tags": ["Tom", "项目", "时间表", "会议", "截止日期"]
+        "value": "2025年6月25日下午3:00，Tom与团队开会讨论新项目。会议涉及时间表，并提出了对2025年12月15日截止日期可行性的担忧。",
+        "tags": ["项目", "时间表", "会议", "截止日期"]
     },
     {
-        "key": "Jerry对新项目截止日期的建议",
-        "memory_type": "LongTermMemory",
-        "value": "[assistant-Jerry观点]Jerry对Tom的新项目截止日期提出疑问、并提议Tom考虑延期。",
-        "tags": ["Jerry", "截止日期变更", "建议"]
+        "key": "计划调整范围",
+        "memory_type": "UserMemory",
+        "value": "Tom计划在2025年6月27日上午9:30的会议上建议团队优先处理功能，并提议将项目截止日期推迟至2026年1月5日。",
+        "tags": ["计划", "截止日期变更", "功能优先级"]
     }
   ],
-  "summary": "Tom目前正在做一个进度紧张的新项目。在2025年6月25日的团队会议后，他意识到原定2025年12月15
-  日的截止日期可能无法实现，因为后端会延迟。由于担心测试时间不足，他接受了Jerry提出的延期建议，计划在次日早上的会议上提出将截止日期推迟至2026
-  年1月5日。"
+  "summary": "Tom目前正专注于管理一个进度紧张的新项目。在2025年6月25日的团队会议后，他意识到原定2025年12月15日的截止日期可能无法实现，因为后端会延迟。由于担心测试时间不足，他接受了Jerry提出的延期建议。Tom计划在次日早上的会议上提出将截止日期推迟至2026年1月5日。他的行为反映出对时间线的担忧，以及积极、以团队为导向的问题解决方式。"
 }
 
 示例2：
