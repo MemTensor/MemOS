@@ -39,7 +39,7 @@ class TaskGoalParser:
         - mode == 'fine': use LLM to parse structured topic/keys/tags
         """
         if mode == "fast":
-            return self._parse_fast(task_description, context=context, **kwargs)
+            return self._parse_fast(task_description, **kwargs)
         elif mode == "fine":
             if not self.llm:
                 raise ValueError("LLM not provided for slow mode.")
@@ -51,7 +51,6 @@ class TaskGoalParser:
         """
         Fast mode: simple jieba word split.
         """
-        context = kwargs.get("context", "")
         use_fast_graph = kwargs.get("use_fast_graph", False)
         if use_fast_graph:
             desc_tokenized = self.tokenizer.tokenize_mixed(task_description)
@@ -62,7 +61,6 @@ class TaskGoalParser:
                 goal_type="default",
                 rephrased_query=task_description,
                 internet_search=False,
-                context=context,
             )
         else:
             return ParsedTaskGoal(
@@ -72,7 +70,6 @@ class TaskGoalParser:
                 goal_type="default",
                 rephrased_query=task_description,
                 internet_search=False,
-                context=context,
             )
 
     def _parse_fine(
@@ -94,17 +91,16 @@ class TaskGoalParser:
             logger.info(f"Parsing Goal... LLM input is {prompt}")
             response = self.llm.generate(messages=[{"role": "user", "content": prompt}])
             logger.info(f"Parsing Goal... LLM Response is {response}")
-            return self._parse_response(response, context=context)
+            return self._parse_response(response)
         except Exception:
             logger.warning(f"Fail to fine-parse query {query}: {traceback.format_exc()}")
-            return self._parse_fast(query, context=context)
+            return self._parse_fast(query)
 
-    def _parse_response(self, response: str, **kwargs) -> ParsedTaskGoal:
+    def _parse_response(self, response: str) -> ParsedTaskGoal:
         """
         Parse LLM JSON output safely.
         """
         try:
-            context = kwargs.get("context", "")
             response = response.replace("```", "").replace("json", "").strip()
             response_json = eval(response)
             return ParsedTaskGoal(
@@ -114,7 +110,6 @@ class TaskGoalParser:
                 rephrased_query=response_json.get("rephrased_instruction", None),
                 internet_search=response_json.get("internet_search", False),
                 goal_type=response_json.get("goal_type", "default"),
-                context=context,
             )
         except Exception as e:
             raise ValueError(f"Failed to parse LLM output: {e}\nRaw response:\n{response}") from e
