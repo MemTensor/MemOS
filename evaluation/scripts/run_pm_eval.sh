@@ -1,10 +1,14 @@
 #!/bin/bash
 
 # Common parameters for all scripts
-LIB="memos-local"
+LIB="memos-api"
 VERSION="072201"
 WORKERS=10
 TOPK=20
+
+# echo "downloading data..."
+# export HF_ENDPOINT=https://hf-mirror.com
+# huggingface-cli download --repo-type dataset bowen-upenn/PersonaMem --local-dir /mnt/afs/codes/ljl/MemOS/evaluation/data/personamem
 
 echo "Running pm_ingestion.py..."
 CUDA_VISIBLE_DEVICES=0 python scripts/personamem/pm_ingestion.py --lib $LIB --version $VERSION --workers $WORKERS

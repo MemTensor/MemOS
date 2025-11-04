@@ -24,7 +24,7 @@ async def locomo_response(frame, llm_client, context: str, question: str) -> str
             context=context,
             question=question,
         )
-    elif frame == "memos":
+    else:
         prompt = ANSWER_PROMPT_MEMOS.format(
             context=context,
             question=question,
@@ -112,8 +112,6 @@ async def main(frame, version="default"):
 
     os.makedirs("data", exist_ok=True)
 
-    print(all_responses)
-
     with open(response_path, "w") as f:
         json.dump(all_responses, f, indent=2)
         print("Save response results")
@@ -124,7 +122,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["zep", "memos", "mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        choices=["mem0", "mem0_graph", "openai", "memos-api", "memobase"],
+        default="memos-api",
     )
     parser.add_argument(
         "--version",

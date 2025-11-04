@@ -76,11 +76,11 @@ def run_with_scheduler_init():
 
     # set configs
     mos_config = MOSConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler_and_openai.yaml"
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml"
     )
 
     mem_cube_config = GeneralMemCubeConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config_neo4j.yaml"
     )
 
     # default local graphdb uri

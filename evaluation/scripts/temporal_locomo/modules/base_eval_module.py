@@ -16,7 +16,6 @@ from memos.log import get_logger
 
 from .constants import (
     BASE_DIR,
-    MEMOS_MODEL,
     MEMOS_SCHEDULER_MODEL,
 )
 from .prompts import (
@@ -42,10 +41,9 @@ class BaseEvalModule:
         self.top_k = self.args.top_k
 
         # attributes
-        if self.frame in [MEMOS_MODEL, MEMOS_SCHEDULER_MODEL]:
-            self.context_update_method = ContextUpdateMethod.DIRECT
-        else:
-            self.context_update_method = ContextUpdateMethod.TEMPLATE
+        self.context_update_method = getattr(
+            self.args, "context_update_method", ContextUpdateMethod.PRE_CONTEXT
+        )
         self.custom_instructions = CUSTOM_INSTRUCTIONS
         self.data_dir = Path(f"{BASE_DIR}/data")
         self.locomo_df = pd.read_json(f"{self.data_dir}/locomo/locomo10.json")
@@ -61,18 +59,26 @@ class BaseEvalModule:
             )
         else:
             logger.warning(f"Temporal locomo dataset not found at {temporal_locomo_file}")
+
+        result_dir_prefix = getattr(self.args, "result_dir_prefix", "")
+
         # Configure result dir; if scheduler disabled and using memos scheduler, mark as ablation
         if (
             hasattr(self.args, "scheduler_flag")
-            and self.frame == "memos_scheduler"
+            and self.frame == MEMOS_SCHEDULER_MODEL
             and self.args.scheduler_flag is False
         ):
             self.result_dir = Path(
-                f"{BASE_DIR}/results/temporal_locomo/{self.frame}-{self.version}-ablation/"
+                f"{BASE_DIR}/results/temporal_locomo/{result_dir_prefix}{self.frame}-{self.version}-ablation/"
             )
         else:
             self.result_dir = Path(
-                f"{BASE_DIR}/results/temporal_locomo/{self.frame}-{self.version}/"
+                f"{BASE_DIR}/results/temporal_locomo/{result_dir_prefix}{self.frame}-{self.version}/"
+            )
+
+        if self.context_update_method != ContextUpdateMethod.PRE_CONTEXT:
+            self.result_dir = (
+                self.result_dir.parent / f"{self.result_dir.name}_{self.context_update_method}"
             )
         self.result_dir.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +91,7 @@ class BaseEvalModule:
         self.ingestion_storage_dir = self.result_dir / "storages"
         self.mos_config_path = Path(f"{BASE_DIR}/configs-example/mos_w_scheduler_config.json")
         self.mem_cube_config_path = Path(f"{BASE_DIR}/configs-example/mem_cube_config.json")
+
         self.openai_api_key = os.getenv("CHAT_MODEL_API_KEY")
         self.openai_base_url = os.getenv("CHAT_MODEL_BASE_URL")
         self.openai_chat_model = os.getenv("CHAT_MODEL")
@@ -92,53 +99,51 @@ class BaseEvalModule:
         auth_config_path = Path(f"{BASE_DIR}/scripts/temporal_locomo/eval_auth.json")
         if auth_config_path.exists():
             auth_config = AuthConfig.from_local_config(config_path=auth_config_path)
-
-            self.mos_config_data = json.load(self.mos_config_path.open("r", encoding="utf-8"))
-            self.mem_cube_config_data = json.load(
-                self.mem_cube_config_path.open("r", encoding="utf-8")
+            print(
+                f"✅ Configuration loaded successfully: from local config file {auth_config_path}"
             )
-
-            # Update LLM authentication information in MOS configuration using dictionary assignment
-            self.mos_config_data["mem_reader"]["config"]["llm"]["config"]["api_key"] = (
-                auth_config.openai.api_key
-            )
-            self.mos_config_data["mem_reader"]["config"]["llm"]["config"]["api_base"] = (
-                auth_config.openai.base_url
-            )
-
-            # Update graph database authentication information in memory cube configuration using dictionary assignment
-            self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["uri"] = (
-                auth_config.graph_db.uri
-            )
-            self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["user"] = (
-                auth_config.graph_db.user
-            )
-            self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["password"] = (
-                auth_config.graph_db.password
-            )
-            self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["db_name"] = (
-                auth_config.graph_db.db_name
-            )
-            self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["auto_create"] = (
-                auth_config.graph_db.auto_create
-            )
-
-            self.openai_api_key = auth_config.openai.api_key
-            self.openai_base_url = auth_config.openai.base_url
-            self.openai_chat_model = auth_config.openai.default_model
         else:
-            print("Please referring to configs-example to provide valid configs.")
-            exit()
+            # Load .env file first before reading environment variables
+            load_dotenv()
+            auth_config = AuthConfig.from_local_env()
+            print("✅ Configuration loaded successfully: from environment variables")
+        self.openai_api_key = auth_config.openai.api_key
+        self.openai_base_url = auth_config.openai.base_url
+        self.openai_chat_model = auth_config.openai.default_model
+
+        self.mos_config_data = json.load(self.mos_config_path.open("r", encoding="utf-8"))
+        self.mem_cube_config_data = json.load(self.mem_cube_config_path.open("r", encoding="utf-8"))
+
+        # Update LLM authentication information in MOS configuration using dictionary assignment
+        self.mos_config_data["mem_reader"]["config"]["llm"]["config"]["api_key"] = (
+            auth_config.openai.api_key
+        )
+        self.mos_config_data["mem_reader"]["config"]["llm"]["config"]["api_base"] = (
+            auth_config.openai.base_url
+        )
+
+        # Update graph database authentication information in memory cube configuration using dictionary assignment
+        self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["uri"] = (
+            auth_config.graph_db.uri
+        )
+        self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["user"] = (
+            auth_config.graph_db.user
+        )
+        self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["password"] = (
+            auth_config.graph_db.password
+        )
+        self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["db_name"] = (
+            auth_config.graph_db.db_name
+        )
+        self.mem_cube_config_data["text_mem"]["config"]["graph_db"]["config"]["auto_create"] = (
+            auth_config.graph_db.auto_create
+        )
 
         # Logger initialization
         self.logger = logger
 
         # Statistics tracking with thread safety
         self.stats = {self.frame: {self.version: defaultdict(dict)}}
-        self.stats[self.frame][self.version]["response_stats"] = defaultdict(dict)
-        self.stats[self.frame][self.version]["response_stats"]["response_failure"] = 0
-        self.stats[self.frame][self.version]["response_stats"]["response_count"] = 0
-
         self.stats[self.frame][self.version]["memory_stats"] = defaultdict(dict)
         self.stats[self.frame][self.version]["memory_stats"]["total_queries"] = 0
         self.stats[self.frame][self.version]["memory_stats"]["can_answer_count"] = 0
@@ -155,7 +160,6 @@ class BaseEvalModule:
 
         self.can_answer_cases: list[RecordingCase] = []
         self.cannot_answer_cases: list[RecordingCase] = []
-        load_dotenv()
 
     def print_eval_info(self):
         """

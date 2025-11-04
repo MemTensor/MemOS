@@ -5,7 +5,7 @@ from typing import Generic, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 # Import message types from core types module
-from memos.types import MessageDict
+from memos.types import MessageDict, PermissionDict
 
 
 T = TypeVar("T")
@@ -162,6 +162,56 @@ class SearchRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
     top_k: int = Field(10, description="Number of results to return")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+
+
+class APISearchRequest(BaseRequest):
+    """Request model for searching memories."""
+
+    query: str = Field(..., description="Search query")
+    user_id: str = Field(None, description="User ID")
+    mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    mode: str = Field("fast", description="search mode fast or fine")
+    internet_search: bool = Field(False, description="Whether to use internet search")
+    moscube: bool = Field(False, description="Whether to use MemOSCube")
+    top_k: int = Field(10, description="Number of results to return")
+    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
+    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    operation: list[PermissionDict] | None = Field(
+        None, description="operation ids for multi cubes"
+    )
+
+
+class APIADDRequest(BaseRequest):
+    """Request model for creating memories."""
+
+    user_id: str = Field(None, description="User ID")
+    mem_cube_id: str = Field(..., description="Cube ID")
+    messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
+    memory_content: str | None = Field(None, description="Memory content to store")
+    doc_path: str | None = Field(None, description="Path to document to store")
+    source: str | None = Field(None, description="Source of the memory")
+    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
+    session_id: str | None = Field(None, description="Session id")
+    operation: list[PermissionDict] | None = Field(
+        None, description="operation ids for multi cubes"
+    )
+
+
+class APIChatCompleteRequest(BaseRequest):
+    """Request model for chat operations."""
+
+    user_id: str = Field(..., description="User ID")
+    query: str = Field(..., description="Chat query message")
+    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    history: list[MessageDict] | None = Field(None, description="Chat history")
+    internet_search: bool = Field(False, description="Whether to use internet search")
+    moscube: bool = Field(True, description="Whether to use MemOSCube")
+    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    top_k: int = Field(10, description="Number of results to return")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
+    session_id: str | None = Field(
+        "default_session", description="Session ID for soft-filtering memories"
+    )
 
 
 class SuggestionRequest(BaseRequest):
