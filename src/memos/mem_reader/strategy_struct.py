@@ -43,7 +43,7 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
         template = STRATEGY_PROMPT_DICT["chat"][lang]
         examples = STRATEGY_PROMPT_DICT["chat"][f"{lang}_example"]
         prompt = template.replace("${conversation}", mem_str)
-        if self.config.remove_prompt_example:
+        if self.config.remove_prompt_example:  # TODO unused
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -112,6 +112,19 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
 
                             results.append([overlap_item, item])
                             current_length = overlap_length + content_length
+            else:
+                cut_size, cut_overlap = (
+                    self.chat_chunker["chunk_session"],
+                    self.chat_chunker["chunk_overlap"],
+                )
+                for items in scene_data:
+                    step = cut_size - cut_overlap
+                    end = len(items) - cut_overlap
+                    if end <= 0:
+                        results.extend([items[:]])
+                    else:
+                        results.extend([items[i : i + cut_size] for i in range(0, end, step)])
+
         elif type == "doc":
             parser_config = ParserConfigFactory.model_validate(
                 {

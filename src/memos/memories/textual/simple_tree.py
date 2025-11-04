@@ -66,7 +66,9 @@ class SimpleTreeTextMemory(TreeTextMemory):
         time_start_bm = time.time()
         self.search_strategy = config.search_strategy
         self.bm25_retriever = (
-            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+            EnhancedBM25()
+            if self.search_strategy and self.search_strategy.get("bm25", False)
+            else None
         )
         logger.info(f"time init: bm25_retriever time is: {time.time() - time_start_bm}")
 

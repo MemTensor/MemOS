@@ -184,7 +184,7 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ),
     )
 
-    search_strategy: dict[str, bool] | None = Field(
+    search_strategy: dict[str, Any] | None = Field(
         default=None,
         description=(
             'Set search strategy for this memory configuration.{"bm25": true, "cot": false}'
