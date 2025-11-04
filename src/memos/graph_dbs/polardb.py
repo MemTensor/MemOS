@@ -862,9 +862,9 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 if result:
                     if include_embedding:
-                        properties_json, embedding_json = result
+                        _, properties_json, embedding_json = result
                     else:
-                        properties_json = result
+                        _, properties_json = result
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -892,8 +892,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     return self._parse_node(
                         {
                             "id": id,
-                            "memory": json.loads(properties[1]).get("memory", ""),
-                            **json.loads(properties[1]),
+                            "memory": properties.get("memory", ""),
+                            **properties,
                         }
                     )
                 return None
