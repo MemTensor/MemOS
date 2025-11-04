@@ -36,6 +36,17 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     3. Ensures the context is available throughout the request lifecycle
     """
 
+    def __init__(self, app, source: str | None = None):
+        """
+        Initialize the middleware.
+
+        Args:
+            app: The ASGI application
+            source: Source identifier (e.g., 'product' or 'server') to distinguish request origin
+        """
+        super().__init__(app)
+        self.source = source or "api"
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Extract or generate trace_id
         trace_id = extract_trace_id_from_headers(request) or generate_trace_id()
@@ -52,17 +63,14 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             env=env,
             user_type=user_type,
             user_name=user_name,
+            source=self.source,
         )
         set_request_context(context)
 
-        # Log request start with parameters
-        params_log = {}
-
-        # Get query parameters
-        if request.query_params:
-            params_log["query_params"] = dict(request.query_params)
-
-        logger.info(f"Request started, params: {params_log}, headers: {request.headers}")
+        logger.info(
+            f"Request started, source: {self.source}, method: {request.method}, path: {request.url.path}, "
+            f"headers: {request.headers}"
+        )
 
         # Process the request
         try:
@@ -70,16 +78,16 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             end_time = time.time()
             if response.status_code == 200:
                 logger.info(
-                    f"Request completed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                    f"Request completed: source: {self.source}, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
                 )
             else:
                 logger.error(
-                    f"Request Failed: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                    f"Request Failed: source: {self.source}, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
                 )
         except Exception as e:
             end_time = time.time()
             logger.error(
-                f"Request Exception Error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                f"Request Exception Error: source: {self.source}, path: {request.url.path}, error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
             raise e
 

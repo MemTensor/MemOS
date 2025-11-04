@@ -412,6 +412,8 @@ def search_memories(search_req: APISearchRequest):
         search_req.include_preference,
     )
 
+    logger.info(f"Search memories result: {memories_result}")
+
     return SearchResponse(
         message="Search completed successfully",
         data=memories_result,
@@ -618,6 +620,9 @@ def add_memories(add_req: APIADDRequest):
         text_response_data = text_future.result()
         pref_response_data = pref_future.result()
 
+    logger.info(f"add_memories Text response data: {text_response_data}")
+    logger.info(f"add_memories Pref response data: {pref_response_data}")
+
     return MemoryResponse(
         message="Memory added successfully",
         data=text_response_data + pref_response_data,
@@ -653,6 +658,11 @@ def scheduler_status(user_name: str | None = None):
                 cube = getattr(task, "mem_cube_id", "unknown")
                 task_count_per_user[cube] = task_count_per_user.get(cube, 0) + 1
 
+            try:
+                metrics_snapshot = mem_scheduler.dispatcher.metrics.snapshot()
+            except Exception:
+                metrics_snapshot = {}
+
             return {
                 "message": "ok",
                 "data": {
@@ -661,6 +671,7 @@ def scheduler_status(user_name: str | None = None):
                     "task_count_per_user": task_count_per_user,
                     "timestamp": time.time(),
                     "instance_id": INSTANCE_ID,
+                    "metrics": metrics_snapshot,
                 },
             }
     except Exception as err:
