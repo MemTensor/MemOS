@@ -1,4 +1,5 @@
 import json
+import os
 
 from abc import ABC, abstractmethod
 from concurrent.futures import as_completed
@@ -232,8 +233,12 @@ class NaiveAdder(BaseAdder):
         need_update = (
             need_update if isinstance(need_update, bool) else need_update.lower() == "true"
         )
-        update_item = [mem for mem in retrieved_memories if mem.id == rsp["id"]]
-        if need_update and update_item:
+        update_item = (
+            [mem for mem in retrieved_memories if mem.id == rsp["id"]]
+            if rsp and "id" in rsp
+            else []
+        )
+        if need_update and update_item and rsp:
             update_vec_db_item = update_item[0]
             update_vec_db_item.payload[preference_type] = rsp["new_preference"]
             update_vec_db_item.payload["updated_at"] = vec_db_item.payload["updated_at"]
@@ -283,7 +288,7 @@ class NaiveAdder(BaseAdder):
         retrieved_memories: list[MilvusVecDBItem],
         collection_name: str,
         preference_type: str,
-        update_mode: str = "fine",
+        update_mode: str = "fast",
     ) -> list[str] | str | None:
         """Update the memory.
         Args:
@@ -322,7 +327,11 @@ class NaiveAdder(BaseAdder):
             search_results.sort(key=lambda x: x.score, reverse=True)
 
             return self._update_memory(
-                memory, search_results, collection_name, preference_type, update_mode="fine"
+                memory,
+                search_results,
+                collection_name,
+                preference_type,
+                update_mode=os.getenv("PREFERENCE_ADDER_MODE", "fast"),
             )
 
         except Exception as e:
