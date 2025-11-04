@@ -3024,7 +3024,7 @@ class PolarDBGraphDB(BaseGraphDB):
         """Format parameter value to handle both quoted and unquoted formats"""
         # Handle None value
         if value is None:
-            logger.warning(f"format_param_value: value is None")
+            logger.warning("format_param_value: value is None")
             return "null"
 
         # Remove outer quotes if they exist
