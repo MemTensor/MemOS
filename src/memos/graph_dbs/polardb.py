@@ -859,9 +859,9 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 if result:
                     if include_embedding:
-                        properties_json, embedding_json = result
+                        _, properties_json, embedding_json = result
                     else:
-                        properties_json = result
+                        _, properties_json = result
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -889,8 +889,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     return self._parse_node(
                         {
                             "id": id,
-                            "memory": json.loads(properties[1]).get("memory", ""),
-                            **json.loads(properties[1]),
+                            "memory": properties.get("memory", ""),
+                            **properties,
                         }
                     )
                 return None
@@ -1290,6 +1290,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
+        if center_id.startswith('"') and center_id.endswith('"'):
+            center_id = center_id[1:-1]
         # Use a simplified query to get the subgraph (temporarily only direct neighbors)
         """
             SELECT * FROM cypher('{self.db_name}_graph', $$
