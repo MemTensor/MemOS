@@ -39,7 +39,6 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
         self.chat_chunker = config.chat_chunker["config"]
 
     def _get_llm_response(self, mem_str: str) -> dict:
-        print("[code stamp]: fine_get_llm_response")
         lang = detect_lang(mem_str)
         template = STRATEGY_PROMPT_DICT["chat"][lang]
         examples = STRATEGY_PROMPT_DICT["chat"][f"{lang}_example"]

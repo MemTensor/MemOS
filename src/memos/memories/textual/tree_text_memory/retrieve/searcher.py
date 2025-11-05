@@ -564,9 +564,6 @@ class Searcher:
             prompt = template.replace("${original_query}", query).replace(
                 "${split_num_threshold}", str(split_num)
             )
-        logger.info("COT process")
-        print("---------------prompt-------------")
-        print(prompt, mode)
 
         messages = [{"role": "user", "content": prompt}]
         try:
