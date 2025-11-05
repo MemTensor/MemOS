@@ -78,7 +78,6 @@ def detect_lang(text):
         chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
         chinese_chars = re.findall(chinese_pattern, cleaned_text)
         text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
-        print(text_without_special)
         if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
             return "zh"
         return "en"
