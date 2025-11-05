@@ -45,7 +45,7 @@ def instruct_completion(
         "zh": "隐式偏好 > ",
         "en": "implicit preference > ",
     }
-    lang = detect_lang(explicit_pref_str + implicit_pref_str)
+    lang = detect_lang(explicit_pref_str.replace("Explicit Preference:\n", "") + implicit_pref_str.replace("Implicit Preference:\n", ""))
 
     if not explicit_pref_str and not implicit_pref_str:
         return "", ""
