@@ -57,7 +57,7 @@
 MemOS demonstrates significant improvements over baseline memory solutions in multiple memory tasks,
 showcasing its capabilities in **information extraction**, **temporal and cross-session reasoning**, and **personalized preference responses**.
 
-| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  | 
+| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  |
 |-----------------|-------------|-------------|-------------|-------------|
 | **GPT-4o-mini** | 52.75       | 55.4        | 2.8         | 43.46       |
 | **MemOS**       | **75.80**   | **77.80**   | **71.90**   | **61.17**   |
