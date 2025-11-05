@@ -427,7 +427,7 @@ class APIConfig:
             "config": {
                 "chunk_type": os.getenv("MEM_READER_CHAT_CHUNK_TYPE", "default"),
                 "chunk_length": int(os.getenv("MEM_READER_CHAT_CHUNK_TOKEN_SIZE", 1600)),
-                "chunk_session": int(os.getenv("MEM_READER_CHAT_CHUNK_SESS_SIZE", 10)),
+                "chunk_session": int(os.getenv("MEM_READER_CHAT_CHUNK_SESS_SIZE", 20)),
                 "chunk_overlap": int(os.getenv("MEM_READER_CHAT_CHUNK_OVERLAP", 2)),
             },
         }
