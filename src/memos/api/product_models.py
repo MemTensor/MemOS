@@ -198,6 +198,9 @@ class APIADDRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
+    sync: str | None = Field(
+        None, description="optional async or sync when processing add memories"
+    )
 
 
 class APIChatCompleteRequest(BaseRequest):

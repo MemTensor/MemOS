@@ -507,10 +507,15 @@ def add_memories(add_req: APIADDRequest):
         target_session_id = "default_session"
 
     # If text memory backend works in async mode, submit tasks to scheduler
-    try:
-        sync_mode = getattr(naive_mem_cube.text_mem, "mode", "sync")
-    except Exception:
-        sync_mode = "sync"
+    if add_req.sync and add_req.sync in ["sync", "async"]:
+        sync_mode = add_req.sync
+        logger.info(f"User Input sync_mode is: {sync_mode}")
+        naive_mem_cube.text_mem.mode = sync_mode
+    else:
+        try:
+            sync_mode = getattr(naive_mem_cube.text_mem, "mode", "sync")
+        except Exception:
+            sync_mode = "sync"
     logger.info(f"Add sync_mode mode is: {sync_mode}")
 
     def _process_text_mem() -> list[dict[str, str]]:
