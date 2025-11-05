@@ -38,7 +38,7 @@ if __name__ == "__main__":
     import uvicorn
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8004)
+    parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
     uvicorn.run("memos.api.server_api:app", host="0.0.0.0", port=args.port, workers=args.workers)
