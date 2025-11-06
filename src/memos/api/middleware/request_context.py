@@ -72,10 +72,19 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             f"headers: {request.headers}"
         )
 
+        response = await call_next(request)
+        end_time = time.time()
+
         # Process the request
         try:
-            response = await call_next(request)
-            end_time = time.time()
+
+            if not response:
+                logger.error(
+                    f"Request Failed No Response, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
+                )
+
+                return response
+
             if response.status_code == 200:
                 logger.info(
                     f"Request completed: source: {self.source}, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
@@ -89,6 +98,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             logger.error(
                 f"Request Exception Error: source: {self.source}, path: {request.url.path}, error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
-            raise e
+            raise response
 
         return response
