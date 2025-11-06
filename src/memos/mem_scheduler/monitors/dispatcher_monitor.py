@@ -4,7 +4,7 @@ import time
 from time import perf_counter
 
 from memos.configs.mem_scheduler import BaseSchedulerConfig
-from memos.context.context import ContextThreadPoolExecutor
+from memos.context.context import ContextThread, ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
@@ -340,7 +340,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
             return False
 
         self._running = True
-        self._monitor_thread = threading.Thread(
+        self._monitor_thread = ContextThread(
             target=self._monitor_loop, name="threadpool_monitor", daemon=True
         )
         self._monitor_thread.start()

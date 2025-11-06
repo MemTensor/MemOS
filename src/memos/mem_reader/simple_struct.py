@@ -67,9 +67,18 @@ def detect_lang(text):
     try:
         if not text or not isinstance(text, str):
             return "en"
+        cleaned_text = text
+        # remove role and timestamp
+        cleaned_text = re.sub(
+            r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
+        )
+        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
+
+        # extract chinese characters
         chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
-        chinese_chars = re.findall(chinese_pattern, text)
-        if len(chinese_chars) / len(re.sub(r"[\s\d\W]", "", text)) > 0.3:
+        chinese_chars = re.findall(chinese_pattern, cleaned_text)
+        text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
+        if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
             return "zh"
         return "en"
     except Exception:
@@ -466,15 +475,11 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if type == "chat":
             for items in scene_data:
                 result = []
-                for item in items:
-                    # Convert dictionary to string
-                    if "chat_time" in item:
-                        result.append(item)
-                    else:
-                        result.append(item)
+                for i, item in enumerate(items):
+                    result.append(item)
                     if len(result) >= 10:
                         results.append(result)
-                        context = copy.deepcopy(result[-2:])
+                        context = copy.deepcopy(result[-2:]) if i + 1 < len(items) else []
                         result = context
                 if result:
                     results.append(result)

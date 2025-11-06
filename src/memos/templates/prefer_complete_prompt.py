@@ -601,7 +601,6 @@ PREF_INSTRUCTIONS = """
 # Note:
 Fact memory are summaries of facts, while preference memory are summaries of user preferences.
 Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
-When encountering preference conflicts, the priority is: explicit preference > implicit preference > fact memory.
 """
 
 
@@ -609,5 +608,4 @@ PREF_INSTRUCTIONS_ZH = """
 # 注意：
 事实记忆是事实的摘要，而偏好记忆是用户偏好的摘要。
 你的回复不得违反用户的任何偏好，无论是显式偏好还是隐式偏好，并简要解释你为什么这样回答以避免冲突。
-当遇到偏好冲突时，优先级为：显式偏好 > 隐式偏好 > 事实记忆。
 """

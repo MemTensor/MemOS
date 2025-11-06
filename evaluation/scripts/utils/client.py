@@ -250,33 +250,23 @@ class MemosApiOnlineClient:
                 preference_note = json.loads(response.text)["data"]["preference_note"]
                 for i in text_mem_res:
                     i.update({"memory": i.pop("memory_value")})
+                explicit_pref_string = "Explicit Preference:"
+                implicit_pref_string = "\n\nImplicit Preference:"
+                explicit_idx = 0
+                implicit_idx = 0
+                for pref in pref_mem_res:
+                    if pref["preference_type"] == "explicit_preference":
+                        explicit_pref_string += f"\n{explicit_idx + 1}. {pref['preference']}"
+                        explicit_idx += 1
+                    if pref["preference_type"] == "implicit_preference":
+                        implicit_pref_string += f"\n{implicit_idx + 1}. {pref['preference']}"
+                        implicit_idx += 1
 
-                explicit_prefs = [
-                    p["preference"]
-                    for p in pref_mem_res
-                    if p.get("preference_type", "") == "explicit_preference"
-                ]
-                implicit_prefs = [
-                    p["preference"]
-                    for p in pref_mem_res
-                    if p.get("preference_type", "") == "implicit_preference"
-                ]
+                return {
+                    "text_mem": [{"memories": text_mem_res}],
+                    "pref_string": explicit_pref_string + implicit_pref_string + preference_note,
+                }
 
-                pref_parts = []
-                if explicit_prefs:
-                    pref_parts.append(
-                        "Explicit Preference:\n"
-                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(explicit_prefs))
-                    )
-                if implicit_prefs:
-                    pref_parts.append(
-                        "Implicit Preference:\n"
-                        + "\n".join(f"{i + 1}. {p}" for i, p in enumerate(implicit_prefs))
-                    )
-
-                pref_string = "\n".join(pref_parts) + preference_note
-
-                return {"text_mem": [{"memories": text_mem_res}], "pref_string": pref_string}
             except Exception as e:
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)

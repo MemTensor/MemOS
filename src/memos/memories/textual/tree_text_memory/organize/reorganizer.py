@@ -1,5 +1,4 @@
 import json
-import threading
 import time
 import traceback
 
@@ -10,7 +9,7 @@ from typing import Literal
 
 import numpy as np
 
-from memos.context.context import ContextThreadPoolExecutor
+from memos.context.context import ContextThread, ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBEdge, GraphDBNode
@@ -94,12 +93,12 @@ class GraphStructureReorganizer:
         self._reorganize_needed = True
         if self.is_reorganize:
             # ____ 1. For queue message driven thread ___________
-            self.thread = threading.Thread(target=self._run_message_consumer_loop)
+            self.thread = ContextThread(target=self._run_message_consumer_loop)
             self.thread.start()
             # ____ 2. For periodic structure optimization _______
             self._stop_scheduler = False
             self._is_optimizing = {"LongTermMemory": False, "UserMemory": False}
-            self.structure_optimizer_thread = threading.Thread(
+            self.structure_optimizer_thread = ContextThread(
                 target=self._run_structure_organizer_loop
             )
             self.structure_optimizer_thread.start()

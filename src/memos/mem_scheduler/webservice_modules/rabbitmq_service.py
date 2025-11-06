@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
+from memos.context.context import ContextThread
 from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
@@ -96,7 +97,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             )
 
             # Start IOLoop in dedicated thread
-            self._io_loop_thread = threading.Thread(
+            self._io_loop_thread = ContextThread(
                 target=self.rabbitmq_connection.ioloop.start, daemon=True
             )
             self._io_loop_thread.start()

@@ -349,7 +349,7 @@ def search_memories(search_req: APISearchRequest):
         mem_cube_id=search_req.mem_cube_id,
         session_id=search_req.session_id or "default_session",
     )
-    logger.info(f"Search user_id is: {user_context.mem_cube_id}")
+    logger.info(f"Search Req is: {search_req}")
     memories_result: MOSSearchResult = {
         "text_mem": [],
         "act_mem": [],
@@ -502,6 +502,9 @@ def add_memories(add_req: APIADDRequest):
         mem_cube_id=add_req.mem_cube_id,
         session_id=add_req.session_id or "default_session",
     )
+
+    logger.info(f"Add Req is: {add_req}")
+
     target_session_id = add_req.session_id
     if not target_session_id:
         target_session_id = "default_session"

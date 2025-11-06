@@ -57,7 +57,7 @@
 MemOS demonstrates significant improvements over baseline memory solutions in multiple memory tasks,
 showcasing its capabilities in **information extraction**, **temporal and cross-session reasoning**, and **personalized preference responses**.
 
-| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  | 
+| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  |
 |-----------------|-------------|-------------|-------------|-------------|
 | **GPT-4o-mini** | 52.75       | 55.4        | 2.8         | 43.46       |
 | **MemOS**       | **75.80**   | **77.80**   | **71.90**   | **61.17**   |
@@ -81,6 +81,27 @@ showcasing its capabilities in **information extraction**, **temporal and cross-
 
 ## 🚀 Getting Started
 
+### ⭐️ MemOS online API
+The easiest way to use MemOS. Equip your agent with memory **in minutes**!
+
+Sign up and get started on[`MemOS dashboard`](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing).
+
+
+### Self-Hosted Server
+1. Get the repository.
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+pip install -r ./docker/requirements.txt
+```
+
+2. Configure `docker/.env.example` and copy to `MemOS/.env`
+3. Start the service.
+```bash
+uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 8
+```
+
+### Local SDK
 Here's a quick example of how to create a **`MemCube`**, load it from a directory, access its memories, and save it.
 
 ```python
@@ -102,7 +123,7 @@ for item in mem_cube.act_mem.get_all():
 mem_cube.dump("tmp/mem_cube")
 ```
 
-What about **`MOS`** (Memory Operating System)? It's a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
+**`MOS`** (Memory Operating System) is a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
 
 ```python
 from memos.configs.mem_os import MOSConfig
