@@ -1742,7 +1742,9 @@ class PolarDBGraphDB(BaseGraphDB):
             return_fields.append(
                 f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text AS {alias}"
             )
-            group_by_fields.append(f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text")
+            group_by_fields.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text"
+            )
 
         # Full SQL query construction
         query = f"""
