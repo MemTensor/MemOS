@@ -156,7 +156,9 @@ class MemoryManager:
         results = self.graph_store.get_grouped_counts(
             group_fields=["memory_type"], user_name=user_name
         )
-        self.current_memory_size = {record["memory_type"]: record["count"] for record in results}
+        self.current_memory_size = {
+            record["memory_type"]: int(record["count"]) for record in results
+        }
         logger.info(f"[MemoryManager] Refreshed memory sizes: {self.current_memory_size}")
 
     def _process_memory(self, memory: TextualMemoryItem, user_name: str | None = None):
