@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
+from memos.context.context import ContextThread
 from memos.mem_cube.general import GeneralMemCube
 
 
@@ -178,7 +179,6 @@ class NacosConfigManager:
         if not enable:
             return
         interval = int(os.getenv("NACOS_WATCH_INTERVAL", "60"))
-        import threading
 
         def _loop() -> None:
             while True:
@@ -188,7 +188,7 @@ class NacosConfigManager:
                     logger.error(f"❌ Nacos watch loop error: {e}")
                 time.sleep(interval)
 
-        threading.Thread(target=_loop, daemon=True).start()
+        ContextThread(target=_loop, daemon=True).start()
         logger.info(f"Nacos watch thread started (interval={interval}s).")
 
     @classmethod
