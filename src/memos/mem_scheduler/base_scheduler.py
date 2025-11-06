@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy.engine import Engine
 
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
+from memos.context.context import ContextThread
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
@@ -689,7 +690,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.info("Message consumer process started")
         else:
             # Default to thread mode
-            self._consumer_thread = threading.Thread(
+            self._consumer_thread = ContextThread(
                 target=self._message_consumer,
                 daemon=True,
                 name="MessageConsumerThread",

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import as_completed
 from typing import Any, TypeVar
 
+from memos.context.context import ContextThread
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 
@@ -138,7 +139,7 @@ class ThreadManager(BaseSchedulerModule):
 
             # Start all threads
             for task_name, (func, args) in tasks.items():
-                thread = threading.Thread(
+                thread = ContextThread(
                     target=worker, args=(task_name, func, args), name=f"task-{task_name}"
                 )
                 threads[task_name] = thread
@@ -283,7 +284,7 @@ class ThreadManager(BaseSchedulerModule):
 
         # Create and start threads for each task
         for task_name, task_func in tasks.items():
-            thread = threading.Thread(
+            thread = ContextThread(
                 target=self.worker, args=(task_func, task_name), name=f"race-{task_name}"
             )
             self.threads[task_name] = thread
