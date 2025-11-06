@@ -258,7 +258,7 @@ class MemosApiOnlineClient:
                     if pref["preference_type"] == "explicit_preference":
                         explicit_pref_string += f"\n{explicit_idx + 1}. {pref['preference']}"
                         explicit_idx += 1
-                    if pref["preference_type"] == "explicit_preference":
+                    if pref["preference_type"] == "implicit_preference":
                         implicit_pref_string += f"\n{implicit_idx + 1}. {pref['preference']}"
                         implicit_idx += 1
 
