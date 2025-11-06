@@ -98,6 +98,5 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
             logger.error(
                 f"Request Exception Error: source: {self.source}, path: {request.url.path}, error: {e}, cost: {(end_time - start_time) * 1000:.2f}ms"
             )
-            raise response
 
         return response
