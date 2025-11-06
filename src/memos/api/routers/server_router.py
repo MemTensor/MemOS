@@ -4,10 +4,9 @@ import random as _random
 import socket
 import time
 import traceback
-
 from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -61,13 +60,8 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
 )
 from memos.reranker.factory import RerankerFactory
 from memos.templates.instruction_completion import instruct_completion
-
-
-if TYPE_CHECKING:
-    from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
-from memos.types import MOSSearchResult, UserContext
+from memos.types import UserContext
 from memos.vec_dbs.factory import VecDBFactory
-
 
 logger = get_logger(__name__)
 
@@ -81,10 +75,10 @@ def _to_iter(running: Any) -> Iterable:
         return []
     if isinstance(running, dict):
         return running.values()
-    return running  # assume it's already an iterable (e.g., list)
+    return running
 
 
-def _build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
+def _build_graph_db_config(user_id: str = "default"):
     """Build graph database configuration."""
     graph_db_backend_map = {
         "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
@@ -100,63 +94,6 @@ def _build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
             "config": graph_db_backend_map[graph_db_backend],
         }
     )
-
-
-def _build_vec_db_config() -> dict[str, Any]:
-    """Build vector database configuration."""
-    return VectorDBConfigFactory.model_validate(
-        {
-            "backend": "milvus",
-            "config": APIConfig.get_milvus_config(),
-        }
-    )
-
-
-def _build_llm_config() -> dict[str, Any]:
-    """Build LLM configuration."""
-    return LLMConfigFactory.model_validate(
-        {
-            "backend": "openai",
-            "config": APIConfig.get_openai_config(),
-        }
-    )
-
-
-def _build_embedder_config() -> dict[str, Any]:
-    """Build embedder configuration."""
-    return EmbedderConfigFactory.model_validate(APIConfig.get_embedder_config())
-
-
-def _build_mem_reader_config() -> dict[str, Any]:
-    """Build memory reader configuration."""
-    return MemReaderConfigFactory.model_validate(
-        APIConfig.get_product_default_config()["mem_reader"]
-    )
-
-
-def _build_reranker_config() -> dict[str, Any]:
-    """Build reranker configuration."""
-    return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
-
-
-def _build_internet_retriever_config() -> dict[str, Any]:
-    """Build internet retriever configuration."""
-    return InternetRetrieverConfigFactory.model_validate(APIConfig.get_internet_config())
-
-
-def _build_pref_extractor_config() -> dict[str, Any]:
-    """Build extractor configuration."""
-    return ExtractorConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def _build_pref_adder_config() -> dict[str, Any]:
-    """Build adder configuration."""
-    return AdderConfigFactory.model_validate({"backend": "naive", "config": {}})
-
-
-def _build_pref_retriever_config() -> dict[str, Any]:
-    """Build retriever configuration."""
-    return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
 
 
 def _get_default_memory_size(cube_config) -> dict[str, int]:
@@ -175,15 +112,27 @@ def init_server():
 
     # Build component configurations
     graph_db_config = _build_graph_db_config()
-    llm_config = _build_llm_config()
-    embedder_config = _build_embedder_config()
-    mem_reader_config = _build_mem_reader_config()
-    reranker_config = _build_reranker_config()
-    internet_retriever_config = _build_internet_retriever_config()
-    vector_db_config = _build_vec_db_config()
-    pref_extractor_config = _build_pref_extractor_config()
-    pref_adder_config = _build_pref_adder_config()
-    pref_retriever_config = _build_pref_retriever_config()
+    llm_config = LLMConfigFactory.model_validate(
+        {"backend": "openai", "config": APIConfig.get_openai_config()}
+    )
+    embedder_config = EmbedderConfigFactory.model_validate(APIConfig.get_embedder_config())
+    mem_reader_config = MemReaderConfigFactory.model_validate(
+        APIConfig.get_product_default_config()["mem_reader"]
+    )
+    reranker_config = RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
+    internet_retriever_config = InternetRetrieverConfigFactory.model_validate(
+        APIConfig.get_internet_config()
+    )
+    vector_db_config = VectorDBConfigFactory.model_validate(
+        {"backend": "milvus", "config": APIConfig.get_milvus_config()}
+    )
+    pref_extractor_config = ExtractorConfigFactory.model_validate(
+        {"backend": "naive", "config": {}}
+    )
+    pref_adder_config = AdderConfigFactory.model_validate({"backend": "naive", "config": {}})
+    pref_retriever_config = RetrieverConfigFactory.model_validate(
+        {"backend": "naive", "config": {}}
+    )
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
@@ -249,7 +198,7 @@ def init_server():
     scheduler_config = SchedulerConfigFactory(
         backend="optimized_scheduler", config=scheduler_config_dict
     )
-    mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
+    mem_scheduler = SchedulerFactory.from_config(scheduler_config)
     mem_scheduler.initialize_modules(
         chat_llm=llm,
         process_llm=mem_reader.llm,
@@ -320,97 +269,38 @@ def _format_memory_item(memory_data: Any) -> dict[str, Any]:
     return memory
 
 
-def _post_process_pref_mem(
-    memories_result: list[dict[str, Any]],
-    pref_formatted_mem: list[dict[str, Any]],
-    mem_cube_id: str,
-    include_preference: bool,
-):
-    if include_preference:
-        memories_result["pref_mem"].append(
-            {
-                "cube_id": mem_cube_id,
-                "memories": pref_formatted_mem,
-            }
-        )
-        pref_instruction, pref_note = instruct_completion(pref_formatted_mem)
-        memories_result["pref_string"] = pref_instruction
-        memories_result["pref_note"] = pref_note
-
-    return memories_result
-
-
 @router.post("/search", summary="Search memories", response_model=SearchResponse)
 def search_memories(search_req: APISearchRequest):
     """Search memories for a specific user."""
-    # Create UserContext object - how to assign values
-    user_context = UserContext(
-        user_id=search_req.user_id,
-        mem_cube_id=search_req.mem_cube_id,
-        session_id=search_req.session_id or "default_session",
-    )
     logger.info(f"Search Req is: {search_req}")
-    memories_result: MOSSearchResult = {
-        "text_mem": [],
-        "act_mem": [],
-        "para_mem": [],
-        "pref_mem": [],
-        "pref_note": "",
-    }
-
-    search_mode = search_req.mode
-
-    def _search_text():
-        if search_mode == SearchMode.FAST:
-            formatted_memories = fast_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.FINE:
-            formatted_memories = fine_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.MIXTURE:
-            formatted_memories = mix_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        else:
-            logger.error(f"Unsupported search mode: {search_mode}")
-            raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
-        return formatted_memories
-
-    def _search_pref():
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
-            return []
-        results = naive_mem_cube.pref_mem.search(
-            query=search_req.query,
-            top_k=search_req.pref_top_k,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": search_req.session_id,
-                "chat_history": search_req.chat_history,
-            },
-        )
-        return [_format_memory_item(data) for data in results]
 
     with ContextThreadPoolExecutor(max_workers=2) as executor:
-        text_future = executor.submit(_search_text)
-        pref_future = executor.submit(_search_pref)
+        text_future = executor.submit(_search_text_mem, search_req)
+        pref_future = executor.submit(_search_pref_mem, search_req)
         text_formatted_memories = text_future.result()
         pref_formatted_memories = pref_future.result()
 
-    memories_result["text_mem"].append(
-        {
-            "cube_id": search_req.mem_cube_id,
-            "memories": text_formatted_memories,
-        }
-    )
+    text_mem = [{"cube_id": search_req.mem_cube_id, "memories": text_formatted_memories}]
+    act_mem = []
+    para_mem = []
+    pref_mem = []
+    if search_req.include_preference:
+        pref_instruction, pref_note = instruct_completion(pref_formatted_memories)
+        pref_mem = [
+            {
+                "cube_id": search_req.mem_cube_id,
+                "memories": pref_formatted_memories,
+                "pref_note": pref_note,
+                "pref_string": pref_instruction,
+            }
+        ]
 
-    memories_result = _post_process_pref_mem(
-        memories_result,
-        pref_formatted_memories,
-        search_req.mem_cube_id,
-        search_req.include_preference,
-    )
+    memories_result = {
+        "text_mem": text_mem,
+        "act_mem": act_mem,
+        "para_mem": para_mem,
+        "pref_mem": pref_mem,
+    }
 
     logger.info(f"Search memories result: {memories_result}")
 
@@ -420,89 +310,65 @@ def search_memories(search_req: APISearchRequest):
     )
 
 
-def mix_search_memories(
-    search_req: APISearchRequest,
-    user_context: UserContext,
-):
-    """
-    Mix search memories: fast search + async fine search
-    """
-
-    formatted_memories = mem_scheduler.mix_search_memories(
-        search_req=search_req,
-        user_context=user_context,
+def _search_text_mem(search_req: APISearchRequest):
+    search_mode = search_req.mode
+    user_context = UserContext(
+        user_id=search_req.user_id,
+        mem_cube_id=search_req.mem_cube_id,
+        session_id=search_req.session_id or "default_session",
     )
+    if search_mode in [SearchMode.FAST, SearchMode.FINE]:
+        target_session_id = search_req.session_id
+        if not target_session_id:
+            target_session_id = "default_session"
+        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_results = naive_mem_cube.text_mem.search(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=search_mode,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            info={
+                "user_id": search_req.user_id,
+                "session_id": target_session_id,
+                "chat_history": search_req.chat_history,
+            },
+        )
+        formatted_memories = [_format_memory_item(data) for data in search_results]
+    elif search_mode == SearchMode.MIXTURE:
+        formatted_memories = mem_scheduler.mix_search_memories(
+            search_req=search_req,
+            user_context=user_context,
+        )
+    else:
+        logger.error(f"Unsupported search mode: {search_mode}")
+        raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
     return formatted_memories
 
 
-def fine_search_memories(
-    search_req: APISearchRequest,
-    user_context: UserContext,
-):
-    target_session_id = search_req.session_id
-    if not target_session_id:
-        target_session_id = "default_session"
-    search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-    # Create MemCube and perform search
-    search_results = naive_mem_cube.text_mem.search(
+def _search_pref_mem(search_req):
+    if (
+        os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true"
+        or not search_req.include_preference
+    ):
+        return []
+    results = naive_mem_cube.pref_mem.search(
         query=search_req.query,
-        user_name=user_context.mem_cube_id,
-        top_k=search_req.top_k,
-        mode=SearchMode.FINE,
-        manual_close_internet=not search_req.internet_search,
-        moscube=search_req.moscube,
-        search_filter=search_filter,
+        top_k=search_req.pref_top_k,
         info={
             "user_id": search_req.user_id,
-            "session_id": target_session_id,
+            "session_id": search_req.session_id,
             "chat_history": search_req.chat_history,
         },
     )
-    formatted_memories = [_format_memory_item(data) for data in search_results]
-
-    return formatted_memories
-
-
-def fast_search_memories(
-    search_req: APISearchRequest,
-    user_context: UserContext,
-):
-    target_session_id = search_req.session_id
-    if not target_session_id:
-        target_session_id = "default_session"
-    search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-    # Create MemCube and perform search
-    search_results = naive_mem_cube.text_mem.search(
-        query=search_req.query,
-        user_name=user_context.mem_cube_id,
-        top_k=search_req.top_k,
-        mode=SearchMode.FAST,
-        manual_close_internet=not search_req.internet_search,
-        moscube=search_req.moscube,
-        search_filter=search_filter,
-        info={
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        },
-    )
-    formatted_memories = [_format_memory_item(data) for data in search_results]
-
-    return formatted_memories
+    return [_format_memory_item(data) for data in results]
 
 
 @router.post("/add", summary="Add memories", response_model=MemoryResponse)
 def add_memories(add_req: APIADDRequest):
     """Add memories for a specific user."""
-    # Create UserContext object - how to assign values
-    user_context = UserContext(
-        user_id=add_req.user_id,
-        mem_cube_id=add_req.mem_cube_id,
-        session_id=add_req.session_id or "default_session",
-    )
-
     logger.info(f"Add Req is: {add_req}")
 
     target_session_id = add_req.session_id
@@ -530,7 +396,7 @@ def add_memories(add_req: APIADDRequest):
         logger.info(f"Memory extraction completed for user {add_req.user_id}")
         mem_ids_local: list[str] = naive_mem_cube.text_mem.add(
             flattened_local,
-            user_name=user_context.mem_cube_id,
+            user_name=add_req.mem_cube_id,
         )
         logger.info(
             f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "

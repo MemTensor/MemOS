@@ -6,8 +6,13 @@ from concurrent.futures import as_completed
 from datetime import datetime
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.embedders.base import BaseEmbedder
 from memos.embedders.factory import OllamaEmbedder
+from memos.graph_dbs.base import BaseGraphDB
+from memos.graph_dbs.nebular import NebulaGraphDB
 from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.graph_dbs.polardb import PolarDBGraphDB
+from memos.llms.base import BaseLLM
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -15,7 +20,6 @@ from memos.memories.textual.tree_text_memory.organize.reorganizer import (
     GraphStructureReorganizer,
     QueueMessage,
 )
-
 
 logger = get_logger(__name__)
 
@@ -54,9 +58,9 @@ def extract_working_binding_ids(mem_items: list[TextualMemoryItem]) -> set[str]:
 class MemoryManager:
     def __init__(
         self,
-        graph_store: Neo4jGraphDB,
-        embedder: OllamaEmbedder,
-        llm: OpenAILLM | OllamaLLM | AzureLLM,
+        graph_store: BaseGraphDB | Neo4jGraphDB | NebulaGraphDB | PolarDBGraphDB,
+        embedder: BaseEmbedder | OllamaEmbedder,
+        llm: BaseLLM | OpenAILLM | OllamaLLM | AzureLLM,
         memory_size: dict | None = None,
         threshold: float | None = 0.80,
         merged_threshold: float | None = 0.92,
