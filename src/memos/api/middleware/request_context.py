@@ -77,7 +77,6 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
         # Process the request
         try:
-
             if not response:
                 logger.error(
                     f"Request Failed No Response, path: {request.url.path}, status: {response.status_code}, cost: {(end_time - start_time) * 1000:.2f}ms"
