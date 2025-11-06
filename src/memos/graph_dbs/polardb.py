@@ -1740,9 +1740,11 @@ class PolarDBGraphDB(BaseGraphDB):
         for field in group_fields:
             alias = field.replace(".", "_")
             return_fields.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype) AS {alias}"
+                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text AS {alias}"
             )
-            group_by_fields.append(alias)
+            group_by_fields.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text"
+            )
 
         # Full SQL query construction
         query = f"""
@@ -1751,7 +1753,6 @@ class PolarDBGraphDB(BaseGraphDB):
             {where_clause}
             GROUP BY {", ".join(group_by_fields)}
         """
-
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
@@ -1772,7 +1773,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         else:
                             group_values[field] = str(value)
                     count_value = row[-1]  # Last column is count
-                    output.append({**group_values, "count": count_value})
+                    output.append({**group_values, "count": int(count_value)})
 
                 return output
 
