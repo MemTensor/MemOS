@@ -1,7 +1,4 @@
-import json
 import traceback
-
-from datetime import datetime
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
@@ -508,7 +505,7 @@ class Searcher:
 
     @timed
     def _update_usage_history(self, items, info, user_name: str | None = None):
-        """Update usage history in graph DB"""
+        """Update usage history in graph DB
         now_time = datetime.now().isoformat()
         info_copy = dict(info or {})
         info_copy.pop("chat_history", None)
@@ -532,6 +529,7 @@ class Searcher:
             self._usage_executor.submit(
                 self._update_usage_history_worker, payload, usage_record, user_name
             )
+        """
 
     def _update_usage_history_worker(
         self, payload, usage_record: str, user_name: str | None = None
