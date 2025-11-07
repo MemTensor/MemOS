@@ -19,14 +19,14 @@ class AdderFactory(BaseAdder):
 
     @classmethod
     def from_config(
-        cls, config_factory: AdderConfigFactory, llm_provider=None, embedder=None, vector_db=None
+        cls, config_factory: AdderConfigFactory, llm_provider=None, embedder=None, vector_db=None, text_mem=None
     ) -> BaseAdder:
         """Create a Adder instance from a configuration factory."""
         backend = config_factory.backend
         if backend not in cls.backend_to_class:
             raise ValueError(f"Invalid backend: {backend}")
         adder_class = cls.backend_to_class[backend]
-        return adder_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db)
+        return adder_class(llm_provider=llm_provider, embedder=embedder, vector_db=vector_db, text_mem=text_mem)
 
 
 class ExtractorFactory(BaseExtractor):

@@ -13,6 +13,7 @@ from memos.templates.prefer_complete_prompt import (
     NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT,
     NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_FINE,
     NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE,
+    NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT,
 )
 from memos.vec_dbs.item import MilvusVecDBItem
 
@@ -24,7 +25,7 @@ class BaseAdder(ABC):
     """Abstract base class for adders."""
 
     @abstractmethod
-    def __init__(self, llm_provider=None, embedder=None, vector_db=None):
+    def __init__(self, llm_provider=None, embedder=None, vector_db=None, text_mem=None):
         """Initialize the adder."""
 
     @abstractmethod
@@ -41,12 +42,13 @@ class BaseAdder(ABC):
 class NaiveAdder(BaseAdder):
     """Naive adder."""
 
-    def __init__(self, llm_provider=None, embedder=None, vector_db=None):
+    def __init__(self, llm_provider=None, embedder=None, vector_db=None, text_mem=None):
         """Initialize the naive adder."""
-        super().__init__(llm_provider, embedder, vector_db)
+        super().__init__(llm_provider, embedder, vector_db, text_mem)
         self.llm_provider = llm_provider
         self.embedder = embedder
         self.vector_db = vector_db
+        self.text_mem = text_mem
 
     def _judge_update_or_add_fast(self, old_msg: str, new_msg: str) -> bool:
         """Judge if the new message expresses the same core content as the old message."""
@@ -81,6 +83,47 @@ class NaiveAdder(BaseAdder):
             logger.error(f"Error in judge_update_or_add_fine: {e}")
             return None
 
+    def _judge_dup_with_text_mem(self, new_pref: MilvusVecDBItem) -> bool:
+        """Judge if the new message is the same as the text memory for a single preference."""
+        if new_pref.payload["preference_type"] != "explicit_preference":
+            return False
+        text_recalls = self.text_mem.search(
+            query=new_pref.memory,
+            top_k=5,
+            info={
+                "user_id": new_pref.payload["user_id"],
+                "session_id": new_pref.payload["session_id"],
+            },
+            mode="fast",
+            search_filter={"session_id": new_pref.payload["session_id"]},
+            user_name=new_pref.payload["mem_cube_id"],
+        )
+
+        text_mem_recalls = [
+            {"id": text_recall.id, "memory": text_recall.memory}
+            for text_recall in text_recalls
+        ]
+
+        if not text_mem_recalls:
+            return False
+
+        new_preference = {"id": new_pref.id, "memory": new_pref.payload["preference"]}
+
+        prompt = NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT.replace(
+            "{new_preference}", json.dumps(new_preference)
+        ).replace(
+            "{retrieved_memories}", json.dumps(text_mem_recalls)
+        )
+        try:
+            response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            response = response.strip().replace("```json", "").replace("```", "").strip()
+            result = json.loads(response)
+            exists = result.get("exists", False)
+            return exists
+        except Exception as e:
+            logger.error(f"Error in judge_dup_with_text_mem: {e}")
+            return False
+
     def _judge_update_or_add_trace_op(
         self, new_mems: str, retrieved_mems: str
     ) -> dict[str, Any] | None:
@@ -97,6 +140,30 @@ class NaiveAdder(BaseAdder):
         except Exception as e:
             logger.error(f"Error in judge_update_or_add_trace_op: {e}")
             return None
+
+    def _dedup_explicit_pref_by_textual(self, new_prefs: list[MilvusVecDBItem]) -> list[MilvusVecDBItem]:
+        """Deduplicate explicit preferences by textual memory."""
+        if os.getenv("PREF_DEDUP_EXP_BY_TEXTUAL", "false").lower() != "true":
+            return new_prefs
+        dedup_prefs = []
+        with ContextThreadPoolExecutor(max_workers=max(1, min(len(new_prefs), 5))) as executor:
+            future_to_idx = {
+                executor.submit(self._judge_dup_with_text_mem, new_pref): idx
+                for idx, new_pref in enumerate(new_prefs)
+            }
+            is_dup_flags = [False] * len(new_prefs)
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    is_dup_flags[idx] = future.result()
+                except Exception as e:
+                    logger.error(
+                        f"Error in _judge_dup_with_text_mem for pref {new_prefs[idx].id}: {e}"
+                    )
+                    is_dup_flags[idx] = False
+
+        dedup_prefs = [pref for idx, pref in enumerate(new_prefs) if not is_dup_flags[idx]]
+        return dedup_prefs
 
     def _update_memory_op_trace(
         self,
@@ -143,6 +210,11 @@ class NaiveAdder(BaseAdder):
             retrieved_mems=json.dumps(retrieved_mem_inputs) if retrieved_mem_inputs else "",
         )
         if not rsp:
+            dedup_rsp = self._dedup_explicit_pref_by_textual(new_vec_db_items)
+            if not dedup_rsp:
+                return []
+            else:
+                new_vec_db_items = dedup_rsp
             with ContextThreadPoolExecutor(max_workers=min(len(new_vec_db_items), 5)) as executor:
                 futures = {
                     executor.submit(self.vector_db.add, collection_name, [db_item]): db_item
@@ -245,6 +317,9 @@ class NaiveAdder(BaseAdder):
             self.vector_db.update(collection_name, rsp["id"], update_vec_db_item)
             return rsp["id"]
         else:
+            dedup_rsp = self._dedup_explicit_pref_by_textual([vec_db_item])
+            if not dedup_rsp:
+                return ""
             self.vector_db.add(collection_name, [vec_db_item])
             return vec_db_item.id
 
@@ -272,6 +347,9 @@ class NaiveAdder(BaseAdder):
         old_msg_str = recall.memory
         new_msg_str = new_memory.memory
         is_same = self._judge_update_or_add_fast(old_msg=old_msg_str, new_msg=new_msg_str)
+        dedup_rsp = self._dedup_explicit_pref_by_textual([vec_db_item])
+        if not dedup_rsp:
+            return ""
         if is_same:
             vec_db_item.id = recall.id
             self.vector_db.update(collection_name, recall.id, vec_db_item)
