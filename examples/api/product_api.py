@@ -12,13 +12,15 @@ import json
 import requests
 
 
-BASE_URL = "http://0.0.0.0:8004/product"
+BASE_URL = "http://0.0.0.0:8001/product"
 HEADERS = {"Content-Type": "application/json"}
 
-USER_ID = "memos_user_id"
-USER_NAME = "memos_user_alice"
-MEM_CUBE_ID = "memos_cube_id_01"
-SESSION_ID = "memos_session_id_01"
+index = "24"
+USER_ID = f"memos_user_id_{index}"
+USER_NAME = f"memos_user_alice_{index}"
+MEM_CUBE_ID = f"memos_cube_id_{index}"
+SESSION_ID = f"memos_session_id_{index}"
+SESSION_ID2 = f"memos_session_id_{index}_s2"
 
 
 def register_user():
@@ -68,16 +70,16 @@ def search_memory(query="系统测试"):
     return resp.json()
 
 
-def chat_stream(query="总结一下我今天做的事"):
+def chat_stream(query: str, session_id: str, history: list | None = None):
     url = f"{BASE_URL}/chat"
     data = {
         "user_id": USER_ID,
         "query": query,
         "mem_cube_id": MEM_CUBE_ID,
-        "history": [],
+        "history": history,
         "internet_search": False,
         "moscube": False,
-        "session_id": SESSION_ID,
+        "session_id": session_id,
     }
 
     print("[*] Starting streaming chat ...")
@@ -128,4 +130,15 @@ if __name__ == "__main__":
     search_memory()
 
     print("\n===== STEP 4: Stream Chat =====")
-    chat_stream()
+    chat_stream("我很开心，我今天吃了好吃的拉面", SESSION_ID, history=[])
+    chat_stream(
+        "我刚和你说什么",
+        SESSION_ID,
+        history=[
+            {"role": "user", "content": "我很开心，我今天吃了好吃的拉面"},
+            {"role": "assistant", "content": "🉑"},
+        ],
+    )
+
+    print("\n===== STEP 4: Stream Chat =====")
+    chat_stream("我刚和你说什么了呢", SESSION_ID2, history=[])
