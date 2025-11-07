@@ -67,14 +67,14 @@ ENV_NAME = os.getenv("ENV_NAME", "PLAYGROUND_OFFLINE")
 
 theme_map = {
     "ONLINE": {
-        "color": "#2196F3",  # 天空蓝
+        "color": "#2196F3",
         "grad": ("#E3F2FD", "#BBDEFB"),
-        "emoji": "🩵",  # 冷静、明亮
+        "emoji": "🩵",
     },
     "OFFLINE": {
-        "color": "#FFC107",  # 柔黄色
+        "color": "#FFC107",
         "grad": ("#FFF8E1", "#FFECB3"),
-        "emoji": "🤍",  # 轻微提示
+        "emoji": "🤍",
     },
 }
 
