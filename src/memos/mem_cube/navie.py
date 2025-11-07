@@ -31,7 +31,9 @@ class NaiveMemCube(BaseMemCube):
         self._pref_mem: BaseTextMemory | None = pref_mem
 
     def load(
-        self, dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None
+        self,
+        dir: str,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Load memories.
         Args:

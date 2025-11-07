@@ -10,10 +10,10 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.prefer_complete_prompt import (
+    NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT,
     NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT,
     NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_FINE,
     NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT_OP_TRACE,
-    NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT,
 )
 from memos.vec_dbs.item import MilvusVecDBItem
 
@@ -100,8 +100,7 @@ class NaiveAdder(BaseAdder):
         )
 
         text_mem_recalls = [
-            {"id": text_recall.id, "memory": text_recall.memory}
-            for text_recall in text_recalls
+            {"id": text_recall.id, "memory": text_recall.memory} for text_recall in text_recalls
         ]
 
         if not text_mem_recalls:
@@ -111,9 +110,7 @@ class NaiveAdder(BaseAdder):
 
         prompt = NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT.replace(
             "{new_preference}", json.dumps(new_preference)
-        ).replace(
-            "{retrieved_memories}", json.dumps(text_mem_recalls)
-        )
+        ).replace("{retrieved_memories}", json.dumps(text_mem_recalls))
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             response = response.strip().replace("```json", "").replace("```", "").strip()
@@ -141,7 +138,9 @@ class NaiveAdder(BaseAdder):
             logger.error(f"Error in judge_update_or_add_trace_op: {e}")
             return None
 
-    def _dedup_explicit_pref_by_textual(self, new_prefs: list[MilvusVecDBItem]) -> list[MilvusVecDBItem]:
+    def _dedup_explicit_pref_by_textual(
+        self, new_prefs: list[MilvusVecDBItem]
+    ) -> list[MilvusVecDBItem]:
         """Deduplicate explicit preferences by textual memory."""
         if os.getenv("PREF_DEDUP_EXP_BY_TEXTUAL", "false").lower() != "true":
             return new_prefs
