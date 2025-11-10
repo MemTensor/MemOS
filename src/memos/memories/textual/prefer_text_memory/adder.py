@@ -109,8 +109,10 @@ class NaiveAdder(BaseAdder):
         new_preference = {"id": new_pref.id, "memory": new_pref.payload["preference"]}
 
         prompt = NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT.replace(
-            "{new_preference}", json.dumps(new_preference)
-        ).replace("{retrieved_memories}", json.dumps(text_mem_recalls))
+            "{new_preference}", json.dumps(new_preference, ensure_ascii=False)
+        ).replace(
+            "{retrieved_memories}", json.dumps(text_mem_recalls, ensure_ascii=False)
+        )
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             response = response.strip().replace("```json", "").replace("```", "").strip()
@@ -142,7 +144,7 @@ class NaiveAdder(BaseAdder):
         self, new_prefs: list[MilvusVecDBItem]
     ) -> list[MilvusVecDBItem]:
         """Deduplicate explicit preferences by textual memory."""
-        if os.getenv("PREF_DEDUP_EXP_BY_TEXTUAL", "false").lower() != "true":
+        if os.getenv("DEDUP_PREF_EXP_BY_TEXTUAL", "false").lower() != "true" or not self.text_mem:
             return new_prefs
         dedup_prefs = []
         with ContextThreadPoolExecutor(max_workers=max(1, min(len(new_prefs), 5))) as executor:
@@ -205,8 +207,11 @@ class NaiveAdder(BaseAdder):
         ]
 
         rsp = self._judge_update_or_add_trace_op(
-            new_mems=json.dumps(new_mem_inputs),
-            retrieved_mems=json.dumps(retrieved_mem_inputs) if retrieved_mem_inputs else "",
+            new_mems=json.dumps(new_mem_inputs, ensure_ascii=False),
+            retrieved_mems=
+                json.dumps(retrieved_mem_inputs, ensure_ascii=False)
+                if retrieved_mem_inputs
+                else "",
         )
         if not rsp:
             dedup_rsp = self._dedup_explicit_pref_by_textual(new_vec_db_items)
@@ -293,8 +298,11 @@ class NaiveAdder(BaseAdder):
             if mem.payload.get("preference", None)
         ]
         rsp = self._judge_update_or_add_fine(
-            new_mem=json.dumps(new_mem_input),
-            retrieved_mems=json.dumps(retrieved_mem_inputs) if retrieved_mem_inputs else "",
+            new_mem=json.dumps(new_mem_input, ensure_ascii=False),
+            retrieved_mems=
+                json.dumps(retrieved_mem_inputs, ensure_ascii=False)
+                if retrieved_mem_inputs
+                else "",
         )
         need_update = rsp.get("need_update", False) if rsp else False
         need_update = (

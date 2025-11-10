@@ -388,36 +388,44 @@ def search_memories(search_req: APISearchRequest):
     search_mode = search_req.mode
 
     def _search_text():
-        if search_mode == SearchMode.FAST:
-            formatted_memories = fast_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.FINE:
-            formatted_memories = fine_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.MIXTURE:
-            formatted_memories = mix_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        else:
-            logger.error(f"Unsupported search mode: {search_mode}")
-            raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
-        return formatted_memories
+        try:
+            if search_mode == SearchMode.FAST:
+                formatted_memories = fast_search_memories(
+                    search_req=search_req, user_context=user_context
+                )
+            elif search_mode == SearchMode.FINE:
+                formatted_memories = fine_search_memories(
+                    search_req=search_req, user_context=user_context
+                )
+            elif search_mode == SearchMode.MIXTURE:
+                formatted_memories = mix_search_memories(
+                    search_req=search_req, user_context=user_context
+                )
+            else:
+                logger.error(f"Unsupported search mode: {search_mode}")
+                raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
+            return formatted_memories
+        except Exception as e:
+            logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
+            return []
 
     def _search_pref():
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
-        results = naive_mem_cube.pref_mem.search(
-            query=search_req.query,
-            top_k=search_req.pref_top_k,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": search_req.session_id,
-                "chat_history": search_req.chat_history,
-            },
-        )
-        return [_format_memory_item(data) for data in results]
+        try:
+            results = naive_mem_cube.pref_mem.search(
+                query=search_req.query,
+                top_k=search_req.pref_top_k,
+                info={
+                    "user_id": search_req.user_id,
+                    "session_id": search_req.session_id,
+                    "chat_history": search_req.chat_history,
+                },
+            )
+            return [_format_memory_item(data) for data in results]
+        except Exception as e:
+            logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
+            return []
 
     with ContextThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_search_text)
