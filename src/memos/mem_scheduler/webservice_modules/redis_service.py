@@ -1,12 +1,12 @@
 import asyncio
 import os
 import subprocess
-import threading
 import time
 
 from collections.abc import Callable
 from typing import Any
 
+from memos.context.context import ContextThread
 from memos.dependency import require_python_package
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
@@ -41,7 +41,7 @@ class RedisSchedulerModule(BaseSchedulerModule):
         self.query_list_capacity = 1000
 
         self._redis_listener_running = False
-        self._redis_listener_thread: threading.Thread | None = None
+        self._redis_listener_thread: ContextThread | None = None
         self._redis_listener_loop: asyncio.AbstractEventLoop | None = None
 
     @property
@@ -273,7 +273,7 @@ class RedisSchedulerModule(BaseSchedulerModule):
 
         self._cleanup_local_redis()
 
-    async def redis_add_message_stream(self, message: dict):
+    def redis_add_message_stream(self, message: dict):
         logger.debug(f"add_message_stream: {message}")
         return self._redis_conn.xadd("user:queries:stream", message)
 
@@ -336,7 +336,7 @@ class RedisSchedulerModule(BaseSchedulerModule):
         if handler is None:
             handler = self.redis_consume_message_stream
 
-        self._redis_listener_thread = threading.Thread(
+        self._redis_listener_thread = ContextThread(
             target=self._redis_run_listener_async,
             args=(handler,),
             daemon=True,

@@ -47,3 +47,4 @@ class MilvusVecDBItem(VecDBItem):
     """Represents a single item in the Milvus vector database."""
 
     memory: str | None = Field(default=None, description="Memory string")
+    original_text: str | None = Field(default=None, description="Original text content")

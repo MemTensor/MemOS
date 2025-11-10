@@ -184,6 +184,13 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         ),
     )
 
+    search_strategy: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            'Set search strategy for this memory configuration.{"bm25": true, "cot": false}'
+        ),
+    )
+
     mode: str | None = Field(
         default="sync",
         description=("whether use asynchronous mode in memory add"),

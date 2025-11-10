@@ -5,6 +5,7 @@ from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.neo4j import Neo4jGraphDB
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieval_mid_structs import ParsedTaskGoal
 
 
@@ -16,11 +17,18 @@ class GraphMemoryRetriever:
     Unified memory retriever that combines both graph-based and vector-based retrieval logic.
     """
 
-    def __init__(self, graph_store: Neo4jGraphDB, embedder: OllamaEmbedder):
+    def __init__(
+        self,
+        graph_store: Neo4jGraphDB,
+        embedder: OllamaEmbedder,
+        bm25_retriever: EnhancedBM25 | None = None,
+    ):
         self.graph_store = graph_store
         self.embedder = embedder
+        self.bm25_retriever = bm25_retriever
         self.max_workers = 10
         self.filter_weight = 0.6
+        self.use_bm25 = bool(self.bm25_retriever)
 
     def retrieve(
         self,
@@ -31,6 +39,8 @@ class GraphMemoryRetriever:
         query_embedding: list[list[float]] | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        id_filter: dict | None = None,
+        use_fast_graph: bool = False,
     ) -> list[TextualMemoryItem]:
         """
         Perform hybrid memory retrieval:
@@ -58,9 +68,15 @@ class GraphMemoryRetriever:
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories]
 
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=3) as executor:
             # Structured graph-based retrieval
-            future_graph = executor.submit(self._graph_recall, parsed_goal, memory_scope, user_name)
+            future_graph = executor.submit(
+                self._graph_recall,
+                parsed_goal,
+                memory_scope,
+                user_name,
+                use_fast_graph=use_fast_graph,
+            )
             # Vector similarity search
             future_vector = executor.submit(
                 self._vector_recall,
@@ -70,12 +86,23 @@ class GraphMemoryRetriever:
                 search_filter=search_filter,
                 user_name=user_name,
             )
+            if self.use_bm25:
+                future_bm25 = executor.submit(
+                    self._bm25_recall,
+                    query,
+                    parsed_goal,
+                    memory_scope,
+                    top_k=top_k,
+                    user_name=user_name,
+                    search_filter=id_filter,
+                )
 
             graph_results = future_graph.result()
             vector_results = future_vector.result()
+            bm25_results = future_bm25.result() if self.use_bm25 else []
 
         # Merge and deduplicate by ID
-        combined = {item.id: item for item in graph_results + vector_results}
+        combined = {item.id: item for item in graph_results + vector_results + bm25_results}
 
         graph_ids = {item.id for item in graph_results}
         combined_ids = set(combined.keys())
@@ -135,7 +162,7 @@ class GraphMemoryRetriever:
         return list(combined.values())
 
     def _graph_recall(
-        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str | None = None
+        self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str | None = None, **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Perform structured node-based retrieval from Neo4j.
@@ -143,37 +170,9 @@ class GraphMemoryRetriever:
         - tags must overlap with at least 2 input tags
         - scope filters by memory_type if provided
         """
-        candidate_ids = set()
+        use_fast_graph = kwargs.get("use_fast_graph", False)
 
-        # 1) key-based OR branch
-        if parsed_goal.keys:
-            key_filters = [
-                {"field": "key", "op": "in", "value": parsed_goal.keys},
-                {"field": "memory_type", "op": "=", "value": memory_scope},
-            ]
-            key_ids = self.graph_store.get_by_metadata(key_filters, user_name=user_name)
-            candidate_ids.update(key_ids)
-
-        # 2) tag-based OR branch
-        if parsed_goal.tags:
-            tag_filters = [
-                {"field": "tags", "op": "contains", "value": parsed_goal.tags},
-                {"field": "memory_type", "op": "=", "value": memory_scope},
-            ]
-            tag_ids = self.graph_store.get_by_metadata(tag_filters, user_name=user_name)
-            candidate_ids.update(tag_ids)
-
-        # No matches → return empty
-        if not candidate_ids:
-            return []
-
-        # Load nodes and post-filter
-        node_dicts = self.graph_store.get_nodes(
-            list(candidate_ids), include_embedding=False, user_name=user_name
-        )
-
-        final_nodes = []
-        for node in node_dicts:
+        def process_node(node):
             meta = node.get("metadata", {})
             node_key = meta.get("key")
             node_tags = meta.get("tags", []) or []
@@ -184,19 +183,112 @@ class GraphMemoryRetriever:
                 keep = True
             # overlap tags more than 2
             elif parsed_goal.tags:
-                overlap = len(set(node_tags) & set(parsed_goal.tags))
+                node_tags_list = [tag.lower() for tag in node_tags]
+                overlap = len(set(node_tags_list) & set(parsed_goal.tags))
                 if overlap >= 2:
                     keep = True
+
             if keep:
-                final_nodes.append(TextualMemoryItem.from_dict(node))
-        return final_nodes
+                return TextualMemoryItem.from_dict(node)
+            return None
+
+        if not use_fast_graph:
+            candidate_ids = set()
+
+            # 1) key-based OR branch
+            if parsed_goal.keys:
+                key_filters = [
+                    {"field": "key", "op": "in", "value": parsed_goal.keys},
+                    {"field": "memory_type", "op": "=", "value": memory_scope},
+                ]
+                key_ids = self.graph_store.get_by_metadata(key_filters)
+                candidate_ids.update(key_ids)
+
+            # 2) tag-based OR branch
+            if parsed_goal.tags:
+                tag_filters = [
+                    {"field": "tags", "op": "contains", "value": parsed_goal.tags},
+                    {"field": "memory_type", "op": "=", "value": memory_scope},
+                ]
+                tag_ids = self.graph_store.get_by_metadata(tag_filters)
+                candidate_ids.update(tag_ids)
+
+            # No matches → return empty
+            if not candidate_ids:
+                return []
+
+            # Load nodes and post-filter
+            node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False)
+
+            final_nodes = []
+            for node in node_dicts:
+                meta = node.get("metadata", {})
+                node_key = meta.get("key")
+                node_tags = meta.get("tags", []) or []
+
+                keep = False
+                # key equals to node_key
+                if parsed_goal.keys and node_key in parsed_goal.keys:
+                    keep = True
+                # overlap tags more than 2
+                elif parsed_goal.tags:
+                    overlap = len(set(node_tags) & set(parsed_goal.tags))
+                    if overlap >= 2:
+                        keep = True
+                if keep:
+                    final_nodes.append(TextualMemoryItem.from_dict(node))
+            return final_nodes
+        else:
+            candidate_ids = set()
+
+            # 1) key-based OR branch
+            if parsed_goal.keys:
+                key_filters = [
+                    {"field": "key", "op": "in", "value": parsed_goal.keys},
+                    {"field": "memory_type", "op": "=", "value": memory_scope},
+                ]
+                key_ids = self.graph_store.get_by_metadata(key_filters, user_name=user_name)
+                candidate_ids.update(key_ids)
+
+            # 2) tag-based OR branch
+            if parsed_goal.tags:
+                tag_filters = [
+                    {"field": "tags", "op": "contains", "value": parsed_goal.tags},
+                    {"field": "memory_type", "op": "=", "value": memory_scope},
+                ]
+                tag_ids = self.graph_store.get_by_metadata(tag_filters, user_name=user_name)
+                candidate_ids.update(tag_ids)
+
+            # No matches → return empty
+            if not candidate_ids:
+                return []
+
+            # Load nodes and post-filter
+            node_dicts = self.graph_store.get_nodes(
+                list(candidate_ids), include_embedding=False, user_name=user_name
+            )
+
+            final_nodes = []
+            with ContextThreadPoolExecutor(max_workers=3) as executor:
+                futures = {
+                    executor.submit(process_node, node): i for i, node in enumerate(node_dicts)
+                }
+                temp_results = [None] * len(node_dicts)
+
+                for future in concurrent.futures.as_completed(futures):
+                    original_index = futures[future]
+                    result = future.result()
+                    temp_results[original_index] = result
+
+                final_nodes = [result for result in temp_results if result is not None]
+            return final_nodes
 
     def _vector_recall(
         self,
         query_embedding: list[list[float]],
         memory_scope: str,
         top_k: int = 20,
-        max_num: int = 3,
+        max_num: int = 5,
         status: str = "activated",
         cube_name: str | None = None,
         search_filter: dict | None = None,
@@ -269,3 +361,37 @@ class GraphMemoryRetriever:
             or []
         )
         return [TextualMemoryItem.from_dict(n) for n in node_dicts]
+
+    def _bm25_recall(
+        self,
+        query: str,
+        parsed_goal: ParsedTaskGoal,
+        memory_scope: str,
+        top_k: int = 20,
+        user_name: str | None = None,
+        search_filter: dict | None = None,
+    ) -> list[TextualMemoryItem]:
+        """
+        Perform BM25-based retrieval.
+        """
+        if not self.bm25_retriever:
+            return []
+        key_filters = [
+            {"field": "memory_type", "op": "=", "value": memory_scope},
+        ]
+        # corpus_name is user_name + user_id
+        corpus_name = f"{user_name}" if user_name else ""
+        if search_filter is not None:
+            for key in search_filter:
+                value = search_filter[key]
+                key_filters.append({"field": key, "op": "=", "value": value})
+            corpus_name += "".join(list(search_filter.values()))
+        candidate_ids = self.graph_store.get_by_metadata(key_filters, user_name=user_name)
+        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False)
+
+        bm25_query = " ".join(list({query, *parsed_goal.keys}))
+        bm25_results = self.bm25_retriever.search(
+            bm25_query, node_dicts, top_k=top_k, corpus_name=corpus_name
+        )
+
+        return [TextualMemoryItem.from_dict(n) for n in bm25_results]

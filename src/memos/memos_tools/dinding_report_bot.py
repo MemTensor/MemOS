@@ -7,12 +7,18 @@ import hmac
 import json
 import os
 import time
+import traceback
 import urllib.parse
 
 from datetime import datetime
 from uuid import uuid4
 
 from dotenv import load_dotenv
+
+from memos.log import get_logger
+
+
+logger = get_logger(__name__)
 
 
 load_dotenv()
@@ -57,6 +63,20 @@ OSS_CONFIG = {
 ROBOT_CODE = os.getenv("DINGDING_ROBOT_CODE")
 DING_APP_KEY = os.getenv("DINGDING_APP_KEY")
 DING_APP_SECRET = os.getenv("DINGDING_APP_SECRET")
+ENV_NAME = os.getenv("ENV_NAME", "PLAYGROUND_OFFLINE")
+
+theme_map = {
+    "ONLINE": {
+        "color": "#2196F3",
+        "grad": ("#E3F2FD", "#BBDEFB"),
+        "emoji": "🩵",
+    },
+    "OFFLINE": {
+        "color": "#FFC107",
+        "grad": ("#FFF8E1", "#FFECB3"),
+        "emoji": "🤍",
+    },
+}
 
 
 # Get access_token
@@ -311,7 +331,7 @@ def error_bot(
     )
 
     # ---------- Markdown ----------
-    colored_title = f"<font color='{title_color}' size='4'><b>{title}</b></font>"
+    colored_title = f"<font color='{title_color}' size='4'><b>{ENV_NAME}</b></font>"
     at_suffix = ""
     if user_ids:
         at_suffix = "\n\n" + " ".join([f"@{m}" for m in user_ids])
@@ -367,41 +387,52 @@ def online_bot(
     other_data2: dict,
     emoji: dict,
 ):
-    heading_color = "#00956D"  # Green for subtitle
+    try:
+        logger.info("in online bot")
+        theme = "OFFLINE" if "OFFLINE" in ENV_NAME or "TEST" in ENV_NAME else "ONLINE"
+        style = theme_map.get(theme, theme_map["OFFLINE"])
+        heading_color = style["color"]  # Use theme color for subtitle
 
-    # 0) Banner
-    banner_bytes = make_header(header_name, sub_title_name)
-    banner_url = upload_bytes_to_oss(banner_bytes, filename="online_report.png")
-
-    # 1) Colored main title
-    colored_title = f"<font color='{title_color}' size='4'><b>{header_name}</b></font>"
-
-    # 3) Markdown
-    md = "\n\n".join(
-        filter(
-            None,
-            [
-                f"![banner]({banner_url})",
-                f"### 🙄 <font color='{heading_color}' size='4'><b>{colored_title}</b></font>\n\n",
-                _kv_lines(
-                    other_data1,
-                    next(iter(emoji.keys())),
-                    next(iter(emoji.values())),
-                    heading_color=heading_color,
-                ),
-                _kv_lines(
-                    other_data2,
-                    list(emoji.keys())[1],
-                    list(emoji.values())[1],
-                    heading_color=heading_color,
-                ),
-                f"<font color='#9E9E9E' size='1'>Time: "
-                f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</font>\n",
-            ],
+        # 0) Banner
+        banner_bytes = make_header(
+            header_name,
+            sub_title_name,
+            colors=style["grad"],
+            fg=style["color"],
         )
-    )
+        banner_url = upload_bytes_to_oss(banner_bytes, filename=f"{ENV_NAME}_online_report.png")
 
-    _send_md(colored_title, md, type="user")
+        # 1) Colored main title
+        colored_title = f"<font color='{style['color']}' size='4'><b>{ENV_NAME}</b></font>"
+
+        # 3) Markdown
+        md = "\n\n".join(
+            filter(
+                None,
+                [
+                    f"![banner]({banner_url})",
+                    f"### {style['emoji']} <font color='{heading_color}' size='4'><b>{colored_title}</b></font>\n\n",
+                    _kv_lines(
+                        other_data1,
+                        next(iter(emoji.keys())),
+                        next(iter(emoji.values())),
+                        heading_color=heading_color,
+                    ),
+                    _kv_lines(
+                        other_data2,
+                        list(emoji.keys())[1],
+                        list(emoji.values())[1],
+                        heading_color=heading_color,
+                    ),
+                    f"<font color='#9E9E9E' size='1'>Time: "
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</font>\n",
+                ],
+            )
+        )
+
+        _send_md(colored_title, md, type="user")
+    except Exception:
+        logger.error(traceback.format_exc())
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from memos.log import get_logger
+from memos.utils import timed
 
 from .base import BaseReranker
 from .concat import concat_original_source
@@ -118,6 +119,7 @@ class HTTPBGEReranker(BaseReranker):
         self.warn_unknown_filter_keys = bool(warn_unknown_filter_keys)
         self._warned_missing_keys: set[str] = set()
 
+    @timed(log=True, log_prefix="RerankerAPI")
     def rerank(
         self,
         query: str,

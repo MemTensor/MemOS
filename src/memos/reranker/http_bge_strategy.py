@@ -10,6 +10,7 @@ import requests
 
 from memos.log import get_logger
 from memos.reranker.strategies import RerankerStrategyFactory
+from memos.utils import timed
 
 from .base import BaseReranker
 
@@ -119,6 +120,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
         self._warned_missing_keys: set[str] = set()
         self.reranker_strategy = RerankerStrategyFactory.from_config(reranker_strategy)
 
+    @timed(log=True, log_prefix="RerankerStrategy")
     def rerank(
         self,
         query: str,

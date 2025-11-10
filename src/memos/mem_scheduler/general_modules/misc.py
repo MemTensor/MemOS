@@ -127,7 +127,7 @@ class DictConversionMixin:
     @field_serializer("timestamp", check_fields=False)
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
         """
-        Custom datetime serialization logic.
+        Custom timestamp serialization logic.
         - Supports timezone-aware datetime objects
         - Compatible with models without timestamp field (via check_fields=False)
         """

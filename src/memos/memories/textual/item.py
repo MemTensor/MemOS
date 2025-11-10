@@ -1,6 +1,7 @@
 """Defines memory item types for textual memory."""
 
 import json
+import logging
 import uuid
 
 from datetime import datetime
@@ -123,6 +124,25 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     def coerce_sources(cls, v):
         if v is None:
             return v
+            # Handle string representation of sources (e.g., from PostgreSQL array or malformed data)
+        if isinstance(v, str):
+            logging.info(f"[coerce_sources] v: {v} type: {type(v)}")
+            # If it's a string that looks like a list representation, try to parse it
+            # This handles cases like: "[uuid1, uuid2, uuid3]" or "[item1, item2]"
+            v_stripped = v.strip()
+            if v_stripped.startswith("[") and v_stripped.endswith("]"):
+                # Remove brackets and split by comma
+                content = v_stripped[1:-1].strip()
+                if content:
+                    # Split by comma and clean up each item
+                    items = [item.strip() for item in content.split(",")]
+                    # Convert to list of strings
+                    v = items
+                else:
+                    v = []
+            else:
+                # Single string, wrap in list
+                v = [v]
         if not isinstance(v, list):
             raise TypeError("sources must be a list")
         out = []
@@ -174,11 +194,11 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
         default="explicit_preference", description="Type of preference."
     )
     dialog_id: str | None = Field(default=None, description="ID of the dialog.")
-    dialog_str: str | None = Field(default=None, description="String of the dialog.")
+    original_text: str | None = Field(default=None, description="String of the dialog.")
     embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")
-    explicit_preference: str | None = Field(default=None, description="Explicit preference.")
+    preference: str | None = Field(default=None, description="Preference.")
     created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
-    implicit_preference: str | None = Field(default=None, description="Implicit preference.")
+    mem_cube_id: str | None = Field(default=None, description="ID of the MemCube.")
 
 
 class TextualMemoryItem(BaseModel):
@@ -224,6 +244,17 @@ class TextualMemoryItem(BaseModel):
         ):
             return v
         if isinstance(v, dict):
+            if "metadata" in v and isinstance(v["metadata"], dict):
+                nested_metadata = v["metadata"]
+                nested_metadata = nested_metadata.copy()
+                nested_metadata.pop("id", None)
+                nested_metadata.pop("memory", None)
+                v = nested_metadata
+            else:
+                v = v.copy()
+                v.pop("id", None)
+                v.pop("memory", None)
+
             if v.get("relativity") is not None:
                 return SearchedTreeNodeTextualMemoryMetadata(**v)
             if v.get("preference_type") is not None:

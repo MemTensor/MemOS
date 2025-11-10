@@ -6,13 +6,13 @@
 # Number of workers for parallel processing.
 # This variable controls both pref_memos.py (--max-workers)
 # and pref_eval.py (--concurrency-limit).
-WORKERS=10
+WORKERS=20
 
 # Parameters for pref_memos.py
-TOP_K=6
-ADD_TURN=0  # Options: 0, 10, or 300
-LIB="memos-api"
-VERSION="1022-0"
+TOP_K=10
+ADD_TURN=10  # Options: 0, 10, or 300
+LIB="memos-api"  # Options: memos-api, memos-api-online, mem0, mem0-graph, memobase, supermemory, memu, zep
+VERSION="default"
 
 # --- File Paths ---
 # You may need to adjust these paths based on your project structure.
@@ -133,7 +133,8 @@ echo ""
 echo "Running pref_eval.py..."
 python scripts/PrefEval/pref_eval.py \
     --input $RESPONSE_FILE \
-    --concurrency-limit $WORKERS
+    --concurrency-limit $WORKERS \
+    --lib $LIB
 
 if [ $? -ne 0 ]; then
     echo "Error: Evaluation script failed."

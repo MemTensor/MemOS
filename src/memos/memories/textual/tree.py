@@ -16,6 +16,7 @@ from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
@@ -34,6 +35,8 @@ class TreeTextMemory(BaseTextMemory):
         """Initialize memory with the given configuration."""
         # Set mode from class default or override if needed
         self.mode = config.mode
+        logger.info(f"Tree mode is {self.mode}")
+
         self.config: TreeTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm
@@ -43,6 +46,12 @@ class TreeTextMemory(BaseTextMemory):
         )
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: Neo4jGraphDB = GraphStoreFactory.from_config(config.graph_db)
+
+        self.search_strategy = config.search_strategy
+        self.bm25_retriever = (
+            EnhancedBM25() if self.search_strategy and self.search_strategy["bm25"] else None
+        )
+
         if config.reranker is None:
             default_cfg = RerankerConfigFactory.model_validate(
                 {
@@ -81,18 +90,28 @@ class TreeTextMemory(BaseTextMemory):
         else:
             logger.info("No internet retriever configured")
 
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
+    def add(
+        self,
+        memories: list[TextualMemoryItem | dict[str, Any]],
+        user_name: str | None = None,
+        **kwargs,
+    ) -> list[str]:
         """Add memories.
         Args:
             memories: List of TextualMemoryItem objects or dictionaries to add.
+            user_name: optional user_name
         """
-        return self.memory_manager.add(memories, mode=self.mode)
+        return self.memory_manager.add(memories, user_name=user_name, mode=self.mode)
 
-    def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
-        self.memory_manager.replace_working_memory(memories)
+    def replace_working_memory(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
+    ) -> None:
+        self.memory_manager.replace_working_memory(memories, user_name=user_name)
 
-    def get_working_memory(self) -> list[TextualMemoryItem]:
-        working_memories = self.graph_store.get_all_memory_items(scope="WorkingMemory")
+    def get_working_memory(self, user_name: str | None = None) -> list[TextualMemoryItem]:
+        working_memories = self.graph_store.get_all_memory_items(
+            scope="WorkingMemory", user_name=user_name
+        )
         items = [TextualMemoryItem.from_dict(record) for record in (working_memories)]
         # Sort by updated_at in descending order
         sorted_items = sorted(
@@ -100,12 +119,40 @@ class TreeTextMemory(BaseTextMemory):
         )
         return sorted_items
 
-    def get_current_memory_size(self) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: str | None = None) -> dict[str, int]:
         """
         Get the current size of each memory type.
         This delegates to the MemoryManager.
         """
-        return self.memory_manager.get_current_memory_size()
+        return self.memory_manager.get_current_memory_size(user_name=user_name)
+
+    def get_searcher(
+        self,
+        manual_close_internet: bool = False,
+        moscube: bool = False,
+    ):
+        if (self.internet_retriever is not None) and manual_close_internet:
+            logger.warning(
+                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
+            )
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                self.reranker,
+                internet_retriever=None,
+                moscube=moscube,
+            )
+        else:
+            searcher = Searcher(
+                self.dispatcher_llm,
+                self.graph_store,
+                self.embedder,
+                self.reranker,
+                internet_retriever=self.internet_retriever,
+                moscube=moscube,
+            )
+        return searcher
 
     def search(
         self,
@@ -117,6 +164,7 @@ class TreeTextMemory(BaseTextMemory):
         manual_close_internet: bool = False,
         moscube: bool = False,
         search_filter: dict | None = None,
+        user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -149,8 +197,10 @@ class TreeTextMemory(BaseTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                bm25_retriever=self.bm25_retriever,
                 internet_retriever=None,
                 moscube=moscube,
+                search_strategy=self.search_strategy,
             )
         else:
             searcher = Searcher(
@@ -158,10 +208,14 @@ class TreeTextMemory(BaseTextMemory):
                 self.graph_store,
                 self.embedder,
                 self.reranker,
+                bm25_retriever=self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
+                search_strategy=self.search_strategy,
             )
-        return searcher.search(query, top_k, info, mode, memory_type, search_filter)
+        return searcher.search(
+            query, top_k, info, mode, memory_type, search_filter, user_name=user_name
+        )
 
     def get_relevant_subgraph(
         self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"
@@ -213,7 +267,7 @@ class TreeTextMemory(BaseTextMemory):
                 center_id=core_id, depth=depth, center_status=center_status
             )
 
-            if not subgraph["core_node"]:
+            if subgraph is None or not subgraph["core_node"]:
                 logger.info(f"Skipping node {core_id} (inactive or not found).")
                 continue
 
@@ -234,9 +288,9 @@ class TreeTextMemory(BaseTextMemory):
                 {"id": core_id, "score": score, "core_node": core_node, "neighbors": neighbors}
             )
 
-        top_core = cores[0]
+        top_core = cores[0] if cores else None
         return {
-            "core_id": top_core["id"],
+            "core_id": top_core["id"] if top_core else None,
             "nodes": list(all_nodes.values()),
             "edges": [{"source": f, "target": t, "type": ty} for (f, t, ty) in all_edges],
         }
@@ -259,24 +313,26 @@ class TreeTextMemory(BaseTextMemory):
             metadata=TreeNodeTextualMemoryMetadata(**metadata_dict),
         )
 
-    def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
+    def get_by_ids(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
         raise NotImplementedError
 
-    def get_all(self) -> dict:
+    def get_all(self, user_name: str | None = None) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph()
+        all_items = self.graph_store.export_graph(user_name=user_name)
         return all_items
 
-    def delete(self, memory_ids: list[str]) -> None:
+    def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
         if not memory_ids:
             return
         for mid in memory_ids:
             try:
-                self.graph_store.delete_node(mid)
+                self.graph_store.delete_node(mid, user_name=user_name)
             except Exception as e:
                 logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
 

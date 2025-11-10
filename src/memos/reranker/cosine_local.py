@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from memos.log import get_logger
+from memos.utils import timed
 
 from .base import BaseReranker
 
@@ -58,6 +59,7 @@ class CosineLocalReranker(BaseReranker):
         self.level_weights = level_weights or {"topic": 1.0, "concept": 1.0, "fact": 1.0}
         self.level_field = level_field
 
+    @timed
     def rerank(
         self,
         query: str,

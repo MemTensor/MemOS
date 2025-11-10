@@ -28,7 +28,13 @@ tokenizer = tiktoken.get_encoding("cl100k_base")
 
 
 def add_memory_for_line(
-    line_data: tuple, mem_client, num_irrelevant_turns: int, lib: str, version: str
+    line_data: tuple,
+    mem_client,
+    num_irrelevant_turns: int,
+    lib: str,
+    version: str,
+    success_records,
+    f,
 ) -> dict:
     """
     Adds conversation memory for a single line of data to MemOS and returns the data with a persistent user_id.
@@ -45,15 +51,20 @@ def add_memory_for_line(
         elif num_irrelevant_turns == 300:
             conversation = conversation + irre_300
 
-        turns_add = 5
         start_time_add = time.monotonic()
-        if conversation:
-            if os.getenv("PRE_SPLIT_CHUNK", "false").lower() == "true":
-                for chunk_start in range(0, len(conversation), turns_add * 2):
-                    chunk = conversation[chunk_start : chunk_start + turns_add * 2]
-                    mem_client.add(messages=chunk, user_id=user_id)
-            else:
-                mem_client.add(messages=conversation, user_id=user_id)
+
+        for idx, _ in enumerate(conversation[::2]):
+            msg_idx = idx * 2
+            record_id = f"{lib}_user_pref_eval_{i}_{version}_{msg_idx!s}"
+
+            if record_id not in success_records:
+                mem_client.add(
+                    messages=conversation[msg_idx : msg_idx + 2],
+                    user_id=user_id,
+                )
+                f.write(f"{record_id}\n")
+                f.flush()
+
         end_time_add = time.monotonic()
         add_duration = end_time_add - start_time_add
 
@@ -90,9 +101,7 @@ def search_memory_for_line(line_data: tuple, mem_client, top_k_value: int) -> di
         start_time_search = time.monotonic()
         relevant_memories = mem_client.search(query=question, user_id=user_id, top_k=top_k_value)
         search_memories_duration = time.monotonic() - start_time_search
-        memories_str = "\n".join(
-            f"- {entry.get('memory', '')}" for entry in relevant_memories["text_mem"][0]["memories"]
-        )
+        memories_str = relevant_memories
 
         memory_tokens_used = len(tokenizer.encode(memories_str))
 
@@ -250,6 +259,16 @@ def main():
 
     mem_client = SupermemoryClient()
 
+    os.makedirs(f"results/prefeval/{args.lib}_{args.version}", exist_ok=True)
+    success_records = set()
+    record_file = f"results/prefeval/{args.lib}_{args.version}/success_records.txt"
+    if os.path.exists(record_file):
+        print(f"Loading existing success records from {record_file}...")
+        with open(record_file, encoding="utf-8") as f:
+            for i in f.readlines():
+                success_records.add(i.strip())
+        print(f"Loaded {len(success_records)} records.")
+
     if args.mode == "add":
         print(f"Running in 'add' mode. Ingesting memories from '{args.input}'...")
         print(f"Adding {args.add_turn} irrelevant turns.")
@@ -257,6 +276,7 @@ def main():
         with (
             open(args.output, "w", encoding="utf-8") as outfile,
             concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor,
+            open(record_file, "a+", encoding="utf-8") as f,
         ):
             futures = [
                 executor.submit(
@@ -266,6 +286,8 @@ def main():
                     args.add_turn,
                     args.lib,
                     args.version,
+                    success_records,
+                    f,
                 )
                 for i, line in enumerate(lines)
             ]

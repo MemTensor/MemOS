@@ -1,6 +1,7 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
@@ -17,12 +18,17 @@ app = FastAPI(
     version="1.0.1",
 )
 
-app.add_middleware(RequestContextMiddleware)
+app.add_middleware(RequestContextMiddleware, source="server_api")
 # Include routers
 app.include_router(server_router)
 
-# Exception handlers
+# Request validation failed
+app.exception_handler(RequestValidationError)(APIExceptionHandler.validation_error_handler)
+# Invalid business code parameters
 app.exception_handler(ValueError)(APIExceptionHandler.value_error_handler)
+# Business layer manual exception
+app.exception_handler(HTTPException)(APIExceptionHandler.http_error_handler)
+# Fallback for unknown errors
 app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 
