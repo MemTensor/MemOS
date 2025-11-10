@@ -403,7 +403,9 @@ def search_memories(search_req: APISearchRequest):
                 )
             else:
                 logger.error(f"Unsupported search mode: {search_mode}")
-                raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unsupported search mode: {search_mode}"
+                )
             return formatted_memories
         except Exception as e:
             logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())

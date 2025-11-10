@@ -134,7 +134,7 @@ class NaiveRetriever(BaseRetriever):
             query=query, prefs_mem=implicit_prefs_mem, prefs=implicit_prefs, top_k=top_k
         )
 
-        # filter explicit mem by score bigger than threshold 
+        # filter explicit mem by score bigger than threshold
         explicit_prefs_mem = [
             item for item in explicit_prefs_mem if explicit_id_scores.get(item.id, 0) >= 0.2
         ]
