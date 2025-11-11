@@ -55,6 +55,8 @@ from memos.memories.textual.prefer_text_memory.factory import (
     ExtractorFactory,
     RetrieverFactory,
 )
+from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
+from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
@@ -195,25 +197,6 @@ def init_server():
     internet_retriever = InternetRetrieverFactory.from_config(
         internet_retriever_config, embedder=embedder
     )
-    pref_extractor = ExtractorFactory.from_config(
-        config_factory=pref_extractor_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
-    )
-    pref_adder = AdderFactory.from_config(
-        config_factory=pref_adder_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
-    )
-    pref_retriever = RetrieverFactory.from_config(
-        config_factory=pref_retriever_config,
-        llm_provider=llm,
-        embedder=embedder,
-        reranker=reranker,
-        vector_db=vector_db,
-    )
 
     # Initialize memory manager
     memory_manager = MemoryManager(
@@ -223,25 +206,65 @@ def init_server():
         memory_size=_get_default_memory_size(default_cube_config),
         is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
     )
+
+    # Initialize text memory
+    text_mem = SimpleTreeTextMemory(
+        llm=llm,
+        embedder=embedder,
+        mem_reader=mem_reader,
+        graph_db=graph_db,
+        reranker=reranker,
+        memory_manager=memory_manager,
+        config=default_cube_config.text_mem.config,
+        internet_retriever=internet_retriever,
+    )
+
+    pref_extractor = ExtractorFactory.from_config(
+        config_factory=pref_extractor_config,
+        llm_provider=llm,
+        embedder=embedder,
+        vector_db=vector_db,
+    )
+
+    pref_adder = AdderFactory.from_config(
+        config_factory=pref_adder_config,
+        llm_provider=llm,
+        embedder=embedder,
+        vector_db=vector_db,
+        text_mem=text_mem,
+    )
+
+    pref_retriever = RetrieverFactory.from_config(
+        config_factory=pref_retriever_config,
+        llm_provider=llm,
+        embedder=embedder,
+        reranker=reranker,
+        vector_db=vector_db,
+    )
+
+    # Initialize preference memory
+    pref_mem = SimplePreferenceTextMemory(
+        extractor_llm=llm,
+        vector_db=vector_db,
+        embedder=embedder,
+        reranker=reranker,
+        extractor=pref_extractor,
+        adder=pref_adder,
+        retriever=pref_retriever,
+    )
+
     mos_server = MOSServer(
         mem_reader=mem_reader,
         llm=llm,
         online_bot=False,
     )
 
+    # Create MemCube with pre-initialized memory instances
     naive_mem_cube = NaiveMemCube(
-        llm=llm,
-        embedder=embedder,
-        mem_reader=mem_reader,
-        graph_db=graph_db,
-        reranker=reranker,
-        internet_retriever=internet_retriever,
-        memory_manager=memory_manager,
-        default_cube_config=default_cube_config,
-        vector_db=vector_db,
-        pref_extractor=pref_extractor,
-        pref_adder=pref_adder,
-        pref_retriever=pref_retriever,
+        text_mem=text_mem,
+        pref_mem=pref_mem,
+        act_mem=None,
+        para_mem=None,
     )
 
     # Initialize Scheduler
@@ -281,6 +304,8 @@ def init_server():
         pref_extractor,
         pref_adder,
         pref_retriever,
+        text_mem,
+        pref_mem,
     )
 
 
@@ -302,6 +327,8 @@ def init_server():
     pref_extractor,
     pref_adder,
     pref_retriever,
+    text_mem,
+    pref_mem,
 ) = init_server()
 
 
@@ -365,36 +392,46 @@ def search_memories(search_req: APISearchRequest):
         search_mode = search_req.mode
 
     def _search_text():
-        if search_mode == SearchMode.FAST:
-            formatted_memories = fast_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.FINE:
-            formatted_memories = fine_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        elif search_mode == SearchMode.MIXTURE:
-            formatted_memories = mix_search_memories(
-                search_req=search_req, user_context=user_context
-            )
-        else:
-            logger.error(f"Unsupported search mode: {search_mode}")
-            raise HTTPException(status_code=400, detail=f"Unsupported search mode: {search_mode}")
-        return formatted_memories
+        try:
+            if search_mode == SearchMode.FAST:
+                formatted_memories = fast_search_memories(
+                    search_req=search_req, user_context=user_context
+                )
+            elif search_mode == SearchMode.FINE:
+                formatted_memories = fine_search_memories(
+                    search_req=search_req, user_context=user_context
+                )
+            elif search_mode == SearchMode.MIXTURE:
+                formatted_memories = mix_search_memories(
+                    search_req=search_req, user_context=user_context
+                )
+            else:
+                logger.error(f"Unsupported search mode: {search_mode}")
+                raise HTTPException(
+                    status_code=400, detail=f"Unsupported search mode: {search_mode}"
+                )
+            return formatted_memories
+        except Exception as e:
+            logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
+            return []
 
     def _search_pref():
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
-        results = naive_mem_cube.pref_mem.search(
-            query=search_req.query,
-            top_k=search_req.pref_top_k,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": search_req.session_id,
-                "chat_history": search_req.chat_history,
-            },
-        )
-        return [_format_memory_item(data) for data in results]
+        try:
+            results = naive_mem_cube.pref_mem.search(
+                query=search_req.query,
+                top_k=search_req.pref_top_k,
+                info={
+                    "user_id": search_req.user_id,
+                    "session_id": search_req.session_id,
+                    "chat_history": search_req.chat_history,
+                },
+            )
+            return [_format_memory_item(data) for data in results]
+        except Exception as e:
+            logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
+            return []
 
     with ContextThreadPoolExecutor(max_workers=2) as executor:
         text_future = executor.submit(_search_text)
@@ -621,6 +658,7 @@ def add_memories(add_req: APIADDRequest):
                 info={
                     "user_id": add_req.user_id,
                     "session_id": target_session_id,
+                    "mem_cube_id": add_req.mem_cube_id,
                 },
             )
             pref_ids_local: list[str] = naive_mem_cube.pref_mem.add(pref_memories_local)
