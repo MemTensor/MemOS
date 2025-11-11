@@ -1,3 +1,8 @@
+# MemOS: Memory Operating System for AI Agents
+
+MemOS is an open-source **Agent Memory framework** that empowers AI agents with **long-term memory, personality consistency, and contextual recall**. It enables agents to **remember past interactions**, **learn over time**, and **build evolving identities** across sessions.
+
+Designed for **AI companions, role-playing NPCs, and multi-agent systems**, MemOS provides a unified API for **memory representation, retrieval, and update** — making it the foundation for next-generation **memory-augmented AI agents**.
 <div align="center">
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/memos-banner.gif" alt="MemOS Banner">
