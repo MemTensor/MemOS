@@ -859,9 +859,9 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 if result:
                     if include_embedding:
-                        properties_json, embedding_json = result
+                        _, properties_json, embedding_json = result
                     else:
-                        properties_json = result
+                        _, properties_json = result
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -889,8 +889,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     return self._parse_node(
                         {
                             "id": id,
-                            "memory": json.loads(properties[1]).get("memory", ""),
-                            **json.loads(properties[1]),
+                            "memory": properties.get("memory", ""),
+                            **properties,
                         }
                     )
                 return None
@@ -1290,6 +1290,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
+        if center_id.startswith('"') and center_id.endswith('"'):
+            center_id = center_id[1:-1]
         # Use a simplified query to get the subgraph (temporarily only direct neighbors)
         """
             SELECT * FROM cypher('{self.db_name}_graph', $$
@@ -1738,9 +1740,11 @@ class PolarDBGraphDB(BaseGraphDB):
         for field in group_fields:
             alias = field.replace(".", "_")
             return_fields.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype) AS {alias}"
+                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text AS {alias}"
             )
-            group_by_fields.append(alias)
+            group_by_fields.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"{field}\"'::agtype)::text"
+            )
 
         # Full SQL query construction
         query = f"""
@@ -1749,7 +1753,6 @@ class PolarDBGraphDB(BaseGraphDB):
             {where_clause}
             GROUP BY {", ".join(group_by_fields)}
         """
-
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
@@ -1770,7 +1773,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         else:
                             group_values[field] = str(value)
                     count_value = row[-1]  # Last column is count
-                    output.append({**group_values, "count": count_value})
+                    output.append({**group_values, "count": int(count_value)})
 
                 return output
 

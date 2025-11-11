@@ -132,6 +132,74 @@ NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 """
 
 
+NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT = """
+You are a content comparison expert. Your task is to determine whether each new preference information already exists in the retrieved text memories.
+
+**Task:** For each new preference, check if its content/topic/intent is already present in any of the retrieved text memories.
+
+**Input Structure:**
+- New preferences: Array of objects, each with "id" and "memory" fields
+- Retrieved memories: Array of objects, each with "id" and "memory" fields
+
+**Judgment Criteria:**
+- If the core content, topic, or intent of a new preference is **already covered** in any retrieved memory, mark as "exists" (true).
+- Consider both semantic similarity and topic overlap - even if wording differs, if the meaning is the same, it counts as existing.
+- If the new preference introduces **new information, different topic, or unique content** not found in retrieved memories, mark as "exists" (false).
+- Focus on the substantive content rather than minor phrasing differences.
+
+**Output Format (JSON):**
+```json
+{
+  "new_preference_id": "ID of the new preference being evaluated",
+  "exists": true/false,
+  "reasoning": "Brief explanation of your judgment, citing which retrieved memory contains similar content (if exists=true) or why it's new content (if exists=false)",
+  "matched_memory_id": "If exists=true, indicate which retrieved memory id matches; otherwise null"
+}
+```
+**New Preferences (array):**
+{new_preference}
+
+**Retrieved Text Memories (array):**
+{retrieved_memories}
+
+Output only the JSON response, no additional text.
+"""
+
+
+NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT_ZH = """
+你是一个内容比较专家。你的任务是判断每个新的偏好信息是否已经存在于召回的文本记忆中。
+
+**任务：** 对每个新偏好，检查其内容/主题/意图是否已经在任何召回的文本记忆中存在。
+
+**输入结构：**
+- 新偏好：对象数组，每个对象包含"id"和"memory"字段
+- 召回记忆：对象数组，每个对象包含"id"和"memory"字段
+
+**判断标准：**
+- 如果新偏好的核心内容、主题或意图**已经被覆盖**在任何召回的记忆中，标记为"exists"（true）。
+- 考虑语义相似性和主题重叠 - 即使措辞不同，如果含义相同，也算作已存在。
+- 如果新偏好引入了**新信息、不同主题或独特内容**，且在召回记忆中未找到，标记为"exists"（false）。
+- 关注实质性内容，而非细微的表达差异。
+
+**输出格式（JSON）：**
+```json
+{
+  "new_preference_id": "正在评估的新偏好ID",
+  "exists": true/false,
+  "reasoning": "简要说明你的判断理由，引用包含相似内容的召回记忆（如果exists=true）或说明为什么是新内容（如果exists=false）",
+  "matched_memory_id": "如果exists=true，指出匹配的召回记忆id；否则为null"
+}
+```
+**新偏好（数组）：**
+{new_preference}
+
+**召回的文本记忆（数组）：**
+{retrieved_memories}
+
+只输出JSON响应，不要输出其他任何文本。
+"""
+
+
 NAIVE_JUDGE_UPDATE_OR_ADD_PROMPT = """
 You are a content comparison expert. Now you are given old and new information, each containing a question, answer topic name and topic description.
 Please judge whether these two information express the **same question or core content**, regardless of expression differences, details or example differences. The judgment criteria are as follows:
@@ -599,15 +667,13 @@ retrieved_memories:
 
 PREF_INSTRUCTIONS = """
 # Note:
-Plaintext memory are summaries of facts, while preference memories are summaries of user preferences.
+Fact memory are summaries of facts, while preference memory are summaries of user preferences.
 Your response must not violate any of the user's preferences, whether explicit or implicit, and briefly explain why you answer this way to avoid conflicts.
-When encountering preference conflicts, the priority is: explicit preference > implicit preference > plaintext memory.
 """
 
 
 PREF_INSTRUCTIONS_ZH = """
 # 注意：
-明文记忆是事实的摘要，而偏好记忆是用户偏好的摘要。
+事实记忆是事实的摘要，而偏好记忆是用户偏好的摘要。
 你的回复不得违反用户的任何偏好，无论是显式偏好还是隐式偏好，并简要解释你为什么这样回答以避免冲突。
-当遇到偏好冲突时，优先级为：显式偏好 > 隐式偏好 > 明文记忆。
 """
