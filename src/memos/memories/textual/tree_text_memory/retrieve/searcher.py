@@ -1,7 +1,4 @@
-import json
 import traceback
-
-from datetime import datetime
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
@@ -30,8 +27,8 @@ from .task_goal_parser import TaskGoalParser
 
 logger = get_logger(__name__)
 COT_DICT = {
-    "fast": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
-    "fine": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
+    "fine": {"en": COT_PROMPT, "zh": COT_PROMPT_ZH},
+    "fast": {"en": SIMPLE_COT_PROMPT, "zh": SIMPLE_COT_PROMPT_ZH},
 }
 
 
@@ -59,12 +56,8 @@ class Searcher:
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
         self.moscube = moscube
-        self.vec_cot = (
-            search_strategy.get("vec_cot", "false") == "true" if search_strategy else False
-        )
-        self.use_fast_graph = (
-            search_strategy.get("fast_graph", "false") == "true" if search_strategy else False
-        )
+        self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
+        self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
 
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
@@ -115,7 +108,7 @@ class Searcher:
     def search(
         self,
         query: str,
-        top_k: int,
+        top_k: int = 10,
         info=None,
         mode="fast",
         memory_type="All",
@@ -287,6 +280,7 @@ class Searcher:
                     search_filter,
                     user_name,
                     id_filter,
+                    mode=mode,
                 )
             )
             tasks.append(
@@ -369,6 +363,7 @@ class Searcher:
         search_filter: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
+        mode: str = "fast",
     ):
         """Retrieve and rerank from LongTermMemory and UserMemory"""
         results = []
@@ -377,7 +372,7 @@ class Searcher:
         # chain of thinking
         cot_embeddings = []
         if self.vec_cot:
-            queries = self._cot_query(query)
+            queries = self._cot_query(query, mode=mode, context=parsed_goal.context)
             if len(queries) > 1:
                 cot_embeddings = self.embedder.embed(queries)
             cot_embeddings.extend(query_embedding)
@@ -510,7 +505,7 @@ class Searcher:
 
     @timed
     def _update_usage_history(self, items, info, user_name: str | None = None):
-        """Update usage history in graph DB"""
+        """Update usage history in graph DB
         now_time = datetime.now().isoformat()
         info_copy = dict(info or {})
         info_copy.pop("chat_history", None)
@@ -534,6 +529,7 @@ class Searcher:
             self._usage_executor.submit(
                 self._update_usage_history_worker, payload, usage_record, user_name
             )
+        """
 
     def _update_usage_history_worker(
         self, payload, usage_record: str, user_name: str | None = None
@@ -566,7 +562,6 @@ class Searcher:
             prompt = template.replace("${original_query}", query).replace(
                 "${split_num_threshold}", str(split_num)
             )
-        logger.info("COT process")
 
         messages = [{"role": "user", "content": prompt}]
         try:

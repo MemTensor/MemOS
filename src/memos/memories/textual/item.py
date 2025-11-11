@@ -198,6 +198,7 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")
     preference: str | None = Field(default=None, description="Preference.")
     created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
+    mem_cube_id: str | None = Field(default=None, description="ID of the MemCube.")
 
 
 class TextualMemoryItem(BaseModel):

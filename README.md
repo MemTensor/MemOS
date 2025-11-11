@@ -43,7 +43,7 @@
 
 ---
 
-<img src="https://statics.memtensor.com.cn/memos/sota_score.jpg" alt="SOTA SCORE">
+<img src="https://cdn.memtensor.com.cn/img/1762436050812_3tgird_compressed.png" alt="SOTA SCORE">
 
 **MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions.
 
@@ -52,12 +52,34 @@
 - **API Reference**: https://memos-docs.openmem.net/docs/api/info/
 - **Source Code**: https://github.com/MemTensor/MemOS
 
+## 📰 News
+
+Stay up to date with the latest MemOS announcements, releases, and community highlights.
+
+
+- **2025-11-06** - 🎉 MemOS v1.1.3 (Async Memory & Preference):
+  Millisecond-level async memory add (support plain-text-memory and
+  preference memory); enhanced BM25, graph recall, and mixture search; full
+  results & code for LoCoMo, LongMemEval, PersonaMem, and PrefEval released.
+- **2025-10-30** - 🎉 MemOS v1.1.2 (API & MCP Update):
+API architecture overhaul and full MCP (Model Context Protocol) support — enabling models, IDEs, and agents to read/write external memory directly.
+- **2025-09-10** - 🎉 *MemOS v1.0.1 (Group Q&A Bot)*: Group Q&A bot based on MemOS Cube, updated KV-Cache performance comparison data across different GPU deployment schemes, optimized test benchmarks and statistics, added plaintext memory Reranker sorting, optimized plaintext memory hallucination issues, and Playground version updates. [Try PlayGround](https://memos-playground.openmem.net/login/)
+- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
+- **2025-07-29** – 🎉 *MemOS v0.2.2 (Nebula Update)*: Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
+- **2025-07-21** – 🎉 *MemOS v0.2.1 (Neo Release)*: Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
+- **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
+- **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
+- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
+- **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
+- **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
+- **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.
+
 ## 📈 Performance Benchmark
 
 MemOS demonstrates significant improvements over baseline memory solutions in multiple memory tasks,
 showcasing its capabilities in **information extraction**, **temporal and cross-session reasoning**, and **personalized preference responses**.
 
-| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  | 
+| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  |
 |-----------------|-------------|-------------|-------------|-------------|
 | **GPT-4o-mini** | 52.75       | 55.4        | 2.8         | 43.46       |
 | **MemOS**       | **75.80**   | **77.80**   | **71.90**   | **61.17**   |
@@ -81,6 +103,27 @@ showcasing its capabilities in **information extraction**, **temporal and cross-
 
 ## 🚀 Getting Started
 
+### ⭐️ MemOS online API
+The easiest way to use MemOS. Equip your agent with memory **in minutes**!
+
+Sign up and get started on[`MemOS dashboard`](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing).
+
+
+### Self-Hosted Server
+1. Get the repository.
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+pip install -r ./docker/requirements.txt
+```
+
+2. Configure `docker/.env.example` and copy to `MemOS/.env`
+3. Start the service.
+```bash
+uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 8
+```
+
+### Local SDK
 Here's a quick example of how to create a **`MemCube`**, load it from a directory, access its memories, and save it.
 
 ```python
@@ -102,7 +145,7 @@ for item in mem_cube.act_mem.get_all():
 mem_cube.dump("tmp/mem_cube")
 ```
 
-What about **`MOS`** (Memory Operating System)? It's a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
+**`MOS`** (Memory Operating System) is a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
 
 ```python
 from memos.configs.mem_os import MOSConfig
@@ -244,19 +287,3 @@ We welcome contributions from the community! Please read our [contribution guide
 ## 📄 License
 
 MemOS is licensed under the [Apache 2.0 License](./LICENSE).
-
-## 📰 News
-
-Stay up to date with the latest MemOS announcements, releases, and community highlights.
-
-
-- **2025-09-10** - 🎉 *MemOS v1.0.1 (Group Q&A Bot)*: Group Q&A bot based on MemOS Cube, updated KV-Cache performance comparison data across different GPU deployment schemes, optimized test benchmarks and statistics, added plaintext memory Reranker sorting, optimized plaintext memory hallucination issues, and Playground version updates. [Try PlayGround](https://memos-playground.openmem.net/login/)
-- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
-- **2025-07-29** – 🎉 *MemOS v0.2.2 (Nebula Update)*: Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
-- **2025-07-21** – 🎉 *MemOS v0.2.1 (Neo Release)*: Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
-- **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
-- **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
-- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
-- **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
-- **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
-- **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.
