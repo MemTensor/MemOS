@@ -6,6 +6,7 @@ import re
 import traceback
 
 from abc import ABC
+from datetime import datetime, timezone
 from typing import Any
 
 from tqdm import tqdm
@@ -399,7 +400,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not all(isinstance(info[field], str) for field in required_fields):
             raise ValueError("user_id and session_id must be strings")
-
+        scene_data = self._complete_chat_time(scene_data, type)
         list_scene_data_info = self.get_scene_data_info(scene_data, type)
 
         memory_list = []
@@ -507,6 +508,31 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     print(f"Error parsing file {item}: {e!s}")
 
         return results
+
+    def _complete_chat_time(self, scene_data: list[list[dict]], type: str):
+        if type != "chat":
+            return scene_data
+        complete_scene_data = []
+
+        for items in scene_data:
+            chat_time_value = None
+
+            for item in items:
+                if "chat_time" in item:
+                    chat_time_value = item["chat_time"]
+                    break
+
+            if chat_time_value is None:
+                session_date = datetime.now(timezone.utc)
+                date_format = "%I:%M %p on %d %B, %Y UTC"
+                chat_time_value = session_date.strftime(date_format)
+
+            for i in range(len(items)):
+                if "chat_time" not in items[i]:
+                    items[i]["chat_time"] = chat_time_value
+
+            complete_scene_data.append(items)
+        return complete_scene_data
 
     def _process_doc_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")

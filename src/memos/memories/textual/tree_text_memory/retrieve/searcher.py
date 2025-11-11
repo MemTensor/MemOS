@@ -108,7 +108,7 @@ class Searcher:
     def search(
         self,
         query: str,
-        top_k: int,
+        top_k: int = 10,
         info=None,
         mode="fast",
         memory_type="All",

@@ -119,6 +119,9 @@ class NaiveRetriever(BaseRetriever):
             if pref.payload.get("preference", None)
         ]
 
+        # store explicit id and score, use it after reranker
+        explicit_id_scores = {item.id: item.score for item in explicit_prefs}
+
         reranker_map = {
             "naive": self._naive_reranker,
             "original_text": self._original_text_reranker,
@@ -130,5 +133,10 @@ class NaiveRetriever(BaseRetriever):
         implicit_prefs_mem = reranker_func(
             query=query, prefs_mem=implicit_prefs_mem, prefs=implicit_prefs, top_k=top_k
         )
+
+        # filter explicit mem by score bigger than threshold
+        explicit_prefs_mem = [
+            item for item in explicit_prefs_mem if explicit_id_scores.get(item.id, 0) >= 0.2
+        ]
 
         return explicit_prefs_mem + implicit_prefs_mem

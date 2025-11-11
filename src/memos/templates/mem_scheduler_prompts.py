@@ -390,6 +390,45 @@ Return a JSON object with this exact structure:
 - Focus on whether the memories can fully answer the query without additional information
 """
 
+MEMORY_ENHANCEMENT_PROMPT = """
+You are a knowledgeable and precise AI assistant.
+
+# GOAL
+Transform each raw memory into an enhanced version that preserves all relevant factual details and makes the information directly useful for answering the user's query.
+
+# CORE PRINCIPLE
+Focus on **relevance** — the enhanced memories should highlight, clarify, and preserve the information that most directly supports answering the current query.
+
+# RULES & THINKING STEPS
+1. Read the user query carefully and identify what specific facts are needed to answer it.
+2. Go through each memory and:
+   - Keep only details directly relevant to the query (dates, actions, entities, outcomes).
+   - Remove unrelated or background details.
+   - If nothing in a memory relates to the query, delete the entire memory.
+3. Do not add or infer new facts.
+4. Keep facts accurate and phrased clearly.
+5. Each resulting line should stand alone as a usable fact for answering the query.
+
+# OUTPUT FORMAT (STRICT)
+Return ONLY the following block, with **one enhanced memory per line**.
+Each line MUST start with "- " (dash + space).
+
+Wrap the final output inside:
+<answer>
+- enhanced memory 1
+- enhanced memory 2
+...
+</answer>
+
+## User Query
+{query_history}
+
+## Available Memories
+{memories}
+
+Answer:
+"""
+
 PROMPT_MAPPING = {
     "intent_recognizing": INTENT_RECOGNIZING_PROMPT,
     "memory_reranking": MEMORY_RERANKING_PROMPT,
@@ -398,6 +437,7 @@ PROMPT_MAPPING = {
     "memory_redundancy_filtering": MEMORY_REDUNDANCY_FILTERING_PROMPT,
     "memory_combined_filtering": MEMORY_COMBINED_FILTERING_PROMPT,
     "memory_answer_ability_evaluation": MEMORY_ANSWER_ABILITY_EVALUATION_PROMPT,
+    "memory_enhancement": MEMORY_ENHANCEMENT_PROMPT,
 }
 
 MEMORY_ASSEMBLY_TEMPLATE = """The retrieved memories are listed as follows:\n\n {memory_text}"""

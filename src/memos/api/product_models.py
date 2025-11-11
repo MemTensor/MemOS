@@ -171,7 +171,9 @@ class APISearchRequest(BaseRequest):
     query: str = Field(..., description="Search query")
     user_id: str = Field(None, description="User ID")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
-    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
+    mode: SearchMode = Field(
+        SearchMode.NOT_INITIALIZED, description="search mode: fast, fine, or mixture"
+    )
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
     top_k: int = Field(10, description="Number of results to return")

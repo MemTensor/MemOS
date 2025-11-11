@@ -563,6 +563,34 @@ class MOSProduct(MOSCore):
             logger.error(f"Error extracting references from response: {e}", exc_info=True)
             return response, []
 
+    def _extract_struct_data_from_history(self, chat_data: list[dict]) -> dict:
+        """
+        get struct message from chat-history
+        # TODO: @xcy make this more general
+        """
+        system_content = ""
+        memory_content = ""
+        chat_history = []
+
+        for item in chat_data:
+            role = item.get("role")
+            content = item.get("content", "")
+            if role == "system":
+                parts = content.split("# Memories", 1)
+                system_content = parts[0].strip()
+                if len(parts) > 1:
+                    memory_content = "# Memories" + parts[1].strip()
+            elif role in ("user", "assistant"):
+                chat_history.append({"role": role, "content": content})
+
+        if chat_history and chat_history[-1]["role"] == "assistant":
+            if len(chat_history) >= 2 and chat_history[-2]["role"] == "user":
+                chat_history = chat_history[:-2]
+            else:
+                chat_history = chat_history[:-1]
+
+        return {"system": system_content, "memory": memory_content, "chat_history": chat_history}
+
     def _chunk_response_with_tiktoken(
         self, response: str, chunk_size: int = 5
     ) -> Generator[str, None, None]:
@@ -609,7 +637,6 @@ class MOSProduct(MOSCore):
             message_item = ScheduleMessageItem(
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=self.mem_cubes[mem_cube_id],
                 label=label,
                 content=query,
                 timestamp=datetime.utcnow(),
@@ -640,23 +667,26 @@ class MOSProduct(MOSCore):
             clean_response, extracted_references = self._extract_references_from_response(
                 full_response
             )
+            struct_message = self._extract_struct_data_from_history(current_messages)
             logger.info(f"Extracted {len(extracted_references)} references from response")
 
             # Send chat report notifications asynchronously
             if self.online_bot:
+                logger.info("Online Bot Open!")
                 try:
                     from memos.memos_tools.notification_utils import (
                         send_online_bot_notification_async,
                     )
 
                     # Prepare notification data
-                    chat_data = {
-                        "query": query,
-                        "user_id": user_id,
-                        "cube_id": cube_id,
-                        "system_prompt": system_prompt,
-                        "full_response": full_response,
-                    }
+                    chat_data = {"query": query, "user_id": user_id, "cube_id": cube_id}
+                    chat_data.update(
+                        {
+                            "memory": struct_message["memory"],
+                            "chat_history": struct_message["chat_history"],
+                            "full_response": full_response,
+                        }
+                    )
 
                     system_data = {
                         "references": extracted_references,
@@ -720,6 +750,7 @@ class MOSProduct(MOSCore):
         """
         Asynchronous processing of logs, notifications and memory additions, handle synchronous and asynchronous environments
         """
+        logger.info("Start post_chat_processing...")
 
         def run_async_in_thread():
             """Running asynchronous tasks in a new thread"""
@@ -1046,14 +1077,20 @@ class MOSProduct(MOSCore):
             memories_list = new_memories_list
 
         system_prompt = super()._build_system_prompt(memories_list, base_prompt)
-        history_info = []
-        if history:
+        if history is not None:
+            # Use the provided history (even if it's empty)
             history_info = history[-20:]
+        else:
+            # Fall back to internal chat_history
+            if user_id not in self.chat_history_manager:
+                self._register_chat_history(user_id, session_id)
+            history_info = self.chat_history_manager[user_id].chat_history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},
             *history_info,
             {"role": "user", "content": query},
         ]
+        logger.info("Start to get final answer...")
         response = self.chat_llm.generate(current_messages)
         time_end = time.time()
         self._start_post_chat_processing(
@@ -1129,7 +1166,7 @@ class MOSProduct(MOSCore):
             self._register_chat_history(user_id, session_id)
 
         chat_history = self.chat_history_manager[user_id]
-        if history:
+        if history is not None:
             chat_history.chat_history = history[-20:]
         current_messages = [
             {"role": "system", "content": system_prompt},

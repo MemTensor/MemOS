@@ -66,7 +66,7 @@ class GraphMemoryRetriever:
             working_memories = self.graph_store.get_all_memory_items(
                 scope="WorkingMemory", include_embedding=False, user_name=user_name
             )
-            return [TextualMemoryItem.from_dict(record) for record in working_memories]
+            return [TextualMemoryItem.from_dict(record) for record in working_memories[:top_k]]
 
         with ContextThreadPoolExecutor(max_workers=3) as executor:
             # Structured graph-based retrieval

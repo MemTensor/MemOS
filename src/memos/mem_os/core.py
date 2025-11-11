@@ -283,7 +283,6 @@ class MOSCore:
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
                         label=QUERY_LABEL,
                         content=query,
                         timestamp=datetime.utcnow(),
@@ -344,7 +343,6 @@ class MOSCore:
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
                     label=ANSWER_LABEL,
                     content=response,
                     timestamp=datetime.utcnow(),
@@ -768,12 +766,10 @@ class MOSCore:
                     )
                     # submit messages for scheduler
                     if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                        mem_cube = self.mem_cubes[mem_cube_id]
                         if sync_mode == "async":
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=mem_cube,
                                 label=MEM_READ_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
@@ -783,7 +779,6 @@ class MOSCore:
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=mem_cube,
                                 label=ADD_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
@@ -797,7 +792,6 @@ class MOSCore:
                 and self.mem_cubes[mem_cube_id].pref_mem
             ):
                 messages_list = [messages]
-                mem_cube = self.mem_cubes[mem_cube_id]
                 if sync_mode == "sync":
                     pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
                         messages_list,
@@ -816,7 +810,6 @@ class MOSCore:
                         user_id=target_user_id,
                         session_id=target_session_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
                         label=PREF_ADD_LABEL,
                         content=json.dumps(messages_list),
                         timestamp=datetime.utcnow(),
@@ -867,12 +860,10 @@ class MOSCore:
 
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                    mem_cube = self.mem_cubes[mem_cube_id]
                     if sync_mode == "async":
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
                             mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
                             label=MEM_READ_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
@@ -882,7 +873,6 @@ class MOSCore:
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
                             mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
                             label=ADD_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
@@ -909,11 +899,9 @@ class MOSCore:
 
             # submit messages for scheduler
             if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                mem_cube = self.mem_cubes[mem_cube_id]
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
                     label=ADD_LABEL,
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
