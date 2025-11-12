@@ -70,6 +70,7 @@ class OpenAILLM(BaseLLM):
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
+            timeout=6000,
         )
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
         response_content = response.choices[0].message.content
