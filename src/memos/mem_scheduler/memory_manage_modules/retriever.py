@@ -1,9 +1,14 @@
+from concurrent.futures import as_completed
+
 from memos.configs.mem_scheduler import BaseSchedulerConfig
+from memos.context.context import ContextThreadPoolExecutor
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
+    DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+    DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
     TreeTextMemory_FINE_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
 )
@@ -12,11 +17,11 @@ from memos.mem_scheduler.utils.filter_utils import (
     filter_vector_based_similar_memories,
     transform_name_to_key,
 )
-from memos.mem_scheduler.utils.misc_utils import (
-    extract_json_dict,
-)
+from memos.mem_scheduler.utils.misc_utils import extract_json_obj, extract_list_items_in_answer
+from memos.memories.textual.item import TextualMemoryMetadata
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 
+# Extract JSON response
 from .memory_filter import MemoryFilter
 
 
@@ -30,12 +35,213 @@ class SchedulerRetriever(BaseSchedulerModule):
         # hyper-parameters
         self.filter_similarity_threshold = 0.75
         self.filter_min_length_threshold = 6
-
-        self.config: BaseSchedulerConfig = config
-        self.process_llm = process_llm
-
-        # Initialize memory filter
         self.memory_filter = MemoryFilter(process_llm=process_llm, config=config)
+        self.process_llm = process_llm
+        self.config = config
+
+        # Configure enhancement batching & retries from config with safe defaults
+        self.batch_size: int | None = getattr(
+            config, "scheduler_retriever_batch_size", DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE
+        )
+        self.retries: int = getattr(
+            config, "scheduler_retriever_enhance_retries", DEFAULT_SCHEDULER_RETRIEVER_RETRIES
+        )
+
+    def evaluate_memory_answer_ability(
+        self, query: str, memory_texts: list[str], top_k: int | None = None
+    ) -> bool:
+        limited_memories = memory_texts[:top_k] if top_k is not None else memory_texts
+        # Build prompt using the template
+        prompt = self.build_prompt(
+            template_name="memory_answer_ability_evaluation",
+            query=query,
+            memory_list="\n".join([f"- {memory}" for memory in limited_memories])
+            if limited_memories
+            else "No memories available",
+        )
+
+        # Use the process LLM to generate response
+        response = self.process_llm.generate([{"role": "user", "content": prompt}])
+
+        try:
+            result = extract_json_obj(response)
+
+            # Validate response structure
+            if "result" in result:
+                logger.info(
+                    f"Answerability: result={result['result']}; reason={result.get('reason', 'n/a')}; evaluated={len(limited_memories)}"
+                )
+                return result["result"]
+            else:
+                logger.warning(f"Answerability: invalid LLM JSON structure; payload={result}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Answerability: parse failed; err={e}; raw={str(response)[:200]}...")
+            # Fallback: return False if we can't determine answer ability
+            return False
+
+    # ---------------------- Enhancement helpers ----------------------
+    def _build_enhancement_prompt(self, query_history: list[str], batch_texts: list[str]) -> str:
+        if len(query_history) == 1:
+            query_history = query_history[0]
+        else:
+            query_history = (
+                [f"[{i}] {query}" for i, query in enumerate(query_history)]
+                if len(query_history) > 1
+                else query_history[0]
+            )
+        text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(batch_texts)])
+        return self.build_prompt(
+            "memory_enhancement",
+            query_history=query_history,
+            memories=text_memories,
+        )
+
+    def _process_enhancement_batch(
+        self,
+        batch_index: int,
+        query_history: list[str],
+        memories: list[TextualMemoryItem],
+        retries: int,
+    ) -> tuple[list[TextualMemoryItem], bool]:
+        attempt = 0
+        text_memories = [one.memory for one in memories]
+        while attempt <= max(0, retries) + 1:
+            try:
+                prompt = self._build_enhancement_prompt(
+                    query_history=query_history, batch_texts=text_memories
+                )
+                logger.debug(
+                    f"[Enhance][batch={batch_index}] Prompt (first 200 chars, len={len(prompt)}): "
+                    f"{prompt[:200]}]..."
+                )
+
+                response = self.process_llm.generate([{"role": "user", "content": prompt}])
+                logger.debug(
+                    f"[Enhance][batch={batch_index}] Response (first 200 chars): {response}..."
+                )
+
+                processed_text_memories = extract_list_items_in_answer(response)
+                if len(processed_text_memories) == len(memories):
+                    # Update
+                    for i, new_mem in enumerate(processed_text_memories):
+                        memories[i].memory = new_mem
+                    enhanced_memories = memories
+                else:
+                    # create new
+                    enhanced_memories = []
+                    user_id = memories[0].metadata.user_id
+                    for new_mem in processed_text_memories:
+                        enhanced_memories.append(
+                            TextualMemoryItem(
+                                memory=new_mem, metadata=TextualMemoryMetadata(user_id=user_id)
+                            )
+                        )
+                    enhanced_memories = (
+                        enhanced_memories + memories[: len(memories) - len(enhanced_memories)]
+                    )
+
+                    logger.info(
+                        f"[Enhance]: processed_text_memories: {len(processed_text_memories)}; padded with original memories to preserve total count"
+                    )
+
+                return enhanced_memories, True
+            except Exception as e:
+                attempt += 1
+                logger.debug(
+                    f"[Enhance][batch={batch_index}] 🔁 retry {attempt}/{max(1, retries) + 1} failed: {e}"
+                )
+        logger.error(
+            f"Fail to run memory enhancement; original memories: {memories}", exc_info=True
+        )
+        return memories, False
+
+    @staticmethod
+    def _split_batches(
+        memories: list[TextualMemoryItem], batch_size: int
+    ) -> list[tuple[int, int, list[TextualMemoryItem]]]:
+        batches: list[tuple[int, int, list[TextualMemoryItem]]] = []
+        start = 0
+        n = len(memories)
+        while start < n:
+            end = min(start + batch_size, n)
+            batches.append((start, end, memories[start:end]))
+            start = end
+        return batches
+
+    def enhance_memories_with_query(
+        self,
+        query_history: list[str],
+        memories: list[TextualMemoryItem],
+    ) -> (list[TextualMemoryItem], bool):
+        """
+        Enhance memories by adding context and making connections to better answer queries.
+
+        Args:
+            query_history: List of user queries in chronological order
+            memories: List of memory items to enhance
+
+        Returns:
+            Tuple of (enhanced_memories, success_flag)
+        """
+        if not memories:
+            logger.warning("[Enhance] ⚠️ skipped (no memories to process)")
+            return memories, True
+
+        batch_size = self.batch_size
+        retries = self.retries
+        num_of_memories = len(memories)
+        try:
+            # no parallel
+            if batch_size is None or num_of_memories <= batch_size:
+                # Single batch path with retry
+                enhanced_memories, success_flag = self._process_enhancement_batch(
+                    batch_index=0,
+                    query_history=query_history,
+                    memories=memories,
+                    retries=retries,
+                )
+
+                all_success = success_flag
+            else:
+                # parallel running batches
+                # Split into batches preserving order
+                batches = self._split_batches(memories=memories, batch_size=batch_size)
+
+                # Process batches concurrently
+                all_success = True
+                failed_batches = 0
+                with ContextThreadPoolExecutor(max_workers=len(batches)) as executor:
+                    future_map = {
+                        executor.submit(
+                            self._process_enhancement_batch, bi, query_history, texts, retries
+                        ): (bi, s, e)
+                        for bi, (s, e, texts) in enumerate(batches)
+                    }
+                    enhanced_memories = []
+                    for fut in as_completed(future_map):
+                        bi, s, e = future_map[fut]
+
+                        batch_memories, ok = fut.result()
+                        enhanced_memories.extend(batch_memories)
+                        if not ok:
+                            all_success = False
+                            failed_batches += 1
+                logger.info(
+                    f"[Enhance] ✅ multi-batch done | batches={len(batches)} | enhanced={len(enhanced_memories)} |"
+                    f" failed_batches={failed_batches} | success={all_success}"
+                )
+
+        except Exception as e:
+            logger.error(f"[Enhance] ❌ fatal error: {e}", exc_info=True)
+            all_success = False
+            enhanced_memories = memories
+
+        if len(enhanced_memories) == 0:
+            enhanced_memories = memories
+            logger.error("[Enhance] ❌ fatal error: enhanced_memories is empty", exc_info=True)
+        return enhanced_memories, all_success
 
     def search(
         self,
@@ -115,7 +321,7 @@ class SchedulerRetriever(BaseSchedulerModule):
 
         try:
             # Parse JSON response
-            response = extract_json_dict(response)
+            response = extract_json_obj(response)
             new_order = response["new_order"][:top_k]
             text_memories_with_new_order = [original_memories[idx] for idx in new_order]
             logger.info(

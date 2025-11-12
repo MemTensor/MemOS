@@ -236,29 +236,32 @@ class MilvusVecDB(BaseVecDB):
             "sparse": self._sparse_search,
             "hybrid": self._hybrid_search,
         }
-
-        results = search_func_map[search_type](
-            collection_name=collection_name,
-            query_vector=query_vector,
-            query=query,
-            top_k=top_k,
-            filter=expr,
-        )
-
-        items = []
-        for hit in results[0]:
-            entity = hit.get("entity", {})
-
-            items.append(
-                MilvusVecDBItem(
-                    id=str(entity.get("id")),
-                    memory=entity.get("memory"),
-                    original_text=entity.get("original_text"),
-                    vector=entity.get("vector"),
-                    payload=entity.get("payload", {}),
-                    score=1 - float(hit["distance"]),
-                )
+        try:
+            results = search_func_map[search_type](
+                collection_name=collection_name,
+                query_vector=query_vector,
+                query=query,
+                top_k=top_k,
+                filter=expr,
             )
+
+            items = []
+            for hit in results[0]:
+                entity = hit.get("entity", {})
+
+                items.append(
+                    MilvusVecDBItem(
+                        id=str(entity.get("id")),
+                        memory=entity.get("memory"),
+                        original_text=entity.get("original_text"),
+                        vector=entity.get("vector"),
+                        payload=entity.get("payload", {}),
+                        score=1 - float(hit["distance"]),
+                    )
+                )
+        except Exception as e:
+            logger.error("Error in _%s_search: %s", search_type, e)
+            return []
 
         logger.info(f"Milvus search completed with {len(items)} results.")
         return items
