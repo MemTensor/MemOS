@@ -105,3 +105,4 @@ jobs:
       if: ${{ !startsWith(matrix.os, 'macos-13') }}
       run: |
         poetry run pytest tests -vv --durations=10 --cov-fail-under=80
+#              80%
