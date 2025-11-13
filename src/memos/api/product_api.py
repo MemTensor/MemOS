@@ -25,7 +25,6 @@ app.include_router(product_router)
 
 # Exception handlers
 app.exception_handler(ValueError)(APIExceptionHandler.value_error_handler)
-app.exception_handler(Exception)(APIExceptionHandler.global_exception_handler)
 
 
 if __name__ == "__main__":
