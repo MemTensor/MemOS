@@ -200,7 +200,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             ),
         )
 
-    def _get_llm_response(self, mem_str: str, info: dict = None) -> dict:
+    def _get_llm_response(self, mem_str: str, info: dict | None = None) -> dict:
         if info.get("customized_prompt", ""):
             template = info["customized_prompt"]
             prompt = template.replace("${conversation}", mem_str)
