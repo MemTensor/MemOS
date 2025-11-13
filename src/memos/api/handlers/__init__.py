@@ -9,8 +9,14 @@ This package contains modular handlers for the server_router, responsible for:
 """
 
 # Lazy imports to avoid circular dependencies
-from memos.api import handlers
-from memos.api.handlers import add_handlers, chat_handlers, scheduler_handlers, search_handlers
+from memos.api.handlers import (
+    add_handler,
+    chat_handler,
+    memory_handler,
+    scheduler_handler,
+    search_handler,
+    suggestion_handler,
+)
 from memos.api.handlers.component_init import init_server
 from memos.api.handlers.config_builders import (
     build_embedder_config,
@@ -24,7 +30,7 @@ from memos.api.handlers.config_builders import (
     build_reranker_config,
     build_vec_db_config,
 )
-from memos.api.handlers.formatters_handlers import (
+from memos.api.handlers.formatters_handler import (
     format_memory_item,
     post_process_pref_mem,
     to_iter,
@@ -32,7 +38,7 @@ from memos.api.handlers.formatters_handlers import (
 
 
 __all__ = [
-    "add_handlers",
+    "add_handler",
     "build_embedder_config",
     "build_graph_db_config",
     "build_internet_retriever_config",
@@ -43,13 +49,14 @@ __all__ = [
     "build_pref_retriever_config",
     "build_reranker_config",
     "build_vec_db_config",
-    "chat_handlers",
+    "chat_handler",
     "format_memory_item",
-    "formatters_handlers",
-    "handlers",
+    "formatters_handler",
     "init_server",
+    "memory_handler",
     "post_process_pref_mem",
-    "scheduler_handlers",
-    "search_handlers",
+    "scheduler_handler",
+    "search_handler",
+    "suggestion_handler",
     "to_iter",
 ]

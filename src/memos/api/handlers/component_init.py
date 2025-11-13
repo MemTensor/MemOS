@@ -233,7 +233,6 @@ def init_server() -> tuple[Any, ...]:
         mem_reader=mem_reader,
     )
     mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube)
-
     logger.debug("Scheduler initialized")
 
     # Initialize SchedulerAPIModule

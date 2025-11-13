@@ -200,6 +200,9 @@ class APIADDRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
+    async_mode: Literal["async", "sync"] = Field(
+        "async", description="Whether to add memory in async mode"
+    )
 
 
 class APIChatCompleteRequest(BaseRequest):

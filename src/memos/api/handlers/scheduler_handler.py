@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from memos.api.handlers.formatters_handlers import to_iter
+from memos.api.handlers.formatters_handler import to_iter
 from memos.log import get_logger
 
 
