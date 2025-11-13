@@ -92,7 +92,7 @@ def init_server() -> dict[str, Any]:
     # Get default cube configuration
     default_cube_config = APIConfig.get_default_cube_config()
 
-    #Get online bot setting
+    # Get online bot setting
     dingding_enabled = APIConfig.is_dingding_bot_enabled()
 
     # Build component configurations
@@ -236,6 +236,7 @@ def init_server() -> dict[str, Any]:
     online_bot = None
     if dingding_enabled:
         from memos.memos_tools.notification_service import get_online_bot_function
+
         online_bot = get_online_bot_function() if dingding_enabled else None
         logger.info("DingDing bot is enabled")
 

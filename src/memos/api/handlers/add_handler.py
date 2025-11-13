@@ -79,7 +79,7 @@ class AddHandler(BaseHandler):
             data=text_response_data + pref_response_data,
         )
 
-    def _convert_content_messsage(seflf, memory_content: str) -> list[dict[str, str]]:
+    def _convert_content_messsage(self, memory_content: str) -> list[dict[str, str]]:
         """
         Convert content string to list of message dictionaries.
 
@@ -89,10 +89,16 @@ class AddHandler(BaseHandler):
         Returns:
             List of message dictionaries
         """
-        messages_list = [{"role": "user", "content": memory_content, "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}]
+        messages_list = [
+            {
+                "role": "user",
+                "content": memory_content,
+                "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            }
+        ]
         # for only user-str input and convert message
         return messages_list
-        
+
     def _process_text_mem(
         self,
         add_req: APIADDRequest,

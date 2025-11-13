@@ -363,8 +363,8 @@ class ChatHandler(BaseHandler):
         if memories:
             memory_list = []
             for i, memory in enumerate(memories, 1):
-                    text_memory = memory.get("memory", "")
-                    memory_list.append(f"{i}. {text_memory}")
+                text_memory = memory.get("memory", "")
+                memory_list.append(f"{i}. {text_memory}")
             memory_context = "\n".join(memory_list)
 
         if "{memories}" in base_prompt:

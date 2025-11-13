@@ -4,8 +4,6 @@ Memory handler for retrieving and managing memories.
 This module handles retrieving all memories or specific subgraphs based on queries.
 """
 
-import random
-
 from typing import Any, Literal
 
 from memos.api.product_models import MemoryResponse
@@ -113,7 +111,9 @@ def handle_get_subgraph(
     """
     try:
         # Get relevant subgraph from text memory
-        memories = naive_mem_cube.text_mem.get_relevant_subgraph(query, top_k=top_k, user_name=mem_cube_id)
+        memories = naive_mem_cube.text_mem.get_relevant_subgraph(
+            query, top_k=top_k, user_name=mem_cube_id
+        )
 
         # Format and convert to tree structure
         memories_cleaned = remove_embedding_recursive(memories)

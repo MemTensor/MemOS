@@ -52,14 +52,15 @@ dependencies = HandlerDependencies.from_init_server(components)
 # Initialize all handlers with dependency injection
 search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
-chat_handler = ChatHandler(dependencies, search_handler, add_handler, online_bot=components.get("online_bot"))
+chat_handler = ChatHandler(
+    dependencies, search_handler, add_handler, online_bot=components.get("online_bot")
+)
 
 # Extract commonly used components for function-based handlers
 # (These can be accessed from the components dict without unpacking all of them)
 mem_scheduler = components["mem_scheduler"]
 llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
-
 
 
 # =============================================================================
