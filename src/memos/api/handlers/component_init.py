@@ -71,7 +71,7 @@ def _get_default_memory_size(cube_config: Any) -> dict[str, int]:
     }
 
 
-def init_server() -> tuple[Any, ...]:
+def init_server() -> dict[str, Any]:
     """
     Initialize all server components and configurations.
 
@@ -83,32 +83,17 @@ def init_server() -> tuple[Any, ...]:
     - Scheduler and related modules
 
     Returns:
-        A tuple containing all initialized components in this order:
-        (
-            graph_db,
-            mem_reader,
-            llm,
-            embedder,
-            reranker,
-            internet_retriever,
-            memory_manager,
-            default_cube_config,
-            mos_server,
-            mem_scheduler,
-            naive_mem_cube,
-            api_module,
-            vector_db,
-            pref_extractor,
-            pref_adder,
-            pref_retriever,
-            text_mem,
-            pref_mem,
-        )
+        A dictionary containing all initialized components with descriptive keys.
+        This approach allows easy addition of new components without breaking
+        existing code that uses the components.
     """
     logger.info("Initializing MemOS server components...")
 
     # Get default cube configuration
     default_cube_config = APIConfig.get_default_cube_config()
+
+    #Get online bot setting
+    dingding_enabled = APIConfig.is_dingding_bot_enabled()
 
     # Build component configurations
     graph_db_config = build_graph_db_config()
@@ -247,23 +232,32 @@ def init_server() -> tuple[Any, ...]:
 
     logger.info("MemOS server components initialized successfully")
 
-    return (
-        graph_db,
-        mem_reader,
-        llm,
-        embedder,
-        reranker,
-        internet_retriever,
-        memory_manager,
-        default_cube_config,
-        mos_server,
-        mem_scheduler,
-        naive_mem_cube,
-        api_module,
-        vector_db,
-        pref_extractor,
-        pref_adder,
-        pref_retriever,
-        text_mem,
-        pref_mem,
-    )
+    # Initialize online bot if enabled
+    online_bot = None
+    if dingding_enabled:
+        from memos.memos_tools.notification_service import get_online_bot_function
+        online_bot = get_online_bot_function() if dingding_enabled else None
+        logger.info("DingDing bot is enabled")
+
+    # Return all components as a dictionary for easy access and extension
+    return {
+        "graph_db": graph_db,
+        "mem_reader": mem_reader,
+        "llm": llm,
+        "embedder": embedder,
+        "reranker": reranker,
+        "internet_retriever": internet_retriever,
+        "memory_manager": memory_manager,
+        "default_cube_config": default_cube_config,
+        "mos_server": mos_server,
+        "mem_scheduler": mem_scheduler,
+        "naive_mem_cube": naive_mem_cube,
+        "api_module": api_module,
+        "vector_db": vector_db,
+        "pref_extractor": pref_extractor,
+        "pref_adder": pref_adder,
+        "pref_retriever": pref_retriever,
+        "text_mem": text_mem,
+        "pref_mem": pref_mem,
+        "online_bot": online_bot,
+    }

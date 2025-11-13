@@ -47,34 +47,19 @@ INSTANCE_ID = f"{socket.gethostname()}:{os.getpid()}:{_random.randint(1000, 9999
 components = handlers.init_server()
 
 # Create dependency container
-dependencies = HandlerDependencies.from_init_server(*components)
+dependencies = HandlerDependencies.from_init_server(components)
 
 # Initialize all handlers with dependency injection
 search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
-chat_handler = ChatHandler(dependencies, search_handler, add_handler)
+chat_handler = ChatHandler(dependencies, search_handler, add_handler, online_bot=components.get("online_bot"))
 
-# For backward compatibility, also provide component access
-(
-    graph_db,
-    mem_reader,
-    llm,
-    embedder,
-    reranker,
-    internet_retriever,
-    memory_manager,
-    default_cube_config,
-    mos_server,
-    mem_scheduler,
-    naive_mem_cube,
-    api_module,
-    vector_db,
-    pref_extractor,
-    pref_adder,
-    pref_retriever,
-    text_mem,
-    pref_mem,
-) = components
+# Extract commonly used components for function-based handlers
+# (These can be accessed from the components dict without unpacking all of them)
+mem_scheduler = components["mem_scheduler"]
+llm = components["llm"]
+naive_mem_cube = components["naive_mem_cube"]
+
 
 
 # =============================================================================
@@ -192,7 +177,7 @@ def chat(chat_req: ChatRequest):
 def get_suggestion_queries(suggestion_req: SuggestionRequest):
     """Get suggestion queries for a specific user with language preference."""
     return handlers.suggestion_handler.handle_get_suggestion_queries(
-        user_id=suggestion_req.user_id,
+        user_id=suggestion_req.mem_cube_id,
         language=suggestion_req.language,
         message=suggestion_req.message,
         llm=llm,

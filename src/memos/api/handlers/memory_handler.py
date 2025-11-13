@@ -113,7 +113,7 @@ def handle_get_subgraph(
     """
     try:
         # Get relevant subgraph from text memory
-        memories = naive_mem_cube.text_mem.get_relevant_subgraph(query, top_k=top_k)
+        memories = naive_mem_cube.text_mem.get_relevant_subgraph(query, top_k=top_k, user_name=mem_cube_id)
 
         # Format and convert to tree structure
         memories_cleaned = remove_embedding_recursive(memories)

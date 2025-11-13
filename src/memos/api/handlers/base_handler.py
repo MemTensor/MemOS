@@ -70,57 +70,23 @@ class HandlerDependencies:
             setattr(self, key, value)
 
     @classmethod
-    def from_init_server(cls, *components):
+    def from_init_server(cls, components: dict[str, Any]):
         """
         Create dependencies from init_server() return values.
 
         Args:
-            *components: Tuple of components returned by init_server()
+            components: Dictionary of components returned by init_server().
+                       All components will be automatically unpacked as dependencies.
 
         Returns:
             HandlerDependencies instance
-        """
-        (
-            graph_db,
-            mem_reader,
-            llm,
-            embedder,
-            reranker,
-            internet_retriever,
-            memory_manager,
-            default_cube_config,
-            mos_server,
-            mem_scheduler,
-            naive_mem_cube,
-            api_module,
-            vector_db,
-            pref_extractor,
-            pref_adder,
-            pref_retriever,
-            text_mem,
-            pref_mem,
-        ) = components
 
-        return cls(
-            llm=llm,
-            naive_mem_cube=naive_mem_cube,
-            mem_reader=mem_reader,
-            mem_scheduler=mem_scheduler,
-            embedder=embedder,
-            reranker=reranker,
-            graph_db=graph_db,
-            vector_db=vector_db,
-            internet_retriever=internet_retriever,
-            memory_manager=memory_manager,
-            mos_server=mos_server,
-            default_cube_config=default_cube_config,
-            api_module=api_module,
-            pref_extractor=pref_extractor,
-            pref_adder=pref_adder,
-            pref_retriever=pref_retriever,
-            text_mem=text_mem,
-            pref_mem=pref_mem,
-        )
+        Note:
+            This method uses **kwargs unpacking, so any new components added to
+            init_server() will automatically become available as dependencies
+            without modifying this code.
+        """
+        return cls(**components)
 
 
 class BaseHandler:

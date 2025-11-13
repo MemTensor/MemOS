@@ -60,7 +60,9 @@ class AddHandler(BaseHandler):
         )
 
         self.logger.info(f"Add Req is: {add_req}")
-
+        if (not add_req.messages) and add_req.memory_content:
+            add_req.messages = self._convert_content_messsage(add_req.memory_content)
+            self.logger.info(f"Converted Add Req content to messages: {add_req.messages}")
         # Process text and preference memories in parallel
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             text_future = executor.submit(self._process_text_mem, add_req, user_context)
@@ -77,6 +79,20 @@ class AddHandler(BaseHandler):
             data=text_response_data + pref_response_data,
         )
 
+    def _convert_content_messsage(seflf, memory_content: str) -> list[dict[str, str]]:
+        """
+        Convert content string to list of message dictionaries.
+
+        Args:
+            content: add content string
+
+        Returns:
+            List of message dictionaries
+        """
+        messages_list = [{"role": "user", "content": memory_content, "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}]
+        # for only user-str input and convert message
+        return messages_list
+        
     def _process_text_mem(
         self,
         add_req: APIADDRequest,

@@ -346,40 +346,34 @@ class ChatHandler(BaseHandler):
 
     def _build_system_prompt(
         self,
-        memories_all: list,
+        memories: list | None = None,
         base_prompt: str | None = None,
-        tone: str = "friendly",
-        verbosity: str = "mid",
+        **kwargs,
     ) -> str:
-        """
-        Build system prompt with memory references (for complete response).
+        """Build system prompt with optional memories context."""
+        if base_prompt is None:
+            base_prompt = (
+                "You are a knowledgeable and helpful AI assistant. "
+                "You have access to conversation memories that help you provide more personalized responses. "
+                "Use the memories to understand the user's context, preferences, and past interactions. "
+                "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
+            )
 
-        Args:
-            memories_all: List of memory items
-            base_prompt: Optional base prompt
-            tone: Tone of the prompt
-            verbosity: Verbosity level
+        memory_context = ""
+        if memories:
+            memory_list = []
+            for i, memory in enumerate(memories, 1):
+                    text_memory = memory.get("memory", "")
+                    memory_list.append(f"{i}. {text_memory}")
+            memory_context = "\n".join(memory_list)
 
-        Returns:
-            System prompt string
-        """
-        now = datetime.now()
-        formatted_date = now.strftime("%Y-%m-%d (%A)")
-        sys_body = get_memos_prompt(
-            date=formatted_date, tone=tone, verbosity=verbosity, mode="base"
-        )
-
-        # Format memories
-        mem_block_o, mem_block_p = self._format_mem_block(memories_all)
-        mem_block = mem_block_o + "\n" + mem_block_p
-
-        prefix = (base_prompt.strip() + "\n\n") if base_prompt else ""
-        return (
-            prefix
-            + sys_body
-            + "\n\n# Memories\n## PersonalMemory & OuterMemory (ordered)\n"
-            + mem_block
-        )
+        if "{memories}" in base_prompt:
+            return base_prompt.format(memories=memory_context)
+        elif base_prompt and memories:
+            # For backward compatibility, append memories if no placeholder is found
+            memory_context_with_header = "\n\n## Memories:\n" + memory_context
+            return base_prompt + memory_context_with_header
+        return base_prompt
 
     def _build_enhance_system_prompt(
         self,

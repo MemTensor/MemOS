@@ -218,7 +218,7 @@ class TreeTextMemory(BaseTextMemory):
         )
 
     def get_relevant_subgraph(
-        self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"
+        self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated", user_name: str | None = None
     ) -> dict[str, Any]:
         """
         Find and merge the local neighborhood sub-graphs of the top-k
@@ -249,7 +249,7 @@ class TreeTextMemory(BaseTextMemory):
         query_embedding = self.embedder.embed([query])[0]
 
         # Step 2: Get top-1 similar node
-        similar_nodes = self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
+        similar_nodes = self.graph_store.search_by_embedding(query_embedding, top_k=top_k, user_name=user_name)
         if not similar_nodes:
             logger.info("No similar nodes found for query embedding.")
             return {"core_id": None, "nodes": [], "edges": []}
@@ -264,7 +264,7 @@ class TreeTextMemory(BaseTextMemory):
             score = node["score"]
 
             subgraph = self.graph_store.get_subgraph(
-                center_id=core_id, depth=depth, center_status=center_status
+                center_id=core_id, depth=depth, center_status=center_status, user_name=user_name
             )
 
             if subgraph is None or not subgraph["core_node"]:
