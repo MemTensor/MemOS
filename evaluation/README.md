@@ -16,10 +16,7 @@ This repository provides tools and scripts for evaluating the `LoCoMo`, `LongMem
    ```
 
 ## Configuration
-
-1. Copy the `.env-example` file to `.env`, and fill in the required environment variables according to your environment and API keys.
-
-2. Copy the `configs-example/` directory to a new directory named `configs/`, and modify the configuration files inside it as needed. This directory contains model and API-specific settings.
+Copy the `.env-example` file to `.env`, and fill in the required environment variables according to your environment and API keys.
 
 ## Setup MemOS
 ### local server

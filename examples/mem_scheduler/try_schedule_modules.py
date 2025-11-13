@@ -176,6 +176,7 @@ if __name__ == "__main__":
     mos.register_mem_cube(
         mem_cube_name_or_path=mem_cube_name_or_path, mem_cube_id=mem_cube_id, user_id=user_id
     )
+    mos.mem_scheduler.current_mem_cube = mem_cube
 
     mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
 

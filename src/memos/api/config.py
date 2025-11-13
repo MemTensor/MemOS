@@ -175,7 +175,7 @@ class NacosConfigManager:
     @classmethod
     def start_watch_if_enabled(cls) -> None:
         enable = os.getenv("NACOS_ENABLE_WATCH", "false").lower() == "true"
-        print("enable:", enable)
+        logger.info(f"NACOS_ENABLE_WATCH: {enable}")
         if not enable:
             return
         interval = int(os.getenv("NACOS_WATCH_INTERVAL", "60"))
@@ -623,7 +623,10 @@ class APIConfig:
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"
                 ).lower()
                 == "true",
-                "enable_activation_memory": True,
+                "enable_activation_memory": os.getenv(
+                    "MOS_SCHEDULER_ENABLE_ACTIVATION_MEMORY", "false"
+                ).lower()
+                == "true",
             },
         }
 
@@ -861,9 +864,9 @@ class APIConfig:
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
                             "memory_size": {
-                                "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
-                                "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
-                                "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
+                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
+                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
                             },
                             "search_strategy": {
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
@@ -933,9 +936,9 @@ class APIConfig:
                             == "true",
                             "internet_retriever": internet_config,
                             "memory_size": {
-                                "WorkingMemory": os.getenv("NEBULAR_WORKING_MEMORY", 20),
-                                "LongTermMemory": os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6),
-                                "UserMemory": os.getenv("NEBULAR_USER_MEMORY", 1e6),
+                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
+                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
+                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
                             },
                             "search_strategy": {
                                 "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),

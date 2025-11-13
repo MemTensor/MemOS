@@ -427,7 +427,6 @@ class MOSForTestScheduler(MOS):
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
                     label=QUERY_LABEL,
                     content=query,
                     timestamp=datetime.now(),
@@ -518,7 +517,6 @@ class MOSForTestScheduler(MOS):
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
                     label=ANSWER_LABEL,
                     content=response,
                     timestamp=datetime.now(),

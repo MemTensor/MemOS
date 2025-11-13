@@ -92,7 +92,7 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ContextThreadPoolExecutor(max_workers=20) as executor:
+        with ContextThreadPoolExecutor(max_workers=200) as executor:
             futures = {executor.submit(self._process_memory, m, user_name): m for m in memories}
             for future in as_completed(futures, timeout=60):
                 try:
@@ -156,7 +156,9 @@ class MemoryManager:
         results = self.graph_store.get_grouped_counts(
             group_fields=["memory_type"], user_name=user_name
         )
-        self.current_memory_size = {record["memory_type"]: record["count"] for record in results}
+        self.current_memory_size = {
+            record["memory_type"]: int(record["count"]) for record in results
+        }
         logger.info(f"[MemoryManager] Refreshed memory sizes: {self.current_memory_size}")
 
     def _process_memory(self, memory: TextualMemoryItem, user_name: str | None = None):

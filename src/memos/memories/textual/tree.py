@@ -103,11 +103,15 @@ class TreeTextMemory(BaseTextMemory):
         """
         return self.memory_manager.add(memories, user_name=user_name, mode=self.mode)
 
-    def replace_working_memory(self, memories: list[TextualMemoryItem]) -> None:
-        self.memory_manager.replace_working_memory(memories)
+    def replace_working_memory(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
+    ) -> None:
+        self.memory_manager.replace_working_memory(memories, user_name=user_name)
 
-    def get_working_memory(self) -> list[TextualMemoryItem]:
-        working_memories = self.graph_store.get_all_memory_items(scope="WorkingMemory")
+    def get_working_memory(self, user_name: str | None = None) -> list[TextualMemoryItem]:
+        working_memories = self.graph_store.get_all_memory_items(
+            scope="WorkingMemory", user_name=user_name
+        )
         items = [TextualMemoryItem.from_dict(record) for record in (working_memories)]
         # Sort by updated_at in descending order
         sorted_items = sorted(
@@ -115,12 +119,12 @@ class TreeTextMemory(BaseTextMemory):
         )
         return sorted_items
 
-    def get_current_memory_size(self) -> dict[str, int]:
+    def get_current_memory_size(self, user_name: str | None = None) -> dict[str, int]:
         """
         Get the current size of each memory type.
         This delegates to the MemoryManager.
         """
-        return self.memory_manager.get_current_memory_size()
+        return self.memory_manager.get_current_memory_size(user_name=user_name)
 
     def get_searcher(
         self,
@@ -160,6 +164,7 @@ class TreeTextMemory(BaseTextMemory):
         manual_close_internet: bool = False,
         moscube: bool = False,
         search_filter: dict | None = None,
+        user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -208,10 +213,17 @@ class TreeTextMemory(BaseTextMemory):
                 moscube=moscube,
                 search_strategy=self.search_strategy,
             )
-        return searcher.search(query, top_k, info, mode, memory_type, search_filter)
+        return searcher.search(
+            query, top_k, info, mode, memory_type, search_filter, user_name=user_name
+        )
 
     def get_relevant_subgraph(
-        self, query: str, top_k: int = 5, depth: int = 2, center_status: str = "activated"
+        self,
+        query: str,
+        top_k: int = 5,
+        depth: int = 2,
+        center_status: str = "activated",
+        user_name: str | None = None,
     ) -> dict[str, Any]:
         """
         Find and merge the local neighborhood sub-graphs of the top-k
@@ -242,7 +254,9 @@ class TreeTextMemory(BaseTextMemory):
         query_embedding = self.embedder.embed([query])[0]
 
         # Step 2: Get top-1 similar node
-        similar_nodes = self.graph_store.search_by_embedding(query_embedding, top_k=top_k)
+        similar_nodes = self.graph_store.search_by_embedding(
+            query_embedding, top_k=top_k, user_name=user_name
+        )
         if not similar_nodes:
             logger.info("No similar nodes found for query embedding.")
             return {"core_id": None, "nodes": [], "edges": []}
@@ -257,7 +271,7 @@ class TreeTextMemory(BaseTextMemory):
             score = node["score"]
 
             subgraph = self.graph_store.get_subgraph(
-                center_id=core_id, depth=depth, center_status=center_status
+                center_id=core_id, depth=depth, center_status=center_status, user_name=user_name
             )
 
             if subgraph is None or not subgraph["core_node"]:
@@ -306,7 +320,9 @@ class TreeTextMemory(BaseTextMemory):
             metadata=TreeNodeTextualMemoryMetadata(**metadata_dict),
         )
 
-    def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
+    def get_by_ids(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
         raise NotImplementedError
 
     def get_all(self, user_name: str | None = None) -> dict:
