@@ -39,15 +39,16 @@ dependencies = [
     "openai (>=1.77.0,<2.0.0)",
     "ollama (>=0.4.8,<0.5.0)",
     "transformers (>=4.51.3,<5.0.0)",
-    "tenacity (>=9.1.2,<10.0.0)",  # Error handling and retrying library
-    "fastapi[all] (>=0.115.12,<0.116.0)",  # Web framework for building APIs
-    "sqlalchemy (>=2.0.41,<3.0.0)",  # SQL toolkit
-    "pymysql (>=1.1.0,<2.0.0)",  # MySQL Python driver
-    "scikit-learn (>=1.7.0,<2.0.0)",  # Machine learning
+    "tenacity (>=9.1.2,<10.0.0)", # Error handling and retrying library
+    "fastapi[all] (>=0.115.12,<0.116.0)", # Web framework for building APIs
+    "sqlalchemy (>=2.0.41,<3.0.0)", # SQL toolkit
+    "pymysql (>=1.1.0,<2.0.0)", # MySQL Python driver
+    "scikit-learn (>=1.7.0,<2.0.0)", # Machine learning
     "fastmcp (>=2.10.5,<3.0.0)",
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
     "psycopg2-binary (>=2.9.11,<=2.9.11)",
     "pymilvus (>=2.6.3,<=2.6.3)",
+    "pytest-cov>=7.0.0",
 ]
 
 [project.urls]
