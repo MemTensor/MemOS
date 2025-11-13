@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "1.1.2"
+version = "1.1.3"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -152,6 +152,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.2.0"
+pytest-html = "^4.1.1"
 
 
 [tool.poetry.group.test]
@@ -197,7 +198,16 @@ pythonpath = "src"
 filterwarnings = [
     "ignore::DeprecationWarning:qdrant_client.*",
 ]
+addopts = [ # pytest 用于指定命令行参数的配置项
+#   表示使用 pytest-cov 插件来计算代码覆盖率
+#   memos 指定了要计算覆盖率的模块或包名称，即只统计 memos 这个包 / 模块下的代码覆盖情况
+    "--cov=memos",
 
+#    表示生成覆盖率报告的格式和内容
+#    term 表示在终端（命令行）输出覆盖率报告
+#    missing 表示在报告中显示哪些行的代码没有被测试覆盖到
+    "--cov-report=term-missing",
+]
 
 [tool.ruff]
 ##############################################################################
