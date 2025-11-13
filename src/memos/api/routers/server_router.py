@@ -580,6 +580,7 @@ def add_memories(add_req: APIADDRequest):
             info={
                 "user_id": add_req.user_id,
                 "session_id": target_session_id,
+                "customized_prompt": add_req.customized_prompt,
             },
             mode="fast" if sync_mode == "async" else "fine",
         )
