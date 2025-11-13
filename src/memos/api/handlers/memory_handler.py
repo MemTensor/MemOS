@@ -76,59 +76,9 @@ def handle_get_all_memories(
             )
 
         elif memory_type == "act_mem":
-            # Get activation memory
-            memories_list = []
-            act_mem = getattr(naive_mem_cube, "act_mem", None)
-            if act_mem:
-                act_mem_params = act_mem.get_all()
-                if act_mem_params:
-                    memories_data = act_mem_params[0].model_dump()
-                    records = memories_data.get("records", [])
-                    for record in records.get("text_memories", []):
-                        memories_list.append(
-                            {
-                                "id": memories_data["id"],
-                                "text": record,
-                                "create_time": records.get("timestamp"),
-                                "size": random.randint(1, 20),
-                                "modify_times": 1,
-                            }
-                        )
-
-            reformat_memory_list.append(
-                {
-                    "cube_id": mem_cube_id,
-                    "memories": memories_list,
-                }
-            )
-
+            logger.warning("Activity memory retrieval not implemented yet.")
         elif memory_type == "para_mem":
-            # Get parameter memory
-            act_mem = getattr(naive_mem_cube, "act_mem", None)
-            if act_mem:
-                act_mem_params = act_mem.get_all()
-                if act_mem_params:
-                    reformat_memory_list.append(
-                        {
-                            "cube_id": mem_cube_id,
-                            "memories": act_mem_params[0].model_dump(),
-                        }
-                    )
-                else:
-                    reformat_memory_list.append(
-                        {
-                            "cube_id": mem_cube_id,
-                            "memories": {},
-                        }
-                    )
-            else:
-                reformat_memory_list.append(
-                    {
-                        "cube_id": mem_cube_id,
-                        "memories": {},
-                    }
-                )
-
+            logger.warning("Parameter memory retrieval not implemented yet.")
         return MemoryResponse(
             message="Memories retrieved successfully",
             data=reformat_memory_list,
