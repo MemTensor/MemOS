@@ -197,6 +197,7 @@ class APIADDRequest(BaseRequest):
     source: str | None = Field(None, description="Source of the memory")
     chat_history: list[MessageDict] | None = Field(None, description="Chat history")
     session_id: str | None = Field(None, description="Session id")
+    customized_prompt: str | None = Field("", description="Customized prompt")
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
