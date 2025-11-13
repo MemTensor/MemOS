@@ -46,6 +46,8 @@ dependencies = [
     "scikit-learn (>=1.7.0,<2.0.0)",  # Machine learning
     "fastmcp (>=2.10.5,<3.0.0)",
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
+    "psycopg2-binary (>=2.9.11,<=2.9.11)",
+    "pymilvus (>=2.6.3,<=2.6.3)",
 ]
 
 [project.urls]
@@ -150,6 +152,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.2.0"
+pytest-html = "^4.1.1"
 
 
 [tool.poetry.group.test]
@@ -195,7 +198,16 @@ pythonpath = "src"
 filterwarnings = [
     "ignore::DeprecationWarning:qdrant_client.*",
 ]
+addopts = [ # pytest 用于指定命令行参数的配置项
+#   表示使用 pytest-cov 插件来计算代码覆盖率
+#   memos 指定了要计算覆盖率的模块或包名称，即只统计 memos 这个包 / 模块下的代码覆盖情况
+    "--cov=memos",
 
+#    表示生成覆盖率报告的格式和内容
+#    term 表示在终端（命令行）输出覆盖率报告
+#    missing 表示在报告中显示哪些行的代码没有被测试覆盖到
+    "--cov-report=term-missing",
+]
 
 [tool.ruff]
 ##############################################################################
