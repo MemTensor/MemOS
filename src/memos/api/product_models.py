@@ -200,6 +200,9 @@ class APIADDRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
+    async_mode: Literal["async", "sync"] = Field(
+        "async", description="Whether to add memory in async mode"
+    )
 
 
 class APIChatCompleteRequest(BaseRequest):
@@ -223,6 +226,7 @@ class SuggestionRequest(BaseRequest):
     """Request model for getting suggestion queries."""
 
     user_id: str = Field(..., description="User ID")
+    mem_cube_id: str = Field(..., description="Cube ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
     message: list[MessageDict] | None = Field(None, description="List of messages to store.")
 

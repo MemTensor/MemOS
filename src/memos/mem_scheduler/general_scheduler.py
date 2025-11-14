@@ -53,9 +53,6 @@ class GeneralScheduler(BaseScheduler):
     ):
         mem_cube = self.current_mem_cube
 
-        # for status update
-        self._set_current_context_from_message(msg=messages[0])
-
         # update query monitors
         for msg in messages:
             self.monitor.register_query_monitor_if_not_exists(
@@ -185,9 +182,6 @@ class GeneralScheduler(BaseScheduler):
                 if len(messages) == 0:
                     return
 
-                # for status update
-                self._set_current_context_from_message(msg=messages[0])
-
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
@@ -200,9 +194,6 @@ class GeneralScheduler(BaseScheduler):
                     messages = grouped_messages[user_id][mem_cube_id]
                     if len(messages) == 0:
                         return
-
-                    # for status update
-                    self._set_current_context_from_message(msg=messages[0])
 
                     # submit logs
                     for msg in messages:
