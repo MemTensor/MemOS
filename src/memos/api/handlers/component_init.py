@@ -1,0 +1,264 @@
+"""
+Server component initialization module.
+
+This module handles the initialization of all MemOS server components
+including databases, LLMs, memory systems, and schedulers.
+"""
+
+from typing import TYPE_CHECKING, Any
+
+from memos.api.config import APIConfig
+from memos.api.handlers.config_builders import (
+    build_embedder_config,
+    build_graph_db_config,
+    build_internet_retriever_config,
+    build_llm_config,
+    build_mem_reader_config,
+    build_pref_adder_config,
+    build_pref_extractor_config,
+    build_pref_retriever_config,
+    build_reranker_config,
+    build_vec_db_config,
+)
+from memos.configs.mem_scheduler import SchedulerConfigFactory
+from memos.embedders.factory import EmbedderFactory
+from memos.graph_dbs.factory import GraphStoreFactory
+from memos.llms.factory import LLMFactory
+from memos.log import get_logger
+from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_os.product_server import MOSServer
+from memos.mem_reader.factory import MemReaderFactory
+from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
+from memos.mem_scheduler.scheduler_factory import SchedulerFactory
+from memos.memories.textual.prefer_text_memory.factory import (
+    AdderFactory,
+    ExtractorFactory,
+    RetrieverFactory,
+)
+from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
+from memos.memories.textual.simple_tree import SimpleTreeTextMemory
+from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
+    InternetRetrieverFactory,
+)
+from memos.reranker.factory import RerankerFactory
+from memos.vec_dbs.factory import VecDBFactory
+
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
+
+logger = get_logger(__name__)
+
+
+def _get_default_memory_size(cube_config: Any) -> dict[str, int]:
+    """
+    Get default memory size configuration.
+
+    Attempts to retrieve memory size from cube config, falls back to defaults
+    if not found.
+
+    Args:
+        cube_config: The cube configuration object
+
+    Returns:
+        Dictionary with memory sizes for different memory types
+    """
+    return getattr(cube_config.text_mem.config, "memory_size", None) or {
+        "WorkingMemory": 20,
+        "LongTermMemory": 1500,
+        "UserMemory": 480,
+    }
+
+
+def init_server() -> dict[str, Any]:
+    """
+    Initialize all server components and configurations.
+
+    This function orchestrates the creation and initialization of all components
+    required by the MemOS server, including:
+    - Database connections (graph DB, vector DB)
+    - Language models and embedders
+    - Memory systems (text, preference)
+    - Scheduler and related modules
+
+    Returns:
+        A dictionary containing all initialized components with descriptive keys.
+        This approach allows easy addition of new components without breaking
+        existing code that uses the components.
+    """
+    logger.info("Initializing MemOS server components...")
+
+    # Get default cube configuration
+    default_cube_config = APIConfig.get_default_cube_config()
+
+    # Get online bot setting
+    dingding_enabled = APIConfig.is_dingding_bot_enabled()
+
+    # Build component configurations
+    graph_db_config = build_graph_db_config()
+    llm_config = build_llm_config()
+    embedder_config = build_embedder_config()
+    mem_reader_config = build_mem_reader_config()
+    reranker_config = build_reranker_config()
+    internet_retriever_config = build_internet_retriever_config()
+    vector_db_config = build_vec_db_config()
+    pref_extractor_config = build_pref_extractor_config()
+    pref_adder_config = build_pref_adder_config()
+    pref_retriever_config = build_pref_retriever_config()
+
+    logger.debug("Component configurations built successfully")
+
+    # Create component instances
+    graph_db = GraphStoreFactory.from_config(graph_db_config)
+    vector_db = VecDBFactory.from_config(vector_db_config)
+    llm = LLMFactory.from_config(llm_config)
+    embedder = EmbedderFactory.from_config(embedder_config)
+    mem_reader = MemReaderFactory.from_config(mem_reader_config)
+    reranker = RerankerFactory.from_config(reranker_config)
+    internet_retriever = InternetRetrieverFactory.from_config(
+        internet_retriever_config, embedder=embedder
+    )
+
+    logger.debug("Core components instantiated")
+
+    # Initialize memory manager
+    memory_manager = MemoryManager(
+        graph_db,
+        embedder,
+        llm,
+        memory_size=_get_default_memory_size(default_cube_config),
+        is_reorganize=getattr(default_cube_config.text_mem.config, "reorganize", False),
+    )
+
+    logger.debug("Memory manager initialized")
+
+    # Initialize text memory
+    text_mem = SimpleTreeTextMemory(
+        llm=llm,
+        embedder=embedder,
+        mem_reader=mem_reader,
+        graph_db=graph_db,
+        reranker=reranker,
+        memory_manager=memory_manager,
+        config=default_cube_config.text_mem.config,
+        internet_retriever=internet_retriever,
+    )
+
+    logger.debug("Text memory initialized")
+
+    # Initialize preference memory components
+    pref_extractor = ExtractorFactory.from_config(
+        config_factory=pref_extractor_config,
+        llm_provider=llm,
+        embedder=embedder,
+        vector_db=vector_db,
+    )
+
+    pref_adder = AdderFactory.from_config(
+        config_factory=pref_adder_config,
+        llm_provider=llm,
+        embedder=embedder,
+        vector_db=vector_db,
+        text_mem=text_mem,
+    )
+
+    pref_retriever = RetrieverFactory.from_config(
+        config_factory=pref_retriever_config,
+        llm_provider=llm,
+        embedder=embedder,
+        reranker=reranker,
+        vector_db=vector_db,
+    )
+
+    logger.debug("Preference memory components initialized")
+
+    # Initialize preference memory
+    pref_mem = SimplePreferenceTextMemory(
+        extractor_llm=llm,
+        vector_db=vector_db,
+        embedder=embedder,
+        reranker=reranker,
+        extractor=pref_extractor,
+        adder=pref_adder,
+        retriever=pref_retriever,
+    )
+
+    logger.debug("Preference memory initialized")
+
+    # Initialize MOS Server
+    mos_server = MOSServer(
+        mem_reader=mem_reader,
+        llm=llm,
+        online_bot=False,
+    )
+
+    logger.debug("MOS server initialized")
+
+    # Create MemCube with pre-initialized memory instances
+    naive_mem_cube = NaiveMemCube(
+        text_mem=text_mem,
+        pref_mem=pref_mem,
+        act_mem=None,
+        para_mem=None,
+    )
+
+    logger.debug("MemCube created")
+
+    # Initialize Scheduler
+    scheduler_config_dict = APIConfig.get_scheduler_config()
+    scheduler_config = SchedulerConfigFactory(
+        backend="optimized_scheduler", config=scheduler_config_dict
+    )
+    mem_scheduler: OptimizedScheduler = SchedulerFactory.from_config(scheduler_config)
+    mem_scheduler.initialize_modules(
+        chat_llm=llm,
+        process_llm=mem_reader.llm,
+        db_engine=BaseDBManager.create_default_sqlite_engine(),
+        mem_reader=mem_reader,
+    )
+    mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube)
+    logger.debug("Scheduler initialized")
+
+    # Initialize SchedulerAPIModule
+    api_module = mem_scheduler.api_module
+
+    # Start scheduler if enabled
+    import os
+
+    if os.getenv("API_SCHEDULER_ON", True):
+        mem_scheduler.start()
+        logger.info("Scheduler started")
+
+    logger.info("MemOS server components initialized successfully")
+
+    # Initialize online bot if enabled
+    online_bot = None
+    if dingding_enabled:
+        from memos.memos_tools.notification_service import get_online_bot_function
+
+        online_bot = get_online_bot_function() if dingding_enabled else None
+        logger.info("DingDing bot is enabled")
+
+    # Return all components as a dictionary for easy access and extension
+    return {
+        "graph_db": graph_db,
+        "mem_reader": mem_reader,
+        "llm": llm,
+        "embedder": embedder,
+        "reranker": reranker,
+        "internet_retriever": internet_retriever,
+        "memory_manager": memory_manager,
+        "default_cube_config": default_cube_config,
+        "mos_server": mos_server,
+        "mem_scheduler": mem_scheduler,
+        "naive_mem_cube": naive_mem_cube,
+        "api_module": api_module,
+        "vector_db": vector_db,
+        "pref_extractor": pref_extractor,
+        "pref_adder": pref_adder,
+        "pref_retriever": pref_retriever,
+        "text_mem": text_mem,
+        "pref_mem": pref_mem,
+        "online_bot": online_bot,
+    }
