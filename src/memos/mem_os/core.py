@@ -796,7 +796,11 @@ class MOSCore:
                     pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
                         messages_list,
                         type="chat",
-                        info={"user_id": target_user_id, "session_id": self.session_id},
+                        info={
+                            "user_id": target_user_id,
+                            "session_id": self.session_id,
+                            "mem_cube_id": mem_cube_id,
+                        },
                     )
                     pref_ids = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
                     logger.info(
