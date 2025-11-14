@@ -353,7 +353,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def _process_transfer_chat_data(self, raw_node: TextualMemoryItem):
         raw_memory = raw_node.memory
-        info = {"customized_prompt": raw_node.background}
+        info = {"customized_prompt": raw_node.metadata.background}
         response_json = self._get_llm_response(raw_memory, info)
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
