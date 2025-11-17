@@ -182,7 +182,7 @@ class Searcher:
         query_embedding = None
 
         # fine mode will trigger initial embedding search
-        if mode == "fine":
+        if mode == "fine_old":
             logger.info("[SEARCH] Fine mode: embedding search")
             query_embedding = self.embedder.embed([query])[0]
 
