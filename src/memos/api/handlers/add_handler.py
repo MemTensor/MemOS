@@ -9,7 +9,9 @@ from datetime import datetime
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIADDRequest, MemoryResponse
-from memos.multi_mem_cube.views import CompositeCubeView, MemCubeView, SingleCubeView
+from memos.multi_mem_cube.composite_cube import CompositeCubeView
+from memos.multi_mem_cube.single_cube import SingleCubeView
+from memos.multi_mem_cube.views import MemCubeView
 
 
 class AddHandler(BaseHandler):

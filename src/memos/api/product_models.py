@@ -72,6 +72,12 @@ class ChatRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    readable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can read for multi-cube chat"
+    )
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube chat"
+    )
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(True, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
@@ -217,6 +223,12 @@ class APIChatCompleteRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    readable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can read for multi-cube chat"
+    )
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube chat"
+    )
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(True, description="Whether to use MemOSCube")
