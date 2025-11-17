@@ -245,7 +245,7 @@ class SearchHandler(BaseHandler):
             query=search_req.query,
             user_name=user_context.mem_cube_id,
             top_k=search_req.top_k,
-            mode=SearchMode.FAST,
+            mode=SearchMode.FINE,
             manual_close_internet=not search_req.internet_search,
             moscube=search_req.moscube,
             search_filter=search_filter,
