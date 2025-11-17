@@ -521,7 +521,9 @@ class GeneralScheduler(BaseScheduler):
 
                 # Use pref_mem.get_memory to process the memories
                 pref_memories = pref_mem.get_memory(
-                    messages_list, type="chat", info={"user_id": user_id, "session_id": session_id}
+                    messages_list,
+                    type="chat",
+                    info={"user_id": user_id, "session_id": session_id, "mem_cube_id": mem_cube_id},
                 )
                 # Add pref_mem to vector db
                 pref_ids = pref_mem.add(pref_memories)
