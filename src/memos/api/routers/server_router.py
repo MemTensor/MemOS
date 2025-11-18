@@ -23,6 +23,8 @@ from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
+    AddStatusRequest,
+    AddStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
     APISearchRequest,
@@ -98,11 +100,15 @@ def add_memories(add_req: APIADDRequest):
 # =============================================================================
 
 
-@router.get("/scheduler/status", summary="Get scheduler running status")
-def scheduler_status(user_name: str | None = None):
+@router.get(
+    "/scheduler/status", summary="Get scheduler running status", response_model=AddStatusResponse
+)
+def scheduler_status(add_status_req: AddStatusRequest):
     """Get scheduler running status."""
     return handlers.scheduler_handler.handle_scheduler_status(
-        user_name=user_name,
+        mem_cube_id=add_status_req.mem_cube_id,
+        user_id=add_status_req.user_id,
+        session_id=add_status_req.session_id,
         mem_scheduler=mem_scheduler,
         instance_id=INSTANCE_ID,
     )

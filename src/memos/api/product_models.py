@@ -1,6 +1,6 @@
 import uuid
 
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -75,7 +75,18 @@ class ChatRequest(BaseRequest):
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(True, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    top_k: int = Field(10, description="Number of results to return")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
 
 
 class ChatCompleteRequest(BaseRequest):
@@ -120,6 +131,10 @@ class SuggestionResponse(BaseResponse[list]):
     """Response model for suggestion operations."""
 
     data: dict[str, list[str]] | None = Field(None, description="Response data")
+
+
+class AddStatusResponse(BaseResponse[dict]):
+    """Response model for add status operations."""
 
 
 class ConfigResponse(BaseResponse[None]):
@@ -184,6 +199,7 @@ class APISearchRequest(BaseRequest):
     )
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
 
 
 class APIADDRequest(BaseRequest):
@@ -203,6 +219,11 @@ class APIADDRequest(BaseRequest):
     async_mode: Literal["async", "sync"] = Field(
         "async", description="Whether to add memory in async mode"
     )
+    custom_tags: list[str] | None = Field(None, description="Custom tags for the memory")
+    info: dict[str, str] | None = Field(None, description="Additional information for the memory")
+    is_feedback: bool = Field(
+        False, description="Whether the user feedback in knowladge base service"
+    )
 
 
 class APIChatCompleteRequest(BaseRequest):
@@ -214,12 +235,28 @@ class APIChatCompleteRequest(BaseRequest):
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(True, description="Whether to use MemOSCube")
-    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(
         "default_session", description="Session ID for soft-filtering memories"
     )
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+
+class AddStatusRequest(BaseRequest):
+    """Request model for checking add status."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    user_id: str | None = Field(None, description="User ID")
+    session_id: str | None = Field(None, description="Session ID")
 
 
 class SuggestionRequest(BaseRequest):
