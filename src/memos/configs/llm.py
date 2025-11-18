@@ -130,6 +130,7 @@ class LLMConfigFactory(BaseConfig):
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
         "qwen": QwenLLMConfig,
         "deepseek": DeepSeekLLMConfig,
+        "openai_new": OpenAIResponsesLLMConfig,
     }
 
     @field_validator("backend")
