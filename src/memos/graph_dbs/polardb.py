@@ -484,12 +484,11 @@ class PolarDBGraphDB(BaseGraphDB):
         original_memory = current_node.get("memory", "")  # Preserve original memory
 
         # If fields include memory, use it; otherwise keep original memory
-        if "memory" in fields:
-            original_memory = fields.pop("memory")
+        new_memory = fields.pop("memory") if "memory" in fields else original_memory
 
         properties.update(fields)
         properties["id"] = original_id  # Ensure ID is not overwritten
-        properties["memory"] = original_memory  # Ensure memory is not overwritten
+        properties["memory"] = new_memory  # Ensure memory is not overwritten
 
         # Handle embedding field
         embedding_vector = None

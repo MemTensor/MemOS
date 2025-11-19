@@ -240,6 +240,42 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
     )
 
 
+class MemFeedbackConfig(BaseTextMemoryConfig):
+    """Memory feedback configuration class."""
+
+    extractor_llm: LLMConfigFactory = Field(
+        ...,
+        default_factory=LLMConfigFactory,
+        description="LLM configuration for the memory extractor",
+    )
+    embedder: EmbedderConfigFactory = Field(
+        ...,
+        default_factory=EmbedderConfigFactory,
+        description="Embedder configuration for the memory embedding",
+    )
+    reranker: RerankerConfigFactory | None = Field(
+        None,
+        description="Reranker configuration (optional).",
+    )
+    graph_db: GraphDBConfigFactory = Field(
+        ...,
+        default_factory=GraphDBConfigFactory,
+        description="Graph database configuration for the tree-memory storage",
+    )
+    reorganize: bool | None = Field(
+        False,
+        description="Optional description for this memory configuration.",
+    )
+
+    memory_size: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Maximum item counts per memory bucket, e.g.: "
+            '{"WorkingMemory": 20, "LongTermMemory": 10000, "UserMemory": 10000}'
+        ),
+    )
+
+
 # ─── 3. Global Memory Config Factory ──────────────────────────────────────────
 
 
@@ -259,6 +295,7 @@ class MemoryConfigFactory(BaseConfig):
         "vllm_kv_cache": KVCacheMemoryConfig,  # Use same config as kv_cache
         "lora": LoRAMemoryConfig,
         "uninitialized": UninitializedMemoryConfig,
+        "mem_feedback": MemFeedbackConfig,
     }
 
     @field_validator("backend")

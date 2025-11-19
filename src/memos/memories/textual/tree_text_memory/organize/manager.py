@@ -115,6 +115,26 @@ class MemoryManager:
             self._refresh_memory_size(user_name=user_name)
         return added_ids
 
+    def update(
+        self,
+        memories_ids: list[str],
+        memories: list[TextualMemoryItem],
+        user_name: str | None = None,
+        mode: str = "sync",
+    ) -> list[str]:
+        for _id, memory in zip(memories_ids, memories, strict=False):
+            field = {
+                "memory": memory.memory,
+                "key": memory.metadata.key,
+                "tags": memory.metadata.tags,
+                "embedding": memory.metadata.embedding,
+            }
+            self.graph_store.update_node(_id, field, user_name)
+
+        graph_class_name = self.graph_store.__class__.__name__
+        logger.info(f"Updated {graph_class_name}")
+        return memories_ids
+
     def replace_working_memory(
         self, memories: list[TextualMemoryItem], user_name: str | None = None
     ) -> None:

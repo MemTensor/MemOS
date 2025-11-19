@@ -16,6 +16,7 @@ from memos.api.config import APIConfig
 from memos.api.product_models import (
     APIADDRequest,
     APIChatCompleteRequest,
+    APIFeedbackRequest,
     APISearchRequest,
     MemoryResponse,
     SearchResponse,
@@ -34,6 +35,7 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
@@ -253,6 +255,10 @@ def init_server():
         retriever=pref_retriever,
     )
 
+    feedback_server = SimpleMemFeedback(
+        llm=llm, embedder=embedder, graph_store=graph_db, memory_manager=memory_manager
+    )
+
     mos_server = MOSServer(
         mem_reader=mem_reader,
         llm=llm,
@@ -304,6 +310,7 @@ def init_server():
         pref_retriever,
         text_mem,
         pref_mem,
+        feedback_server,
     )
 
 
@@ -327,6 +334,7 @@ def init_server():
     pref_retriever,
     text_mem,
     pref_mem,
+    feedback_server,
 ) = init_server()
 
 
@@ -668,6 +676,24 @@ def add_memories(add_req: APIADDRequest):
         message="Memory added successfully",
         data=text_response_data + pref_response_data,
     )
+
+
+@router.post("/chat/feedback", summary="Chat feedback", response_model=MemoryResponse)
+def chat_feedback(feedback_req: APIFeedbackRequest):
+    """Process feedback for a specific user"""
+    process_record = feedback_server.process_feedback(
+        user_name=feedback_req.mem_cube_id,
+        session_id=feedback_req.session_id,
+        chat_history=feedback_req.chat_history,
+        feedback_content=feedback_req.feedback_content,
+        feedback_time=feedback_req.feedback_time,
+        allow_knowledgebase_write=feedback_req.allow_knowledgebase_write,
+        sync_mode=feedback_req.sync_mode,
+        corrected_answer=feedback_req.corrected_answer,
+        mem_reader=mem_reader,
+    )
+
+    return MemoryResponse(message="Feedback process successfully", data=[process_record])
 
 
 @router.get("/scheduler/status", summary="Get scheduler running status")
