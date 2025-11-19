@@ -29,7 +29,7 @@ from memos.api.product_models import (
     APIChatCompleteRequest,
     APISearchRequest,
     ChatRequest,
-    GetMemoryRequest,
+    GetAllMemoryRequest,
     MemoryResponse,
     SearchResponse,
     SuggestionRequest,
@@ -198,7 +198,7 @@ def get_suggestion_queries(suggestion_req: SuggestionRequest):
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-def get_all_memories(memory_req: GetMemoryRequest):
+def get_all_memories(memory_req: GetAllMemoryRequest):
     """
     Get all memories or subgraph for a specific user.
 

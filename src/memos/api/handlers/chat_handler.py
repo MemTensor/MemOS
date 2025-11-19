@@ -32,7 +32,6 @@ from memos.mem_os.utils.reference_utils import (
 from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    SearchMode,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.templates.mos_prompts import (
@@ -111,15 +110,17 @@ class ChatHandler(BaseHandler):
 
             # Step 1: Search for relevant memories
             search_req = APISearchRequest(
+                query=chat_req.query,
                 user_id=chat_req.user_id,
                 mem_cube_id=chat_req.mem_cube_id,
-                query=chat_req.query,
-                top_k=chat_req.top_k or 10,
-                session_id=chat_req.session_id,
-                mode=SearchMode.FINE,
+                mode=chat_req.mode,
                 internet_search=chat_req.internet_search,
-                moscube=chat_req.moscube,
+                top_k=chat_req.top_k,
                 chat_history=chat_req.history,
+                session_id=chat_req.session_id,
+                include_preference=chat_req.include_preference,
+                pref_top_k=chat_req.pref_top_k,
+                filter=chat_req.filter,
             )
 
             search_response = self.search_handler.handle_search_memories(search_req)
@@ -137,7 +138,9 @@ class ChatHandler(BaseHandler):
             )
 
             # Step 2: Build system prompt
-            system_prompt = self._build_system_prompt(filtered_memories, chat_req.base_prompt)
+            system_prompt = self._build_system_prompt(
+                filtered_memories, search_response.data["pref_string"], chat_req.system_prompt
+            )
 
             # Prepare message history
             history_info = chat_req.history[-20:] if chat_req.history else []
@@ -180,7 +183,7 @@ class ChatHandler(BaseHandler):
             self.logger.error(f"Failed to complete chat: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
-    def handle_chat_stream(self, chat_req: ChatRequest) -> StreamingResponse:
+    def handle_chat_stream_playground(self, chat_req: ChatRequest) -> StreamingResponse:
         """
         Chat with MemOS via Server-Sent Events (SSE) stream using search/add handlers.
 
@@ -208,15 +211,17 @@ class ChatHandler(BaseHandler):
                     yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
 
                     search_req = APISearchRequest(
+                        query=chat_req.query,
                         user_id=chat_req.user_id,
                         mem_cube_id=chat_req.mem_cube_id,
-                        query=chat_req.query,
-                        top_k=20,
-                        session_id=chat_req.session_id,
-                        mode=SearchMode.FINE,
+                        mode=chat_req.mode,
                         internet_search=chat_req.internet_search,
-                        moscube=chat_req.moscube,
+                        top_k=chat_req.top_k,
                         chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=chat_req.include_preference,
+                        pref_top_k=chat_req.pref_top_k,
+                        filter=chat_req.filter,
                     )
 
                     search_response = self.search_handler.handle_search_memories(search_req)
@@ -242,8 +247,17 @@ class ChatHandler(BaseHandler):
                     reference = prepare_reference_data(filtered_memories)
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
+                    # Prepare preference markdown string
+                    if chat_req.include_preference:
+                        pref_md_string = self._build_pref_md_string_for_playground(
+                            search_response.data["pref_mem"][0].get("memories", [])
+                        )
+                        yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
+
                     # Step 2: Build system prompt with memories
-                    system_prompt = self._build_enhance_system_prompt(filtered_memories)
+                    system_prompt = self._build_enhance_system_prompt(
+                        filtered_memories, search_response.data["pref_string"]
+                    )
 
                     # Prepare messages
                     history_info = chat_req.history[-20:] if chat_req.history else []
@@ -344,9 +358,45 @@ class ChatHandler(BaseHandler):
             self.logger.error(f"Failed to start chat stream: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
+    def _build_pref_md_string_for_playground(self, pref_mem_list: list[any]) -> str:
+        """Build preference markdown string for playground."""
+        explicit = []
+        implicit = []
+        for pref_mem in pref_mem_list:
+            if pref_mem["metadata"]["preference_type"] == "explicit":
+                explicit.append(
+                    {
+                        "content": pref_mem["preference"],
+                        "reasoning": pref_mem["metadata"]["reasoning"],
+                    }
+                )
+            elif pref_mem["metadata"]["preference_type"] == "implicit":
+                implicit.append(
+                    {
+                        "content": pref_mem["preference"],
+                        "reasoning": pref_mem["metadata"]["reasoning"],
+                    }
+                )
+
+        explicit_md = "\n\n".join(
+            [
+                f"显性偏好 {i + 1}:\n- 抽取内容: {pref['content']}\n- 抽取理由: {pref['reasoning']}"
+                for i, pref in enumerate(explicit)
+            ]
+        )
+        implicit_md = "\n\n".join(
+            [
+                f"隐性偏好 {i + 1}:\n- 抽取内容: {pref['content']}\n- 抽取理由: {pref['reasoning']}"
+                for i, pref in enumerate(implicit)
+            ]
+        )
+
+        return f"{explicit_md}\n\n{implicit_md}"
+
     def _build_system_prompt(
         self,
         memories: list | None = None,
+        pref_string: str | None = None,
         base_prompt: str | None = None,
         **kwargs,
     ) -> str:
@@ -366,6 +416,8 @@ class ChatHandler(BaseHandler):
                 text_memory = memory.get("memory", "")
                 memory_list.append(f"{i}. {text_memory}")
             memory_context = "\n".join(memory_list)
+        if pref_string:
+            memory_context += f"\n\n{pref_string}"
 
         if "{memories}" in base_prompt:
             return base_prompt.format(memories=memory_context)
@@ -378,6 +430,7 @@ class ChatHandler(BaseHandler):
     def _build_enhance_system_prompt(
         self,
         memories_list: list,
+        pref_string: str = "",
         tone: str = "friendly",
         verbosity: str = "mid",
     ) -> str:
@@ -386,6 +439,7 @@ class ChatHandler(BaseHandler):
 
         Args:
             memories_list: List of memory items
+            pref_string: Preference string
             tone: Tone of the prompt
             verbosity: Verbosity level
 
@@ -407,6 +461,7 @@ class ChatHandler(BaseHandler):
             + mem_block_p
             + "\n## OuterMemory (ordered)\n"
             + mem_block_o
+            + f"\n\n{pref_string}"
         )
 
     def _format_mem_block(

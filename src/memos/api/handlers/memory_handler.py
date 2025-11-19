@@ -6,7 +6,13 @@ This module handles retrieving all memories or specific subgraphs based on queri
 
 from typing import Any, Literal
 
-from memos.api.product_models import MemoryResponse
+from memos.api.product_models import (
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    GetMemoryRequest,
+    GetMemoryResponse,
+    MemoryResponse,
+)
 from memos.log import get_logger
 from memos.mem_os.utils.format_utils import (
     convert_graph_to_tree_forworkmem,
@@ -149,3 +155,17 @@ def handle_get_subgraph(
     except Exception as e:
         logger.error(f"Failed to get subgraph: {e}", exc_info=True)
         raise
+
+
+def handle_get_memories(self, get_mem_req: GetMemoryRequest):
+    return GetMemoryResponse(
+        message="Memories retrieved successfully",
+        data=None,
+    )
+
+
+def handle_delete_memories(self, delete_mem_req: DeleteMemoryRequest):
+    return DeleteMemoryResponse(
+        message="Memories deleted successfully",
+        data=None,
+    )

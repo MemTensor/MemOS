@@ -10,7 +10,7 @@ from memos.api.product_models import (
     BaseResponse,
     ChatCompleteRequest,
     ChatRequest,
-    GetMemoryRequest,
+    GetAllMemoryRequest,
     MemoryCreateRequest,
     MemoryResponse,
     SearchRequest,
@@ -159,7 +159,7 @@ def get_suggestion_queries_post(suggestion_req: SuggestionRequest):
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-def get_all_memories(memory_req: GetMemoryRequest):
+def get_all_memories(memory_req: GetAllMemoryRequest):
     """Get all memories for a specific user."""
     try:
         mos_product = get_mos_product_instance()

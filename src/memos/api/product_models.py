@@ -36,7 +36,7 @@ class UserRegisterRequest(BaseRequest):
     interests: str | None = Field(None, description="User interests")
 
 
-class GetMemoryRequest(BaseRequest):
+class GetAllMemoryRequest(BaseRequest):
     """Request model for getting memories."""
 
     user_id: str = Field(..., description="User ID")
@@ -74,7 +74,6 @@ class ChatRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(True, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
@@ -82,7 +81,7 @@ class ChatRequest(BaseRequest):
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
-    model_name: str | None = Field(None, description="Model name to use for chat")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
     max_tokens: int | None = Field(None, description="Max tokens to generate")
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
@@ -97,11 +96,18 @@ class ChatCompleteRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
-    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    system_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
 
 
 class UserCreate(BaseRequest):
@@ -149,6 +155,14 @@ class ChatResponse(BaseResponse[str]):
     """Response model for chat operations."""
 
 
+class GetMemoryResponse(BaseResponse[dict]):
+    """Response model for getting memories."""
+
+
+class DeleteMemoryResponse(BaseResponse[dict]):
+    """Response model for deleting memories."""
+
+
 class UserResponse(BaseResponse[dict]):
     """Response model for user operations."""
 
@@ -186,11 +200,8 @@ class APISearchRequest(BaseRequest):
     query: str = Field(..., description="Search query")
     user_id: str = Field(None, description="User ID")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
-    mode: SearchMode = Field(
-        SearchMode.NOT_INITIALIZED, description="search mode: fast, fine, or mixture"
-    )
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
     top_k: int = Field(10, description="Number of results to return")
     chat_history: list[MessageDict] | None = Field(None, description="Chat history")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
@@ -236,6 +247,7 @@ class APIChatCompleteRequest(BaseRequest):
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(True, description="Whether to use MemOSCube")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(
@@ -257,6 +269,20 @@ class AddStatusRequest(BaseRequest):
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     session_id: str | None = Field(None, description="Session ID")
+
+
+class GetMemoryRequest(BaseRequest):
+    """Request model for getting memories."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    user_id: str | None = Field(None, description="User ID")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+
+
+class DeleteMemoryRequest(BaseRequest):
+    """Request model for deleting memories."""
+
+    memory_id: str = Field(..., description="Memory ID")
 
 
 class SuggestionRequest(BaseRequest):
