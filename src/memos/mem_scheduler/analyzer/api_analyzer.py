@@ -7,7 +7,6 @@ for search and add operations with reusable instance variables.
 
 import http.client
 import json
-import time
 
 from typing import Any
 from urllib.parse import urlparse
@@ -15,6 +14,7 @@ from urllib.parse import urlparse
 import requests
 
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.general_schemas import SearchMode
 
 
 logger = get_logger(__name__)
@@ -487,7 +487,7 @@ class DirectSearchMemoriesAnalyzer:
 
         return result
 
-    def test_continuous_conversation(self):
+    def test_continuous_conversation(self, mode=SearchMode.MIXTURE):
         """Test continuous conversation functionality"""
         print("=" * 80)
         print("Testing Continuous Conversation Functionality")
@@ -542,15 +542,15 @@ class DirectSearchMemoriesAnalyzer:
 
             # Search for trip-related information
             self.search_in_conversation(
-                query="New Year's Eve Shanghai recommendations", mode="mixture", top_k=5
+                query="New Year's Eve Shanghai recommendations", mode=mode, top_k=5
             )
 
             # Search for food-related information
-            self.search_in_conversation(query="budget food Shanghai", mode="mixture", top_k=3)
+            self.search_in_conversation(query="budget food Shanghai", mode=mode, top_k=3)
 
             # Search without conversation history
             self.search_in_conversation(
-                query="Shanghai travel", mode="mixture", top_k=3, include_history=False
+                query="Shanghai travel", mode=mode, top_k=3, include_history=False
             )
 
             print("\n✅ Continuous conversation test completed successfully!")
@@ -645,7 +645,7 @@ class DirectSearchMemoriesAnalyzer:
             operation=None,
         )
 
-    def run_all_tests(self):
+    def run_all_tests(self, mode=SearchMode.MIXTURE):
         """Run all available tests"""
         print("🚀 Starting comprehensive test suite")
         print("=" * 80)
@@ -653,8 +653,7 @@ class DirectSearchMemoriesAnalyzer:
         # Test continuous conversation functionality
         print("\n💬 Testing CONTINUOUS CONVERSATION functions:")
         try:
-            self.test_continuous_conversation()
-            time.sleep(5)
+            self.test_continuous_conversation(mode=mode)
             print("✅ Continuous conversation test completed successfully")
         except Exception as e:
             print(f"❌ Continuous conversation test failed: {e}")
@@ -682,7 +681,7 @@ if __name__ == "__main__":
         print("Using direct test mode")
         try:
             direct_analyzer = DirectSearchMemoriesAnalyzer()
-            direct_analyzer.run_all_tests()
+            direct_analyzer.run_all_tests(mode=SearchMode.MIXTURE)
         except Exception as e:
             print(f"Direct test mode failed: {e}")
             import traceback

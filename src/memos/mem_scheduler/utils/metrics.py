@@ -6,9 +6,13 @@ import time
 
 from dataclasses import dataclass, field
 
+from memos.log import get_logger
+
 
 # ==== global window config ====
 WINDOW_SEC = 120  # 2 minutes sliding window
+
+logger = get_logger(__name__)
 
 
 # ---------- O(1) EWMA ----------
@@ -187,7 +191,7 @@ class MetricsRegistry:
             old_lam = ls.lambda_ewma.value_at(now)
             ls.lambda_ewma.update(inst_rate, now)
             new_lam = ls.lambda_ewma.value_at(now)
-            print(
+            logger.info(
                 f"[DEBUG enqueue] {label} backlog={ls.backlog} dt={dt if dt is not None else '—'}s inst={inst_rate:.3f} λ {old_lam:.3f}→{new_lam:.3f}"
             )
             self._label_topk[label].add(mem_cube_id)
@@ -225,7 +229,7 @@ class MetricsRegistry:
             old_mu = ls.mu_ewma.value_at(now)
             ls.mu_ewma.update(inst_rate, now)
             new_mu = ls.mu_ewma.value_at(now)
-            print(
+            logger.info(
                 f"[DEBUG done] {label} backlog={ls.backlog} dt={dt if dt is not None else '—'}s inst={inst_rate:.3f} μ {old_mu:.3f}→{new_mu:.3f}"
             )
             ds = self._detail_stats.get((label, mem_cube_id))

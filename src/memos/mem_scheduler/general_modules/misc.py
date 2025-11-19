@@ -199,6 +199,9 @@ class AutoDroppingQueue(Queue[T]):
     """A thread-safe queue that automatically drops the oldest item when full."""
 
     def __init__(self, maxsize: int = 0):
+        # If maxsize <= 0, set to 0 (unlimited queue size)
+        if maxsize <= 0:
+            maxsize = 0
         super().__init__(maxsize=maxsize)
 
     def put(self, item: T, block: bool = False, timeout: float | None = None) -> None:
@@ -218,7 +221,7 @@ class AutoDroppingQueue(Queue[T]):
             # First try non-blocking put
             super().put(item, block=block, timeout=timeout)
         except Full:
-            # Remove oldest item and mark it done to avoid leaking unfinished_tasks
+            # Remove the oldest item and mark it done to avoid leaking unfinished_tasks
             with suppress(Empty):
                 _ = self.get_nowait()
                 # If the removed item had previously incremented unfinished_tasks,
@@ -228,11 +231,69 @@ class AutoDroppingQueue(Queue[T]):
             # Retry putting the new item
             super().put(item, block=block, timeout=timeout)
 
+    def get(
+        self, block: bool = True, timeout: float | None = None, batch_size: int | None = None
+    ) -> list[T] | T:
+        """Get items from the queue.
+
+        Args:
+            block: Whether to block if no items are available (default: True)
+            timeout: Timeout in seconds for blocking operations (default: None)
+            batch_size: Number of items to retrieve (default: 1)
+
+        Returns:
+            List of items (always returns a list for consistency)
+
+        Raises:
+            Empty: If no items are available and block=False or timeout expires
+        """
+
+        if batch_size is None:
+            return super().get(block=block, timeout=timeout)
+        items = []
+        for _ in range(batch_size):
+            try:
+                items.append(super().get(block=block, timeout=timeout))
+            except Empty:
+                if not items and block:
+                    # If we haven't gotten any items and we're blocking, re-raise Empty
+                    raise
+                break
+        return items
+
+    def get_nowait(self, batch_size: int | None = None) -> list[T]:
+        """Get items from the queue without blocking.
+
+        Args:
+            batch_size: Number of items to retrieve (default: 1)
+
+        Returns:
+            List of items (always returns a list for consistency)
+        """
+        if batch_size is None:
+            return super().get_nowait()
+
+        items = []
+        for _ in range(batch_size):
+            try:
+                items.append(super().get_nowait())
+            except Empty:
+                break
+        return items
+
     def get_queue_content_without_pop(self) -> list[T]:
         """Return a copy of the queue's contents without modifying it."""
         # Ensure a consistent snapshot by holding the mutex
         with self.mutex:
             return list(self.queue)
+
+    def qsize(self) -> int:
+        """Return the approximate size of the queue.
+
+        Returns:
+            Number of items currently in the queue
+        """
+        return super().qsize()
 
     def clear(self) -> None:
         """Remove all items from the queue.

@@ -1,6 +1,5 @@
-import contextlib
 import multiprocessing
-import queue
+import os
 import threading
 import time
 
@@ -15,8 +14,8 @@ from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
 from memos.context.context import ContextThread
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
+from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
@@ -24,9 +23,11 @@ from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherM
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
+    DEFAULT_CONSUME_BATCH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_CONTEXT_WINDOW_SIZE,
     DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+    DEFAULT_MAX_WEB_LOG_QUEUE_SIZE,
     DEFAULT_STARTUP_MODE,
     DEFAULT_THREAD_POOL_MAX_WORKERS,
     DEFAULT_TOP_K,
@@ -41,6 +42,9 @@ from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleMessageItem,
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
+from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
+from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
@@ -50,11 +54,12 @@ from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerM
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 
 
 if TYPE_CHECKING:
-    from memos.mem_cube.base import BaseMemCube
+    from memos.reranker.http_bge import HTTPBGEReranker
 
 
 logger = get_logger(__name__)
@@ -86,37 +91,12 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             "scheduler_startup_mode", DEFAULT_STARTUP_MODE
         )
 
-        self.retriever: SchedulerRetriever | None = None
-        self.db_engine: Engine | None = None
-        self.monitor: SchedulerGeneralMonitor | None = None
-        self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
-        self.mem_reader = None  # Will be set by MOSCore
-        self.dispatcher = SchedulerDispatcher(
-            config=self.config,
-            max_workers=self.thread_pool_max_workers,
-            enable_parallel_dispatch=self.enable_parallel_dispatch,
-        )
-
         # optional configs
-        self.disable_handlers: list | None = self.config.get("disable_handlers", None)
+        self.disabled_handlers: list | None = self.config.get("disabled_handlers", None)
 
-        # message queue configuration
-        self.use_redis_queue = self.config.get("use_redis_queue", DEFAULT_USE_REDIS_QUEUE)
-        self.max_internal_message_queue_size = self.config.get(
-            "max_internal_message_queue_size", DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE
+        self.max_web_log_queue_size = self.config.get(
+            "max_web_log_queue_size", DEFAULT_MAX_WEB_LOG_QUEUE_SIZE
         )
-
-        # Initialize message queue based on configuration
-        if self.use_redis_queue:
-            self.memos_message_queue = None  # Will use Redis instead
-            # Initialize Redis if using Redis queue with auto-initialization
-            self.auto_initialize_redis()
-        else:
-            self.memos_message_queue: Queue[ScheduleMessageItem] = Queue(
-                maxsize=self.max_internal_message_queue_size
-            )
-
-        self.max_web_log_queue_size = self.config.get("max_web_log_queue_size", 50)
         self._web_log_message_queue: Queue[ScheduleLogForWebItem] = Queue(
             maxsize=self.max_web_log_queue_size
         )
@@ -125,6 +105,31 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._running = False
         self._consume_interval = self.config.get(
             "consume_interval_seconds", DEFAULT_CONSUME_INTERVAL_SECONDS
+        )
+        self.consume_batch = self.config.get("consume_batch", DEFAULT_CONSUME_BATCH)
+
+        # message queue configuration
+        self.use_redis_queue = self.config.get("use_redis_queue", DEFAULT_USE_REDIS_QUEUE)
+        self.max_internal_message_queue_size = self.config.get(
+            "max_internal_message_queue_size", DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE
+        )
+        self.memos_message_queue = ScheduleTaskQueue(
+            use_redis_queue=self.use_redis_queue,
+            maxsize=self.max_internal_message_queue_size,
+            disabled_handlers=self.disabled_handlers,
+        )
+        self.searcher: Searcher | None = None
+        self.retriever: SchedulerRetriever | None = None
+        self.db_engine: Engine | None = None
+        self.monitor: SchedulerGeneralMonitor | None = None
+        self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
+        self.mem_reader = None  # Will be set by MOSCore
+        self.dispatcher = SchedulerDispatcher(
+            config=self.config,
+            memos_message_queue=self.memos_message_queue,
+            use_redis_queue=self.use_redis_queue,
+            max_workers=self.thread_pool_max_workers,
+            enable_parallel_dispatch=self.enable_parallel_dispatch,
         )
 
         # other attributes
@@ -135,6 +140,22 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
+
+    def init_mem_cube(
+        self,
+        mem_cube: BaseMemCube,
+        searcher: Searcher | None = None,
+    ):
+        self.mem_cube = mem_cube
+        self.text_mem: TreeTextMemory = self.mem_cube.text_mem
+        self.reranker: HTTPBGEReranker = self.text_mem.reranker
+        if searcher is None:
+            self.searcher: Searcher = self.text_mem.get_searcher(
+                manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+                moscube=False,
+            )
+        else:
+            self.searcher = searcher
 
     def initialize_modules(
         self,
@@ -192,6 +213,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         # start queue monitor if enabled and a bot is set later
 
+    def debug_mode_on(self):
+        self.memos_message_queue.debug_mode_on()
+
     def _cleanup_on_init_failure(self):
         """Clean up resources if initialization fails."""
         try:
@@ -201,22 +225,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.warning(f"Error during cleanup: {e}")
 
     @property
-    def mem_cube(self) -> GeneralMemCube:
+    def mem_cube(self) -> BaseMemCube:
         """The memory cube associated with this MemChat."""
         return self.current_mem_cube
 
     @mem_cube.setter
-    def mem_cube(self, value: GeneralMemCube) -> None:
+    def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
         self.current_mem_cube = value
         self.retriever.mem_cube = value
-
-    def _set_current_context_from_message(self, msg: ScheduleMessageItem) -> None:
-        """Update current user/cube context from the incoming message (thread-safe)."""
-        with self._context_lock:
-            self.current_user_id = msg.user_id
-            self.current_mem_cube_id = msg.mem_cube_id
-            self.current_mem_cube = msg.mem_cube
 
     def transform_working_memories_to_monitors(
         self, query_keywords, memories: list[TextualMemoryItem]
@@ -516,37 +533,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
-        """Submit messages to the message queue (either local queue or Redis)."""
-        if isinstance(messages, ScheduleMessageItem):
-            messages = [messages]  # transform single message to list
-
-        for message in messages:
-            if not isinstance(message, ScheduleMessageItem):
-                error_msg = f"Invalid message type: {type(message)}, expected ScheduleMessageItem"
-                logger.error(error_msg)
-                raise TypeError(error_msg)
-
-            if getattr(message, "timestamp", None) is None:
-                with contextlib.suppress(Exception):
-                    message.timestamp = datetime.utcnow()
-
-            if self.disable_handlers and message.label in self.disable_handlers:
-                logger.info(f"Skipping disabled handler: {message.label} - {message.content}")
-                continue
-
-            if self.use_redis_queue:
-                # Use Redis stream for message queue
-                self.redis_add_message_stream(message.to_dict())
-                logger.info(f"Submitted message to Redis: {message.label} - {message.content}")
-            else:
-                # Use local queue
-                self.memos_message_queue.put(message)
-                logger.info(
-                    f"Submitted message to local queue: {message.label} - {message.content}"
-                )
-        with contextlib.suppress(Exception):
-            if messages:
-                self.dispatcher.on_messages_enqueued(messages)
+        self.memos_message_queue.submit_messages(messages=messages)
 
     def _submit_web_logs(
         self, messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem]
@@ -590,7 +577,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             try:
                 item = self._web_log_message_queue.get_nowait()  # Thread-safe get
                 messages.append(item.to_dict())
-            except queue.Empty:
+            except Exception:
                 break
         return messages
 
@@ -601,62 +588,34 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Runs in a dedicated thread to process messages at regular intervals.
         For Redis queue, this method starts the Redis listener.
         """
-        if self.use_redis_queue:
-            # For Redis queue, start the Redis listener
-            def redis_message_handler(message_data):
-                """Handler for Redis messages"""
-                try:
-                    # Redis message data needs to be decoded from bytes to string
-                    decoded_data = {}
-                    for key, value in message_data.items():
-                        if isinstance(key, bytes):
-                            key = key.decode("utf-8")
-                        if isinstance(value, bytes):
-                            value = value.decode("utf-8")
-                        decoded_data[key] = value
 
-                    message = ScheduleMessageItem.from_dict(decoded_data)
-                    self.dispatcher.dispatch([message])
-                except Exception as e:
-                    logger.error(f"Error processing Redis message: {e}")
-                    logger.error(f"Message data: {message_data}")
+        # Original local queue logic
+        while self._running:  # Use a running flag for graceful shutdown
+            try:
+                # Get messages in batches based on consume_batch setting
 
-            self.redis_start_listening(handler=redis_message_handler)
+                messages = self.memos_message_queue.get_messages(batch_size=self.consume_batch)
 
-            # Keep the thread alive while Redis listener is running
-            while self._running:
-                time.sleep(self._consume_interval)
-        else:
-            # Original local queue logic
-            while self._running:  # Use a running flag for graceful shutdown
-                try:
-                    # Get all available messages at once (thread-safe approach)
-                    messages = []
-                    while True:
-                        try:
-                            # Use get_nowait() directly without empty() check to avoid race conditions
-                            message = self.memos_message_queue.get_nowait()
-                            messages.append(message)
-                        except queue.Empty:
-                            # No more messages available
-                            break
+                if messages:
+                    try:
+                        import contextlib
 
-                    if messages:
-                        try:
-                            self.dispatcher.dispatch(messages)
-                        except Exception as e:
-                            logger.error(f"Error dispatching messages: {e!s}")
-                        finally:
-                            # Mark all messages as processed
-                            for _ in messages:
-                                self.memos_message_queue.task_done()
+                        with contextlib.suppress(Exception):
+                            if messages:
+                                self.dispatcher.on_messages_enqueued(messages)
 
-                    # Sleep briefly to prevent busy waiting
-                    time.sleep(self._consume_interval)  # Adjust interval as needed
+                        self.dispatcher.dispatch(messages)
+                    except Exception as e:
+                        logger.error(f"Error dispatching messages: {e!s}")
 
-                except Exception as e:
+                # Sleep briefly to prevent busy waiting
+                time.sleep(self._consume_interval)  # Adjust interval as needed
+
+            except Exception as e:
+                # Don't log error for "No messages available in Redis queue" as it's expected
+                if "No messages available in Redis queue" not in str(e):
                     logger.error(f"Unexpected error in message consumer: {e!s}")
-                    time.sleep(self._consume_interval)  # Prevent tight error loops
+                time.sleep(self._consume_interval)  # Prevent tight error loops
 
     def start(self) -> None:
         """
@@ -666,15 +625,24 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         1. Message consumer thread or process (based on startup_mode)
         2. Dispatcher thread pool (if parallel dispatch enabled)
         """
-        if self._running:
-            logger.warning("Memory Scheduler is already running")
-            return
-
         # Initialize dispatcher resources
         if self.enable_parallel_dispatch:
             logger.info(
                 f"Initializing dispatcher thread pool with {self.thread_pool_max_workers} workers"
             )
+
+        self.start_consumer()
+
+    def start_consumer(self) -> None:
+        """
+        Start only the message consumer thread/process.
+
+        This method can be used to restart the consumer after it has been stopped
+        with stop_consumer(), without affecting other scheduler components.
+        """
+        if self._running:
+            logger.warning("Memory Scheduler consumer is already running")
+            return
 
         # Start consumer based on startup mode
         self._running = True
@@ -698,15 +666,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self._consumer_thread.start()
             logger.info("Message consumer thread started")
 
-    def stop(self) -> None:
-        """Stop all scheduler components gracefully.
+    def stop_consumer(self) -> None:
+        """Stop only the message consumer thread/process gracefully.
 
-        1. Stops message consumer thread/process
-        2. Shuts down dispatcher thread pool
-        3. Cleans up resources
+        This method stops the consumer without affecting other components like
+        dispatcher or monitors. Useful when you want to pause message processing
+        while keeping other scheduler components running.
         """
         if not self._running:
-            logger.warning("Memory Scheduler is not running")
+            logger.warning("Memory Scheduler consumer is not running")
             return
 
         # Signal consumer thread/process to stop
@@ -726,12 +694,30 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                         logger.info("Consumer process terminated")
                 else:
                     logger.info("Consumer process stopped")
+            self._consumer_process = None
         elif self._consumer_thread and self._consumer_thread.is_alive():
             self._consumer_thread.join(timeout=5.0)
             if self._consumer_thread.is_alive():
                 logger.warning("Consumer thread did not stop gracefully")
             else:
                 logger.info("Consumer thread stopped")
+            self._consumer_thread = None
+
+        logger.info("Memory Scheduler consumer stopped")
+
+    def stop(self) -> None:
+        """Stop all scheduler components gracefully.
+
+        1. Stops message consumer thread/process
+        2. Shuts down dispatcher thread pool
+        3. Cleans up resources
+        """
+        if not self._running:
+            logger.warning("Memory Scheduler is not running")
+            return
+
+        # Stop consumer first
+        self.stop_consumer()
 
         # Shutdown dispatcher
         if self.dispatcher:
@@ -742,10 +728,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         if self.dispatcher_monitor:
             logger.info("Shutting down monitor...")
             self.dispatcher_monitor.stop()
-
-        # Clean up queues
-        self._cleanup_queues()
-        logger.info("Memory Scheduler stopped completely")
 
     @property
     def handlers(self) -> dict[str, Callable]:
@@ -819,30 +801,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         return result
 
-    def _cleanup_queues(self) -> None:
-        """Ensure all queues are emptied and marked as closed."""
-        if self.use_redis_queue:
-            # For Redis queue, stop the listener and close connection
-            try:
-                self.redis_stop_listening()
-                self.redis_close()
-            except Exception as e:
-                logger.error(f"Error cleaning up Redis connection: {e}")
-        else:
-            # Original local queue cleanup
-            try:
-                while not self.memos_message_queue.empty():
-                    self.memos_message_queue.get_nowait()
-                    self.memos_message_queue.task_done()
-            except queue.Empty:
-                pass
-
-        try:
-            while not self._web_log_message_queue.empty():
-                self._web_log_message_queue.get_nowait()
-        except queue.Empty:
-            pass
-
     def mem_scheduler_wait(
         self, timeout: float = 180.0, poll: float = 0.1, log_every: float = 0.01
     ) -> bool:
@@ -906,10 +864,23 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     st = (
                         stats_fn()
                     )  # expected: {'pending':int,'running':int,'done':int?,'rate':float?}
-                    pend = int(st.get("pending", 0))
                     run = int(st.get("running", 0))
+
                 except Exception:
                     pass
+
+            if isinstance(self.memos_message_queue, SchedulerRedisQueue):
+                # For Redis queue, prefer XINFO GROUPS to compute pending
+                groups_info = self.memos_message_queue.redis.xinfo_groups(
+                    self.memos_message_queue.stream_key_prefix
+                )
+                if groups_info:
+                    for group in groups_info:
+                        if group.get("name") == self.memos_message_queue.consumer_group:
+                            pend = int(group.get("pending", pend))
+                            break
+            else:
+                pend = run
 
             # 2) dynamic total (allows new tasks queued while waiting)
             total_now = max(init_unfinished, done_total + curr_unfinished)

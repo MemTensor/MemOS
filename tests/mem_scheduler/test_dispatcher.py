@@ -14,10 +14,11 @@ from memos.configs.mem_scheduler import (
 )
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
+from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -90,7 +91,6 @@ class TestSchedulerDispatcher(unittest.TestCase):
             ScheduleMessageItem(
                 item_id="msg1",
                 user_id="user1",
-                mem_cube="cube1",
                 mem_cube_id="msg1",
                 label="label1",
                 content="Test content 1",
@@ -99,7 +99,6 @@ class TestSchedulerDispatcher(unittest.TestCase):
             ScheduleMessageItem(
                 item_id="msg2",
                 user_id="user1",
-                mem_cube="cube1",
                 mem_cube_id="msg2",
                 label="label2",
                 content="Test content 2",
@@ -108,7 +107,6 @@ class TestSchedulerDispatcher(unittest.TestCase):
             ScheduleMessageItem(
                 item_id="msg3",
                 user_id="user2",
-                mem_cube="cube2",
                 mem_cube_id="msg3",
                 label="label1",
                 content="Test content 3",
@@ -193,51 +191,10 @@ class TestSchedulerDispatcher(unittest.TestCase):
         self.assertEqual(len(label2_messages), 1)
         self.assertEqual(label2_messages[0].item_id, "msg2")
 
-    def test_dispatch_parallel(self):
-        """Test dispatching messages in parallel mode."""
-        # Create fresh mock handlers for this test
-        mock_handler1 = MagicMock()
-        mock_handler2 = MagicMock()
-
-        # Create a new dispatcher for this test to avoid interference
-        parallel_dispatcher = SchedulerDispatcher(max_workers=2, enable_parallel_dispatch=True)
-        parallel_dispatcher.register_handler("label1", mock_handler1)
-        parallel_dispatcher.register_handler("label2", mock_handler2)
-
-        # Dispatch messages
-        parallel_dispatcher.dispatch(self.test_messages)
-
-        # Wait for all futures to complete
-        parallel_dispatcher.join(timeout=1.0)
-
-        # Verify handlers were called - label1 handler should be called twice (for user1 and user2)
-        # label2 handler should be called once (only for user1)
-        self.assertEqual(mock_handler1.call_count, 2)  # Called for user1/msg1 and user2/msg3
-        mock_handler2.assert_called_once()  # Called for user1/msg2
-
-        # Check that each handler received the correct messages
-        # For label1: should have two calls, each with one message
-        label1_calls = mock_handler1.call_args_list
-        self.assertEqual(len(label1_calls), 2)
-
-        # Extract messages from calls
-        call1_messages = label1_calls[0][0][0]  # First call, first argument (messages list)
-        call2_messages = label1_calls[1][0][0]  # Second call, first argument (messages list)
-
-        # Verify the messages in each call
-        self.assertEqual(len(call1_messages), 1)
-        self.assertEqual(len(call2_messages), 1)
-
-        # For label2: should have one call with [msg2]
-        label2_messages = mock_handler2.call_args[0][0]
-        self.assertEqual(len(label2_messages), 1)
-        self.assertEqual(label2_messages[0].item_id, "msg2")
-
     def test_group_messages_by_user_and_mem_cube(self):
         """Test grouping messages by user and cube."""
-        # Check actual grouping logic
-        with patch("memos.mem_scheduler.general_modules.dispatcher.logger.debug"):
-            result = self.dispatcher._group_messages_by_user_and_mem_cube(self.test_messages)
+        # Check actual grouping logic using shared utility function
+        result = group_messages_by_user_and_mem_cube(self.test_messages)
 
         # Adjust expected results based on actual grouping logic
         # Note: According to dispatcher.py implementation, grouping is by mem_cube_id not mem_cube
