@@ -16,7 +16,11 @@ class UniversalAPIEmbedder(BaseEmbedder):
         self.config = config
 
         if self.provider == "openai":
-            self.client = OpenAIClient(api_key=config.api_key, base_url=config.base_url)
+            self.client = OpenAIClient(
+                api_key=config.api_key,
+                base_url=config.base_url,
+                default_headers=config.headers_extra if config.headers_extra else None,
+            )
         elif self.provider == "azure":
             self.client = AzureClient(
                 azure_endpoint=config.base_url,
