@@ -34,10 +34,12 @@ def _setup_logfile() -> Path:
 
     Returns: the logfile Path
     """
-    logfile = Path(settings.MEMOS_DIR / "logs" / "memos.log")
-    logfile.parent.mkdir(parents=True, exist_ok=True)
-    logfile.touch(exist_ok=True)
-    return logfile
+    today_str = time.strftime("%Y-%m-%d", time.localtime())
+    today_file_name = f"{today_str}.memos.log"
+    today_file = Path(settings.MEMOS_DIR / "logs" / today_file_name)
+    today_file.parent.mkdir(parents=True, exist_ok=True)
+
+    return today_file
 
 
 class ContextFilter(logging.Filter):
@@ -187,7 +189,7 @@ LOGGING_CONFIG = {
     },
     "handlers": {
         "console": {
-            "level": selected_log_level,
+            "level": "DEBUG",
             "class": "logging.StreamHandler",
             "stream": stdout,
             "formatter": "no_datetime",
@@ -195,10 +197,11 @@ LOGGING_CONFIG = {
         },
         "file": {
             "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "when": "midnight",
+            "interval": 1,
+            "backupCount": 5,
             "filename": _setup_logfile(),
-            "maxBytes": 1024**2 * 10,
-            "backupCount": 10,
             "formatter": "standard",
             "filters": ["context_filter"],
         },
