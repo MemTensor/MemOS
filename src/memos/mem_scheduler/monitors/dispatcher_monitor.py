@@ -7,12 +7,13 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.context.context import ContextThread, ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_DISPATCHER_MONITOR_CHECK_INTERVAL,
     DEFAULT_DISPATCHER_MONITOR_MAX_FAILURES,
+    DEFAULT_STOP_WAIT,
     DEFAULT_STUCK_THREAD_TOLERANCE,
 )
+from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 
@@ -45,6 +46,11 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         # modules with thread pool
         self.dispatcher: SchedulerDispatcher | None = None
         self.dispatcher_pool_name = "dispatcher"
+
+        # Configure shutdown wait behavior from config or default
+        self.stop_wait = (
+            self.config.get("stop_wait", DEFAULT_STOP_WAIT) if self.config else DEFAULT_STOP_WAIT
+        )
 
     def initialize(self, dispatcher: SchedulerDispatcher):
         self.dispatcher = dispatcher
@@ -367,12 +373,9 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
                 if not executor._shutdown:  # pylint: disable=protected-access
                     try:
                         logger.info(f"Shutting down thread pool '{name}'")
-                        executor.shutdown(wait=True, cancel_futures=True)
+                        executor.shutdown(wait=self.stop_wait, cancel_futures=True)
                         logger.info(f"Successfully shut down thread pool '{name}'")
                     except Exception as e:
                         logger.error(f"Error shutting down pool '{name}': {e!s}", exc_info=True)
-
-        # Clear the pool registry
-        self._pools.clear()
 
         logger.info("Thread pool monitor and all pools stopped")

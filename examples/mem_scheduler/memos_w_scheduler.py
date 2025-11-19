@@ -70,13 +70,48 @@ def init_task():
     return conversations, questions
 
 
+def show_web_logs(mem_scheduler: GeneralScheduler):
+    """Display all web log entries from the scheduler's log queue.
+
+    Args:
+        mem_scheduler: The scheduler instance containing web logs to display
+    """
+    if mem_scheduler._web_log_message_queue.empty():
+        print("Web log queue is currently empty.")
+        return
+
+    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
+
+    # Create a temporary queue to preserve the original queue contents
+    temp_queue = Queue()
+    log_count = 0
+
+    while not mem_scheduler._web_log_message_queue.empty():
+        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
+        temp_queue.put(log_item)
+        log_count += 1
+
+        # Print log entry details
+        print(f"\nLog Entry #{log_count}:")
+        print(f'- "{log_item.label}" log: {log_item}')
+
+        print("-" * 50)
+
+    # Restore items back to the original queue
+    while not temp_queue.empty():
+        mem_scheduler._web_log_message_queue.put(temp_queue.get())
+
+    print(f"\nTotal {log_count} web log entries displayed.")
+    print("=" * 110 + "\n")
+
+
 def run_with_scheduler_init():
     print("==== run_with_automatic_scheduler_init ====")
     conversations, questions = init_task()
 
     # set configs
     mos_config = MOSConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml"
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_optimized_scheduler.yaml"
     )
 
     mem_cube_config = GeneralMemCubeConfig.from_yaml_file(
@@ -118,6 +153,7 @@ def run_with_scheduler_init():
     )
 
     mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
+    mos.mem_scheduler.current_mem_cube = mem_cube
 
     for item in questions:
         print("===== Chat Start =====")
@@ -129,41 +165,6 @@ def run_with_scheduler_init():
     show_web_logs(mem_scheduler=mos.mem_scheduler)
 
     mos.mem_scheduler.stop()
-
-
-def show_web_logs(mem_scheduler: GeneralScheduler):
-    """Display all web log entries from the scheduler's log queue.
-
-    Args:
-        mem_scheduler: The scheduler instance containing web logs to display
-    """
-    if mem_scheduler._web_log_message_queue.empty():
-        print("Web log queue is currently empty.")
-        return
-
-    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
-
-    # Create a temporary queue to preserve the original queue contents
-    temp_queue = Queue()
-    log_count = 0
-
-    while not mem_scheduler._web_log_message_queue.empty():
-        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
-        temp_queue.put(log_item)
-        log_count += 1
-
-        # Print log entry details
-        print(f"\nLog Entry #{log_count}:")
-        print(f'- "{log_item.label}" log: {log_item}')
-
-        print("-" * 50)
-
-    # Restore items back to the original queue
-    while not temp_queue.empty():
-        mem_scheduler._web_log_message_queue.put(temp_queue.get())
-
-    print(f"\nTotal {log_count} web log entries displayed.")
-    print("=" * 110 + "\n")
 
 
 if __name__ == "__main__":

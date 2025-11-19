@@ -1,3 +1,4 @@
+import os
 import uuid
 
 from typing import Generic, Literal, TypeVar
@@ -171,7 +172,9 @@ class APISearchRequest(BaseRequest):
     query: str = Field(..., description="Search query")
     user_id: str = Field(None, description="User ID")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
-    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
+    mode: SearchMode = Field(
+        os.getenv("SEARCH_MODE", SearchMode.FAST), description="search mode: fast, fine, or mixture"
+    )
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
     top_k: int = Field(10, description="Number of results to return")
@@ -198,6 +201,9 @@ class APIADDRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
+    async_mode: Literal["async", "sync"] = Field(
+        "async", description="Whether to add memory in async mode"
+    )
 
 
 class APIChatCompleteRequest(BaseRequest):
@@ -221,6 +227,7 @@ class SuggestionRequest(BaseRequest):
     """Request model for getting suggestion queries."""
 
     user_id: str = Field(..., description="User ID")
+    mem_cube_id: str = Field(..., description="Cube ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
     message: list[MessageDict] | None = Field(None, description="List of messages to store.")
 
