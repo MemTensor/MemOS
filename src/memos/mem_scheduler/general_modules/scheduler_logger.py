@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 from memos.log import get_logger
-from memos.mem_cube.general import GeneralMemCube
+from memos.mem_cube.base import BaseMemCube
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     ACTIVATION_MEMORY_TYPE,
@@ -44,7 +44,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         to_memory_type: str,
         user_id: str,
         mem_cube_id: str,
-        mem_cube: GeneralMemCube,
+        mem_cube: BaseMemCube,
     ) -> ScheduleLogForWebItem:
         text_mem_base: TreeTextMemory = mem_cube.text_mem
         current_memory_sizes = text_mem_base.get_current_memory_size()
@@ -106,7 +106,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         new_memory: list[TextualMemoryItem],
         user_id: str,
         mem_cube_id: str,
-        mem_cube: GeneralMemCube,
+        mem_cube: BaseMemCube,
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
         """Log changes when working memory is replaced."""
@@ -163,7 +163,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         label: str,
         user_id: str,
         mem_cube_id: str,
-        mem_cube: GeneralMemCube,
+        mem_cube: BaseMemCube,
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
         """Log changes when activation memory is updated."""
@@ -214,7 +214,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         memory_type: str,
         user_id: str,
         mem_cube_id: str,
-        mem_cube: GeneralMemCube,
+        mem_cube: BaseMemCube,
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
         """Log changes when working memory is replaced."""

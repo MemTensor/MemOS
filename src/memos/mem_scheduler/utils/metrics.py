@@ -6,9 +6,13 @@ import time
 
 from dataclasses import dataclass, field
 
+from memos.log import get_logger
+
 
 # ==== global window config ====
 WINDOW_SEC = 120  # 2 minutes sliding window
+
+logger = get_logger(__name__)
 
 
 # ---------- O(1) EWMA ----------

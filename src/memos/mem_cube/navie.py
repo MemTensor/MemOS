@@ -2,26 +2,13 @@ import os
 
 from typing import Literal
 
-from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.utils import get_json_file_model_schema
-from memos.embedders.base import BaseEmbedder
 from memos.exceptions import ConfigurationError, MemCubeError
-from memos.graph_dbs.base import BaseGraphDB
-from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
-from memos.mem_reader.base import BaseMemReader
 from memos.memories.activation.base import BaseActMemory
 from memos.memories.parametric.base import BaseParaMemory
 from memos.memories.textual.base import BaseTextMemory
-from memos.memories.textual.prefer_text_memory.adder import BaseAdder
-from memos.memories.textual.prefer_text_memory.extractor import BaseExtractor
-from memos.memories.textual.prefer_text_memory.retrievers import BaseRetriever
-from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
-from memos.memories.textual.simple_tree import SimpleTreeTextMemory
-from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
-from memos.reranker.base import BaseReranker
-from memos.vec_dbs.base import BaseVecDB
 
 
 logger = get_logger(__name__)
@@ -32,55 +19,28 @@ class NaiveMemCube(BaseMemCube):
 
     def __init__(
         self,
-        llm: BaseLLM,
-        embedder: BaseEmbedder,
-        mem_reader: BaseMemReader,
-        graph_db: BaseGraphDB,
-        reranker: BaseReranker,
-        memory_manager: MemoryManager,
-        default_cube_config: GeneralMemCubeConfig,
-        vector_db: BaseVecDB,
-        internet_retriever: None = None,
-        pref_extractor: BaseExtractor | None = None,
-        pref_adder: BaseAdder | None = None,
-        pref_retriever: BaseRetriever | None = None,
+        text_mem: BaseTextMemory | None = None,
+        pref_mem: BaseTextMemory | None = None,
+        act_mem: BaseActMemory | None = None,
+        para_mem: BaseParaMemory | None = None,
     ):
-        """Initialize the MemCube with a configuration."""
-        self._text_mem: BaseTextMemory | None = SimpleTreeTextMemory(
-            llm,
-            embedder,
-            mem_reader,
-            graph_db,
-            reranker,
-            memory_manager,
-            default_cube_config.text_mem.config,
-            internet_retriever,
-        )
-        self._act_mem: BaseActMemory | None = None
-        self._para_mem: BaseParaMemory | None = None
-        self._pref_mem: BaseTextMemory | None = (
-            SimplePreferenceTextMemory(
-                extractor_llm=llm,
-                vector_db=vector_db,
-                embedder=embedder,
-                reranker=reranker,
-                extractor=pref_extractor,
-                adder=pref_adder,
-                retriever=pref_retriever,
-            )
-            if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "true"
-            else None
-        )
+        """Initialize the MemCube with memory instances."""
+        self._text_mem: BaseTextMemory = text_mem
+        self._act_mem: BaseActMemory | None = act_mem
+        self._para_mem: BaseParaMemory | None = para_mem
+        self._pref_mem: BaseTextMemory | None = pref_mem
 
     def load(
-        self, dir: str, memory_types: list[Literal["text_mem", "act_mem", "para_mem"]] | None = None
+        self,
+        dir: str,
+        memory_types: list[Literal["text_mem", "act_mem", "para_mem", "pref_mem"]] | None = None,
     ) -> None:
         """Load memories.
         Args:
             dir (str): The directory containing the memory files.
             memory_types (list[str], optional): List of memory types to load.
                 If None, loads all available memory types.
-                Options: ["text_mem", "act_mem", "para_mem"]
+                Options: ["text_mem", "act_mem", "para_mem", "pref_mem"]
         """
         loaded_schema = get_json_file_model_schema(os.path.join(dir, self.config.config_filename))
         if loaded_schema != self.config.model_schema:
