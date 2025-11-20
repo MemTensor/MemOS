@@ -604,7 +604,7 @@ class GeneralScheduler(BaseScheduler):
                             "updated_at": None,
                         }
                         if merged_target_ids:
-                            post_ref_id = list(merged_target_ids)[0]
+                            post_ref_id = next(iter(merged_target_ids))
                             with contextlib.suppress(Exception):
                                 merged_item = text_mem.get(post_ref_id)
                                 combined_key = getattr(
