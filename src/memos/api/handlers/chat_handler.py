@@ -104,10 +104,6 @@ class ChatHandler(BaseHandler):
             HTTPException: If chat fails
         """
         try:
-            import time
-
-            time_start = time.time()
-
             # Step 1: Search for relevant memories
             search_req = APISearchRequest(
                 query=chat_req.query,
@@ -155,32 +151,167 @@ class ChatHandler(BaseHandler):
             # Step 3: Generate complete response from LLM
             response = self.llm.generate(current_messages)
 
-            time_end = time.time()
-
-            # Step 4: Start post-chat processing asynchronously
-            self._start_post_chat_processing(
+            # Step 4: start add after chat asynchronously
+            self._start_add_to_memory(
                 user_id=chat_req.user_id,
                 cube_id=chat_req.mem_cube_id,
                 session_id=chat_req.session_id or "default_session",
                 query=chat_req.query,
                 full_response=response,
-                system_prompt=system_prompt,
-                time_start=time_start,
-                time_end=time_end,
-                speed_improvement=0.0,
-                current_messages=current_messages,
+                async_mode="async",
             )
 
-            # Return the complete response
+            import re
+
+            match = re.search(r"<think>([\s\S]*?)</think>", response)
+            reasoning_text = match.group(1) if match else None
+            final_text = (
+                re.sub(r"<think>[\s\S]*?</think>", "", response, count=1) if match else response
+            )
+
             return {
                 "message": "Chat completed successfully",
-                "data": {"response": response, "references": filtered_memories},
+                "data": {"response": final_text, "reasoning": reasoning_text},
             }
 
         except ValueError as err:
             raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
         except Exception as err:
             self.logger.error(f"Failed to complete chat: {traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+    def handle_chat_stream(self, chat_req: ChatRequest) -> StreamingResponse:
+        """
+        Chat with MemOS via Server-Sent Events (SSE) stream using search/add handlers.
+
+        This implementation directly uses search_handler and add_handler.
+
+        Args:
+            chat_req: Chat stream request
+
+        Returns:
+            StreamingResponse with SSE formatted chat stream
+
+        Raises:
+            HTTPException: If stream initialization fails
+        """
+        try:
+
+            def generate_chat_response() -> Generator[str, None, None]:
+                """Generate chat response as SSE stream."""
+                try:
+                    search_req = APISearchRequest(
+                        query=chat_req.query,
+                        user_id=chat_req.user_id,
+                        mem_cube_id=chat_req.mem_cube_id,
+                        mode=chat_req.mode,
+                        internet_search=chat_req.internet_search,
+                        top_k=chat_req.top_k,
+                        chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=chat_req.include_preference,
+                        pref_top_k=chat_req.pref_top_k,
+                        filter=chat_req.filter,
+                    )
+
+                    search_response = self.search_handler.handle_search_memories(search_req)
+
+                    self._send_message_to_scheduler(
+                        user_id=chat_req.user_id,
+                        mem_cube_id=chat_req.mem_cube_id,
+                        query=chat_req.query,
+                        label=QUERY_LABEL,
+                    )
+                    # Extract memories from search results
+                    memories_list = []
+                    if search_response.data and search_response.data.get("text_mem"):
+                        text_mem_results = search_response.data["text_mem"]
+                        if text_mem_results and text_mem_results[0].get("memories"):
+                            memories_list = text_mem_results[0]["memories"]
+
+                    # Filter memories by threshold
+                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+
+                    # Step 2: Build system prompt with memories
+                    system_prompt = self._build_system_prompt(
+                        filtered_memories,
+                        search_response.data["pref_string"],
+                        chat_req.system_prompt,
+                    )
+
+                    # Prepare messages
+                    history_info = chat_req.history[-20:] if chat_req.history else []
+                    current_messages = [
+                        {"role": "system", "content": system_prompt},
+                        *history_info,
+                        {"role": "user", "content": chat_req.query},
+                    ]
+
+                    self.logger.info(
+                        f"user_id: {chat_req.user_id}, cube_id: {chat_req.mem_cube_id}, "
+                        f"current_system_prompt: {system_prompt}"
+                    )
+
+                    # Step 3: Generate streaming response from LLM
+                    response_stream = self.llm.generate_stream(current_messages)
+
+                    # Stream the response
+                    buffer = ""
+                    full_response = ""
+                    in_think = False
+
+                    for chunk in response_stream:
+                        if chunk == "<think>":
+                            in_think = True
+                            continue
+                        if chunk == "</think>":
+                            in_think = False
+                            continue
+
+                        if in_think:
+                            chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
+                            yield chunk_data
+                            continue
+
+                        buffer += chunk
+                        full_response += chunk
+
+                        chunk_data = f"data: {json.dumps({'type': 'text', 'data': chunk}, ensure_ascii=False)}\n\n"
+                        yield chunk_data
+
+                    current_messages.append({"role": "assistant", "content": full_response})
+
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        cube_id=chat_req.mem_cube_id,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=full_response,
+                        async_mode="async",
+                    )
+
+                except Exception as e:
+                    self.logger.error(f"Error in chat stream: {e}", exc_info=True)
+                    error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
+                    yield error_data
+
+            return StreamingResponse(
+                generate_chat_response(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/event-stream",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Methods": "*",
+                },
+            )
+
+        except ValueError as err:
+            raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+        except Exception as err:
+            self.logger.error(f"Failed to start chat stream: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
     def handle_chat_stream_playground(self, chat_req: ChatRequest) -> StreamingResponse:
@@ -280,9 +411,19 @@ class ChatHandler(BaseHandler):
                     # Stream the response
                     buffer = ""
                     full_response = ""
+                    in_think = False
 
                     for chunk in response_stream:
-                        if chunk in ["<think>", "</think>"]:
+                        if chunk == "<think>":
+                            in_think = True
+                            continue
+                        if chunk == "</think>":
+                            in_think = False
+                            continue
+
+                        if in_think:
+                            chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
+                            yield chunk_data
                             continue
 
                         buffer += chunk
@@ -320,7 +461,6 @@ class ChatHandler(BaseHandler):
 
                     yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
-                    # Step 4: Add conversation to memory asynchronously
                     self._start_post_chat_processing(
                         user_id=chat_req.user_id,
                         cube_id=chat_req.mem_cube_id,
@@ -332,6 +472,15 @@ class ChatHandler(BaseHandler):
                         time_end=time_end,
                         speed_improvement=speed_improvement,
                         current_messages=current_messages,
+                    )
+
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        cube_id=chat_req.mem_cube_id,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=full_response,
+                        async_mode="sync",
                     )
 
                 except Exception as e:
@@ -663,6 +812,36 @@ class ChatHandler(BaseHandler):
         except Exception as e:
             self.logger.error(f"Failed to send message to scheduler: {e}", exc_info=True)
 
+    async def _add_conversation_to_memory(
+        self,
+        user_id: str,
+        cube_id: str,
+        session_id: str,
+        query: str,
+        clean_response: str,
+        async_mode: Literal["async", "sync"] = "sync",
+    ) -> None:
+        add_req = APIADDRequest(
+            user_id=user_id,
+            mem_cube_id=cube_id,
+            session_id=session_id,
+            messages=[
+                {
+                    "role": "user",
+                    "content": query,
+                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                },
+                {
+                    "role": "assistant",
+                    "content": clean_response,
+                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                },
+            ],
+            async_mode=async_mode,
+        )
+
+        self.add_handler.handle_add_memories(add_req)
+
     async def _post_chat_processing(
         self,
         user_id: str,
@@ -755,28 +934,6 @@ class ChatHandler(BaseHandler):
             self._send_message_to_scheduler(
                 user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
             )
-
-            # Add conversation to memory using add handler
-            add_req = APIADDRequest(
-                user_id=user_id,
-                mem_cube_id=cube_id,
-                session_id=session_id,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": query,
-                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                    },
-                    {
-                        "role": "assistant",
-                        "content": clean_response,  # Store clean text without reference markers
-                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                    },
-                ],
-                async_mode="sync",  # set suync for playground
-            )
-
-            self.add_handler.handle_add_memories(add_req)
 
             self.logger.info(f"Post-chat processing completed for user {user_id}")
 
@@ -874,6 +1031,68 @@ class ChatHandler(BaseHandler):
             thread = ContextThread(
                 target=run_async_in_thread,
                 name=f"PostChatProcessing-{user_id}",
+                daemon=True,
+            )
+            thread.start()
+
+    def _start_add_to_memory(
+        self,
+        user_id: str,
+        cube_id: str,
+        session_id: str,
+        query: str,
+        full_response: str,
+        async_mode: Literal["async", "sync"] = "sync",
+    ) -> None:
+        def run_async_in_thread():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    clean_response, _ = self._extract_references_from_response(full_response)
+                    loop.run_until_complete(
+                        self._add_conversation_to_memory(
+                            user_id=user_id,
+                            cube_id=cube_id,
+                            session_id=session_id,
+                            query=query,
+                            clean_response=clean_response,
+                            async_mode=async_mode,
+                        )
+                    )
+                finally:
+                    loop.close()
+            except Exception as e:
+                self.logger.error(
+                    f"Error in thread-based add to memory for user {user_id}: {e}",
+                    exc_info=True,
+                )
+
+        try:
+            asyncio.get_running_loop()
+            clean_response, _ = self._extract_references_from_response(full_response)
+            task = asyncio.create_task(
+                self._add_conversation_to_memory(
+                    user_id=user_id,
+                    cube_id=cube_id,
+                    session_id=session_id,
+                    query=query,
+                    clean_response=clean_response,
+                    async_mode=async_mode,
+                )
+            )
+            task.add_done_callback(
+                lambda t: self.logger.error(
+                    f"Error in background add to memory for user {user_id}: {t.exception()}",
+                    exc_info=True,
+                )
+                if t.exception()
+                else None
+            )
+        except RuntimeError:
+            thread = ContextThread(
+                target=run_async_in_thread,
+                name=f"AddToMemory-{user_id}",
                 daemon=True,
             )
             thread.start()

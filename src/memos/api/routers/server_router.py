@@ -29,7 +29,11 @@ from memos.api.product_models import (
     APIChatCompleteRequest,
     APISearchRequest,
     ChatRequest,
-    GetAllMemoryRequest,
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    GetMemoryPlaygroundRequest,
+    GetMemoryRequest,
+    GetMemoryResponse,
     MemoryResponse,
     SearchResponse,
     SuggestionRequest,
@@ -160,8 +164,8 @@ def chat_complete(chat_req: APIChatCompleteRequest):
     return chat_handler.handle_chat_complete(chat_req)
 
 
-@router.post("/chat", summary="Chat with MemOS")
-def chat(chat_req: ChatRequest):
+@router.post("/chat/stream", summary="Chat with MemOS")
+def chat_stream(chat_req: ChatRequest):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
 
@@ -169,6 +173,17 @@ def chat(chat_req: ChatRequest):
     composes SearchHandler and AddHandler for a clean architecture.
     """
     return chat_handler.handle_chat_stream(chat_req)
+
+
+@router.post("/chat/stream/playground", summary="Chat with MemOS playground")
+def chat_stream_playground(chat_req: ChatRequest):
+    """
+    Chat with MemOS for a specific user. Returns SSE stream.
+
+    This endpoint uses the class-based ChatHandler which internally
+    composes SearchHandler and AddHandler for a clean architecture.
+    """
+    return chat_handler.handle_chat_stream_playground(chat_req)
 
 
 # =============================================================================
@@ -193,12 +208,12 @@ def get_suggestion_queries(suggestion_req: SuggestionRequest):
 
 
 # =============================================================================
-# Memory Retrieval API Endpoints
+# Memory Retrieval Delete API Endpoints
 # =============================================================================
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-def get_all_memories(memory_req: GetAllMemoryRequest):
+def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
     """
     Get all memories or subgraph for a specific user.
 
@@ -224,3 +239,18 @@ def get_all_memories(memory_req: GetAllMemoryRequest):
             memory_type=memory_req.memory_type or "text_mem",
             naive_mem_cube=naive_mem_cube,
         )
+
+
+@router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
+def get_memories(memory_req: GetMemoryRequest):
+    return handlers.memory_handler.handle_get_memories(
+        get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.post(
+    "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
+)
+def delete_memories(memory_req: DeleteMemoryRequest):
+    return handlers.memory_handler.handle_delete_memories(memory_req)

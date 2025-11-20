@@ -61,7 +61,6 @@ class OptimizedScheduler(GeneralScheduler):
         self.text_mem: TreeTextMemory = self.current_mem_cube.text_mem
         self.searcher: Searcher = self.text_mem.get_searcher(
             manual_close_internet=False,
-            moscube=False,
         )
         self.reranker: HTTPBGEReranker = self.text_mem.reranker
 
@@ -80,7 +79,6 @@ class OptimizedScheduler(GeneralScheduler):
                 "session_id": session_id,
                 "top_k": search_req.top_k,
                 "internet_search": search_req.internet_search,
-                "moscube": search_req.moscube,
                 "chat_history": search_req.chat_history,
             },
             "user_context": {"mem_cube_id": user_context.mem_cube_id},
@@ -123,7 +121,6 @@ class OptimizedScheduler(GeneralScheduler):
             top_k=search_req.top_k,
             mode=mode,
             manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
             search_filter=search_filter,
             info={
                 "user_id": search_req.user_id,
@@ -162,7 +159,6 @@ class OptimizedScheduler(GeneralScheduler):
             top_k=search_req.top_k,
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
             search_filter=search_filter,
             info=info,
         )

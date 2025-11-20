@@ -41,7 +41,6 @@ class Searcher:
         reranker: BaseReranker,
         bm25_retriever: EnhancedBM25 | None = None,
         internet_retriever: None = None,
-        moscube: bool = False,
         search_strategy: dict | None = None,
     ):
         self.graph_store = graph_store
@@ -55,7 +54,6 @@ class Searcher:
 
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
-        self.moscube = moscube
         self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
         self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
 
@@ -296,17 +294,6 @@ class Searcher:
                     user_name,
                 )
             )
-            if self.moscube:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_memcubes,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                        "memos_cube01",
-                    )
-                )
 
             results = []
             for t in tasks:

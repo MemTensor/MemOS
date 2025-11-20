@@ -36,7 +36,7 @@ class UserRegisterRequest(BaseRequest):
     interests: str | None = Field(None, description="User interests")
 
 
-class GetAllMemoryRequest(BaseRequest):
+class GetMemoryPlaygroundRequest(BaseRequest):
     """Request model for getting memories."""
 
     user_id: str = Field(..., description="User ID")
@@ -245,7 +245,6 @@ class APIChatCompleteRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(True, description="Whether to use MemOSCube")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     top_k: int = Field(10, description="Number of results to return")
@@ -256,7 +255,7 @@ class APIChatCompleteRequest(BaseRequest):
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
-    model_name: str | None = Field(None, description="Model name to use for chat")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
     max_tokens: int | None = Field(None, description="Max tokens to generate")
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
@@ -282,7 +281,7 @@ class GetMemoryRequest(BaseRequest):
 class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
-    memory_id: str = Field(..., description="Memory ID")
+    memory_ids: list[str] = Field(..., description="Memory IDs")
 
 
 class SuggestionRequest(BaseRequest):
