@@ -139,12 +139,8 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     metadata: list[dict] | None = Field(
         default=None, description="Structured metadata list for each log item"
     )
-    memcube_name: str | None = Field(
-        default=None, description="Display name for memcube"
-    )
-    memory_len: int | None = Field(
-        default=None, description="Count of items involved in the event"
-    )
+    memcube_name: str | None = Field(default=None, description="Display name for memcube")
+    memory_len: int | None = Field(default=None, description="Count of items involved in the event")
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""

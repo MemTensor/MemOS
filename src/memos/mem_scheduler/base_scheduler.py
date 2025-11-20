@@ -621,7 +621,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             def _with_memory_time(meta: dict) -> dict:
                 enriched = dict(meta)
                 if "memory_time" not in enriched:
-                    enriched["memory_time"] = enriched.get("updated_at") or enriched.get("update_at")
+                    enriched["memory_time"] = enriched.get("updated_at") or enriched.get(
+                        "update_at"
+                    )
                 return enriched
 
             data["metadata"] = [_with_memory_time(m) for m in metadata]

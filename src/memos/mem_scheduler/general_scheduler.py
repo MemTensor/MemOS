@@ -294,7 +294,10 @@ class GeneralScheduler(BaseScheduler):
                             except Exception:
                                 exists = False
 
-                            payload = {"content": f"{key}: {mem_item.memory}", "ref_id": mem_item.id}
+                            payload = {
+                                "content": f"{key}: {mem_item.memory}",
+                                "ref_id": mem_item.id,
+                            }
                             meta_dict = {
                                 "ref_id": mem_item.id,
                                 "id": mem_item.id,
@@ -565,13 +568,15 @@ class GeneralScheduler(BaseScheduler):
                                         mid, type="MERGED_TO", direction="OUT"
                                     )
                                     for edge in edges:
-                                        target = edge.get("to") or edge.get("dst") or edge.get("target")
+                                        target = (
+                                            edge.get("to") or edge.get("dst") or edge.get("target")
+                                        )
                                         if target:
                                             merged_target_ids.add(target)
                         for item in mem_items:
-                            key = getattr(getattr(item, "metadata", {}), "key", None) or transform_name_to_key(
-                                getattr(item, "memory", "")
-                            )
+                            key = getattr(
+                                getattr(item, "metadata", {}), "key", None
+                            ) or transform_name_to_key(getattr(item, "memory", ""))
                             keys.append(key)
                             memcube_content.append(
                                 {"content": key or "(no key)", "ref_id": item.id, "type": "merged"}
@@ -607,9 +612,10 @@ class GeneralScheduler(BaseScheduler):
                             post_ref_id = next(iter(merged_target_ids))
                             with contextlib.suppress(Exception):
                                 merged_item = text_mem.get(post_ref_id)
-                                combined_key = getattr(
-                                    getattr(merged_item, "metadata", {}), "key", None
-                                ) or combined_key
+                                combined_key = (
+                                    getattr(getattr(merged_item, "metadata", {}), "key", None)
+                                    or combined_key
+                                )
                                 post_meta = {
                                     "ref_id": post_ref_id,
                                     "id": post_ref_id,
@@ -626,7 +632,9 @@ class GeneralScheduler(BaseScheduler):
                                     "confidence": getattr(
                                         getattr(merged_item, "metadata", {}), "confidence", None
                                     ),
-                                    "tags": getattr(getattr(merged_item, "metadata", {}), "tags", None),
+                                    "tags": getattr(
+                                        getattr(merged_item, "metadata", {}), "tags", None
+                                    ),
                                     "updated_at": getattr(
                                         getattr(merged_item, "metadata", {}), "updated_at", None
                                     )
