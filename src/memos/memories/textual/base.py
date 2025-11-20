@@ -10,6 +10,9 @@ from memos.types import MessageList
 class BaseTextMemory(BaseMemory):
     """Base class for all textual memory implementations."""
 
+    # Default mode configuration - can be overridden by subclasses
+    mode: str = "sync"  # Default mode: 'async' or 'sync'
+
     @abstractmethod
     def __init__(self, config: BaseTextMemoryConfig):
         """Initialize memory with the given configuration."""
@@ -24,7 +27,7 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:
+    def add(self, memories: list[TextualMemoryItem | dict[str, Any]], **kwargs) -> list[str]:
         """Add memories.
 
         Args:

@@ -1,4 +1,4 @@
-ANSWER_PROMPT = """
+LME_ANSWER_PROMPT = """
     You are an intelligent memory assistant tasked with retrieving accurate information from conversation memories.
 
     # CONTEXT:
@@ -8,7 +8,6 @@ ANSWER_PROMPT = """
     1. Carefully analyze all provided memories.
     2. Pay special attention to the timestamps to determine the answer.
     3. If the question asks about a specific event or fact, look for direct evidence in the memories.
-    4. The answer must be brief (under 10 words) and direct, with no extra description.
 
     # APPROACH (Think step by step):
     1. First, examine all memories that contain information related to the question.
@@ -27,6 +26,7 @@ ANSWER_PROMPT = """
 
     Answer:
     """
+
 
 PM_ANSWER_PROMPT = """
     You are a helpful assistant tasked with selecting the best answer to a user question, based solely on summarized conversation memories.
@@ -56,6 +56,13 @@ PM_ANSWER_PROMPT = """
 
     Final Answer:
     <final_answer>
+"""
+
+
+PREFEVAL_ANSWER_PROMPT = """
+    You are a helpful AI. Answer the question based on the query and the following memories:
+    User Memories:
+    {context}
 """
 
 

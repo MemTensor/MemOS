@@ -1,3 +1,4 @@
+import logging
 import os
 
 from pathlib import Path
@@ -10,8 +11,15 @@ from memos.mem_scheduler.general_modules.misc import DictConversionMixin, EnvCon
 from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
+    DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
-    DEFAULT_THREAD__POOL_MAX_WORKERS,
+    DEFAULT_CONTEXT_WINDOW_SIZE,
+    DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+    DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
+    DEFAULT_THREAD_POOL_MAX_WORKERS,
+    DEFAULT_TOP_K,
+    DEFAULT_USE_REDIS_QUEUE,
+    DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
 )
 
 
@@ -19,26 +27,42 @@ class BaseSchedulerConfig(BaseConfig):
     """Base configuration class for mem_scheduler."""
 
     top_k: int = Field(
-        default=10, description="Number of top candidates to consider in initial retrieval"
+        default=DEFAULT_TOP_K,
+        description="Number of top candidates to consider in initial retrieval",
     )
     enable_parallel_dispatch: bool = Field(
         default=True, description="Whether to enable parallel message processing using thread pool"
     )
     thread_pool_max_workers: int = Field(
-        default=DEFAULT_THREAD__POOL_MAX_WORKERS,
+        default=DEFAULT_THREAD_POOL_MAX_WORKERS,
         gt=1,
-        lt=20,
-        description=f"Maximum worker threads in pool (default: {DEFAULT_THREAD__POOL_MAX_WORKERS})",
+        description=f"Maximum worker threads in pool (default: {DEFAULT_THREAD_POOL_MAX_WORKERS})",
     )
-    consume_interval_seconds: int = Field(
+    consume_interval_seconds: float = Field(
         default=DEFAULT_CONSUME_INTERVAL_SECONDS,
         gt=0,
-        le=60,
         description=f"Interval for consuming messages from queue in seconds (default: {DEFAULT_CONSUME_INTERVAL_SECONDS})",
     )
     auth_config_path: str | None = Field(
         default=None,
         description="Path to the authentication configuration file containing private credentials",
+    )
+    # Redis queue configuration
+    use_redis_queue: bool = Field(
+        default=DEFAULT_USE_REDIS_QUEUE,
+        description="Whether to use Redis queue instead of local memory queue",
+    )
+    redis_config: dict[str, Any] = Field(
+        default_factory=lambda: {"host": "localhost", "port": 6379, "db": 0},
+        description="Redis connection configuration",
+    )
+    max_internal_message_queue_size: int = Field(
+        default=DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+        description="Maximum size of internal message queue when not using Redis",
+    )
+    multi_task_running_timeout: int = Field(
+        default=DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
+        description="Default timeout for multi-task running operations in seconds",
     )
 
 
@@ -48,7 +72,8 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=300, description="Interval in seconds for updating activation memory"
     )
     context_window_size: int | None = Field(
-        default=10, description="Size of the context window for conversation history"
+        default=DEFAULT_CONTEXT_WINDOW_SIZE,
+        description="Size of the context window for conversation history",
     )
     act_mem_dump_path: str | None = Field(
         default=DEFAULT_ACT_MEM_DUMP_PATH,  # Replace with DEFAULT_ACT_MEM_DUMP_PATH
@@ -58,10 +83,12 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
         default=False, description="Whether to enable automatic activation memory updates"
     )
     working_mem_monitor_capacity: int = Field(
-        default=30, description="Capacity of the working memory monitor"
+        default=DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
+        description="Capacity of the working memory monitor",
     )
     activation_mem_monitor_capacity: int = Field(
-        default=20, description="Capacity of the activation memory monitor"
+        default=DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
+        description="Capacity of the activation memory monitor",
     )
 
     # Database configuration for ORM persistence
@@ -78,6 +105,14 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
     )
 
 
+class OptimizedSchedulerConfig(GeneralSchedulerConfig):
+    """Configuration for the optimized scheduler.
+
+    This class inherits all fields from `GeneralSchedulerConfig`
+    and is used to distinguish optimized scheduling logic via type.
+    """
+
+
 class SchedulerConfigFactory(BaseConfig):
     """Factory class for creating scheduler configurations."""
 
@@ -87,7 +122,7 @@ class SchedulerConfigFactory(BaseConfig):
     model_config = ConfigDict(extra="forbid", strict=True)
     backend_to_class: ClassVar[dict[str, Any]] = {
         "general_scheduler": GeneralSchedulerConfig,
-        "optimized_scheduler": GeneralSchedulerConfig,  # optimized_scheduler uses same config as general_scheduler
+        "optimized_scheduler": OptimizedSchedulerConfig,  # optimized_scheduler uses same config as general_scheduler
     }
 
     @field_validator("backend")
@@ -135,7 +170,7 @@ class GraphDBAuthConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
     password: str = Field(
         default="",
         description="Password for graph database authentication",
-        min_length=8,  # 建议密码最小长度
+        min_length=8,  # Recommended minimum password length
     )
     db_name: str = Field(default="neo4j", description="Database name to connect to")
     auto_create: bool = Field(
@@ -150,12 +185,50 @@ class OpenAIConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):
 
 
 class AuthConfig(BaseConfig, DictConversionMixin):
-    rabbitmq: RabbitMQConfig
-    openai: OpenAIConfig
-    graph_db: GraphDBAuthConfig
+    rabbitmq: RabbitMQConfig | None = None
+    openai: OpenAIConfig | None = None
+    graph_db: GraphDBAuthConfig | None = None
     default_config_path: ClassVar[str] = (
         f"{BASE_DIR}/examples/data/config/mem_scheduler/scheduler_auth.yaml"
     )
+
+    @model_validator(mode="after")
+    def validate_partial_initialization(self) -> "AuthConfig":
+        """
+        Validate that at least one configuration component is successfully initialized.
+        Log warnings for any failed initializations but allow partial success.
+        """
+        logger = logging.getLogger(__name__)
+
+        initialized_components = []
+        failed_components = []
+
+        if self.rabbitmq is not None:
+            initialized_components.append("rabbitmq")
+        else:
+            failed_components.append("rabbitmq")
+
+        if self.openai is not None:
+            initialized_components.append("openai")
+        else:
+            failed_components.append("openai")
+
+        if self.graph_db is not None:
+            initialized_components.append("graph_db")
+        else:
+            failed_components.append("graph_db")
+
+        # Allow all components to be None for flexibility, but log a warning
+        if not initialized_components:
+            logger.warning(
+                "All configuration components are None. This may indicate missing environment variables or configuration files."
+            )
+        elif failed_components:
+            logger.warning(
+                f"Failed to initialize components: {', '.join(failed_components)}. Successfully initialized: {', '.join(initialized_components)}"
+            )
+
+        return self
 
     @classmethod
     def from_local_config(cls, config_path: str | Path | None = None) -> "AuthConfig":
@@ -205,24 +278,75 @@ class AuthConfig(BaseConfig, DictConversionMixin):
 
         This method loads configuration for all nested components (RabbitMQ, OpenAI, GraphDB)
         from their respective environment variables using each component's specific prefix.
+        If any component fails to initialize, it will be set to None and a warning will be logged.
 
         Returns:
             AuthConfig: Configured instance with values from environment variables
 
         Raises:
-            ValueError: If any required environment variables are missing
+            ValueError: If all components fail to initialize
         """
+        logger = logging.getLogger(__name__)
+
+        rabbitmq_config = None
+        openai_config = None
+        graph_db_config = None
+
+        # Try to initialize RabbitMQ config - check if any RabbitMQ env vars exist
+        try:
+            rabbitmq_prefix = RabbitMQConfig.get_env_prefix()
+            has_rabbitmq_env = any(key.startswith(rabbitmq_prefix) for key in os.environ)
+            if has_rabbitmq_env:
+                rabbitmq_config = RabbitMQConfig.from_env()
+                logger.info("Successfully initialized RabbitMQ configuration")
+            else:
+                logger.info(
+                    "No RabbitMQ environment variables found, skipping RabbitMQ initialization"
+                )
+        except (ValueError, Exception) as e:
+            logger.warning(f"Failed to initialize RabbitMQ config from environment: {e}")
+
+        # Try to initialize OpenAI config - check if any OpenAI env vars exist
+        try:
+            openai_prefix = OpenAIConfig.get_env_prefix()
+            has_openai_env = any(key.startswith(openai_prefix) for key in os.environ)
+            if has_openai_env:
+                openai_config = OpenAIConfig.from_env()
+                logger.info("Successfully initialized OpenAI configuration")
+            else:
+                logger.info("No OpenAI environment variables found, skipping OpenAI initialization")
+        except (ValueError, Exception) as e:
+            logger.warning(f"Failed to initialize OpenAI config from environment: {e}")
+
+        # Try to initialize GraphDB config - check if any GraphDB env vars exist
+        try:
+            graphdb_prefix = GraphDBAuthConfig.get_env_prefix()
+            has_graphdb_env = any(key.startswith(graphdb_prefix) for key in os.environ)
+            if has_graphdb_env:
+                graph_db_config = GraphDBAuthConfig.from_env()
+                logger.info("Successfully initialized GraphDB configuration")
+            else:
+                logger.info(
+                    "No GraphDB environment variables found, skipping GraphDB initialization"
+                )
+        except (ValueError, Exception) as e:
+            logger.warning(f"Failed to initialize GraphDB config from environment: {e}")
+
         return cls(
-            rabbitmq=RabbitMQConfig.from_env(),
-            openai=OpenAIConfig.from_env(),
-            graph_db=GraphDBAuthConfig.from_env(),
+            rabbitmq=rabbitmq_config,
+            openai=openai_config,
+            graph_db=graph_db_config,
         )
 
     def set_openai_config_to_environment(self):
-        # Set environment variables
-        os.environ["OPENAI_API_KEY"] = self.openai.api_key
-        os.environ["OPENAI_BASE_URL"] = self.openai.base_url
-        os.environ["MODEL"] = self.openai.default_model
+        # Set environment variables only if openai config is available
+        if self.openai is not None:
+            os.environ["OPENAI_API_KEY"] = self.openai.api_key
+            os.environ["OPENAI_BASE_URL"] = self.openai.base_url
+            os.environ["MODEL"] = self.openai.default_model
+        else:
+            logger = logging.getLogger(__name__)
+            logger.warning("OpenAI config is not available, skipping environment variable setup")
 
     @classmethod
     def default_config_exists(cls) -> bool:

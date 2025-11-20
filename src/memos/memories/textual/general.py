@@ -26,6 +26,8 @@ class GeneralTextMemory(BaseTextMemory):
 
     def __init__(self, config: GeneralTextMemoryConfig):
         """Initialize memory with the given configuration."""
+        # Set mode from class default or override if needed
+        self.mode = getattr(self.__class__, "mode", "sync")
         self.config: GeneralTextMemoryConfig = config
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(
             config.extractor_llm

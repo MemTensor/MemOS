@@ -44,7 +44,7 @@ def test_add_node(graph_db):
 
     graph_db.add_node(node_id, memory, metadata)
 
-    # 确认至少有一次 MERGE 节点的调用
+    # Confirm at least one MERGE node call
     calls = session_mock.run.call_args_list
     assert any("MERGE (n:Memory" in call.args[0] for call in calls), "Expected MERGE to be called"
 

@@ -1,17 +1,257 @@
+import base64
+import hashlib
+import hmac
 import json
+import logging
 import os
+import re
+import time
 
 from typing import Any
+
+import requests
 
 from dotenv import load_dotenv
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
+from memos.context.context import ContextThread
 from memos.mem_cube.general import GeneralMemCube
 
 
 # Load environment variables
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
+def _update_env_from_dict(data: dict[str, Any]) -> None:
+    """Apply a dict to environment variables, with change logging."""
+
+    def _is_sensitive(name: str) -> bool:
+        n = name.upper()
+        return any(s in n for s in ["PASSWORD", "SECRET", "AK", "SK", "TOKEN", "KEY"])
+
+    for k, v in data.items():
+        if isinstance(v, dict):
+            new_val = json.dumps(v, ensure_ascii=False)
+        elif isinstance(v, bool):
+            new_val = "true" if v else "false"
+        elif v is None:
+            new_val = ""
+        else:
+            new_val = str(v)
+
+        old_val = os.environ.get(k)
+        os.environ[k] = new_val
+
+        try:
+            log_old = "***" if _is_sensitive(k) else (old_val if old_val is not None else "<unset>")
+            log_new = "***" if _is_sensitive(k) else new_val
+            if old_val != new_val:
+                logger.info(f"Nacos config update: {k}={log_new} (was {log_old})")
+        except Exception as e:
+            # Avoid logging failures blocking config updates
+            logger.debug(f"Skip logging change for {k}: {e}")
+
+
+def get_config_json(name: str, default: Any | None = None) -> Any:
+    """Read JSON object/array from env and parse. Returns default on missing/invalid."""
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        logger.warning(f"Invalid JSON in env '{name}', returning default.")
+        return default
+
+
+def get_config_value(path: str, default: Any | None = None) -> Any:
+    """Read value from env with optional dot-path for structured configs.
+
+    Examples:
+    - get_config_value("MONGODB_CONFIG.base_uri")
+    - get_config_value("MONGODB_BASE_URI")
+    """
+    if "." not in path:
+        val = os.getenv(path)
+        return val if val is not None else default
+    root, *subkeys = path.split(".")
+    data = get_config_json(root, default=None)
+    if not isinstance(data, dict):
+        return default
+    cur: Any = data
+    for key in subkeys:
+        if isinstance(cur, dict) and key in cur:
+            cur = cur[key]
+        else:
+            return default
+    return cur
+
+
+class NacosConfigManager:
+    _client = None
+    _data_id = None
+    _group = None
+    _enabled = False
+
+    # Pre-compile regex patterns for better performance
+    _KEY_VALUE_PATTERN = re.compile(r"^([^=]+)=(.*)$")
+    _INTEGER_PATTERN = re.compile(r"^[+-]?\d+$")
+    _FLOAT_PATTERN = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+
+    @classmethod
+    def _sign(cls, secret_key: str, data: str) -> str:
+        """HMAC-SHA1 sgin"""
+        signature = hmac.new(secret_key.encode("utf-8"), data.encode("utf-8"), hashlib.sha1)
+        return base64.b64encode(signature.digest()).decode()
+
+    @staticmethod
+    def _parse_value(value: str) -> Any:
+        """Parse string value to appropriate Python type.
+
+        Supports: bool, int, float, and string.
+        """
+        if not value:
+            return value
+
+        val_lower = value.lower()
+
+        # Boolean
+        if val_lower in ("true", "false"):
+            return val_lower == "true"
+
+        # Integer
+        if NacosConfigManager._INTEGER_PATTERN.match(value):
+            try:
+                return int(value)
+            except (ValueError, OverflowError):
+                return value
+
+        # Float
+        if NacosConfigManager._FLOAT_PATTERN.match(value):
+            try:
+                return float(value)
+            except (ValueError, OverflowError):
+                return value
+
+        # Default to string
+        return value
+
+    @staticmethod
+    def parse_properties(content: str) -> dict[str, Any]:
+        """Parse properties file content to dictionary with type inference.
+
+        Supports:
+        - Comments (lines starting with #)
+        - Key-value pairs (KEY=VALUE)
+        - Type inference (bool, int, float, string)
+        """
+        data: dict[str, Any] = {}
+
+        for line in content.splitlines():
+            line = line.strip()
+
+            # Skip empty lines and comments
+            if not line or line.startswith("#"):
+                continue
+
+            # Parse key-value pair
+            match = NacosConfigManager._KEY_VALUE_PATTERN.match(line)
+            if match:
+                key = match.group(1).strip()
+                value = match.group(2).strip()
+                data[key] = NacosConfigManager._parse_value(value)
+
+        return data
+
+    @classmethod
+    def start_config_watch(cls):
+        while True:
+            cls.init()
+            time.sleep(60)
+
+    @classmethod
+    def start_watch_if_enabled(cls) -> None:
+        enable = os.getenv("NACOS_ENABLE_WATCH", "false").lower() == "true"
+        print("enable:", enable)
+        if not enable:
+            return
+        interval = int(os.getenv("NACOS_WATCH_INTERVAL", "60"))
+
+        def _loop() -> None:
+            while True:
+                try:
+                    cls.init()
+                except Exception as e:
+                    logger.error(f"❌ Nacos watch loop error: {e}")
+                time.sleep(interval)
+
+        ContextThread(target=_loop, daemon=True).start()
+        logger.info(f"Nacos watch thread started (interval={interval}s).")
+
+    @classmethod
+    def init(cls) -> None:
+        server_addr = os.getenv("NACOS_SERVER_ADDR")
+        data_id = os.getenv("NACOS_DATA_ID")
+        group = os.getenv("NACOS_GROUP", "DEFAULT_GROUP")
+        namespace = os.getenv("NACOS_NAMESPACE", "")
+        ak = os.getenv("AK")
+        sk = os.getenv("SK")
+
+        if not (server_addr and data_id and ak and sk):
+            logger.warning("❌ missing NACOS_SERVER_ADDR / AK / SK / DATA_ID")
+            return
+
+        base_url = f"http://{server_addr}/nacos/v1/cs/configs"
+
+        def _auth_headers():
+            ts = str(int(time.time() * 1000))
+
+            sign_data = namespace + "+" + group + "+" + ts if namespace else group + "+" + ts
+            signature = cls._sign(sk, sign_data)
+            return {
+                "Spas-AccessKey": ak,
+                "Spas-Signature": signature,
+                "timeStamp": ts,
+            }
+
+        try:
+            params = {
+                "dataId": data_id,
+                "group": group,
+                "tenant": namespace,
+            }
+
+            headers = _auth_headers()
+            resp = requests.get(base_url, headers=headers, params=params, timeout=10)
+
+            if resp.status_code != 200:
+                logger.error(f"Nacos AK/SK fail: {resp.status_code} {resp.text}")
+                return
+
+            content = resp.text.strip()
+            if not content:
+                logger.warning("⚠️ Nacos is empty")
+                return
+            try:
+                data_props = cls.parse_properties(content)
+                logger.info("nacos config:", data_props)
+                _update_env_from_dict(data_props)
+                logger.info("✅ parse Nacos setting is Properties ")
+            except Exception as e:
+                logger.error(f"⚠️ Nacos parse fail（not JSON/YAML/Properties）: {e}")
+                raise Exception(f"Nacos configuration parsing failed: {e}") from e
+
+        except Exception as e:
+            logger.error(f"❌ Nacos AK/SK init fail: {e}")
+            raise Exception(f"❌ Nacos AK/SK init fail: {e}") from e
+
+
+# init Nacos
+NacosConfigManager.init()
+NacosConfigManager.start_watch_if_enabled()
 
 
 class APIConfig:
@@ -23,7 +263,7 @@ class APIConfig:
         return {
             "model_name_or_path": os.getenv("MOS_CHAT_MODEL", "gpt-4o-mini"),
             "temperature": float(os.getenv("MOS_CHAT_TEMPERATURE", "0.8")),
-            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "1024")),
+            "max_tokens": int(os.getenv("MOS_MAX_TOKENS", "8000")),
             "top_p": float(os.getenv("MOS_TOP_P", "0.9")),
             "top_k": int(os.getenv("MOS_TOP_K", "50")),
             "remove_think_prefix": True,
@@ -77,6 +317,24 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_memreader_config() -> dict[str, Any]:
+        """Get MemReader configuration."""
+        return {
+            "backend": "openai",
+            "config": {
+                "model_name_or_path": os.getenv("MEMRADER_MODEL", "gpt-4o-mini"),
+                "temperature": 0.6,
+                "max_tokens": int(os.getenv("MEMRADER_MAX_TOKENS", "8000")),
+                "top_p": 0.95,
+                "top_k": 20,
+                "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
+                "api_base": os.getenv("MEMRADER_API_BASE"),
+                "remove_think_prefix": True,
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+            },
+        }
+
+    @staticmethod
     def get_activation_vllm_config() -> dict[str, Any]:
         """Get Ollama configuration."""
         return {
@@ -91,19 +349,39 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_preference_memory_config() -> dict[str, Any]:
+        """Get preference memory configuration."""
+        return {
+            "backend": "pref_text",
+            "config": {
+                "extractor_llm": APIConfig.get_memreader_config(),
+                "vector_db": {
+                    "backend": "milvus",
+                    "config": APIConfig.get_milvus_config(),
+                },
+                "embedder": APIConfig.get_embedder_config(),
+                "reranker": APIConfig.get_reranker_config(),
+                "extractor": {"backend": "naive", "config": {}},
+                "adder": {"backend": "naive", "config": {}},
+                "retriever": {"backend": "naive", "config": {}},
+            },
+        }
+
+    @staticmethod
     def get_reranker_config() -> dict[str, Any]:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_RERANKER_BACKEND", "http_bge")
 
-        if embedder_backend == "http_bge":
+        if embedder_backend in ["http_bge", "http_bge_strategy"]:
             return {
-                "backend": "http_bge",
+                "backend": embedder_backend,
                 "config": {
                     "url": os.getenv("MOS_RERANKER_URL"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
                     "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
+                    "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
                 },
             }
         else:
@@ -142,8 +420,22 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_reader_config() -> dict[str, Any]:
+        """Get reader configuration."""
+        return {
+            "backend": os.getenv("MEM_READER_BACKEND", "simple_struct"),
+            "config": {
+                "chunk_type": os.getenv("MEM_READER_CHAT_CHUNK_TYPE", "default"),
+                "chunk_length": int(os.getenv("MEM_READER_CHAT_CHUNK_TOKEN_SIZE", 1600)),
+                "chunk_session": int(os.getenv("MEM_READER_CHAT_CHUNK_SESS_SIZE", 10)),
+                "chunk_overlap": int(os.getenv("MEM_READER_CHAT_CHUNK_OVERLAP", 2)),
+            },
+        }
+
+    @staticmethod
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
+        reader_config = APIConfig.get_reader_config()
         return {
             "backend": "bocha",
             "config": {
@@ -151,7 +443,7 @@ class APIConfig:
                 "max_results": 15,
                 "num_per_request": 10,
                 "reader": {
-                    "backend": "simple_struct",
+                    "backend": reader_config["backend"],
                     "config": {
                         "llm": {
                             "backend": "openai",
@@ -177,6 +469,7 @@ class APIConfig:
                                 "min_sentences_per_chunk": 1,
                             },
                         },
+                        "chat_chunker": reader_config,
                     },
                 },
             },
@@ -258,6 +551,46 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_milvus_config():
+        return {
+            "collection_name": [
+                "explicit_preference",
+                "implicit_preference",
+            ],
+            "vector_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+            "distance_metric": "cosine",
+            "uri": os.getenv("MILVUS_URI", "http://localhost:19530"),
+            "user_name": os.getenv("MILVUS_USER_NAME", "root"),
+            "password": os.getenv("MILVUS_PASSWORD", "12345678"),
+        }
+
+    @staticmethod
+    def get_polardb_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get PolarDB configuration."""
+        use_multi_db = os.getenv("POLAR_DB_USE_MULTI_DB", "false").lower() == "true"
+
+        if use_multi_db:
+            # Multi-DB mode: each user gets their own database (physical isolation)
+            db_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+            user_name = None
+        else:
+            # Shared-DB mode: all users share one database with user_name tag (logical isolation)
+            db_name = os.getenv("POLAR_DB_DB_NAME", "shared_memos_db")
+            user_name = f"memos{user_id.replace('-', '')}" if user_id else "memos_default"
+
+        return {
+            "host": os.getenv("POLAR_DB_HOST", "localhost"),
+            "port": int(os.getenv("POLAR_DB_PORT", "5432")),
+            "user": os.getenv("POLAR_DB_USER", "root"),
+            "password": os.getenv("POLAR_DB_PASSWORD", "123456"),
+            "db_name": db_name,
+            "user_name": user_name,
+            "use_multi_db": use_multi_db,
+            "auto_create": True,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+        }
+
+    @staticmethod
     def get_mysql_config() -> dict[str, Any]:
         """Get MySQL configuration."""
         return {
@@ -281,10 +614,10 @@ class APIConfig:
                 ),
                 "context_window_size": int(os.getenv("MOS_SCHEDULER_CONTEXT_WINDOW_SIZE", "5")),
                 "thread_pool_max_workers": int(
-                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10")
+                    os.getenv("MOS_SCHEDULER_THREAD_POOL_MAX_WORKERS", "10000")
                 ),
-                "consume_interval_seconds": int(
-                    os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "3")
+                "consume_interval_seconds": float(
+                    os.getenv("MOS_SCHEDULER_CONSUME_INTERVAL_SECONDS", "0.01")
                 ),
                 "enable_parallel_dispatch": os.getenv(
                     "MOS_SCHEDULER_ENABLE_PARALLEL_DISPATCH", "true"
@@ -338,6 +671,8 @@ class APIConfig:
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
+        reader_config = APIConfig.get_reader_config()
+
         backend_model = {
             "openai": openai_config,
             "huggingface": qwen_config,
@@ -349,12 +684,9 @@ class APIConfig:
             "user_id": os.getenv("MOS_USER_ID", "root"),
             "chat_model": {"backend": backend, "config": backend_model[backend]},
             "mem_reader": {
-                "backend": "simple_struct",
+                "backend": reader_config["backend"],
                 "config": {
-                    "llm": {
-                        "backend": "openai",
-                        "config": openai_config,
-                    },
+                    "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
@@ -365,10 +697,13 @@ class APIConfig:
                             "min_sentences_per_chunk": 1,
                         },
                     },
+                    "chat_chunker": reader_config,
                 },
             },
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
+            == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
             == "true",
             "top_k": int(os.getenv("MOS_TOP_K", "50")),
             "max_turns_window": int(os.getenv("MOS_MAX_TURNS_WINDOW", "20")),
@@ -398,6 +733,8 @@ class APIConfig:
             "session_id": os.getenv("MOS_SESSION_ID", "default_session"),
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
+            == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
             == "true",
             "top_k": int(os.getenv("MOS_TOP_K", "5")),
             "chat_model": {
@@ -431,6 +768,7 @@ class APIConfig:
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
         mysql_config = APIConfig.get_mysql_config()
+        reader_config = APIConfig.get_reader_config()
         backend = os.getenv("MOS_CHAT_MODEL_PROVIDER", "openai")
         backend_model = {
             "openai": openai_config,
@@ -445,12 +783,9 @@ class APIConfig:
                 "config": backend_model[backend],
             },
             "mem_reader": {
-                "backend": "simple_struct",
+                "backend": reader_config["backend"],
                 "config": {
-                    "llm": {
-                        "backend": "openai",
-                        "config": openai_config,
-                    },
+                    "llm": APIConfig.get_memreader_config(),
                     "embedder": APIConfig.get_embedder_config(),
                     "chunker": {
                         "backend": "sentence",
@@ -461,10 +796,13 @@ class APIConfig:
                             "min_sentences_per_chunk": 1,
                         },
                     },
+                    "chat_chunker": reader_config,
                 },
             },
             "enable_textual_memory": True,
             "enable_activation_memory": os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower()
+            == "true",
+            "enable_preference_memory": os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower()
             == "true",
             "top_k": 30,
             "max_turns_window": 20,
@@ -488,6 +826,7 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id)
         neo4j_config = APIConfig.get_neo4j_config(user_id)
         nebular_config = APIConfig.get_nebular_config(user_id)
+        polardb_config = APIConfig.get_polardb_config(user_id)
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
@@ -497,6 +836,7 @@ class APIConfig:
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
+            "polardb": polardb_config,
         }
         graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
         if graph_db_backend in graph_db_backend_map:
@@ -518,12 +858,27 @@ class APIConfig:
                             "embedder": APIConfig.get_embedder_config(),
                             "internet_retriever": internet_config,
                             "reranker": APIConfig.get_reranker_config(),
+                            "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
+                            == "true",
+                            "memory_size": {
+                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
+                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
+                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
+                            },
+                            "search_strategy": {
+                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                            },
                         },
                     },
                     "act_mem": {}
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
+                    "pref_mem": {}
+                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_preference_memory_config(),
                 }
             )
         else:
@@ -545,10 +900,12 @@ class APIConfig:
         neo4j_community_config = APIConfig.get_neo4j_community_config(user_id="default")
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         nebular_config = APIConfig.get_nebular_config(user_id="default")
+        polardb_config = APIConfig.get_polardb_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
+            "polardb": polardb_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
@@ -575,12 +932,26 @@ class APIConfig:
                             "reorganize": os.getenv("MOS_ENABLE_REORGANIZE", "false").lower()
                             == "true",
                             "internet_retriever": internet_config,
+                            "memory_size": {
+                                "WorkingMemory": int(os.getenv("NEBULAR_WORKING_MEMORY", 20)),
+                                "LongTermMemory": int(os.getenv("NEBULAR_LONGTERM_MEMORY", 1e6)),
+                                "UserMemory": int(os.getenv("NEBULAR_USER_MEMORY", 1e6)),
+                            },
+                            "search_strategy": {
+                                "fast_graph": bool(os.getenv("FAST_GRAPH", "false") == "true"),
+                                "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
+                                "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
+                            },
+                            "mode": os.getenv("ASYNC_MODE", "sync"),
                         },
                     },
                     "act_mem": {}
                     if os.getenv("ENABLE_ACTIVATION_MEMORY", "false").lower() == "false"
                     else APIConfig.get_activation_vllm_config(),
                     "para_mem": {},
+                    "pref_mem": {}
+                    if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() == "false"
+                    else APIConfig.get_preference_memory_config(),
                 }
             )
         else:

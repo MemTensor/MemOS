@@ -1,3 +1,8 @@
+# MemOS: Memory Operating System for AI Agents
+
+MemOS is an open-source **Agent Memory framework** that empowers AI agents with **long-term memory, personality consistency, and contextual recall**. It enables agents to **remember past interactions**, **learn over time**, and **build evolving identities** across sessions.
+
+Designed for **AI companions, role-playing NPCs, and multi-agent systems**, MemOS provides a unified API for **memory representation, retrieval, and update** — making it the foundation for next-generation **memory-augmented AI agents**.
 <div align="center">
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/memos-banner.gif" alt="MemOS Banner">
@@ -39,37 +44,67 @@
       <img src="https://img.shields.io/badge/License-Apache_2.0-green.svg?logo=apache" alt="License">
     </a>
   </p>
+
+
+<a href="https://memos.openmem.net/">
+  <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
+</a>
+
 </div>
+
+
+Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=github)
+
 
 ---
 
-<img src="https://statics.memtensor.com.cn/memos/sota_score.jpg" alt="SOTA SCORE">
+<img src="https://cdn.memtensor.com.cn/img/1762436050812_3tgird_compressed.png" alt="SOTA SCORE">
 
 **MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions.
 
 - **Website**: https://memos.openmem.net/
 - **Documentation**: https://memos-docs.openmem.net/home/overview/
-- **API Reference**: https://memos-docs.openmem.net/docs/api/info/
+- **API Reference**: https://memos-docs.openmem.net/api-reference/configure-memos/
 - **Source Code**: https://github.com/MemTensor/MemOS
+
+## 📰 News
+
+Stay up to date with the latest MemOS announcements, releases, and community highlights.
+
+
+- **2025-11-06** - 🎉 MemOS v1.1.3 (Async Memory & Preference):
+  Millisecond-level async memory add (support plain-text-memory and
+  preference memory); enhanced BM25, graph recall, and mixture search; full
+  results & code for LoCoMo, LongMemEval, PersonaMem, and PrefEval released.
+- **2025-10-30** - 🎉 MemOS v1.1.2 (API & MCP Update):
+API architecture overhaul and full MCP (Model Context Protocol) support — enabling models, IDEs, and agents to read/write external memory directly.
+- **2025-09-10** - 🎉 *MemOS v1.0.1 (Group Q&A Bot)*: Group Q&A bot based on MemOS Cube, updated KV-Cache performance comparison data across different GPU deployment schemes, optimized test benchmarks and statistics, added plaintext memory Reranker sorting, optimized plaintext memory hallucination issues, and Playground version updates. [Try PlayGround](https://memos-playground.openmem.net/login/)
+- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
+- **2025-07-29** – 🎉 *MemOS v0.2.2 (Nebula Update)*: Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
+- **2025-07-21** – 🎉 *MemOS v0.2.1 (Neo Release)*: Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
+- **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
+- **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
+- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
+- **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
+- **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
+- **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.
 
 ## 📈 Performance Benchmark
 
-MemOS demonstrates significant improvements over baseline memory solutions in multiple reasoning tasks.
+MemOS demonstrates significant improvements over baseline memory solutions in multiple memory tasks,
+showcasing its capabilities in **information extraction**, **temporal and cross-session reasoning**, and **personalized preference responses**.
 
-| Model       | Avg. Score | Multi-Hop | Open Domain | Single-Hop | Temporal Reasoning |
-|-------------|------------|-----------|-------------|------------|---------------------|
-| **OpenAI**  | 0.5275     | 0.6028    | 0.3299      | 0.6183     | 0.2825              |
-| **MemOS**   | **0.7331** | **0.6430** | **0.5521**   | **0.7844** | **0.7321**          |
-| **Improvement** | **+38.98%** | **+6.67%** | **+67.35%** | **+26.86%** | **+159.15%**       |
+| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  |
+|-----------------|-------------|-------------|-------------|-------------|
+| **GPT-4o-mini** | 52.75       | 55.4        | 2.8         | 43.46       |
+| **MemOS**       | **75.80**   | **77.80**   | **71.90**   | **61.17**   |
+| **Improvement** | **+43.70%** | **+40.43%** | **+2568%**  | **+40.75%** |
 
-> 💡 **Temporal reasoning accuracy improved by 159% compared to the OpenAI baseline.**
-
-### Details of End-to-End Evaluation on LOCOMO
-
-> [!NOTE]
-> Comparison of LLM Judge Scores across five major tasks in the LOCOMO benchmark. Each bar shows the mean evaluation score judged by LLMs for a given method-task pair, with standard deviation as error bars. MemOS-0630 consistently outperforms baseline methods (LangMem, Zep, OpenAI, Mem0) across all task types, especially in multi-hop and temporal reasoning scenarios.
-
-<img src="https://statics.memtensor.com.cn/memos/score_all_end2end.jpg" alt="END2END SCORE">
+### Detailed Evaluation Results
+- We use gpt-4o-mini as the processing and judging LLM and bge-m3 as embedding model in MemOS evaluation.
+- The evaluation was conducted under conditions that align various settings as closely as possible. Reproduce the results with our scripts at [`evaluation`](./evaluation).
+- Check the full search and response details at huggingface https://huggingface.co/datasets/MemTensor/MemOS_eval_result.
+> 💡 **MemOS outperforms all other methods (Mem0, Zep, Memobase, SuperMemory et al.) across all benchmarks!**
 
 ## ✨ Key Features
 
@@ -83,6 +118,27 @@ MemOS demonstrates significant improvements over baseline memory solutions in mu
 
 ## 🚀 Getting Started
 
+### ⭐️ MemOS online API
+The easiest way to use MemOS. Equip your agent with memory **in minutes**!
+
+Sign up and get started on[`MemOS dashboard`](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing).
+
+
+### Self-Hosted Server
+1. Get the repository.
+```bash
+git clone https://github.com/MemTensor/MemOS.git
+cd MemOS
+pip install -r ./docker/requirements.txt
+```
+
+2. Configure `docker/.env.example` and copy to `MemOS/.env`
+3. Start the service.
+```bash
+uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 8
+```
+
+### Local SDK
 Here's a quick example of how to create a **`MemCube`**, load it from a directory, access its memories, and save it.
 
 ```python
@@ -104,7 +160,7 @@ for item in mem_cube.act_mem.get_all():
 mem_cube.dump("tmp/mem_cube")
 ```
 
-What about **`MOS`** (Memory Operating System)? It's a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
+**`MOS`** (Memory Operating System) is a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
 
 ```python
 from memos.configs.mem_os import MOSConfig
@@ -246,19 +302,3 @@ We welcome contributions from the community! Please read our [contribution guide
 ## 📄 License
 
 MemOS is licensed under the [Apache 2.0 License](./LICENSE).
-
-## 📰 News
-
-Stay up to date with the latest MemOS announcements, releases, and community highlights.
-
-
-- **2025-09-10** - 🎉 *MemOS v1.0.1 (Group Q&A Bot)*: Group Q&A bot based on MemOS Cube, updated KV-Cache performance comparison data across different GPU deployment schemes, optimized test benchmarks and statistics, added plaintext memory Reranker sorting, optimized plaintext memory hallucination issues, and Playground version updates. [Try PlayGround](https://memos-playground.openmem.net/login/)
-- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
-- **2025-07-29** – 🎉 *MemOS v0.2.2 (Nebula Update)*: Internet search+Nebula DB integration, refactored memory scheduler, KV Cache stress tests, MemCube Cookbook release (CN/EN), and 4b/1.7b/0.6b memory ops models.
-- **2025-07-21** – 🎉 *MemOS v0.2.1 (Neo Release)*: Lightweight Neo version with plaintext+KV Cache functionality, Docker/multi-tenant support, MCP expansion, and new Cookbook/Mud game examples.
-- **2025-07-11** – 🎉 *MemOS v0.2.0 (Cross-Platform)*: Added doc search/bilingual UI, MemReader-4B (local deploy), full Win/Mac/Linux support, and playground end-to-end connection.
-- **2025-07-07** – 🎉 *MemOS 1.0 (Stellar) Preview Release*: A SOTA Memory OS for LLMs is now open-sourced.
-- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
-- **2025-05-28** – 🎉 *Short Paper Uploaded*: [MemOS: An Operating System for Memory-Augmented Generation (MAG) in Large Language Models](https://arxiv.org/abs/2505.22101) was published on arXiv.
-- **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
-- **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Common parameters for all scripts
-LIB="memos-local"
-VERSION="072202"
-WORKERS=50
+LIB="memos-api"
+VERSION="default"
+WORKERS=10
 TOPK=20
 
 echo "Running lme_ingestion.py..."

@@ -18,10 +18,17 @@ class BaseMemReader(ABC):
 
     @abstractmethod
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any]
+        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast"
     ) -> list[list[TextualMemoryItem]]:
         """Various types of memories extracted from scene_data"""
 
     @abstractmethod
     def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:
         """Transform the memory data into a list of TextualMemoryItem objects."""
+
+    @abstractmethod
+    def fine_transfer_simple_mem(
+        self, input_memories: list[list[TextualMemoryItem]], type: str
+    ) -> list[list[TextualMemoryItem]]:
+        """Fine Transform TextualMemoryItem List into another list of
+        TextualMemoryItem objects via calling llm to better understand users."""

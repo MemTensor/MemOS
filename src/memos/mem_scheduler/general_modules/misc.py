@@ -6,6 +6,7 @@ from datetime import datetime
 from queue import Empty, Full, Queue
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from dotenv import load_dotenv
 from pydantic import field_serializer
 
 
@@ -32,7 +33,7 @@ class EnvConfigMixin(Generic[T]):
         Examples:
             RabbitMQConfig -> "RABBITMQ_"
             OpenAIConfig -> "OPENAI_"
-            GraphDBAuthConfig -> "GRAPH_DB_AUTH_"
+            GraphDBAuthConfig -> "GRAPHDBAUTH_"
         """
         class_name = cls.__name__
         # Remove 'Config' suffix if present
@@ -55,6 +56,8 @@ class EnvConfigMixin(Generic[T]):
         Raises:
             ValueError: If required environment variables are missing.
         """
+        load_dotenv()
+
         prefix = cls.get_env_prefix()
         field_values = {}
 
@@ -85,6 +88,35 @@ class EnvConfigMixin(Generic[T]):
             return float(value)
         return value
 
+    @classmethod
+    def print_env_mapping(cls) -> None:
+        """Print the mapping between class fields and their corresponding environment variable names.
+
+        Displays each field's name, type, whether it's required, default value, and corresponding environment variable name.
+        """
+        prefix = cls.get_env_prefix()
+        print(f"\n=== {cls.__name__} Environment Variable Mapping ===")
+        print(f"Environment Variable Prefix: {prefix}")
+        print("-" * 60)
+
+        if not hasattr(cls, "model_fields"):
+            print("This class does not define model_fields, may not be a Pydantic model")
+            return
+
+        for field_name, field_info in cls.model_fields.items():
+            env_var = f"{prefix}{field_name.upper()}"
+            field_type = field_info.annotation
+            is_required = field_info.is_required()
+            default_value = field_info.default if field_info.default is not None else "None"
+
+            print(f"Field Name: {field_name}")
+            print(f"  Environment Variable: {env_var}")
+            print(f"  Type: {field_type}")
+            print(f"  Required: {'Yes' if is_required else 'No'}")
+            print(f"  Default Value: {default_value}")
+            print(f"  Current Environment Value: {os.environ.get(env_var, 'Not Set')}")
+            print("-" * 40)
+
 
 class DictConversionMixin:
     """
@@ -95,7 +127,7 @@ class DictConversionMixin:
     @field_serializer("timestamp", check_fields=False)
     def serialize_datetime(self, dt: datetime | None, _info) -> str | None:
         """
-        Custom datetime serialization logic.
+        Custom timestamp serialization logic.
         - Supports timezone-aware datetime objects
         - Compatible with models without timestamp field (via check_fields=False)
         """
@@ -173,7 +205,9 @@ class AutoDroppingQueue(Queue[T]):
         """Put an item into the queue.
 
         If the queue is full, the oldest item will be automatically removed to make space.
-        This operation is thread-safe.
+        IMPORTANT: When we drop an item we also call `task_done()` to keep
+        the internal `unfinished_tasks` counter consistent (the dropped task
+        will never be processed).
 
         Args:
             item: The item to be put into the queue
@@ -184,19 +218,34 @@ class AutoDroppingQueue(Queue[T]):
             # First try non-blocking put
             super().put(item, block=block, timeout=timeout)
         except Full:
+            # Remove oldest item and mark it done to avoid leaking unfinished_tasks
             with suppress(Empty):
-                self.get_nowait()  # Remove oldest item
+                _ = self.get_nowait()
+                # If the removed item had previously incremented unfinished_tasks,
+                # we must decrement here since it will never be processed.
+                with suppress(ValueError):
+                    self.task_done()
             # Retry putting the new item
             super().put(item, block=block, timeout=timeout)
 
     def get_queue_content_without_pop(self) -> list[T]:
         """Return a copy of the queue's contents without modifying it."""
-        return list(self.queue)
+        # Ensure a consistent snapshot by holding the mutex
+        with self.mutex:
+            return list(self.queue)
 
     def clear(self) -> None:
         """Remove all items from the queue.
 
         This operation is thread-safe.
+        IMPORTANT: We also decrement `unfinished_tasks` by the number of
+        items cleared, since those tasks will never be processed.
         """
         with self.mutex:
+            dropped = len(self.queue)
             self.queue.clear()
+        # Call task_done() outside of the mutex to avoid deadlocks because
+        # Queue.task_done() acquires the same condition bound to `self.mutex`.
+        for _ in range(dropped):
+            with suppress(ValueError):
+                self.task_done()

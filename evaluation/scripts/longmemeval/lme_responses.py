@@ -12,16 +12,15 @@ from tqdm import tqdm
 
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.prompts import ANSWER_PROMPT
+from utils.prompts import LME_ANSWER_PROMPT
 
 
 def lme_response(llm_client, context, question, question_date):
-    prompt = ANSWER_PROMPT.format(
+    prompt = LME_ANSWER_PROMPT.format(
         question=question,
         question_date=question_date,
         context=context,
     )
-
     response = llm_client.chat.completions.create(
         model=os.getenv("CHAT_MODEL"),
         messages=[
@@ -45,14 +44,10 @@ def process_qa(user_id, search_result, llm_client):
     response_duration_ms = (time() - start) * 1000
 
     print("\n" + "-" * 80)
-    print(f"🤖 Processed User: \033[1m{user_id}\033[0m")
-    print(f"⏱️  Duration: \033[92m{response_duration_ms:.2f} ms\033[0m")
-    print(f"❓ Question: \033[93m{question}\033[0m")
-    print(
-        f"💬 Answer: \033[96m{anwer[:150]}...\033[0m"
-        if len(anwer) > 150
-        else f"💬 Answer: \033[96m{anwer}\033[0m"
-    )
+    print(f"🤖 Processed User: {user_id}")
+    print(f"⏱️  Duration: {response_duration_ms:.2f} ms")
+    print(f"❓ Question: {question}")
+    print(f"💬 Answer: {anwer[:150]}..." if len(anwer) > 150 else f"💬 Answer: {anwer}")
     print("-" * 80)
 
     return {
@@ -71,11 +66,7 @@ def process_qa(user_id, search_result, llm_client):
 
 def main(frame, version, num_workers=4):
     print("\n" + "=" * 80)
-    print(
-        f"🚀 \033[1;36mLONGMEMEVAL RESPONSE GENERATION - {frame.upper()} v{version}\033[0m".center(
-            80
-        )
-    )
+    print(f"🚀 LONGMEMEVAL RESPONSE GENERATION - {frame.upper()} v{version}".center(80))
     print("=" * 80)
 
     load_dotenv()
@@ -84,18 +75,16 @@ def main(frame, version, num_workers=4):
         api_key=os.getenv("CHAT_MODEL_API_KEY"), base_url=os.getenv("CHAT_MODEL_BASE_URL")
     )
 
-    print(
-        f"🔌 \033[1mUsing OpenAI client with model:\033[0m \033[94m{os.getenv('CHAT_MODEL')}\033[0m"
-    )
+    print(f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}")
 
     search_path = f"results/lme/{frame}-{version}/{frame}_lme_search_results.json"
     response_path = f"results/lme/{frame}-{version}/{frame}_lme_responses.json"
 
-    print(f"📂 \033[1mLoading search results from:\033[0m \033[94m{search_path}\033[0m")
+    print(f"📂 Loading search results from: {search_path}")
     with open(search_path) as file:
         lme_search_results = json.load(file)
-    print(f"📊 \033[1mFound\033[0m \033[93m{len(lme_search_results)}\033[0m users to process")
-    print(f"⚙️  \033[1mUsing\033[0m \033[93m{num_workers}\033[0m worker threads")
+    print(f"📊 Found {len(lme_search_results)} users to process")
+    print(f"⚙️  Using {num_workers} worker threads")
     print("-" * 80)
 
     lme_responses = {}
@@ -118,25 +107,23 @@ def main(frame, version, num_workers=4):
                 result = future.result()
                 lme_responses[user_id] = result
             except Exception as exc:
-                print(f"\033[91m❌ Error processing user {user_id}: {exc}\033[0m")
+                print(f"❌ Error processing user {user_id}: {exc}")
 
     end_time = time()
     elapsed_time = end_time - start_time
     elapsed_sec = int(elapsed_time)
 
     print("\n" + "=" * 80)
-    print("✅ \033[1;32mRESPONSE GENERATION COMPLETE\033[0m".center(80))
+    print("✅ RESPONSE GENERATION COMPLETE".center(80))
     print("=" * 80)
-    print(f"⏱️  \033[1mTotal time:\033[0m \033[92m{elapsed_sec // 60}m {elapsed_sec % 60}s\033[0m")
-    print(f"📊 \033[1mProcessed:\033[0m \033[93m{len(lme_responses)}\033[0m users")
-    print(
-        f"🔄 \033[1mFramework:\033[0m \033[94m{frame}\033[0m | \033[1mVersion:\033[0m \033[94m{version}\033[0m"
-    )
+    print(f"⏱️ Total time: {elapsed_sec // 60}m {elapsed_sec % 60}s")
+    print(f"📊 Processed: {len(lme_responses)} users")
+    print(f"🔄 Framework: {frame} | Version: {version}")
 
     with open(response_path, "w") as f:
         json.dump(lme_responses, f, indent=4)
 
-    print(f"📁 \033[1mResponses saved to:\033[0m \033[1;94m{response_path}\033[0m")
+    print(f"📁 Responses saved to: {response_path}")
     print("=" * 80 + "\n")
 
 
@@ -145,13 +132,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lib",
         type=str,
-        choices=["mem0-local", "mem0-api", "memos-local", "memos-api", "zep", "memobase"],
+        choices=[
+            "mem0",
+            "mem0_graph",
+            "memos-api",
+            "memos-api-online",
+            "memobase",
+            "memu",
+            "supermemory",
+        ],
+        default="memos-api",
     )
     parser.add_argument(
-        "--version", type=str, default="v1", help="Version of the evaluation framework."
+        "--version", type=str, default="default", help="Version of the evaluation framework."
     )
     parser.add_argument(
-        "--workers", type=int, default=3, help="Number of runs for LLM-as-a-Judge evaluation."
+        "--workers", type=int, default=30, help="Number of runs for LLM-as-a-Judge evaluation."
     )
 
     args = parser.parse_args()

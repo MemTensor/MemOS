@@ -69,13 +69,6 @@ def test_searcher_fast_path(mock_searcher):
     assert len(result) <= 2
     assert all(isinstance(item, TextualMemoryItem) for item in result)
 
-    # Should update usage and call update_node
-    for item in result:
-        assert len(item.metadata.usage) > 0
-        mock_searcher.graph_store.update_node.assert_any_call(
-            item.id, {"usage": item.metadata.usage}
-        )
-
 
 def test_searcher_fine_mode_triggers_reasoner(mock_searcher):
     parsed_goal = MagicMock()

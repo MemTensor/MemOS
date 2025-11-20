@@ -52,56 +52,6 @@ def embed_memory_item(memory: str) -> list[float]:
     return embedding_list
 
 
-def example_multi_db(db_name: str = "paper"):
-    # Step 1: Build factory config
-    config = GraphDBConfigFactory(
-        backend="nebular",
-        config={
-            "uri": json.loads(os.getenv("NEBULAR_HOSTS", "localhost")),
-            "user": os.getenv("NEBULAR_USER", "root"),
-            "password": os.getenv("NEBULAR_PASSWORD", "xxxxxx"),
-            "space": db_name,
-            "use_multi_db": True,
-            "auto_create": True,
-            "embedding_dimension": embedder_dimension,
-        },
-    )
-
-    # Step 2: Instantiate the graph store
-    graph = GraphStoreFactory.from_config(config)
-    graph.clear()
-
-    # Step 3: Create topic node
-    topic = TextualMemoryItem(
-        memory="This research addresses long-term multi-UAV navigation for energy-efficient communication coverage.",
-        metadata=TreeNodeTextualMemoryMetadata(
-            memory_type="LongTermMemory",
-            key="Multi-UAV Long-Term Coverage",
-            hierarchy_level="topic",
-            type="fact",
-            memory_time="2024-01-01",
-            source="file",
-            sources=["paper://multi-uav-coverage/intro"],
-            status="activated",
-            confidence=95.0,
-            tags=["UAV", "coverage", "multi-agent"],
-            entities=["UAV", "coverage", "navigation"],
-            visibility="public",
-            updated_at=datetime.now().isoformat(),
-            embedding=embed_memory_item(
-                "This research addresses long-term "
-                "multi-UAV navigation for "
-                "energy-efficient communication "
-                "coverage."
-            ),
-        ),
-    )
-
-    graph.add_node(
-        id=topic.id, memory=topic.memory, metadata=topic.metadata.model_dump(exclude_none=True)
-    )
-
-
 def example_shared_db(db_name: str = "shared-traval-group"):
     """
     Example: Single(Shared)-DB multi-tenant (logical isolation)
@@ -404,9 +354,6 @@ def example_complex_shared_db(db_name: str = "shared-traval-group-complex"):
 
 
 if __name__ == "__main__":
-    print("\n=== Example: Multi-DB ===")
-    example_multi_db(db_name="paper-new")
-
     print("\n=== Example: Single-DB ===")
     example_shared_db(db_name="shared_traval_group-new")
 

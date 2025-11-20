@@ -66,7 +66,9 @@ def test_add_calls_manager(mock_tree_text_memory):
         metadata=TreeNodeTextualMemoryMetadata(updated_at=None),
     )
     mock_tree_text_memory.add([mock_item])
-    mock_tree_text_memory.memory_manager.add.assert_called_once()
+    mock_tree_text_memory.memory_manager.add.assert_called_once_with(
+        [mock_item], user_name=None, mode="sync"
+    )
 
 
 def test_get_working_memory_sorted(mock_tree_text_memory):
@@ -161,4 +163,6 @@ def test_add_returns_ids(mock_tree_text_memory):
     result = mock_tree_text_memory.add(mock_items)
 
     assert result == dummy_ids
-    mock_tree_text_memory.memory_manager.add.assert_called_once_with(mock_items)
+    mock_tree_text_memory.memory_manager.add.assert_called_once_with(
+        mock_items, user_name=None, mode="sync"
+    )
