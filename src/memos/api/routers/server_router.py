@@ -98,6 +98,7 @@ def add_memories(add_req: APIADDRequest):
 # Scheduler API Endpoints
 # =============================================================================
 
+
 @router.get("/scheduler/status", summary="Get scheduler running status")
 def scheduler_status(user_name: str | None = None):
     """Get scheduler running status."""
