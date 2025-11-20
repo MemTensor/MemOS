@@ -7,6 +7,7 @@ from memos.configs.embedder import EmbedderConfigFactory
 from memos.configs.graph_db import GraphDBConfigFactory
 from memos.configs.internet_retriever import InternetRetrieverConfigFactory
 from memos.configs.llm import LLMConfigFactory
+from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.exceptions import ConfigurationError
@@ -240,7 +241,7 @@ class PreferenceTextMemoryConfig(BaseTextMemoryConfig):
     )
 
 
-class MemFeedbackConfig(BaseTextMemoryConfig):
+class MemFeedbackConfig(BaseMemoryConfig):
     """Memory feedback configuration class."""
 
     extractor_llm: LLMConfigFactory = Field(
@@ -273,6 +274,12 @@ class MemFeedbackConfig(BaseTextMemoryConfig):
             "Maximum item counts per memory bucket, e.g.: "
             '{"WorkingMemory": 20, "LongTermMemory": 10000, "UserMemory": 10000}'
         ),
+    )
+
+    mem_reader: MemReaderConfigFactory = Field(
+        ...,
+        default_factory=MemReaderConfigFactory,
+        description="MemReader configuration for the Feedback",
     )
 
 

@@ -216,7 +216,10 @@ class APIFeedbackRequest(BaseRequest):
     )
     agent_id: str = Field(None, description="Agent ID")
     app_id: str = Field(None, description="App ID")
-    chat_history: list[MessageDict] | None = Field(..., description="Chat history")
+    history: list[MessageDict] | None = Field(..., description="Chat history")
+    retrieved_memory_ids: list[str] | None = Field(
+        None, description="Retrieved memory ids at last turn"
+    )
     feedback_content: str | None = Field(..., description="Feedback content to process")
     feedback_time: str | None = Field(None, description="Feedback time")
     allow_public: bool = Field(

@@ -37,6 +37,7 @@ class HandlerDependencies:
         internet_retriever: Any | None = None,
         memory_manager: Any | None = None,
         mos_server: Any | None = None,
+        feedback_server: Any | None = None,
         **kwargs,
     ):
         """
@@ -68,6 +69,7 @@ class HandlerDependencies:
         self.internet_retriever = internet_retriever
         self.memory_manager = memory_manager
         self.mos_server = mos_server
+        self.feedback_server = feedback_server
 
         # Store any additional dependencies
         for key, value in kwargs.items():
@@ -160,6 +162,11 @@ class BaseHandler:
     def mos_server(self):
         """Get MOS server instance."""
         return self.deps.mos_server
+
+    @property
+    def feedback_server(self):
+        """Get feedback server instance."""
+        return self.deps.feedback_server
 
     def _validate_dependencies(self, *required_deps: str) -> None:
         """

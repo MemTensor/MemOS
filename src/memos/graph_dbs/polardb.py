@@ -524,13 +524,19 @@ class PolarDBGraphDB(BaseGraphDB):
         properties = current_node["metadata"].copy()
         original_id = properties.get("id", id)  # Preserve original ID
         original_memory = current_node.get("memory", "")  # Preserve original memory
+        updated_at = fields.pop("updated_at", datetime.utcnow().isoformat())
+        usage_text = f"User: {user_name} | Time: {updated_at} | Operation: Update | Overwrite： {original_memory}"
+        usage_info = current_node.get("usage", [])  # Preserve usage_info
+        usage_info.insert(0, usage_text)
 
         # If fields include memory, use it; otherwise keep original memory
         new_memory = fields.pop("memory") if "memory" in fields else original_memory
 
         properties.update(fields)
-        properties["id"] = original_id  # Ensure ID is not overwritten
-        properties["memory"] = new_memory  # Ensure memory is not overwritten
+        properties["id"] = original_id
+        properties["memory"] = new_memory
+        properties["usage"] = usage_info
+        properties["updated_at"] = updated_at
 
         # Handle embedding field
         embedding_vector = None
