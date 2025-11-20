@@ -241,7 +241,7 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
         )
 
 
-@router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
+@router.get("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
 def get_memories(memory_req: GetMemoryRequest):
     return handlers.memory_handler.handle_get_memories(
         get_mem_req=memory_req,
