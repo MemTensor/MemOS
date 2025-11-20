@@ -117,7 +117,11 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    vector_db = VecDBFactory.from_config(vector_db_config)
+    vector_db = (
+        VecDBFactory.from_config(vector_db_config)
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
+    )
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
     mem_reader = MemReaderFactory.from_config(mem_reader_config)
@@ -154,40 +158,56 @@ def init_server() -> dict[str, Any]:
     logger.debug("Text memory initialized")
 
     # Initialize preference memory components
-    pref_extractor = ExtractorFactory.from_config(
-        config_factory=pref_extractor_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
+    pref_extractor = (
+        ExtractorFactory.from_config(
+            config_factory=pref_extractor_config,
+            llm_provider=llm,
+            embedder=embedder,
+            vector_db=vector_db,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
-    pref_adder = AdderFactory.from_config(
-        config_factory=pref_adder_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
-        text_mem=text_mem,
+    pref_adder = (
+        AdderFactory.from_config(
+            config_factory=pref_adder_config,
+            llm_provider=llm,
+            embedder=embedder,
+            vector_db=vector_db,
+            text_mem=text_mem,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
-    pref_retriever = RetrieverFactory.from_config(
-        config_factory=pref_retriever_config,
-        llm_provider=llm,
-        embedder=embedder,
-        reranker=reranker,
-        vector_db=vector_db,
+    pref_retriever = (
+        RetrieverFactory.from_config(
+            config_factory=pref_retriever_config,
+            llm_provider=llm,
+            embedder=embedder,
+            reranker=reranker,
+            vector_db=vector_db,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
     logger.debug("Preference memory components initialized")
 
     # Initialize preference memory
-    pref_mem = SimplePreferenceTextMemory(
-        extractor_llm=llm,
-        vector_db=vector_db,
-        embedder=embedder,
-        reranker=reranker,
-        extractor=pref_extractor,
-        adder=pref_adder,
-        retriever=pref_retriever,
+    pref_mem = (
+        SimplePreferenceTextMemory(
+            extractor_llm=llm,
+            vector_db=vector_db,
+            embedder=embedder,
+            reranker=reranker,
+            extractor=pref_extractor,
+            adder=pref_adder,
+            retriever=pref_retriever,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
     logger.debug("Preference memory initialized")
