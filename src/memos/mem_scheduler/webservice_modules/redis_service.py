@@ -333,6 +333,15 @@ class RedisSchedulerModule(BaseSchedulerModule):
             logger.warning("Listener is already running")
             return
 
+        # Check Redis connection before starting listener
+        if self.redis is None:
+            logger.warning(
+                "Redis connection is None, attempting to auto-initialize before starting listener..."
+            )
+            if not self.auto_initialize_redis():
+                logger.error("Failed to initialize Redis connection, cannot start listener")
+                return
+
         if handler is None:
             handler = self.redis_consume_message_stream
 

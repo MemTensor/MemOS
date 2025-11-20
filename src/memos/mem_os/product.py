@@ -637,12 +637,11 @@ class MOSProduct(MOSCore):
             message_item = ScheduleMessageItem(
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=self.mem_cubes[mem_cube_id],
                 label=label,
                 content=query,
                 timestamp=datetime.utcnow(),
             )
-            self.mem_scheduler.submit_messages(messages=[message_item])
+            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
 
     async def _post_chat_processing(
         self,

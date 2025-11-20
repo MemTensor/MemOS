@@ -205,7 +205,6 @@ class MOS(MOSCore):
             # Step 7: Submit message to scheduler (same as core method)
             if len(accessible_cubes) == 1:
                 mem_cube_id = accessible_cubes[0].cube_id
-                mem_cube = self.mem_cubes[mem_cube_id]
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
                     from datetime import datetime
 
@@ -217,12 +216,11 @@ class MOS(MOSCore):
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
                         label=ANSWER_LABEL,
                         content=enhanced_response,
                         timestamp=datetime.now().isoformat(),
                     )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
+                    self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
 
             return enhanced_response
 

@@ -29,7 +29,7 @@ from memos.mem_scheduler.schemas.monitor_schemas import (
     QueryMonitorQueue,
 )
 from memos.mem_scheduler.utils.db_utils import get_utc_now
-from memos.mem_scheduler.utils.misc_utils import extract_json_dict
+from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -92,7 +92,7 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         llm_response = self._process_llm.generate([{"role": "user", "content": prompt}])
         try:
             # Parse JSON output from LLM response
-            keywords = extract_json_dict(llm_response)
+            keywords = extract_json_obj(llm_response)
             assert isinstance(keywords, list)
         except Exception as e:
             logger.error(
@@ -206,7 +206,7 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         self.working_mem_monitor_capacity = min(
             DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
             (
-                text_mem_base.memory_manager.memory_size["WorkingMemory"]
+                int(text_mem_base.memory_manager.memory_size["WorkingMemory"])
                 + self.partial_retention_number
             ),
         )
@@ -353,7 +353,7 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         )
         response = self._process_llm.generate([{"role": "user", "content": prompt}])
         try:
-            response = extract_json_dict(response)
+            response = extract_json_obj(response)
             assert ("trigger_retrieval" in response) and ("missing_evidences" in response)
         except Exception:
             logger.error(f"Fail to extract json dict from response: {response}")

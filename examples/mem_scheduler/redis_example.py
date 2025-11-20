@@ -22,7 +22,7 @@ BASE_DIR = FILE_PATH.parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
 
 
-async def service_run():
+def service_run():
     # Init
     example_scheduler_config_path = (
         f"{BASE_DIR}/examples/data/config/mem_scheduler/general_scheduler_config.yaml"
@@ -60,11 +60,11 @@ async def service_run():
             content=query,
             timestamp=datetime.now(),
         )
-        res = await mem_scheduler.redis_add_message_stream(message=message_item.to_dict())
+        res = mem_scheduler.redis_add_message_stream(message=message_item.to_dict())
         print(
             f"Added: {res}",
         )
-        await asyncio.sleep(0.5)
+        asyncio.sleep(0.5)
 
     mem_scheduler.redis_stop_listening()
 
@@ -72,4 +72,4 @@ async def service_run():
 
 
 if __name__ == "__main__":
-    asyncio.run(service_run())
+    service_run()
