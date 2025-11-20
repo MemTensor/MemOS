@@ -82,7 +82,7 @@ def _truncate_with_rules(text: str) -> str:
     normalized = text.strip().replace("\n", " ")
     if len(normalized) <= limit:
         return normalized
-    return normalized[: limit - 1] + "… 查看详情"
+    return normalized[:limit] + "..."
 
 
 def _format_title(ts: datetime, title_text: str) -> str:
@@ -95,14 +95,14 @@ def _cube_display_from(mem_cube_id: str) -> str:
     return "UserMemCube"
 
 
-_TYPE_ZH = {
-    "LongTermMemory": "长期",
-    "UserMemory": "用户",
-    "WorkingMemory": "工作",
-    "ActivationMemory": "激活",
-    "ParameterMemory": "参数",
-    "TextMemory": "明文",
-    "UserInput": "消息",
+_TYPE_SHORT = {
+    "LongTermMemory": "LTM",
+    "UserMemory": "User",
+    "WorkingMemory": "Working",
+    "ActivationMemory": "Activation",
+    "ParameterMemory": "Parameter",
+    "TextMemory": "Text",
+    "UserInput": "Input",
     "NotApplicable": "NA",
 }
 
@@ -121,43 +121,43 @@ def _format_entry(item: ScheduleLogForWebItem) -> tuple[str, str]:
 
     if label in ("addMessage", QUERY_LABEL, ANSWER_LABEL):
         target_cube = cube_display.replace("MemCube", "")
-        title = _format_title(item.timestamp, f"addMessages至{target_cube} MemCube")
+        title = _format_title(item.timestamp, f"addMessages to {target_cube} MemCube")
         return title, _truncate_with_rules(_first_content())
 
     if label in ("addMemory", ADD_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display}新增了{memory_len}条记忆")
+        title = _format_title(item.timestamp, f"{cube_display} added {memory_len} memories")
         return title, _truncate_with_rules(_first_content())
 
     if label in ("updateMemory", MEM_UPDATE_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display}更新了{memory_len}条记忆")
+        title = _format_title(item.timestamp, f"{cube_display} updated {memory_len} memories")
         return title, _truncate_with_rules(_first_content())
 
     if label in ("archiveMemory", MEM_ARCHIVE_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display}归档了{memory_len}条记忆")
+        title = _format_title(item.timestamp, f"{cube_display} archived {memory_len} memories")
         return title, _truncate_with_rules(_first_content())
 
     if label in ("mergeMemory", MEM_ORGANIZE_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display}合并了{memory_len}条记忆")
+        title = _format_title(item.timestamp, f"{cube_display} merged {memory_len} memories")
         merged = [c for c in memcube_content if c.get("type") == "merged"]
         post = [c for c in memcube_content if c.get("type") == "postMerge"]
         parts = []
         if merged:
-            parts.append("被合并的记忆： " + " | ".join(c.get("content", "") for c in merged))
+            parts.append("Merged: " + " | ".join(c.get("content", "") for c in merged))
         if post:
-            parts.append("合并后的记忆： " + " | ".join(c.get("content", "") for c in post))
+            parts.append("Result: " + " | ".join(c.get("content", "") for c in post))
         detail = " ".join(parts) if parts else _first_content()
         return title, _truncate_with_rules(detail)
 
     if label == "scheduleMemory":
-        title = _format_title(item.timestamp, f"{cube_display}调度了{memory_len}条记忆")
+        title = _format_title(item.timestamp, f"{cube_display} scheduled {memory_len} memories")
         if memcube_content:
             return title, _truncate_with_rules(memcube_content[0].get("content", ""))
         key = transform_name_to_key(content)
-        from_zh = _TYPE_ZH.get(item.from_memory_type, item.from_memory_type)
-        to_zh = _TYPE_ZH.get(item.to_memory_type, item.to_memory_type)
-        return title, _truncate_with_rules(f"[{from_zh}→{to_zh}] {key}：{content}")
+        from_short = _TYPE_SHORT.get(item.from_memory_type, item.from_memory_type)
+        to_short = _TYPE_SHORT.get(item.to_memory_type, item.to_memory_type)
+        return title, _truncate_with_rules(f"[{from_short}→{to_short}] {key}: {content}")
 
-    title = _format_title(item.timestamp, f"{cube_display}事件")
+    title = _format_title(item.timestamp, f"{cube_display} event")
     return title, _truncate_with_rules(_first_content())
 
 

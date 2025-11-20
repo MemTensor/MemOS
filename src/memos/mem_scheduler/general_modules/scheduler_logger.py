@@ -161,7 +161,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             key_name = getattr(itm.metadata, "key", None) or itm.memory
             k = transform_name_to_key(name=key_name)
             memcube_content.append(
-                {"content": f"[{itm.metadata.memory_type}→{WORKING_MEMORY_TYPE}] {k}：{itm.memory}", "ref_id": itm.id}
+                {"content": f"[{itm.metadata.memory_type}→{WORKING_MEMORY_TYPE}] {k}: {itm.memory}", "ref_id": itm.id}
             )
             meta.append(
                 {
@@ -213,7 +213,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             key = transform_name_to_key(mem)
             ref_id = f"actparam-{hashlib.md5(mem.encode()).hexdigest()}"
             memcube_content.append(
-                {"content": f"[{ACTIVATION_MEMORY_TYPE}→{PARAMETER_MEMORY_TYPE}] {key}：{mem}", "ref_id": ref_id}
+                {"content": f"[{ACTIVATION_MEMORY_TYPE}→{PARAMETER_MEMORY_TYPE}] {key}: {mem}", "ref_id": ref_id}
             )
             meta.append(
                 {

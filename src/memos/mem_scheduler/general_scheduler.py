@@ -294,7 +294,7 @@ class GeneralScheduler(BaseScheduler):
                             except Exception:
                                 exists = False
 
-                            payload = {"content": f"{key}：{mem_item.memory}", "ref_id": mem_item.id}
+                            payload = {"content": f"{key}: {mem_item.memory}", "ref_id": mem_item.id}
                             meta_dict = {
                                 "ref_id": mem_item.id,
                                 "id": mem_item.id,
