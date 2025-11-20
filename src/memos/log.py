@@ -34,12 +34,11 @@ def _setup_logfile() -> Path:
 
     Returns: the logfile Path
     """
-    today_str = time.strftime("%Y-%m-%d", time.localtime())
-    today_file_name = f"{today_str}.memos.log"
-    today_file = Path(settings.MEMOS_DIR / "logs" / today_file_name)
-    today_file.parent.mkdir(parents=True, exist_ok=True)
+    logfile = Path(settings.MEMOS_DIR / "logs" / "memos.log")
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    logfile.touch(exist_ok=True)
 
-    return today_file
+    return logfile
 
 
 class ContextFilter(logging.Filter):
