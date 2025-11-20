@@ -217,12 +217,7 @@ class MetricsRegistry:
             ls.last_done_ts = now
             if ls.backlog > 0:
                 ls.backlog -= 1
-            old_mu = ls.mu_ewma.value_at(now)
             ls.mu_ewma.update(inst_rate, now)
-            new_mu = ls.mu_ewma.value_at(now)
-            print(
-                f"[DEBUG done] {label} backlog={ls.backlog} dt={dt if dt is not None else '—'}s inst={inst_rate:.3f} μ {old_mu:.3f}→{new_mu:.3f}"
-            )
             ds = self._detail_stats.get((label, mem_cube_id))
             if ds:
                 prev_ts_d = ds.last_done_ts

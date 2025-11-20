@@ -104,15 +104,6 @@ class GraphMemoryRetriever:
         # Merge and deduplicate by ID
         combined = {item.id: item for item in graph_results + vector_results + bm25_results}
 
-        graph_ids = {item.id for item in graph_results}
-        combined_ids = set(combined.keys())
-        lost_ids = graph_ids - combined_ids
-
-        if lost_ids:
-            print(
-                f"[DEBUG] The following nodes were in graph_results but missing in combined: {lost_ids}"
-            )
-
         return list(combined.values())
 
     def retrieve_from_cube(
@@ -149,15 +140,6 @@ class GraphMemoryRetriever:
             result_i.metadata.memory_type = "OuterMemory"
         # Merge and deduplicate by ID
         combined = {item.id: item for item in graph_results}
-
-        graph_ids = {item.id for item in graph_results}
-        combined_ids = set(combined.keys())
-        lost_ids = graph_ids - combined_ids
-
-        if lost_ids:
-            print(
-                f"[DEBUG] The following nodes were in graph_results but missing in combined: {lost_ids}"
-            )
 
         return list(combined.values())
 
