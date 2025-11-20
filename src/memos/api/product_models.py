@@ -73,6 +73,7 @@ class ChatRequest(BaseRequest):
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     internet_search: bool = Field(True, description="Whether to use internet search")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")

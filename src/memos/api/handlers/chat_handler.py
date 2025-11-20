@@ -7,6 +7,7 @@ consolidating all chat-related logic without depending on mos_server.
 
 import asyncio
 import json
+import re
 import traceback
 
 from collections.abc import Generator
@@ -149,19 +150,20 @@ class ChatHandler(BaseHandler):
             self.logger.info("Starting to generate complete response...")
 
             # Step 3: Generate complete response from LLM
-            response = self.llm.generate(current_messages)
-
-            # Step 4: start add after chat asynchronously
-            self._start_add_to_memory(
-                user_id=chat_req.user_id,
-                cube_id=chat_req.mem_cube_id,
-                session_id=chat_req.session_id or "default_session",
-                query=chat_req.query,
-                full_response=response,
-                async_mode="async",
+            response = self.llm.generate(
+                current_messages, model_name_or_path=chat_req.model_name_or_path
             )
 
-            import re
+            # Step 4: start add after chat asynchronously
+            if chat_req.add_message_on_answer:
+                self._start_add_to_memory(
+                    user_id=chat_req.user_id,
+                    cube_id=chat_req.mem_cube_id,
+                    session_id=chat_req.session_id or "default_session",
+                    query=chat_req.query,
+                    full_response=response,
+                    async_mode="async",
+                )
 
             match = re.search(r"<think>([\s\S]*?)</think>", response)
             reasoning_text = match.group(1) if match else None
@@ -253,7 +255,9 @@ class ChatHandler(BaseHandler):
                     )
 
                     # Step 3: Generate streaming response from LLM
-                    response_stream = self.llm.generate_stream(current_messages)
+                    response_stream = self.llm.generate_stream(
+                        current_messages, chat_req.model_name_or_path
+                    )
 
                     # Stream the response
                     buffer = ""
