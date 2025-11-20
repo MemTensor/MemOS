@@ -1,11 +1,11 @@
 import concurrent.futures
+import contextlib
 import json
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
-from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -17,13 +17,19 @@ from memos.mem_scheduler.schemas.general_schemas import (
     PREF_ADD_LABEL,
     QUERY_LABEL,
     WORKING_MEMORY_TYPE,
+    USER_INPUT_TYPE,
+    NOT_APPLICABLE_TYPE,
+    LONG_TERM_MEMORY_TYPE,
     MemCubeID,
     UserID,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
-from memos.mem_scheduler.utils.filter_utils import is_all_chinese, is_all_english
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
+from memos.mem_scheduler.utils.filter_utils import (
+    is_all_chinese,
+    is_all_english,
+    transform_name_to_key,
+)
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.preference import PreferenceTextMemory
 from memos.memories.textual.tree import TreeTextMemory
@@ -139,7 +145,7 @@ class GeneralScheduler(BaseScheduler):
                 label=QUERY_LABEL,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=self.mem_cube,
+                mem_cube=self.current_mem_cube,
             )
 
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
@@ -151,18 +157,40 @@ class GeneralScheduler(BaseScheduler):
         """
         logger.info(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
 
-        # Process the query in a session turn
-        grouped_messages = group_messages_by_user_and_mem_cube(messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=QUERY_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
-                messages = grouped_messages[user_id][mem_cube_id]
-                if len(messages) == 0:
-                    return
+                batch = grouped_messages[user_id][mem_cube_id]
+                if not batch:
+                    continue
+                try:
+                    for msg in batch:
+                        event = self.create_event_log(
+                            label="addMessage",
+                            from_memory_type=USER_INPUT_TYPE,
+                            to_memory_type=NOT_APPLICABLE_TYPE,
+                            user_id=msg.user_id,
+                            mem_cube_id=msg.mem_cube_id,
+                            mem_cube=self.current_mem_cube,
+                            memcube_log_content=[
+                                {
+                                    "content": f"[User] {msg.content}",
+                                    "ref_id": msg.item_id,
+                                    "role": "user",
+                                }
+                            ],
+                            metadata=[],
+                            memory_len=1,
+                            memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                        )
+                        self._submit_web_logs([event])
+                except Exception:
+                    logger.exception("Failed to record addMessage log for query")
                 self.long_memory_update_process(
-                    user_id=user_id, mem_cube_id=mem_cube_id, messages=messages
+                    user_id=user_id, mem_cube_id=mem_cube_id, messages=batch
                 )
 
     def _answer_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
@@ -173,63 +201,152 @@ class GeneralScheduler(BaseScheduler):
           messages: List of answer messages to process
         """
         logger.info(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
-        # Process the query in a session turn
-        grouped_messages = group_messages_by_user_and_mem_cube(messages)
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ANSWER_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
-                messages = grouped_messages[user_id][mem_cube_id]
-                if len(messages) == 0:
-                    return
+                batch = grouped_messages[user_id][mem_cube_id]
+                if not batch:
+                    continue
+                try:
+                    for msg in batch:
+                        event = self.create_event_log(
+                            label="addMessage",
+                            from_memory_type=USER_INPUT_TYPE,
+                            to_memory_type=NOT_APPLICABLE_TYPE,
+                            user_id=msg.user_id,
+                            mem_cube_id=msg.mem_cube_id,
+                            mem_cube=self.current_mem_cube,
+                            memcube_log_content=[
+                                {
+                                    "content": f"[Assistant] {msg.content}",
+                                    "ref_id": msg.item_id,
+                                    "role": "assistant",
+                                }
+                            ],
+                            metadata=[],
+                            memory_len=1,
+                            memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                        )
+                        self._submit_web_logs([event])
+                except Exception:
+                    logger.exception("Failed to record addMessage log for answer")
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
-        grouped_messages = group_messages_by_user_and_mem_cube(messages)
-        mem_cube = self.mem_cube
+        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
         try:
             for user_id in grouped_messages:
                 for mem_cube_id in grouped_messages[user_id]:
-                    messages = grouped_messages[user_id][mem_cube_id]
-                    if len(messages) == 0:
-                        return
+                    batch = grouped_messages[user_id][mem_cube_id]
+                    if not batch:
+                        continue
 
-                    # submit logs
-                    for msg in messages:
+                    for msg in batch:
                         try:
                             userinput_memory_ids = json.loads(msg.content)
                         except Exception as e:
                             logger.error(f"Error: {e}. Content: {msg.content}", exc_info=True)
                             userinput_memory_ids = []
 
+                        mem_items: list[TextualMemoryItem] = []
                         for memory_id in userinput_memory_ids:
                             try:
-                                mem_item: TextualMemoryItem = mem_cube.text_mem.get(
+                                mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
                                     memory_id=memory_id
                                 )
+                                mem_items.append(mem_item)
                             except Exception:
                                 logger.warning(
                                     f"This MemoryItem {memory_id} has already been deleted."
                                 )
                                 continue
-                            mem_type = mem_item.metadata.memory_type
-                            mem_content = mem_item.memory
-
-                            if mem_type == WORKING_MEMORY_TYPE:
+                        add_content: list[dict] = []
+                        add_meta: list[dict] = []
+                        update_content: list[dict] = []
+                        update_meta: list[dict] = []
+                        for mem_item in mem_items:
+                            if mem_item.metadata.memory_type == WORKING_MEMORY_TYPE:
                                 continue
-
-                            self.log_adding_memory(
-                                memory=mem_content,
-                                memory_type=mem_type,
-                                user_id=msg.user_id,
-                                mem_cube_id=msg.mem_cube_id,
-                                mem_cube=self.mem_cube,
-                                log_func_callback=self._submit_web_logs,
+                            key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
+                                name=mem_item.memory
                             )
+                            exists = False
+                            try:
+                                text_mem = self.current_mem_cube.text_mem
+                                if key and hasattr(text_mem, "graph_store"):
+                                    candidates = text_mem.graph_store.get_by_metadata(
+                                        [
+                                            {"field": "memory", "op": "=", "value": key},
+                                            {
+                                                "field": "memory_type",
+                                                "op": "=",
+                                                "value": mem_item.metadata.memory_type,
+                                            },
+                                        ]
+                                    )
+                                    exists = bool(candidates)
+                            except Exception:
+                                exists = False
+
+                            payload = {"content": f"{key}：{mem_item.memory}", "ref_id": mem_item.id}
+                            meta_dict = {
+                                "ref_id": mem_item.id,
+                                "id": mem_item.id,
+                                "key": mem_item.metadata.key,
+                                "memory": mem_item.memory,
+                                "memory_type": mem_item.metadata.memory_type,
+                                "status": mem_item.metadata.status,
+                                "confidence": mem_item.metadata.confidence,
+                                "tags": mem_item.metadata.tags,
+                                "updated_at": getattr(mem_item.metadata, "updated_at", None)
+                                or getattr(mem_item.metadata, "update_at", None),
+                            }
+                            if exists:
+                                update_content.append(payload)
+                                update_meta.append(meta_dict)
+                            else:
+                                add_content.append(payload)
+                                add_meta.append(meta_dict)
+
+                        events = []
+                        if add_content:
+                            events.append(
+                                self.create_event_log(
+                                    label="addMemory",
+                                    from_memory_type=USER_INPUT_TYPE,
+                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
+                                    user_id=msg.user_id,
+                                    mem_cube_id=msg.mem_cube_id,
+                                    mem_cube=self.current_mem_cube,
+                                    memcube_log_content=add_content,
+                                    metadata=add_meta,
+                                    memory_len=len(add_content),
+                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                                )
+                            )
+                        if update_content:
+                            events.append(
+                                self.create_event_log(
+                                    label="updateMemory",
+                                    from_memory_type=LONG_TERM_MEMORY_TYPE,
+                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
+                                    user_id=msg.user_id,
+                                    mem_cube_id=msg.mem_cube_id,
+                                    mem_cube=self.current_mem_cube,
+                                    memcube_log_content=update_content,
+                                    metadata=update_meta,
+                                    memory_len=len(update_content),
+                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                                )
+                            )
+                        if events:
+                            self._submit_web_logs(events)
 
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
@@ -241,7 +358,7 @@ class GeneralScheduler(BaseScheduler):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
-                mem_cube = self.mem_cube
+                mem_cube = self.current_mem_cube
                 content = message.content
                 user_name = message.user_name
 
@@ -402,7 +519,7 @@ class GeneralScheduler(BaseScheduler):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
-                mem_cube = self.mem_cube
+                mem_cube = self.current_mem_cube
                 content = message.content
                 user_name = message.user_name
 
@@ -431,6 +548,124 @@ class GeneralScheduler(BaseScheduler):
                     user_name=user_name,
                 )
 
+                with contextlib.suppress(Exception):
+                    mem_items: list[TextualMemoryItem] = []
+                    for mid in mem_ids:
+                        with contextlib.suppress(Exception):
+                            mem_items.append(text_mem.get(mid))
+                    if len(mem_items) > 1:
+                        keys: list[str] = []
+                        memcube_content: list[dict] = []
+                        meta: list[dict] = []
+                        merged_target_ids: set[str] = set()
+                        with contextlib.suppress(Exception):
+                            if hasattr(text_mem, "graph_store"):
+                                for mid in mem_ids:
+                                    edges = text_mem.graph_store.get_edges(
+                                        mid, type="MERGED_TO", direction="OUT"
+                                    )
+                                    for edge in edges:
+                                        target = edge.get("to") or edge.get("dst") or edge.get("target")
+                                        if target:
+                                            merged_target_ids.add(target)
+                        for item in mem_items:
+                            key = getattr(getattr(item, "metadata", {}), "key", None) or transform_name_to_key(
+                                getattr(item, "memory", "")
+                            )
+                            keys.append(key)
+                            memcube_content.append(
+                                {"content": key or "(no key)", "ref_id": item.id, "type": "merged"}
+                            )
+                            meta.append(
+                                {
+                                    "ref_id": item.id,
+                                    "id": item.id,
+                                    "key": key,
+                                    "memory": item.memory,
+                                    "memory_type": item.metadata.memory_type,
+                                    "status": item.metadata.status,
+                                    "confidence": item.metadata.confidence,
+                                    "tags": item.metadata.tags,
+                                    "updated_at": getattr(item.metadata, "updated_at", None)
+                                    or getattr(item.metadata, "update_at", None),
+                                }
+                            )
+                        combined_key = keys[0] if keys else ""
+                        post_ref_id = None
+                        post_meta = {
+                            "ref_id": None,
+                            "id": None,
+                            "key": None,
+                            "memory": None,
+                            "memory_type": None,
+                            "status": None,
+                            "confidence": None,
+                            "tags": None,
+                            "updated_at": None,
+                        }
+                        if merged_target_ids:
+                            post_ref_id = list(merged_target_ids)[0]
+                            with contextlib.suppress(Exception):
+                                merged_item = text_mem.get(post_ref_id)
+                                combined_key = getattr(
+                                    getattr(merged_item, "metadata", {}), "key", None
+                                ) or combined_key
+                                post_meta = {
+                                    "ref_id": post_ref_id,
+                                    "id": post_ref_id,
+                                    "key": getattr(
+                                        getattr(merged_item, "metadata", {}), "key", None
+                                    ),
+                                    "memory": getattr(merged_item, "memory", None),
+                                    "memory_type": getattr(
+                                        getattr(merged_item, "metadata", {}), "memory_type", None
+                                    ),
+                                    "status": getattr(
+                                        getattr(merged_item, "metadata", {}), "status", None
+                                    ),
+                                    "confidence": getattr(
+                                        getattr(merged_item, "metadata", {}), "confidence", None
+                                    ),
+                                    "tags": getattr(getattr(merged_item, "metadata", {}), "tags", None),
+                                    "updated_at": getattr(
+                                        getattr(merged_item, "metadata", {}), "updated_at", None
+                                    )
+                                    or getattr(
+                                        getattr(merged_item, "metadata", {}), "update_at", None
+                                    ),
+                                }
+                        if not post_ref_id:
+                            import hashlib
+
+                            post_ref_id = f"merge-{hashlib.md5(''.join(sorted(mem_ids)).encode()).hexdigest()}"
+                            post_meta["ref_id"] = post_ref_id
+                            post_meta["id"] = post_ref_id
+                        if not post_meta.get("key"):
+                            post_meta["key"] = combined_key
+                        if not keys:
+                            keys = [item.id for item in mem_items]
+                        memcube_content.append(
+                            {
+                                "content": combined_key if combined_key else "(no key)",
+                                "ref_id": post_ref_id,
+                                "type": "postMerge",
+                            }
+                        )
+                        meta.append(post_meta)
+                        event = self.create_event_log(
+                            label="mergeMemory",
+                            from_memory_type=LONG_TERM_MEMORY_TYPE,
+                            to_memory_type=LONG_TERM_MEMORY_TYPE,
+                            user_id=user_id,
+                            mem_cube_id=mem_cube_id,
+                            mem_cube=mem_cube,
+                            memcube_log_content=memcube_content,
+                            metadata=meta,
+                            memory_len=len(keys),
+                            memcube_name=self._map_memcube_name(mem_cube_id),
+                        )
+                        self._submit_web_logs([event])
+
                 logger.info(
                     f"Successfully processed mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}"
                 )
@@ -451,7 +686,7 @@ class GeneralScheduler(BaseScheduler):
         mem_ids: list[str],
         user_id: str,
         mem_cube_id: str,
-        mem_cube: BaseMemCube,
+        mem_cube: GeneralMemCube,
         text_mem: TreeTextMemory,
         user_name: str,
     ) -> None:
@@ -503,7 +738,7 @@ class GeneralScheduler(BaseScheduler):
 
         def process_message(message: ScheduleMessageItem):
             try:
-                mem_cube = self.mem_cube
+                mem_cube = self.current_mem_cube
 
                 user_id = message.user_id
                 session_id = message.session_id
