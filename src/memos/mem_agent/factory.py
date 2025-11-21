@@ -1,4 +1,4 @@
-from typing import Optional, Any, ClassVar
+from typing import Any, ClassVar
 
 from memos.configs.mem_agent import MemAgentConfigFactory
 from memos.mem_agent.base import BaseMemAgent
@@ -14,7 +14,7 @@ class MemAgentFactory:
 
     @classmethod
     def from_config(
-        cls, config_factory: MemAgentConfigFactory, llm: Any, memory_retriever: Optional[Any] = None
+        cls, config_factory: MemAgentConfigFactory, llm: Any, memory_retriever: Any | None = None
     ) -> BaseMemAgent:
         """
         Create a MemAgent instance from configuration.

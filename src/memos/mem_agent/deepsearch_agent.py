@@ -7,7 +7,7 @@ query refinement and memory retrieval to provide comprehensive answers.
 
 import json
 
-from typing import Optional, Any
+from typing import TYPE_CHECKING, Any
 
 from memos.configs.mem_agent import DeepSearchAgentConfig
 from memos.llms.base import BaseLLM
@@ -19,7 +19,10 @@ from memos.templates.mem_agent_prompts import (
     QUERY_REWRITE_PROMPT,
     REFLECTION_PROMPT,
 )
-from memos.types import MessageList
+
+
+if TYPE_CHECKING:
+    from memos.types import MessageList
 
 
 logger = get_logger(__name__)
@@ -120,7 +123,7 @@ class DeepSearchMemAgent(BaseMemAgent):
     def __init__(
         self,
         llm: BaseLLM,
-        memory_retriever: Optional[Any] = None,
+        memory_retriever: Any | None = None,
         config: DeepSearchAgentConfig | None = None,
     ):
         """
@@ -220,7 +223,11 @@ class DeepSearchMemAgent(BaseMemAgent):
         return final_answer
 
     def _perform_memory_search(
-        self, query: str, keywords: Optional[list[str]] = None, user_id: Optional[str] = None, top_k: int = 10
+        self,
+        query: str,
+        keywords: list[str] | None = None,
+        user_id: str | None = None,
+        top_k: int = 10,
     ) -> list[TextualMemoryItem]:
         """
         Perform memory search using the configured retriever.

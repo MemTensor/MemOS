@@ -328,9 +328,6 @@ def main():
         # Run Example 1: Factory pattern
         agent_factory, components_factory = example_1_factory_initialization()
 
-        # Run Example 2: Direct initialization
-        agent_direct, components_direct = example_2_direct_initialization()
-
         # Run Example 4: Minimal initialization
         agent_minimal, components_minimal = example_4_minimal_initialization()
 

@@ -48,7 +48,7 @@ class MemAgentConfigFactory(BaseConfig):
         return backend
 
     @model_validator(mode="after")
-    def create_config(self) -> "AgentConfigFactory":
+    def create_config(self) -> "MemAgentConfigFactory":
         config_class = self.backend_to_class[self.backend]
         self.config = config_class(**self.config)
         return self
