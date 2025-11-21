@@ -271,7 +271,6 @@ def init_server() -> dict[str, Any]:
     tree_mem: TreeTextMemory = naive_mem_cube.text_mem
     searcher: Searcher = tree_mem.get_searcher(
         manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-        moscube=False,
     )
     logger.debug("Searcher created")
 

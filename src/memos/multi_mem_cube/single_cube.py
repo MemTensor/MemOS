@@ -232,7 +232,6 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
             search_filter=search_filter,
             info={
                 "user_id": search_req.user_id,
@@ -287,7 +286,6 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             mode=SearchMode.FINE,
             manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
             search_filter=search_filter,
             info=info,
         )
