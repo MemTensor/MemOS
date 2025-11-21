@@ -22,7 +22,9 @@ logger = get_logger(__name__)
 class OpenAIResponsesLLM(BaseLLM):
     def __init__(self, config: OpenAILLMConfig):
         self.config = config
-        self.client = openai.Client(api_key=config.api_key, base_url=config.api_base)
+        self.client = openai.Client(
+            api_key=config.api_key, base_url=config.api_base, default_headers=config.default_headers
+        )
 
     @timed(log=True, log_prefix="OpenAI Responses LLM")
     def generate(self, messages: MessageList, **kwargs) -> str:

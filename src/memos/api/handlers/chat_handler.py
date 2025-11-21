@@ -53,6 +53,7 @@ class ChatHandler(BaseHandler):
     def __init__(
         self,
         dependencies: HandlerDependencies,
+        chat_llms: dict[str, Any],
         search_handler=None,
         add_handler=None,
         online_bot=None,
@@ -62,6 +63,7 @@ class ChatHandler(BaseHandler):
 
         Args:
             dependencies: HandlerDependencies instance
+            chat_llms: Dictionary mapping model names to LLM instances
             search_handler: Optional SearchHandler instance (created if not provided)
             add_handler: Optional AddHandler instance (created if not provided)
             online_bot: Optional DingDing bot function for notifications
@@ -80,6 +82,7 @@ class ChatHandler(BaseHandler):
 
             add_handler = AddHandler(dependencies)
 
+        self.chat_llms = chat_llms
         self.search_handler = search_handler
         self.add_handler = add_handler
         self.online_bot = online_bot
@@ -150,9 +153,12 @@ class ChatHandler(BaseHandler):
             self.logger.info("Starting to generate complete response...")
 
             # Step 3: Generate complete response from LLM
-            response = self.llm.generate(
-                current_messages, model_name_or_path=chat_req.model_name_or_path
-            )
+            if chat_req.model_name_or_path and chat_req.model_name_or_path not in self.chat_llms:
+                return {
+                    "message": f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}"
+                }
+            model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+            response = self.chat_llms[model].generate(current_messages, model_name_or_path=model)
 
             # Step 4: start add after chat asynchronously
             if chat_req.add_message_on_answer:
@@ -255,8 +261,16 @@ class ChatHandler(BaseHandler):
                     )
 
                     # Step 3: Generate streaming response from LLM
-                    response_stream = self.llm.generate_stream(
-                        current_messages, chat_req.model_name_or_path
+                    if (
+                        chat_req.model_name_or_path
+                        and chat_req.model_name_or_path not in self.chat_llms
+                    ):
+                        return {
+                            "message": f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}"
+                        }
+                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    response_stream = self.chat_llms[model].generate_stream(
+                        current_messages, model_name_or_path=model
                     )
 
                     # Stream the response
@@ -284,15 +298,15 @@ class ChatHandler(BaseHandler):
                         yield chunk_data
 
                     current_messages.append({"role": "assistant", "content": full_response})
-
-                    self._start_add_to_memory(
-                        user_id=chat_req.user_id,
-                        cube_id=chat_req.mem_cube_id,
-                        session_id=chat_req.session_id or "default_session",
-                        query=chat_req.query,
-                        full_response=full_response,
-                        async_mode="async",
-                    )
+                    if chat_req.add_message_on_answer:
+                        self._start_add_to_memory(
+                            user_id=chat_req.user_id,
+                            cube_id=chat_req.mem_cube_id,
+                            session_id=chat_req.session_id or "default_session",
+                            query=chat_req.query,
+                            full_response=full_response,
+                            async_mode="async",
+                        )
 
                 except Exception as e:
                     self.logger.error(f"Error in chat stream: {e}", exc_info=True)
@@ -410,7 +424,17 @@ class ChatHandler(BaseHandler):
                     yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
 
                     # Step 3: Generate streaming response from LLM
-                    response_stream = self.llm.generate_stream(current_messages)
+                    if (
+                        chat_req.model_name_or_path
+                        and chat_req.model_name_or_path not in self.chat_llms
+                    ):
+                        return {
+                            "message": f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}"
+                        }
+                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    response_stream = self.chat_llms[model].generate_stream(
+                        current_messages, model_name_or_path=model
+                    )
 
                     # Stream the response
                     buffer = ""

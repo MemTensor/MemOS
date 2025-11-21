@@ -34,7 +34,9 @@ class VLLMLLM(BaseLLM):
             api_key = "dummy"
 
         self.client = openai.Client(
-            api_key=api_key, base_url=getattr(self.config, "api_base", "http://localhost:8088/v1")
+            api_key=api_key,
+            base_url=getattr(self.config, "api_base", "http://localhost:8088/v1"),
+            default_headers=self.config.default_headers,
         )
 
     def build_vllm_kv_cache(self, messages: Any) -> str:

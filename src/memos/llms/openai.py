@@ -23,7 +23,9 @@ class OpenAILLM(BaseLLM):
 
     def __init__(self, config: OpenAILLMConfig):
         self.config = config
-        self.client = openai.Client(api_key=config.api_key, base_url=config.api_base)
+        self.client = openai.Client(
+            api_key=config.api_key, base_url=config.api_base, default_headers=config.default_headers
+        )
         logger.info("OpenAI LLM instance initialized")
 
     @timed(log=True, log_prefix="OpenAI LLM")

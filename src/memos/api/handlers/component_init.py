@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from memos.api.config import APIConfig
 from memos.api.handlers.config_builders import (
+    build_chat_llm_config,
     build_embedder_config,
     build_graph_db_config,
     build_internet_retriever_config,
@@ -71,6 +72,38 @@ def _get_default_memory_size(cube_config: Any) -> dict[str, int]:
     }
 
 
+def _init_chat_llms(chat_llm_configs: list[dict]) -> dict[str, Any]:
+    """
+    Initialize chat language models from configuration.
+
+    Args:
+        chat_llm_configs: List of chat LLM configuration dictionaries
+
+    Returns:
+        Dictionary mapping model names to initialized LLM instances
+    """
+
+    def _list_models(client):
+        try:
+            models = (
+                [model.id for model in client.models.list().data]
+                if client.models.list().data
+                else client.models.list().models
+            )
+        except Exception as e:
+            logger.error(f"Error listing models: {e}")
+            models = []
+        return models
+
+    model_name_instrance_maping = {}
+    for cfg in chat_llm_configs:
+        llm = LLMFactory.from_config(cfg["config_class"])
+        if cfg["support_models"]:
+            for model_name in cfg["support_models"]:
+                model_name_instrance_maping[model_name] = llm
+    return model_name_instrance_maping
+
+
 def init_server() -> dict[str, Any]:
     """
     Initialize all server components and configurations.
@@ -98,6 +131,7 @@ def init_server() -> dict[str, Any]:
     # Build component configurations
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
+    chat_llm_config = build_chat_llm_config()
     embedder_config = build_embedder_config()
     mem_reader_config = build_mem_reader_config()
     reranker_config = build_reranker_config()
@@ -113,12 +147,15 @@ def init_server() -> dict[str, Any]:
     graph_db = GraphStoreFactory.from_config(graph_db_config)
     vector_db = VecDBFactory.from_config(vector_db_config)
     llm = LLMFactory.from_config(llm_config)
+    chat_llms = _init_chat_llms(chat_llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
     mem_reader = MemReaderFactory.from_config(mem_reader_config)
     reranker = RerankerFactory.from_config(reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(
         internet_retriever_config, embedder=embedder
     )
+
+    # Initialize chat llms
 
     logger.debug("Core components instantiated")
 
@@ -245,6 +282,7 @@ def init_server() -> dict[str, Any]:
         "graph_db": graph_db,
         "mem_reader": mem_reader,
         "llm": llm,
+        "chat_llms": chat_llms,
         "embedder": embedder,
         "reranker": reranker,
         "internet_retriever": internet_retriever,

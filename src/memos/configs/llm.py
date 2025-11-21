@@ -17,6 +17,9 @@ class BaseLLMConfig(BaseConfig):
         default=False,
         description="Remove content within think tags from the generated text",
     )
+    default_headers: dict[str, Any] | None = Field(
+        default=None, description="Default headers for LLM requests"
+    )
 
 
 class OpenAILLMConfig(BaseLLMConfig):

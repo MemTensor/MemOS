@@ -59,7 +59,11 @@ dependencies = HandlerDependencies.from_init_server(components)
 search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
 chat_handler = ChatHandler(
-    dependencies, search_handler, add_handler, online_bot=components.get("online_bot")
+    dependencies,
+    components["chat_llms"],
+    search_handler,
+    add_handler,
+    online_bot=components.get("online_bot"),
 )
 
 # Extract commonly used components for function-based handlers
