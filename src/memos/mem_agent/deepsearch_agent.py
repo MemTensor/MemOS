@@ -117,57 +117,60 @@ class DeepSearchMemAgent(BaseMemAgent):
     memory retrieval, and information synthesis as shown in the architecture diagram.
     """
 
-    def __init__(self, llm: BaseLLM, memory_retriever: BaseMemoryRetriever | None = None):
-        super().__init__(config)
-        self.config = config
-        self.max_iterations = config.max_iterations
-        self.timeout = config.timeout
-        self.llm: Optional[BaseLLM] = llm
-        self.query_rewriter: Optional[QueryRewriteAgent] = QueryRewriter(llm, "QueryRewriter")
-        self.reflector: Optional[ReflectionAgent] = ReflectionAgent(llm, "Reflector")
+    def __init__(
+        self, 
+        llm: BaseLLM, 
+        memory_retriever: Any = None,
+        config: Optional[DeepSearchAgentConfig] = None
+    ):
+        """
+        Initialize DeepSearchMemAgent.
+        
+        Args:
+            llm: Language model for query rewriting and response generation
+            memory_retriever: Memory retrieval interface (e.g., naive_mem_cube.text_mem)
+            config: Configuration for deep search behavior
+        """
+        self.config = config or DeepSearchAgentConfig()
+        self.max_iterations = self.config.max_iterations
+        self.timeout = self.config.timeout
+        self.llm: BaseLLM = llm
+        self.query_rewriter: QueryRewriter = QueryRewriter(llm, "QueryRewriter")
+        self.reflector: ReflectionAgent = ReflectionAgent(llm, "Reflector")
         self.memory_retriever = memory_retriever
-
-    def _set_llm(self, llm: BaseLLM) -> None:
-        """Set the LLM and initialize sub-agents."""
-        self.llm = llm
-        self.query_rewriter = QueryRewriteAgent(llm, "QueryRewriter")
-        self.reflector = ReflectionAgent(llm, "Reflector")
-        self.keyword_extractor = KeywordExtractionAgent(llm, "KeywordExtractor")
-        logger.info("LLM and sub-agents initialized")
 
     def _set_memory_retriever(self, retriever) -> None:
         """Set the memory retrieval interface."""
         self.memory_retriever = retriever
         logger.info("Memory retriever interface set")
 
-    def run(self, input: str, **kwargs) -> str:
+    def run(self, query: str, **kwargs) -> str:
         """
         Main execution method implementing the deep search pipeline.
         
         Args:
-            input: User query string
+            query: User query string
+            **kwargs: Additional arguments (history, user_id, etc.)
         Returns:
             Comprehensive response string
         """
         if not self.llm:
-            raise RuntimeError("LLM not initialized. Call set_llm() first.")
+            raise RuntimeError("LLM not initialized.")
         
-        query = input
         history = kwargs.get("history", [])
         user_id = kwargs.get("user_id")
         
         # Step 1: Query Rewriting
         current_query = self.query_rewriter.run(query, history)
         
-        # Step 2: Keyword Extraction and Planning
-        keyword_analysis = self.keyword_extractor.run(current_query)
-        search_keywords = keyword_analysis.get("keywords", [current_query])
-        
         accumulated_context = []
         accumulated_memories = []
+        search_keywords = []  # Can be extended with keyword extraction
         
-        # Step 3: Iterative Search and Reflection Loop
+        # Step 2: Iterative Search and Reflection Loop
         for iteration in range(self.max_iterations):
+            logger.info(f"Starting iteration {iteration + 1}/{self.max_iterations}")
+            
             search_results = self._perform_memory_search(
                 current_query, 
                 keywords=search_keywords,
@@ -206,11 +209,13 @@ class DeepSearchMemAgent(BaseMemAgent):
                     current_query = query
                 else:
                     break
+        
+        # Step 3: Generate final answer
         final_answer = self._generate_final_answer(
             original_query=query,
             search_results=accumulated_memories,
             context=accumulated_context,
-            missing_info=keyword_analysis.get("search_strategy", "")
+            missing_info=""
         )
         
         logger.info("Deep search pipeline completed")
