@@ -5,20 +5,11 @@ This module provides a class-based implementation of search handlers,
 using dependency injection for better modularity and testability.
 """
 
-import os
-import traceback
-
-from typing import Any
-
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
-from memos.api.handlers.formatters_handler import (
-    format_memory_item,
-    post_process_pref_mem,
-)
 from memos.api.product_models import APISearchRequest, SearchResponse
-from memos.context.context import ContextThreadPoolExecutor
-from memos.mem_scheduler.schemas.general_schemas import SearchMode
-from memos.types import MOSSearchResult, UserContext
+from memos.multi_mem_cube.composite_cube import CompositeCubeView
+from memos.multi_mem_cube.single_cube import SingleCubeView
+from memos.multi_mem_cube.views import MemCubeView
 
 
 class SearchHandler(BaseHandler):
@@ -51,239 +42,56 @@ class SearchHandler(BaseHandler):
         Returns:
             SearchResponse with formatted results
         """
-        # Create UserContext object
-        user_context = UserContext(
-            user_id=search_req.user_id,
-            mem_cube_id=search_req.mem_cube_id,
-            session_id=search_req.session_id or "default_session",
-        )
-        self.logger.info(f"Search Req is: {search_req}")
+        self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
 
-        memories_result: MOSSearchResult = {
-            "text_mem": [],
-            "act_mem": [],
-            "para_mem": [],
-            "pref_mem": [],
-            "pref_note": "",
-        }
+        cube_view = self._build_cube_view(search_req)
 
-        # Determine search mode
-        search_mode = self._get_search_mode(search_req.mode)
+        results = cube_view.search_memories(search_req)
 
-        # Execute search in parallel for text and preference memories
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
-            text_future = executor.submit(self._search_text, search_req, user_context, search_mode)
-            pref_future = executor.submit(self._search_pref, search_req, user_context)
-
-            text_formatted_memories = text_future.result()
-            pref_formatted_memories = pref_future.result()
-
-        # Build result
-        memories_result["text_mem"].append(
-            {
-                "cube_id": search_req.mem_cube_id,
-                "memories": text_formatted_memories,
-            }
-        )
-
-        memories_result = post_process_pref_mem(
-            memories_result,
-            pref_formatted_memories,
-            search_req.mem_cube_id,
-            search_req.include_preference,
-        )
-
-        self.logger.info(f"Search memories result: {memories_result}")
+        self.logger.info(f"[AddHandler] Final add results count={len(results)}")
 
         return SearchResponse(
-            message="Search completed successfully",
-            data=memories_result,
+            message="Memory searched successfully",
+            data=results,
         )
 
-    def _get_search_mode(self, mode: str) -> str:
+    def _resolve_cube_ids(self, search_req: APISearchRequest) -> list[str]:
         """
-        Get search mode with environment variable fallback.
-
-        Args:
-            mode: Requested search mode
-
-        Returns:
-            Search mode string
+        Normalize target cube ids from search_req.
+        Priority:
+        1) readable_cube_ids
+        2) mem_cube_id
+        3) fallback to user_id
         """
-        if mode == SearchMode.NOT_INITIALIZED:
-            return os.getenv("SEARCH_MODE", SearchMode.FAST)
-        return mode
+        if getattr(search_req, "readable_cube_ids", None):
+            return list(dict.fromkeys(search_req.readable_cube_ids))
 
-    def _search_text(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-        search_mode: str,
-    ) -> list[dict[str, Any]]:
-        """
-        Search text memories based on mode.
+        if search_req.mem_cube_id:
+            return [search_req.mem_cube_id]
 
-        Args:
-            search_req: Search request
-            user_context: User context
-            search_mode: Search mode (FAST, FINE, or MIXTURE)
+        return [search_req.user_id]
 
-        Returns:
-            List of formatted memory items
-        """
-        try:
-            if search_mode == SearchMode.FAST:
-                memories = self._fast_search(search_req, user_context)
-            elif search_mode == SearchMode.FINE:
-                memories = self._fine_search(search_req, user_context)
-            elif search_mode == SearchMode.MIXTURE:
-                memories = self._mix_search(search_req, user_context)
-            else:
-                self.logger.error(f"Unsupported search mode: {search_mode}")
-                return []
+    def _build_cube_view(self, search_req: APISearchRequest) -> MemCubeView:
+        cube_ids = self._resolve_cube_ids(search_req)
 
-            return [format_memory_item(data) for data in memories]
-
-        except Exception as e:
-            self.logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
-            return []
-
-    def _search_pref(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-    ) -> list[dict[str, Any]]:
-        """
-        Search preference memories.
-
-        Args:
-            search_req: Search request
-            user_context: User context
-
-        Returns:
-            List of formatted preference memory items
-        """
-        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
-            return []
-
-        try:
-            results = self.naive_mem_cube.pref_mem.search(
-                query=search_req.query,
-                top_k=search_req.pref_top_k,
-                info={
-                    "user_id": search_req.user_id,
-                    "session_id": search_req.session_id,
-                    "chat_history": search_req.chat_history,
-                },
+        if len(cube_ids) == 1:
+            cube_id = cube_ids[0]
+            return SingleCubeView(
+                cube_id=cube_id,
+                naive_mem_cube=self.naive_mem_cube,
+                mem_reader=self.mem_reader,
+                mem_scheduler=self.mem_scheduler,
+                logger=self.logger,
             )
-            return [format_memory_item(data) for data in results]
-        except Exception as e:
-            self.logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
-            return []
-
-    def _fast_search(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-    ) -> list:
-        """
-        Fast search using vector database.
-
-        Args:
-            search_req: Search request
-            user_context: User context
-
-        Returns:
-            List of search results
-        """
-        target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        return self.naive_mem_cube.text_mem.search(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
-            mode=SearchMode.FAST,
-            manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
-            search_filter=search_filter,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": target_session_id,
-                "chat_history": search_req.chat_history,
-            },
-        )
-
-    def _fine_search(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-    ) -> list:
-        """
-        Fine-grained search with query enhancement.
-
-        Args:
-            search_req: Search request
-            user_context: User context
-
-        Returns:
-            List of enhanced search results
-        """
-        target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        searcher = self.mem_scheduler.searcher
-
-        info = {
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        }
-
-        # Fast retrieve
-        fast_retrieved_memories = searcher.retrieve(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
-            mode=SearchMode.FINE,
-            manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
-            search_filter=search_filter,
-            info=info,
-        )
-
-        # Post retrieve
-        fast_memories = searcher.post_retrieve(
-            retrieved_results=fast_retrieved_memories,
-            top_k=search_req.top_k,
-            user_name=user_context.mem_cube_id,
-            info=info,
-        )
-
-        # Enhance with query
-        enhanced_results, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
-            query_history=[search_req.query],
-            memories=fast_memories,
-        )
-
-        return enhanced_results
-
-    def _mix_search(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-    ) -> list:
-        """
-        Mix search combining fast and fine-grained approaches.
-
-        Args:
-            search_req: Search request
-            user_context: User context
-
-        Returns:
-            List of formatted search results
-        """
-        return self.mem_scheduler.mix_search_memories(
-            search_req=search_req,
-            user_context=user_context,
-        )
+        else:
+            single_views = [
+                SingleCubeView(
+                    cube_id=cube_id,
+                    naive_mem_cube=self.naive_mem_cube,
+                    mem_reader=self.mem_reader,
+                    mem_scheduler=self.mem_scheduler,
+                    logger=self.logger,
+                )
+                for cube_id in cube_ids
+            ]
+            return CompositeCubeView(cube_views=single_views, logger=self.logger)

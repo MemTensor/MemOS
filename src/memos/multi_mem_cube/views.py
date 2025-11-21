@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 
 if TYPE_CHECKING:
-    from memos.api.product_models import APIADDRequest
+    from memos.api.product_models import APIADDRequest, APISearchRequest
 
 
 class MemCubeView(Protocol):
@@ -17,6 +17,19 @@ class MemCubeView(Protocol):
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
         Process add_req, extract memories and write them into one or more cubes.
+
+        Returns:
+            A list of memory dicts, each item should at least contain:
+            - memory
+            - memory_id
+            - memory_type
+            - cube_id
+        """
+        ...
+
+    def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
+        """
+        Process search_req, read memories from one or more cubes and search them.
 
         Returns:
             A list of memory dicts, each item should at least contain:

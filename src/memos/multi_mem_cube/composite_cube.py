@@ -7,7 +7,7 @@ from memos.multi_mem_cube.views import MemCubeView
 
 
 if TYPE_CHECKING:
-    from memos.api.product_models import APIADDRequest
+    from memos.api.product_models import APIADDRequest, APISearchRequest
     from memos.multi_mem_cube.single_cube import SingleCubeView
 
 
@@ -34,3 +34,30 @@ class CompositeCubeView(MemCubeView):
             all_results.extend(results)
 
         return all_results
+
+    def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
+        # aggregated MOSSearchResult
+        merged_results: dict[str, Any] = {
+            "text_mem": [],
+            "act_mem": [],
+            "para_mem": [],
+            "pref_mem": [],
+            "pref_note": "",
+        }
+
+        for view in self.cube_views:
+            self.logger.info(f"[CompositeCubeView] fan-out search to cube={view.cube_id}")
+            cube_result = view.search_memories(search_req)
+            merged_results["text_mem"].extend(cube_result.get("text_mem", []))
+            merged_results["act_mem"].extend(cube_result.get("act_mem", []))
+            merged_results["para_mem"].extend(cube_result.get("para_mem", []))
+            merged_results["pref_mem"].extend(cube_result.get("pref_mem", []))
+
+            note = cube_result.get("pref_note")
+            if note:
+                if merged_results["pref_note"]:
+                    merged_results["pref_note"] += " | " + note
+                else:
+                    merged_results["pref_note"] = note
+
+        return merged_results
