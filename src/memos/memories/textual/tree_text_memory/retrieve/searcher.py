@@ -445,7 +445,7 @@ class Searcher:
         user_id: str | None = None,
     ):
         """Retrieve and rerank from Internet source"""
-        if not self.internet_retriever or mode == "fast":
+        if not self.internet_retriever:
             logger.info(f"[PATH-C] '{query}' Skipped (no retriever, fast mode)")
             return []
         if memory_type not in ["All"]:

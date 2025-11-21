@@ -394,7 +394,12 @@ class ChatHandler(BaseHandler):
 
                     # Prepare reference data
                     reference = prepare_reference_data(filtered_memories)
+                    # get internet reference
+                    internet_reference = self._get_internet_reference(
+                        search_response.data.get("text_mem")[0]["memories"]
+                    )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+                    yield f"data: {json.dumps({'type': 'internet_reference', 'data': internet_reference})}\n\n"
 
                     # Prepare preference markdown string
                     if chat_req.include_preference:
@@ -534,6 +539,23 @@ class ChatHandler(BaseHandler):
         except Exception as err:
             self.logger.error(f"Failed to start chat stream: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+    def _get_internet_reference(
+        self, search_response: list[dict[str, any]]
+    ) -> list[dict[str, any]]:
+        """Get internet reference from search response."""
+        unique_set = set()
+        result = []
+
+        for item in search_response:
+            meta = item.get("metadata", {})
+            if meta.get("source") == "web" and meta.get("internet_info"):
+                info = meta.get("internet_info")
+                key = json.dumps(info, sort_keys=True)
+                if key not in unique_set:
+                    unique_set.add(key)
+                    result.append(info)
+        return result
 
     def _build_pref_md_string_for_playground(self, pref_mem_list: list[any]) -> str:
         """Build preference markdown string for playground."""
