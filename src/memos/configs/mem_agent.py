@@ -9,9 +9,7 @@ class BaseAgentConfig(BaseConfig):
     """Base configuration class for agents."""
 
     agent_name: str = Field(..., description="Name of the agent")
-    description: str | None = Field(
-        default=None, description="Description of the agent"
-    )
+    description: str | None = Field(default=None, description="Description of the agent")
 
 
 class SimpleAgentConfig(BaseAgentConfig):
@@ -20,19 +18,15 @@ class SimpleAgentConfig(BaseAgentConfig):
     max_iterations: int = Field(
         default=10, description="Maximum number of iterations for the agent"
     )
-    timeout: int = Field(
-        default=30, description="Timeout in seconds for agent execution"
-    )
+    timeout: int = Field(default=30, description="Timeout in seconds for agent execution")
+
 
 class DeepSearchAgentConfig(BaseAgentConfig):
     """Deep search agent configuration class."""
 
-    max_iterations: int = Field(
-        default=3, description="Maximum number of iterations for the agent"
-    )
-    timeout: int = Field(
-        default=30, description="Timeout in seconds for agent execution"
-    )
+    max_iterations: int = Field(default=3, description="Maximum number of iterations for the agent")
+    timeout: int = Field(default=30, description="Timeout in seconds for agent execution")
+
 
 class MemAgentConfigFactory(BaseConfig):
     """Factory class for creating agent configurations."""
