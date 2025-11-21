@@ -34,6 +34,7 @@ from memos.api.product_models import (
     SuggestionResponse,
 )
 from memos.log import get_logger
+from memos.mem_scheduler.base_scheduler import BaseScheduler
 
 
 logger = get_logger(__name__)
@@ -58,7 +59,7 @@ chat_handler = ChatHandler(
 
 # Extract commonly used components for function-based handlers
 # (These can be accessed from the components dict without unpacking all of them)
-mem_scheduler = components["mem_scheduler"]
+mem_scheduler: BaseScheduler = components["mem_scheduler"]
 llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
 

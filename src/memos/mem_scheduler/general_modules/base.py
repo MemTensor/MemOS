@@ -18,8 +18,6 @@ class BaseSchedulerModule:
         self._chat_llm = None
         self._process_llm = None
 
-        self.mem_cubes: dict[str, GeneralMemCube] = {}
-
     def load_template(self, template_name: str) -> str:
         if template_name not in PROMPT_MAPPING:
             logger.error("Prompt template is not found!")

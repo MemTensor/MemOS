@@ -88,6 +88,7 @@ class AddHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
+                searcher=None,
             )
         else:
             single_views = [
@@ -97,6 +98,7 @@ class AddHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
+                    searcher=None,
                 )
                 for cube_id in cube_ids
             ]

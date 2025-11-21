@@ -1244,7 +1244,7 @@ Consider whether the memories contain the specific information needed to provide
         return results
 
 
-def main():
+def main(version_name="ct-1111"):
     """Main test function."""
     print("=== EvalAnalyzer Simple Test ===")
 
@@ -1254,7 +1254,7 @@ def main():
     print("Analyzer initialized")
 
     # Test file paths
-    eval_result_dir = f"{BASE_DIR}/evaluation/results/locomo/memos-api-xcy-1030-2114-locomo"
+    eval_result_dir = f"{BASE_DIR}/evaluation/results/locomo/memos-api-{version_name}-locomo"
     judged_file = os.path.join(eval_result_dir, "memos-api_locomo_judged.json")
     search_results_file = os.path.join(eval_result_dir, "memos-api_locomo_search_results.json")
 

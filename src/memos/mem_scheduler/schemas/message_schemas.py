@@ -133,6 +133,14 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         default_factory=get_utc_now,
         description="Timestamp indicating when the log entry was created",
     )
+    memcube_log_content: list[dict] | None = Field(
+        default=None, description="Structured memcube log content list"
+    )
+    metadata: list[dict] | None = Field(
+        default=None, description="Structured metadata list for each log item"
+    )
+    memcube_name: str | None = Field(default=None, description="Display name for memcube")
+    memory_len: int | None = Field(default=None, description="Count of items involved in the event")
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""

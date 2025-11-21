@@ -161,7 +161,7 @@ class TreeTextMemory(BaseTextMemory):
         info=None,
         mode: str = "fast",
         memory_type: str = "All",
-        manual_close_internet: bool = False,
+        manual_close_internet: bool = True,
         moscube: bool = False,
         search_filter: dict | None = None,
         user_name: str | None = None,
@@ -189,9 +189,6 @@ class TreeTextMemory(BaseTextMemory):
             list[TextualMemoryItem]: List of matching memories.
         """
         if (self.internet_retriever is not None) and manual_close_internet:
-            logger.warning(
-                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
-            )
             searcher = Searcher(
                 self.dispatcher_llm,
                 self.graph_store,
@@ -201,6 +198,7 @@ class TreeTextMemory(BaseTextMemory):
                 internet_retriever=None,
                 moscube=moscube,
                 search_strategy=self.search_strategy,
+                manual_close_internet=manual_close_internet,
             )
         else:
             searcher = Searcher(
@@ -212,6 +210,7 @@ class TreeTextMemory(BaseTextMemory):
                 internet_retriever=self.internet_retriever,
                 moscube=moscube,
                 search_strategy=self.search_strategy,
+                manual_close_internet=manual_close_internet,
             )
         return searcher.search(
             query, top_k, info, mode, memory_type, search_filter, user_name=user_name

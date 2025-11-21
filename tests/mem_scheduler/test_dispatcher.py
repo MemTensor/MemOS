@@ -14,10 +14,11 @@ from memos.configs.mem_scheduler import (
 )
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
+from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.tree import TreeTextMemory
 
 
@@ -192,9 +193,8 @@ class TestSchedulerDispatcher(unittest.TestCase):
 
     def test_group_messages_by_user_and_mem_cube(self):
         """Test grouping messages by user and cube."""
-        # Check actual grouping logic
-        with patch("memos.mem_scheduler.general_modules.dispatcher.logger.debug"):
-            result = self.dispatcher._group_messages_by_user_and_mem_cube(self.test_messages)
+        # Check actual grouping logic using shared utility function
+        result = group_messages_by_user_and_mem_cube(self.test_messages)
 
         # Adjust expected results based on actual grouping logic
         # Note: According to dispatcher.py implementation, grouping is by mem_cube_id not mem_cube

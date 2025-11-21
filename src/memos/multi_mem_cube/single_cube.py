@@ -13,15 +13,21 @@ from memos.api.handlers.formatters_handler import (
     post_process_pref_mem,
 )
 from memos.context.context import ContextThreadPoolExecutor
+from memos.log import get_logger
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
+    FINE_STRATEGY,
     MEM_READ_LABEL,
     PREF_ADD_LABEL,
+    FineStrategy,
     SearchMode,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.multi_mem_cube.views import MemCubeView
 from memos.types import MOSSearchResult, UserContext
+
+
+logger = get_logger(__name__)
 
 
 if TYPE_CHECKING:
@@ -35,6 +41,7 @@ class SingleCubeView(MemCubeView):
     mem_reader: Any
     mem_scheduler: Any
     logger: Any
+    searcher: Any
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
@@ -78,7 +85,7 @@ class SingleCubeView(MemCubeView):
         # Create UserContext object
         user_context = UserContext(
             user_id=search_req.user_id,
-            mem_cube_id=search_req.mem_cube_id,
+            mem_cube_id=self.cube_id,
             session_id=search_req.session_id or "default_session",
         )
         self.logger.info(f"Search Req is: {search_req}")
@@ -105,7 +112,7 @@ class SingleCubeView(MemCubeView):
         # Build result
         memories_result["text_mem"].append(
             {
-                "cube_id": search_req.mem_cube_id,
+                "cube_id": self.cube_id,
                 "memories": text_formatted_memories,
             }
         )
@@ -113,7 +120,7 @@ class SingleCubeView(MemCubeView):
         memories_result = post_process_pref_mem(
             memories_result,
             pref_formatted_memories,
-            search_req.mem_cube_id,
+            self.cube_id,
             search_req.include_preference,
         )
 
@@ -131,8 +138,6 @@ class SingleCubeView(MemCubeView):
         Returns:
             Search mode string
         """
-        if mode == SearchMode.NOT_INITIALIZED:
-            return os.getenv("SEARCH_MODE", SearchMode.FAST)
         return mode
 
     def _search_text(
@@ -154,16 +159,16 @@ class SingleCubeView(MemCubeView):
         """
         try:
             if search_mode == SearchMode.FAST:
-                memories = self._fast_search(search_req, user_context)
+                text_memories = self._fast_search(search_req, user_context)
             elif search_mode == SearchMode.FINE:
-                memories = self._fine_search(search_req, user_context)
+                text_memories = self._fine_search(search_req, user_context)
             elif search_mode == SearchMode.MIXTURE:
-                memories = self._mix_search(search_req, user_context)
+                text_memories = self._mix_search(search_req, user_context)
             else:
                 self.logger.error(f"Unsupported search mode: {search_mode}")
                 return []
 
-            return [format_memory_item(data) for data in memories]
+            return text_memories
 
         except Exception as e:
             self.logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
@@ -183,6 +188,7 @@ class SingleCubeView(MemCubeView):
 
         Returns:
             List of formatted preference memory items
+            TODO: ADD CUBE ID IN PREFERENCE MEMORY
         """
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
@@ -220,7 +226,7 @@ class SingleCubeView(MemCubeView):
         target_session_id = search_req.session_id or "default_session"
         search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
 
-        return self.naive_mem_cube.text_mem.search(
+        search_results = self.naive_mem_cube.text_mem.search(
             query=search_req.query,
             user_name=user_context.mem_cube_id,
             top_k=search_req.top_k,
@@ -234,6 +240,16 @@ class SingleCubeView(MemCubeView):
                 "chat_history": search_req.chat_history,
             },
         )
+
+        formatted_memories = [format_memory_item(data) for data in search_results]
+
+        return formatted_memories
+
+    def _deep_search(
+        self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
+    ) -> list:
+        logger.error("waiting to be implemented")
+        return []
 
     def _fine_search(
         self,
@@ -250,10 +266,13 @@ class SingleCubeView(MemCubeView):
         Returns:
             List of enhanced search results
         """
+        if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
+            return self._deep_search(
+                search_req=search_req, user_context=user_context, max_thinking_depth=3
+            )
+
         target_session_id = search_req.session_id or "default_session"
         search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        searcher = self.mem_scheduler.searcher
 
         info = {
             "user_id": search_req.user_id,
@@ -262,7 +281,7 @@ class SingleCubeView(MemCubeView):
         }
 
         # Fast retrieve
-        fast_retrieved_memories = searcher.retrieve(
+        fast_retrieved_memories = self.searcher.retrieve(
             query=search_req.query,
             user_name=user_context.mem_cube_id,
             top_k=search_req.top_k,
@@ -274,7 +293,7 @@ class SingleCubeView(MemCubeView):
         )
 
         # Post retrieve
-        fast_memories = searcher.post_retrieve(
+        raw_memories = self.searcher.post_retrieve(
             retrieved_results=fast_retrieved_memories,
             top_k=search_req.top_k,
             user_name=user_context.mem_cube_id,
@@ -282,12 +301,45 @@ class SingleCubeView(MemCubeView):
         )
 
         # Enhance with query
-        enhanced_results, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
+        enhanced_memories, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
             query_history=[search_req.query],
-            memories=fast_memories,
+            memories=raw_memories,
         )
 
-        return enhanced_results
+        if len(enhanced_memories) < len(raw_memories):
+            logger.info(
+                f"Enhanced memories ({len(enhanced_memories)}) are less than raw memories ({len(raw_memories)}). Recalling for more."
+            )
+            missing_info_hint, trigger = self.mem_scheduler.retriever.recall_for_missing_memories(
+                query=search_req.query,
+                memories=raw_memories,
+            )
+            retrieval_size = len(raw_memories) - len(enhanced_memories)
+            logger.info(f"Retrieval size: {retrieval_size}")
+            if trigger:
+                logger.info(f"Triggering additional search with hint: {missing_info_hint}")
+                additional_memories = self.searcher.search(
+                    query=missing_info_hint,
+                    user_name=user_context.mem_cube_id,
+                    top_k=retrieval_size,
+                    mode=SearchMode.FAST,
+                    memory_type="All",
+                    search_filter=search_filter,
+                    info=info,
+                )
+            else:
+                logger.info("Not triggering additional search, using fast memories.")
+                additional_memories = raw_memories[:retrieval_size]
+
+            enhanced_memories += additional_memories
+            logger.info(
+                f"Added {len(additional_memories)} more memories. Total enhanced memories: {len(enhanced_memories)}"
+            )
+        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+
+        logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
+
+        return formatted_memories
 
     def _mix_search(
         self,
@@ -340,6 +392,7 @@ class SingleCubeView(MemCubeView):
         target_session_id = add_req.session_id or "default_session"
 
         if sync_mode == "async":
+            # Async mode: submit MEM_READ_LABEL task
             try:
                 message_item_read = ScheduleMessageItem(
                     user_id=add_req.user_id,
@@ -351,7 +404,7 @@ class SingleCubeView(MemCubeView):
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
                 )
-                self.mem_scheduler.submit_messages(messages=[message_item_read])
+                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_read])
                 self.logger.info(
                     f"[SingleCubeView] cube={self.cube_id} Submitted async MEM_READ: {json.dumps(mem_ids)}"
                 )
@@ -371,7 +424,7 @@ class SingleCubeView(MemCubeView):
                 timestamp=datetime.utcnow(),
                 user_name=self.cube_id,
             )
-            self.mem_scheduler.submit_messages(messages=[message_item_add])
+            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_add])
 
     def _process_pref_mem(
         self,
@@ -409,7 +462,7 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(messages_list),
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.submit_messages(messages=[message_item_pref])
+                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
             except Exception as e:
                 self.logger.error(

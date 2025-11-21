@@ -5,6 +5,8 @@ This module handles the initialization of all MemOS server components
 including databases, LLMs, memory systems, and schedulers.
 """
 
+import os
+
 from typing import TYPE_CHECKING, Any
 
 from memos.api.config import APIConfig
@@ -38,6 +40,10 @@ from memos.memories.textual.prefer_text_memory.factory import (
 from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
@@ -47,7 +53,7 @@ from memos.vec_dbs.factory import VecDBFactory
 
 if TYPE_CHECKING:
     from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
-
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 logger = get_logger(__name__)
 
 
@@ -111,7 +117,11 @@ def init_server() -> dict[str, Any]:
 
     # Create component instances
     graph_db = GraphStoreFactory.from_config(graph_db_config)
-    vector_db = VecDBFactory.from_config(vector_db_config)
+    vector_db = (
+        VecDBFactory.from_config(vector_db_config)
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
+    )
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
     mem_reader = MemReaderFactory.from_config(mem_reader_config)
@@ -148,40 +158,56 @@ def init_server() -> dict[str, Any]:
     logger.debug("Text memory initialized")
 
     # Initialize preference memory components
-    pref_extractor = ExtractorFactory.from_config(
-        config_factory=pref_extractor_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
+    pref_extractor = (
+        ExtractorFactory.from_config(
+            config_factory=pref_extractor_config,
+            llm_provider=llm,
+            embedder=embedder,
+            vector_db=vector_db,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
-    pref_adder = AdderFactory.from_config(
-        config_factory=pref_adder_config,
-        llm_provider=llm,
-        embedder=embedder,
-        vector_db=vector_db,
-        text_mem=text_mem,
+    pref_adder = (
+        AdderFactory.from_config(
+            config_factory=pref_adder_config,
+            llm_provider=llm,
+            embedder=embedder,
+            vector_db=vector_db,
+            text_mem=text_mem,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
-    pref_retriever = RetrieverFactory.from_config(
-        config_factory=pref_retriever_config,
-        llm_provider=llm,
-        embedder=embedder,
-        reranker=reranker,
-        vector_db=vector_db,
+    pref_retriever = (
+        RetrieverFactory.from_config(
+            config_factory=pref_retriever_config,
+            llm_provider=llm,
+            embedder=embedder,
+            reranker=reranker,
+            vector_db=vector_db,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
     logger.debug("Preference memory components initialized")
 
     # Initialize preference memory
-    pref_mem = SimplePreferenceTextMemory(
-        extractor_llm=llm,
-        vector_db=vector_db,
-        embedder=embedder,
-        reranker=reranker,
-        extractor=pref_extractor,
-        adder=pref_adder,
-        retriever=pref_retriever,
+    pref_mem = (
+        SimplePreferenceTextMemory(
+            extractor_llm=llm,
+            vector_db=vector_db,
+            embedder=embedder,
+            reranker=reranker,
+            extractor=pref_extractor,
+            adder=pref_adder,
+            retriever=pref_retriever,
+        )
+        if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
+        else None
     )
 
     logger.debug("Preference memory initialized")
@@ -205,6 +231,13 @@ def init_server() -> dict[str, Any]:
 
     logger.debug("MemCube created")
 
+    tree_mem: TreeTextMemory = naive_mem_cube.text_mem
+    searcher: Searcher = tree_mem.get_searcher(
+        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+        moscube=False,
+    )
+    logger.debug("Searcher created")
+
     # Initialize Scheduler
     scheduler_config_dict = APIConfig.get_scheduler_config()
     scheduler_config = SchedulerConfigFactory(
@@ -217,16 +250,14 @@ def init_server() -> dict[str, Any]:
         db_engine=BaseDBManager.create_default_sqlite_engine(),
         mem_reader=mem_reader,
     )
-    mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube)
+    mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube, searcher=searcher)
     logger.debug("Scheduler initialized")
 
     # Initialize SchedulerAPIModule
     api_module = mem_scheduler.api_module
 
     # Start scheduler if enabled
-    import os
-
-    if os.getenv("API_SCHEDULER_ON", True):
+    if os.getenv("API_SCHEDULER_ON", "true").lower() == "true":
         mem_scheduler.start()
         logger.info("Scheduler started")
 
@@ -253,6 +284,7 @@ def init_server() -> dict[str, Any]:
         "mos_server": mos_server,
         "mem_scheduler": mem_scheduler,
         "naive_mem_cube": naive_mem_cube,
+        "searcher": searcher,
         "api_module": api_module,
         "vector_db": vector_db,
         "pref_extractor": pref_extractor,

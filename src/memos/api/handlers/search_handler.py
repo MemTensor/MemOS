@@ -7,9 +7,13 @@ using dependency injection for better modularity and testability.
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APISearchRequest, SearchResponse
+from memos.log import get_logger
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+
+
+logger = get_logger(__name__)
 
 
 class SearchHandler(BaseHandler):
@@ -27,7 +31,7 @@ class SearchHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies("naive_mem_cube", "mem_scheduler")
+        self._validate_dependencies("naive_mem_cube", "mem_scheduler", "searcher")
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -82,6 +86,7 @@ class SearchHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
+                searcher=self.searcher,
             )
         else:
             single_views = [
@@ -91,6 +96,7 @@ class SearchHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
+                    searcher=self.searcher,
                 )
                 for cube_id in cube_ids
             ]

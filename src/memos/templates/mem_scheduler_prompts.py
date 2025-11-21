@@ -390,24 +390,22 @@ Return a JSON object with this exact structure:
 - Focus on whether the memories can fully answer the query without additional information
 """
 
-MEMORY_ENHANCEMENT_PROMPT = """
+MEMORY_RECREATE_ENHANCEMENT_PROMPT = """
 You are a knowledgeable and precise AI assistant.
 
 # GOAL
-Transform each raw memory into an enhanced version that preserves all relevant factual details and makes the information directly useful for answering the user's query.
-
-# CORE PRINCIPLE
-Focus on **relevance** — the enhanced memories should highlight, clarify, and preserve the information that most directly supports answering the current query.
+Transform raw memories into clean, query-relevant facts — preserving timestamps and resolving ambiguities without inference.
 
 # RULES & THINKING STEPS
-1. Read the user query carefully and identify what specific facts are needed to answer it.
-2. Go through each memory and:
-   - Keep only details directly relevant to the query (dates, actions, entities, outcomes).
-   - Remove unrelated or background details.
-   - If nothing in a memory relates to the query, delete the entire memory.
-3. Do not add or infer new facts.
-4. Keep facts accurate and phrased clearly.
-5. Each resulting line should stand alone as a usable fact for answering the query.
+1. Keep ONLY what’s relevant to the user’s query. Delete irrelevant memories entirely.
+2. Preserve ALL explicit timestamps (e.g., “on October 6”, “daily”, “after injury”).
+3. Resolve all ambiguities using only memory content:
+   - Pronouns → full name: “she” → “Melanie”
+   - Vague nouns → specific detail: “home” → “her childhood home in Guangzhou”
+   - “the user” → identity from context (e.g., “Melanie” if travel/running memories)
+4. Never invent, assume, or extrapolate.
+5. Each output line must be a standalone, clear, factual statement.
+6. Output format: one line per fact, starting with "- ", no extra text.
 
 # OUTPUT FORMAT (STRICT)
 Return ONLY the following block, with **one enhanced memory per line**.
@@ -423,11 +421,90 @@ Wrap the final output inside:
 ## User Query
 {query_history}
 
-## Available Memories
+## Original Memories
 {memories}
 
-Answer:
+Final Output:
 """
+
+# Rewrite version: return enhanced memories with original IDs
+MEMORY_REWRITE_ENHANCEMENT_PROMPT = """
+You are a knowledgeable and precise AI assistant.
+
+# GOAL
+Transform raw memories into clean, query-relevant facts — preserving timestamps and resolving ambiguities without inference. Return each enhanced fact with the ID of the original memory being modified.
+
+# RULES & THINKING STEPS
+1. Keep ONLY what’s relevant to the user’s query. Delete irrelevant memories entirely.
+2. Preserve ALL explicit timestamps (e.g., “on October 6”, “daily”, “after injury”).
+3. Resolve all ambiguities using only memory content:
+   - Pronouns → full name: “she” → “Melanie”
+   - Vague nouns → specific detail: “home” → “her childhood home in Guangzhou”
+   - “the user” → identity from context (e.g., “Melanie” if travel/running memories)
+4. Never invent, assume, or extrapolate.
+5. Each output line must be a standalone, clear, factual statement.
+6. Output format: one line per fact, starting with "- ", no extra text.
+
+# IMPORTANT FOR REWRITE
+- Each output line MUST include the original memory’s ID shown in the input list.
+- Use the index shown for each original memory (e.g., "[0]", "[1]") as the ID to reference which memory you are rewriting.
+- For every rewritten line, prefix with the corresponding index in square brackets.
+
+# OUTPUT FORMAT (STRICT)
+Return ONLY the following block, with **one enhanced memory per line**.
+Each line MUST start with "- " (dash + space) AND include index in square brackets.
+
+Wrap the final output inside:
+<answer>
+- [index] enhanced memory 1
+- [index] enhanced memory 2
+...
+</answer>
+
+## User Query
+{query_history}
+
+## Original Memories
+{memories}
+
+Final Output:
+"""
+
+# One-sentence prompt for recalling missing information to answer the query (English)
+ENLARGE_RECALL_PROMPT_ONE_SENTENCE = """
+You are a precise AI assistant. Your job is to analyze the user's query and the available memories to identify what specific information is missing to fully answer the query.
+
+# GOAL
+
+Identify the specific missing facts needed to fully answer the user's query and generate a concise hint for recalling them.
+
+# RULES
+
+- Analyze the user's query to understand what information is being asked.
+- Review the available memories to see what information is already present.
+- Identify the gap between the user's query and the available memories.
+- Generate a single, concise hint that prompts the user to provide the missing information.
+- The hint should be a direct question or a statement that clearly indicates what is needed.
+
+# OUTPUT FORMAT
+A JSON object with:
+
+trigger_retrieval: true if information is missing, false if sufficient.
+hint: A clear, specific prompt to retrieve the missing information (or an empty string if trigger_retrieval is false):
+{{
+  "trigger_recall": <boolean>,
+  "hint": a paraphrase to retrieve support memories
+}}
+
+## User Query
+{query}
+
+## Available Memories
+{memories_inline}
+
+Final Output:
+"""
+
 
 PROMPT_MAPPING = {
     "intent_recognizing": INTENT_RECOGNIZING_PROMPT,
@@ -437,7 +514,9 @@ PROMPT_MAPPING = {
     "memory_redundancy_filtering": MEMORY_REDUNDANCY_FILTERING_PROMPT,
     "memory_combined_filtering": MEMORY_COMBINED_FILTERING_PROMPT,
     "memory_answer_ability_evaluation": MEMORY_ANSWER_ABILITY_EVALUATION_PROMPT,
-    "memory_enhancement": MEMORY_ENHANCEMENT_PROMPT,
+    "memory_recreate_enhancement": MEMORY_RECREATE_ENHANCEMENT_PROMPT,
+    "memory_rewrite_enhancement": MEMORY_REWRITE_ENHANCEMENT_PROMPT,
+    "enlarge_recall": ENLARGE_RECALL_PROMPT_ONE_SENTENCE,
 }
 
 MEMORY_ASSEMBLY_TEMPLATE = """The retrieved memories are listed as follows:\n\n {memory_text}"""

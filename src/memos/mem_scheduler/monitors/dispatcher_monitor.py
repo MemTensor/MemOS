@@ -7,13 +7,13 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.context.context import ContextThread, ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.mem_scheduler.general_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_DISPATCHER_MONITOR_CHECK_INTERVAL,
     DEFAULT_DISPATCHER_MONITOR_MAX_FAILURES,
     DEFAULT_STOP_WAIT,
     DEFAULT_STUCK_THREAD_TOLERANCE,
 )
+from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 
 
@@ -135,7 +135,9 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
                 pool_info=pool_info,
                 stuck_max_interval=4,
             )
-            logger.info(f"Pool '{name}'. is_healthy: {is_healthy}. pool_info: {pool_info}")
+            if not is_healthy:
+                logger.info(f"Pool '{name}'. is_healthy: {is_healthy}. pool_info: {pool_info}")
+
             with self._pool_lock:
                 if is_healthy:
                     pool_info["failure_count"] = 0
@@ -237,20 +239,7 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
 
         # Log health status with comprehensive information
         if self.dispatcher:
-            # Check thread activity
-            active_threads = sum(
-                1
-                for t in threading.enumerate()
-                if t.name.startswith(executor._thread_name_prefix)  # pylint: disable=protected-access
-            )
-
-            task_count = self.dispatcher.get_running_task_count()
             max_workers = pool_info.get("max_workers", 0)
-            stuck_count = len(stuck_tasks)
-            logger.info(
-                f"Pool health check passed - {active_threads} active threads, "
-                f"{task_count} running tasks, pool size: {max_workers}, stuck tasks: {stuck_count}"
-            )
 
         return True, ""
 

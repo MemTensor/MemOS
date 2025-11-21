@@ -1,3 +1,5 @@
+import time
+
 from concurrent.futures import as_completed
 
 from memos.configs.mem_scheduler import BaseSchedulerConfig
@@ -9,6 +11,8 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
     DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
+    FINE_STRATEGY,
+    FineStrategy,
     TreeTextMemory_FINE_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
 )
@@ -91,9 +95,15 @@ class SchedulerRetriever(BaseSchedulerModule):
                 if len(query_history) > 1
                 else query_history[0]
             )
-        text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(batch_texts)])
+        # Include numbering for rewrite mode to help LLM reference original memory IDs
+        if FINE_STRATEGY == FineStrategy.REWRITE:
+            text_memories = "\n".join([f"- [{i}] {mem}" for i, mem in enumerate(batch_texts)])
+            prompt_name = "memory_rewrite_enhancement"
+        else:
+            text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(batch_texts)])
+            prompt_name = "memory_recreate_enhancement"
         return self.build_prompt(
-            "memory_enhancement",
+            prompt_name,
             query_history=query_history,
             memories=text_memories,
         )
@@ -107,53 +117,80 @@ class SchedulerRetriever(BaseSchedulerModule):
     ) -> tuple[list[TextualMemoryItem], bool]:
         attempt = 0
         text_memories = [one.memory for one in memories]
+
+        prompt = self._build_enhancement_prompt(
+            query_history=query_history, batch_texts=text_memories
+        )
+
+        llm_response = None
         while attempt <= max(0, retries) + 1:
             try:
-                prompt = self._build_enhancement_prompt(
-                    query_history=query_history, batch_texts=text_memories
-                )
-                logger.debug(
-                    f"[Enhance][batch={batch_index}] Prompt (first 200 chars, len={len(prompt)}): "
-                    f"{prompt[:200]}]..."
-                )
-
-                response = self.process_llm.generate([{"role": "user", "content": prompt}])
-                logger.debug(
-                    f"[Enhance][batch={batch_index}] Response (first 200 chars): {response}..."
-                )
-
-                processed_text_memories = extract_list_items_in_answer(response)
-                if len(processed_text_memories) == len(memories):
-                    # Update
-                    for i, new_mem in enumerate(processed_text_memories):
-                        memories[i].memory = new_mem
-                    enhanced_memories = memories
-                else:
+                llm_response = self.process_llm.generate([{"role": "user", "content": prompt}])
+                processed_text_memories = extract_list_items_in_answer(llm_response)
+                if len(processed_text_memories) > 0:
                     # create new
                     enhanced_memories = []
                     user_id = memories[0].metadata.user_id
-                    for new_mem in processed_text_memories:
-                        enhanced_memories.append(
-                            TextualMemoryItem(
-                                memory=new_mem, metadata=TextualMemoryMetadata(user_id=user_id)
+                    if FINE_STRATEGY == FineStrategy.RECREATE:
+                        for new_mem in processed_text_memories:
+                            enhanced_memories.append(
+                                TextualMemoryItem(
+                                    memory=new_mem, metadata=TextualMemoryMetadata(user_id=user_id)
+                                )
                             )
-                        )
-                    enhanced_memories = (
-                        enhanced_memories + memories[: len(memories) - len(enhanced_memories)]
-                    )
+                    elif FINE_STRATEGY == FineStrategy.REWRITE:
+                        # Parse index from each processed line and rewrite corresponding original memory
+                        def _parse_index_and_text(s: str) -> tuple[int | None, str]:
+                            import re
+
+                            s = (s or "").strip()
+                            # Preferred: [index] text
+                            m = re.match(r"^\s*\[(\d+)\]\s*(.+)$", s)
+                            if m:
+                                return int(m.group(1)), m.group(2).strip()
+                            # Fallback: index: text or index - text
+                            m = re.match(r"^\s*(\d+)\s*[:\-\)]\s*(.+)$", s)
+                            if m:
+                                return int(m.group(1)), m.group(2).strip()
+                            return None, s
+
+                        idx_to_original = dict(enumerate(memories))
+                        for j, item in enumerate(processed_text_memories):
+                            idx, new_text = _parse_index_and_text(item)
+                            if idx is not None and idx in idx_to_original:
+                                orig = idx_to_original[idx]
+                            else:
+                                # Fallback: align by order if index missing/invalid
+                                orig = memories[j] if j < len(memories) else None
+                            if not orig:
+                                continue
+                            enhanced_memories.append(
+                                TextualMemoryItem(
+                                    id=orig.id,
+                                    memory=new_text,
+                                    metadata=orig.metadata,
+                                )
+                            )
+                    else:
+                        logger.error(f"Fine search strategy {FINE_STRATEGY} not exists")
 
                     logger.info(
-                        f"[Enhance]: processed_text_memories: {len(processed_text_memories)}; padded with original memories to preserve total count"
+                        f"[enhance_memories_with_query] ✅ done | Strategy={FINE_STRATEGY} | prompt={prompt} | llm_response={llm_response}"
                     )
-
-                return enhanced_memories, True
+                    return enhanced_memories, True
+                else:
+                    raise ValueError(
+                        f"Fail to run memory enhancement; retry {attempt}/{max(1, retries) + 1}; processed_text_memories: {processed_text_memories}"
+                    )
             except Exception as e:
                 attempt += 1
+                time.sleep(1)
                 logger.debug(
-                    f"[Enhance][batch={batch_index}] 🔁 retry {attempt}/{max(1, retries) + 1} failed: {e}"
+                    f"[enhance_memories_with_query][batch={batch_index}] 🔁 retry {attempt}/{max(1, retries) + 1} failed: {e}"
                 )
         logger.error(
-            f"Fail to run memory enhancement; original memories: {memories}", exc_info=True
+            f"Fail to run memory enhancement; prompt: {prompt};\n llm_response: {llm_response}",
+            exc_info=True,
         )
         return memories, False
 
@@ -169,6 +206,76 @@ class SchedulerRetriever(BaseSchedulerModule):
             batches.append((start, end, memories[start:end]))
             start = end
         return batches
+
+    def recall_for_missing_memories(
+        self,
+        query: str,
+        memories: list[TextualMemoryItem],
+    ) -> tuple[str, bool]:
+        text_memories = [one.memory for one in memories] if memories else []
+        text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(text_memories)])
+
+        prompt = self.build_prompt(
+            template_name="enlarge_recall",
+            query=query,
+            memories_inline=text_memories,
+        )
+        llm_response = self.process_llm.generate([{"role": "user", "content": prompt}])
+
+        json_result: dict = extract_json_obj(llm_response)
+
+        logger.info(
+            f"[recall_for_missing_memories] ✅ done | prompt={prompt} | llm_response={llm_response}"
+        )
+
+        hint = json_result.get("hint", "")
+        if len(hint) == 0:
+            return hint, False
+        return hint, json_result.get("trigger_recall", False)
+
+    def search(
+        self,
+        query: str,
+        mem_cube: GeneralMemCube,
+        top_k: int,
+        method: str = TreeTextMemory_SEARCH_METHOD,
+        info: dict | None = None,
+    ) -> list[TextualMemoryItem]:
+        """Search in text memory with the given query.
+
+        Args:
+            query: The search query string
+            top_k: Number of top results to return
+            method: Search method to use
+
+        Returns:
+            Search results or None if not implemented
+        """
+        text_mem_base = mem_cube.text_mem
+        try:
+            if method in [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
+                assert isinstance(text_mem_base, TreeTextMemory)
+                if info is None:
+                    logger.warning(
+                        "Please input 'info' when use tree.search so that "
+                        "the database would store the consume history."
+                    )
+                    info = {"user_id": "", "session_id": ""}
+
+                mode = "fast" if method == TreeTextMemory_SEARCH_METHOD else "fine"
+                results_long_term = text_mem_base.search(
+                    query=query, top_k=top_k, memory_type="LongTermMemory", mode=mode, info=info
+                )
+                results_user = text_mem_base.search(
+                    query=query, top_k=top_k, memory_type="UserMemory", mode=mode, info=info
+                )
+                results = results_long_term + results_user
+            else:
+                raise NotImplementedError(str(type(text_mem_base)))
+        except Exception as e:
+            logger.error(f"Fail to search. The exeption is {e}.", exc_info=True)
+            results = []
+        return results
 
     def enhance_memories_with_query(
         self,
@@ -239,53 +346,9 @@ class SchedulerRetriever(BaseSchedulerModule):
             enhanced_memories = memories
 
         if len(enhanced_memories) == 0:
-            enhanced_memories = memories
+            enhanced_memories = []
             logger.error("[Enhance] ❌ fatal error: enhanced_memories is empty", exc_info=True)
         return enhanced_memories, all_success
-
-    def search(
-        self,
-        query: str,
-        mem_cube: GeneralMemCube,
-        top_k: int,
-        method: str = TreeTextMemory_SEARCH_METHOD,
-        info: dict | None = None,
-    ) -> list[TextualMemoryItem]:
-        """Search in text memory with the given query.
-
-        Args:
-            query: The search query string
-            top_k: Number of top results to return
-            method: Search method to use
-
-        Returns:
-            Search results or None if not implemented
-        """
-        text_mem_base = mem_cube.text_mem
-        try:
-            if method in [TreeTextMemory_SEARCH_METHOD, TreeTextMemory_FINE_SEARCH_METHOD]:
-                assert isinstance(text_mem_base, TreeTextMemory)
-                if info is None:
-                    logger.warning(
-                        "Please input 'info' when use tree.search so that "
-                        "the database would store the consume history."
-                    )
-                    info = {"user_id": "", "session_id": ""}
-
-                mode = "fast" if method == TreeTextMemory_SEARCH_METHOD else "fine"
-                results_long_term = text_mem_base.search(
-                    query=query, top_k=top_k, memory_type="LongTermMemory", mode=mode, info=info
-                )
-                results_user = text_mem_base.search(
-                    query=query, top_k=top_k, memory_type="UserMemory", mode=mode, info=info
-                )
-                results = results_long_term + results_user
-            else:
-                raise NotImplementedError(str(type(text_mem_base)))
-        except Exception as e:
-            logger.error(f"Fail to search. The exeption is {e}.", exc_info=True)
-            results = []
-        return results
 
     def rerank_memories(
         self, queries: list[str], original_memories: list[str], top_k: int

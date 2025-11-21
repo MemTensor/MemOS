@@ -2,12 +2,16 @@ import json
 import re
 import traceback
 
+from collections import defaultdict
 from functools import wraps
 from pathlib import Path
 
 import yaml
 
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.message_schemas import (
+    ScheduleMessageItem,
+)
 
 
 logger = get_logger(__name__)
@@ -216,3 +220,36 @@ def log_exceptions(logger=logger):
         return wrapper
 
     return decorator
+
+
+def group_messages_by_user_and_mem_cube(
+    messages: list[ScheduleMessageItem],
+) -> dict[str, dict[str, list[ScheduleMessageItem]]]:
+    """
+    Groups messages into a nested dictionary structure first by user_id, then by mem_cube_id.
+
+    Args:
+        messages: List of ScheduleMessageItem objects to be grouped
+
+    Returns:
+        A nested dictionary with the structure:
+        {
+            "user_id_1": {
+                "mem_cube_id_1": [msg1, msg2, ...],
+                "mem_cube_id_2": [msg3, msg4, ...],
+                ...
+            },
+            "user_id_2": {
+                ...
+            },
+            ...
+        }
+        Where each msg is the original ScheduleMessageItem object
+    """
+    grouped_dict = defaultdict(lambda: defaultdict(list))
+
+    for msg in messages:
+        grouped_dict[msg.user_id][msg.mem_cube_id].append(msg)
+
+    # Convert defaultdict to regular dict for cleaner output
+    return {user_id: dict(cube_groups) for user_id, cube_groups in grouped_dict.items()}
