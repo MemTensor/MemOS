@@ -9,13 +9,16 @@ class BaseLLMConfig(BaseConfig):
     """Base configuration class for LLMs."""
 
     model_name_or_path: str = Field(..., description="Model name or path")
-    temperature: float = Field(default=0.8, description="Temperature for sampling")
-    max_tokens: int = Field(default=1024, description="Maximum number of tokens to generate")
-    top_p: float = Field(default=0.9, description="Top-p sampling parameter")
+    temperature: float = Field(default=0.7, description="Temperature for sampling")
+    max_tokens: int = Field(default=8192, description="Maximum number of tokens to generate")
+    top_p: float = Field(default=0.95, description="Top-p sampling parameter")
     top_k: int = Field(default=50, description="Top-k sampling parameter")
     remove_think_prefix: bool = Field(
         default=False,
         description="Remove content within think tags from the generated text",
+    )
+    default_headers: dict[str, Any] | None = Field(
+        default=None, description="Default headers for LLM requests"
     )
 
 
@@ -27,6 +30,18 @@ class OpenAILLMConfig(BaseLLMConfig):
     extra_body: Any = Field(default=None, description="extra body")
 
 
+class OpenAIResponsesLLMConfig(BaseLLMConfig):
+    api_key: str = Field(..., description="API key for OpenAI")
+    api_base: str = Field(
+        default="https://api.openai.com/v1", description="Base URL for OpenAI responses API"
+    )
+    extra_body: Any = Field(default=None, description="extra body")
+    enable_thinking: bool = Field(
+        default=False,
+        description="Enable reasoning outputs from vLLM",
+    )
+
+
 class QwenLLMConfig(BaseLLMConfig):
     api_key: str = Field(..., description="API key for DashScope (Qwen)")
     api_base: str = Field(
@@ -34,7 +49,6 @@ class QwenLLMConfig(BaseLLMConfig):
         description="Base URL for Qwen OpenAI-compatible API",
     )
     extra_body: Any = Field(default=None, description="extra body")
-    model_name_or_path: str = Field(..., description="Model name for Qwen, e.g., 'qwen-plus'")
 
 
 class DeepSeekLLMConfig(BaseLLMConfig):
@@ -44,12 +58,21 @@ class DeepSeekLLMConfig(BaseLLMConfig):
         description="Base URL for DeepSeek OpenAI-compatible API",
     )
     extra_body: Any = Field(default=None, description="Extra options for API")
-    model_name_or_path: str = Field(
-        ..., description="Model name: 'deepseek-chat' or 'deepseek-reasoner'"
-    )
 
 
 class AzureLLMConfig(BaseLLMConfig):
+    base_url: str = Field(
+        default="https://api.openai.azure.com/",
+        description="Base URL for Azure OpenAI API",
+    )
+    api_version: str = Field(
+        default="2024-03-01-preview",
+        description="API version for Azure OpenAI",
+    )
+    api_key: str = Field(..., description="API key for Azure OpenAI")
+
+
+class AzureResponsesLLMConfig(BaseLLMConfig):
     base_url: str = Field(
         default="https://api.openai.azure.com/",
         description="Base URL for Azure OpenAI API",
@@ -65,6 +88,10 @@ class OllamaLLMConfig(BaseLLMConfig):
     api_base: str = Field(
         default="http://localhost:11434",
         description="Base URL for Ollama API",
+    )
+    enable_thinking: bool = Field(
+        default=False,
+        description="Enable reasoning outputs from Ollama",
     )
 
 
@@ -85,6 +112,10 @@ class VLLMLLMConfig(BaseLLMConfig):
         default="http://localhost:8088/v1",
         description="Base URL for vLLM API",
     )
+    enable_thinking: bool = Field(
+        default=False,
+        description="Enable reasoning outputs from vLLM",
+    )
 
 
 class LLMConfigFactory(BaseConfig):
@@ -102,6 +133,7 @@ class LLMConfigFactory(BaseConfig):
         "huggingface_singleton": HFLLMConfig,  # Add singleton support
         "qwen": QwenLLMConfig,
         "deepseek": DeepSeekLLMConfig,
+        "openai_new": OpenAIResponsesLLMConfig,
     }
 
     @field_validator("backend")

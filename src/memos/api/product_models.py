@@ -1,7 +1,6 @@
-import os
 import uuid
 
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -37,7 +36,7 @@ class UserRegisterRequest(BaseRequest):
     interests: str | None = Field(None, description="User interests")
 
 
-class GetMemoryRequest(BaseRequest):
+class GetMemoryPlaygroundRequest(BaseRequest):
     """Request model for getting memories."""
 
     user_id: str = Field(..., description="User ID")
@@ -80,9 +79,20 @@ class ChatRequest(BaseRequest):
         None, description="List of cube IDs user can write for multi-cube chat"
     )
     history: list[MessageDict] | None = Field(None, description="Chat history")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     internet_search: bool = Field(True, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    top_k: int = Field(10, description="Number of results to return")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
 
 
 class ChatCompleteRequest(BaseRequest):
@@ -93,11 +103,18 @@ class ChatCompleteRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
-    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    system_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
 
 
 class UserCreate(BaseRequest):
@@ -129,6 +146,10 @@ class SuggestionResponse(BaseResponse[list]):
     data: dict[str, list[str]] | None = Field(None, description="Response data")
 
 
+class AddStatusResponse(BaseResponse[dict]):
+    """Response model for add status operations."""
+
+
 class ConfigResponse(BaseResponse[None]):
     """Response model for configuration endpoint."""
 
@@ -139,6 +160,14 @@ class SearchResponse(BaseResponse[dict]):
 
 class ChatResponse(BaseResponse[str]):
     """Response model for chat operations."""
+
+
+class GetMemoryResponse(BaseResponse[dict]):
+    """Response model for getting memories."""
+
+
+class DeleteMemoryResponse(BaseResponse[dict]):
+    """Response model for deleting memories."""
 
 
 class UserResponse(BaseResponse[dict]):
@@ -181,11 +210,8 @@ class APISearchRequest(BaseRequest):
     readable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can read for multi-cube search"
     )
-    mode: SearchMode = Field(
-        os.getenv("SEARCH_MODE", SearchMode.FAST), description="search mode: fast, fine, or mixture"
-    )
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
     top_k: int = Field(10, description="Number of results to return")
     chat_history: list[MessageDict] | None = Field(None, description="Chat history")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
@@ -194,6 +220,7 @@ class APISearchRequest(BaseRequest):
     )
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
 
 
 class APIADDRequest(BaseRequest):
@@ -213,8 +240,13 @@ class APIADDRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
-    async_mode: Literal["async", "sync"] | None = Field(
-        None, description="Whether to add memory in async mode"
+    async_mode: Literal["async", "sync"] = Field(
+        "async", description="Whether to add memory in async mode"
+    )
+    custom_tags: list[str] | None = Field(None, description="Custom tags for the memory")
+    info: dict[str, str] | None = Field(None, description="Additional information for the memory")
+    is_feedback: bool = Field(
+        False, description="Whether the user feedback in knowladge base service"
     )
 
 
@@ -232,13 +264,43 @@ class APIChatCompleteRequest(BaseRequest):
     )
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(True, description="Whether to use MemOSCube")
-    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(
         "default_session", description="Session ID for soft-filtering memories"
     )
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+
+class AddStatusRequest(BaseRequest):
+    """Request model for checking add status."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    user_id: str | None = Field(None, description="User ID")
+    session_id: str | None = Field(None, description="Session ID")
+
+
+class GetMemoryRequest(BaseRequest):
+    """Request model for getting memories."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    user_id: str | None = Field(None, description="User ID")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+
+
+class DeleteMemoryRequest(BaseRequest):
+    """Request model for deleting memories."""
+
+    memory_ids: list[str] = Field(..., description="Memory IDs")
 
 
 class SuggestionRequest(BaseRequest):
