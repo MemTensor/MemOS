@@ -1,5 +1,6 @@
 import hashlib
 import json
+import time
 
 from collections.abc import Generator
 from typing import ClassVar
@@ -57,12 +58,15 @@ class OpenAILLM(BaseLLM):
         cls._instances.clear()
         logger.info("OpenAI LLM instance cache cleared")
 
-    @timed(log=True, log_prefix="OpenAI LLM")
+    @timed(log=True, log_prefix="model_timed_openai")
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM, optionally overriding generation params."""
         temperature = kwargs.get("temperature", self.config.temperature)
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
         top_p = kwargs.get("top_p", self.config.top_p)
+        start_time = time.time()
+        logger.info(f"openai model request start, model_name: {self.config.model_name_or_path}")
+
         response = self.client.chat.completions.create(
             model=self.config.model_name_or_path,
             messages=messages,
@@ -72,7 +76,11 @@ class OpenAILLM(BaseLLM):
             top_p=top_p,
             **kwargs,
         )
-        logger.info(f"Response from OpenAI: {response.model_dump_json()}")
+
+        end_time = time.time()
+        logger.info(
+            f"openai model request end, time_cost: {end_time - start_time:.0f} ms, response from OpenAI: {response.model_dump_json()}"
+        )
         response_content = response.choices[0].message.content
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)

@@ -17,8 +17,9 @@ def timed(func=None, *, log=True, log_prefix=""):
             start = time.perf_counter()
             result = fn(*args, **kwargs)
             elapsed = time.perf_counter() - start
+            elapsed_ms = elapsed * 1000.0
             if log:
-                logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed:.2f} seconds")
+                logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
             return result
 
         return wrapper

@@ -566,20 +566,71 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
     def get_web_log_messages(self) -> list[dict]:
         """
-        Retrieves all web log messages from the queue and returns them as a list of JSON-serializable dictionaries.
-
-        Returns:
-            List[dict]: A list of dictionaries representing ScheduleLogForWebItem objects,
-                       ready for JSON serialization. The list is ordered from oldest to newest.
+        Retrieve structured log messages from the queue and return JSON-serializable dicts.
         """
-        messages = []
+        raw_items: list[ScheduleLogForWebItem] = []
         while True:
             try:
-                item = self._web_log_message_queue.get_nowait()  # Thread-safe get
-                messages.append(item.to_dict())
+                raw_items.append(self._web_log_message_queue.get_nowait())
             except Exception:
                 break
-        return messages
+
+        def _map_label(label: str) -> str:
+            from memos.mem_scheduler.schemas.general_schemas import (
+                QUERY_LABEL,
+                ANSWER_LABEL,
+                ADD_LABEL,
+                MEM_UPDATE_LABEL,
+                MEM_ORGANIZE_LABEL,
+                MEM_ARCHIVE_LABEL,
+            )
+
+            mapping = {
+                QUERY_LABEL: "addMessage",
+                ANSWER_LABEL: "addMessage",
+                ADD_LABEL: "addMemory",
+                MEM_UPDATE_LABEL: "updateMemory",
+                MEM_ORGANIZE_LABEL: "mergeMemory",
+                MEM_ARCHIVE_LABEL: "archiveMemory",
+            }
+            return mapping.get(label, label)
+
+        def _normalize_item(item: ScheduleLogForWebItem) -> dict:
+            data = item.to_dict()
+            data["label"] = _map_label(data.get("label"))
+            memcube_content = getattr(item, "memcube_log_content", None) or []
+            metadata = getattr(item, "metadata", None) or []
+
+            memcube_name = getattr(item, "memcube_name", None)
+            if not memcube_name and hasattr(self, "_map_memcube_name"):
+                memcube_name = self._map_memcube_name(item.mem_cube_id)
+            data["memcube_name"] = memcube_name
+
+            memory_len = getattr(item, "memory_len", None)
+            if memory_len is None:
+                if data["label"] == "mergeMemory":
+                    memory_len = len([c for c in memcube_content if c.get("type") != "postMerge"])
+                elif memcube_content:
+                    memory_len = len(memcube_content)
+                else:
+                    memory_len = 1 if item.log_content else 0
+
+            data["memcube_log_content"] = memcube_content
+            data["memory_len"] = memory_len
+
+            def _with_memory_time(meta: dict) -> dict:
+                enriched = dict(meta)
+                if "memory_time" not in enriched:
+                    enriched["memory_time"] = enriched.get("updated_at") or enriched.get(
+                        "update_at"
+                    )
+                return enriched
+
+            data["metadata"] = [_with_memory_time(m) for m in metadata]
+            data["log_title"] = ""
+            return data
+
+        return [_normalize_item(it) for it in raw_items]
 
     def _message_consumer(self) -> None:
         """
