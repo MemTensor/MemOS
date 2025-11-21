@@ -74,6 +74,7 @@ class OpenAILLM(BaseLLM):
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
+            **kwargs,
         )
 
         end_time = time.time()
