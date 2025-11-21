@@ -245,7 +245,7 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
         )
 
 
-@router.get("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
+@router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
 def get_memories(memory_req: GetMemoryRequest):
     return handlers.memory_handler.handle_get_memories(
         get_mem_req=memory_req,
@@ -257,4 +257,6 @@ def get_memories(memory_req: GetMemoryRequest):
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
 def delete_memories(memory_req: DeleteMemoryRequest):
-    return handlers.memory_handler.handle_delete_memories(memory_req)
+    return handlers.memory_handler.handle_delete_memories(
+        delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
+    )

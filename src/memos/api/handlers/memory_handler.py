@@ -160,7 +160,7 @@ def handle_get_subgraph(
 
 def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> GetMemoryResponse:
     # TODO: Implement get memory with filter
-    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)
+    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
     filter_params: dict[str, Any] = {}
     if get_mem_req.user_id is not None:
         filter_params["user_id"] = get_mem_req.user_id
@@ -170,7 +170,7 @@ def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> G
     return GetMemoryResponse(
         message="Memories retrieved successfully",
         data={
-            "text_mem": [format_memory_item(mem) for mem in memories],
+            "text_mem": memories,
             "pref_mem": [format_memory_item(mem) for mem in preferences],
         },
     )
@@ -188,5 +188,5 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
         )
     return DeleteMemoryResponse(
         message="Memories deleted successfully",
-        data="success",
+        data={"status": "success"},
     )
