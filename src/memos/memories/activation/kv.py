@@ -2,9 +2,6 @@ import os
 import pickle
 
 from datetime import datetime
-from importlib.metadata import version
-
-from packaging.version import Version
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
@@ -210,29 +207,26 @@ class KVCacheMemory(BaseActMemory):
         if len(caches) == 1:
             return caches[0]
 
-        merged = DynamicCache()
-        num_layers = len(caches[0].key_cache)
-
-        if Version(version("transformers")) >= Version("4.54.0"):
-            merged.append_new_layers(num_layers - 1)
+        # Newer transformers expose `layers` with `.keys`/`.values`
+        if hasattr(caches[0], "layers") and caches[0].layers is not None:
+            num_layers = len(caches[0].layers)
+            base = caches[0]
             for layer in range(num_layers):
-                # gather all K and V for this layer
                 keys = [c.layers[layer].keys for c in caches]
                 vals = [c.layers[layer].values for c in caches]
-                # single concat per layer
-                merged.layers[layer].keys = torch.cat(keys, dim=-2)
-                merged.layers[layer].values = torch.cat(vals, dim=-2)
-
+                base.layers[layer].keys = torch.cat(keys, dim=-2)
+                base.layers[layer].values = torch.cat(vals, dim=-2)
+            return base
         else:
+            # Legacy API: key_cache/value_cache lists
+            merged = DynamicCache()
+            num_layers = len(caches[0].key_cache)
             for layer in range(num_layers):
-                # gather all K and V for this layer
                 keys = [c.key_cache[layer] for c in caches]
                 vals = [c.value_cache[layer] for c in caches]
-                # single concat per layer
                 merged.key_cache.append(torch.cat(keys, dim=-2))
                 merged.value_cache.append(torch.cat(vals, dim=-2))
-
-        return merged
+            return merged
 
 
 def move_dynamic_cache_htod(dynamic_cache: DynamicCache, device: str) -> DynamicCache:
