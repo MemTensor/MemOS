@@ -14,6 +14,23 @@ from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem
 
+from .openai_chat_completion_types import (
+    ChatCompletionContentPartTextParam,
+    ChatCompletionMessageParam,
+    File,
+)
+
+
+__all__ = [
+    "ChatHistory",
+    "MOSSearchResult",
+    "MessageDict",
+    "MessageList",
+    "MessageRole",
+    "Permission",
+    "PermissionDict",
+    "UserContext",
+]
 
 # ─── Message Types ──────────────────────────────────────────────────────────────
 
@@ -32,8 +49,16 @@ class MessageDict(TypedDict, total=False):
     message_id: str | None  # Optional unique identifier for the message
 
 
+RawMessageDict: TypeAlias = ChatCompletionContentPartTextParam | File
+
+
 # Message collections
-MessageList: TypeAlias = list[MessageDict]
+MessageList: TypeAlias = list[ChatCompletionMessageParam]
+RawMessageList: TypeAlias = list[RawMessageDict]
+
+
+# Messages Type
+MessagesType: TypeAlias = str | MessageList | RawMessageList
 
 
 # Chat history structure

@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 
 def handle_scheduler_status(
-    user_name: str | None = None,
+    mem_cube_id: str | None = None,
     mem_scheduler: Any | None = None,
     instance_id: str = "",
 ) -> dict[str, Any]:
@@ -43,9 +43,9 @@ def handle_scheduler_status(
         HTTPException: If status retrieval fails
     """
     try:
-        if user_name:
+        if mem_cube_id:
             running = mem_scheduler.dispatcher.get_running_tasks(
-                lambda task: getattr(task, "mem_cube_id", None) == user_name
+                lambda task: getattr(task, "mem_cube_id", None) == mem_cube_id
             )
             tasks_iter = to_iter(running)
             running_count = len(tasks_iter)
@@ -53,7 +53,7 @@ def handle_scheduler_status(
                 "message": "ok",
                 "data": {
                     "scope": "user",
-                    "user_name": user_name,
+                    "mem_cube_id": mem_cube_id,
                     "running_tasks": running_count,
                     "timestamp": time.time(),
                     "instance_id": instance_id,
