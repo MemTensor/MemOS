@@ -93,6 +93,9 @@ class ChatRequest(BaseRequest):
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+    moscube: bool = Field(
+        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+    )
 
 
 class ChatCompleteRequest(BaseRequest):
@@ -115,6 +118,11 @@ class ChatCompleteRequest(BaseRequest):
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+    base_prompt: str | None = Field(None, description="(Deprecated) Base prompt alias")
+    moscube: bool = Field(
+        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+    )
 
 
 class UserCreate(BaseRequest):

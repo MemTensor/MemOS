@@ -328,7 +328,9 @@ class APIConfig:
                 "top_p": 0.95,
                 "top_k": 20,
                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
-                "api_base": os.getenv("MEMRADER_API_BASE"),
+                # Default to OpenAI base URL when env var is not provided to satisfy pydantic
+                # validation requirements during tests/import.
+                "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
                 "remove_think_prefix": True,
                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             },
