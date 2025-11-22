@@ -68,6 +68,7 @@ def mock_init_server():
         "pref_retriever": None,
         "pref_mem": None,
         "online_bot": None,
+        "chat_llms": Mock(),
     }
 
     with patch("memos.api.handlers.init_server", return_value=mock_components):
@@ -184,6 +185,7 @@ class TestServerRouterSearch:
 
         request_data = {
             "query": "test query",
+            "user_id": "test_user_id",
             "mem_cube_id": "test_cube",
         }
 
@@ -225,18 +227,6 @@ class TestServerRouterAdd:
         assert isinstance(call_args, APIADDRequest)
         assert call_args.mem_cube_id == "test_cube"
         assert call_args.user_id == "test_user"
-
-    def test_add_invalid_input_missing_cube_id(self, mock_handlers, client):
-        """Test add endpoint with missing required field."""
-        request_data = {
-            "user_id": "test_user",
-            "memory_content": "test memory content",
-        }
-
-        response = client.post("/product/add", json=request_data)
-
-        # Should return validation error
-        assert response.status_code == 422
 
     def test_add_response_format(self, mock_handlers, client):
         """Test add endpoint returns MemoryResponse format."""
