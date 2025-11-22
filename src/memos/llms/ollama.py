@@ -77,8 +77,9 @@ class OllamaLLM(BaseLLM):
             tools=kwargs.get("tools"),
         )
         logger.info(f"Raw response from Ollama: {response.model_dump_json()}")
-        if response.message.tool_calls:
-            return self.tool_call_parser(response.message.tool_calls)
+        tool_calls = getattr(response.message, "tool_calls", None)
+        if isinstance(tool_calls, list) and len(tool_calls) > 0:
+            return self.tool_call_parser(tool_calls)
 
         str_thinking = (
             f"<think>{response.message.thinking}</think>"

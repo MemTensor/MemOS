@@ -41,18 +41,18 @@ class OpenAILLM(BaseLLM):
             tools=kwargs.get("tools", NOT_GIVEN),
         )
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
-        if response.choices[0].message.tool_calls:
-            return self.tool_call_parser(response.choices[0].message.tool_calls)
-        reasoning_content = (
-            f"<think>{response.choices[0].message.reasoning_content}</think>"
-            if hasattr(response.choices[0].message, "reasoning_content")
-            else ""
-        )
+        tool_calls = getattr(response.choices[0].message, "tool_calls", None)
+        if isinstance(tool_calls, list) and len(tool_calls) > 0:
+            return self.tool_call_parser(tool_calls)
         response_content = response.choices[0].message.content
+        reasoning_content = getattr(response.choices[0].message, "reasoning_content", None)
+        if isinstance(reasoning_content, str) and reasoning_content:
+            reasoning_content = f"<think>{reasoning_content}</think>"
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
-        else:
+        if reasoning_content:
             return reasoning_content + response_content
+        return response_content
 
     @timed(log=True, log_prefix="OpenAI LLM")
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
