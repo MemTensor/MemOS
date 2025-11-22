@@ -37,6 +37,7 @@ def _setup_logfile() -> Path:
     logfile = Path(settings.MEMOS_DIR / "logs" / "memos.log")
     logfile.parent.mkdir(parents=True, exist_ok=True)
     logfile.touch(exist_ok=True)
+
     return logfile
 
 
@@ -195,10 +196,11 @@ LOGGING_CONFIG = {
         },
         "file": {
             "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "when": "midnight",
+            "interval": 1,
+            "backupCount": 3,
             "filename": _setup_logfile(),
-            "maxBytes": 1024**2 * 10,
-            "backupCount": 10,
             "formatter": "standard",
             "filters": ["context_filter"],
         },

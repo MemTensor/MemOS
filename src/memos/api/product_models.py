@@ -73,6 +73,12 @@ class ChatRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    readable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can read for multi-cube chat"
+    )
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube chat"
+    )
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(True, description="Whether to use internet search")
     moscube: bool = Field(False, description="Whether to use MemOSCube")
@@ -172,6 +178,9 @@ class APISearchRequest(BaseRequest):
     query: str = Field(..., description="Search query")
     user_id: str = Field(None, description="User ID")
     mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    readable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can read for multi-cube search"
+    )
     mode: SearchMode = Field(
         os.getenv("SEARCH_MODE", SearchMode.FAST), description="search mode: fast, fine, or mixture"
     )
@@ -191,7 +200,10 @@ class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
     user_id: str = Field(None, description="User ID")
-    mem_cube_id: str = Field(..., description="Cube ID")
+    mem_cube_id: str | None = Field(None, description="Cube ID")
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube add"
+    )
     messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
@@ -201,8 +213,8 @@ class APIADDRequest(BaseRequest):
     operation: list[PermissionDict] | None = Field(
         None, description="operation ids for multi cubes"
     )
-    async_mode: Literal["async", "sync"] = Field(
-        "async", description="Whether to add memory in async mode"
+    async_mode: Literal["async", "sync"] | None = Field(
+        None, description="Whether to add memory in async mode"
     )
 
 
@@ -212,6 +224,12 @@ class APIChatCompleteRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    readable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can read for multi-cube chat"
+    )
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube chat"
+    )
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
     moscube: bool = Field(True, description="Whether to use MemOSCube")
