@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Union
-from typing_extensions import Literal, Required, TypeAlias, TypedDict
+from typing import Literal, TypeAlias
 
-from .chat_completion_content_part_text_param import ChatCompletionContentPartTextParam
+from typing_extensions import Required, TypedDict
+
 from .chat_completion_content_part_image_param import ChatCompletionContentPartImageParam
 from .chat_completion_content_part_input_audio_param import ChatCompletionContentPartInputAudioParam
+from .chat_completion_content_part_text_param import ChatCompletionContentPartTextParam
+
 
 __all__ = ["ChatCompletionContentPartParam", "File", "FileFile"]
 
@@ -31,9 +33,9 @@ class File(TypedDict, total=False):
     """The type of the content part. Always `file`."""
 
 
-ChatCompletionContentPartParam: TypeAlias = Union[
-    ChatCompletionContentPartTextParam,
-    ChatCompletionContentPartImageParam,
-    ChatCompletionContentPartInputAudioParam,
-    File,
-]
+ChatCompletionContentPartParam: TypeAlias = (
+    ChatCompletionContentPartTextParam
+    | ChatCompletionContentPartImageParam
+    | ChatCompletionContentPartInputAudioParam
+    | File
+)

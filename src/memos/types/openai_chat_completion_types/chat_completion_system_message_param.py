@@ -1,15 +1,20 @@
+# ruff: noqa: TC001, TC003
+
 from __future__ import annotations
 
-from typing import Union, Iterable, Optional
-from typing_extensions import Literal, Required, TypedDict
+from collections.abc import Iterable
+from typing import Literal
+
+from typing_extensions import Required, TypedDict
 
 from .chat_completion_content_part_text_param import ChatCompletionContentPartTextParam
+
 
 __all__ = ["ChatCompletionSystemMessageParam"]
 
 
 class ChatCompletionSystemMessageParam(TypedDict, total=False):
-    content: Required[Union[str, Iterable[ChatCompletionContentPartTextParam]]]
+    content: Required[str | Iterable[ChatCompletionContentPartTextParam]]
     """The contents of the system message."""
 
     role: Required[Literal["system"]]
@@ -22,9 +27,9 @@ class ChatCompletionSystemMessageParam(TypedDict, total=False):
     role.
     """
 
-    chat_time: Optional[str] 
+    chat_time: str | None
     """Optional timestamp for the message, format is not
     restricted, it can be any vague or precise time string."""
 
-    message_id: Optional[str]
+    message_id: str | None
     """Optional unique identifier for the message"""

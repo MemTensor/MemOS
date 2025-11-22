@@ -1,29 +1,28 @@
+import re
 import shutil
 import sys
 
+from datetime import datetime
 from pathlib import Path
 from queue import Queue
+
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
-from datetime import datetime
-import re
-
 from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
+from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
-    QUERY_LABEL,
-    ANSWER_LABEL,
     ADD_LABEL,
+    ANSWER_LABEL,
+    MEM_ARCHIVE_LABEL,
     MEM_ORGANIZE_LABEL,
     MEM_UPDATE_LABEL,
-    MEM_ARCHIVE_LABEL,
-    NOT_APPLICABLE_TYPE,
+    QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
 
 
 FILE_PATH = Path(__file__).absolute()

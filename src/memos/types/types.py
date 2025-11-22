@@ -13,15 +13,20 @@ from typing_extensions import TypedDict
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
 from memos.memories.textual.item import TextualMemoryItem
-from .openai_chat_completion_types import ChatCompletionMessageParam, ChatCompletionContentPartTextParam, File
+
+from .openai_chat_completion_types import (
+    ChatCompletionContentPartTextParam,
+    ChatCompletionMessageParam,
+    File,
+)
 
 
 __all__ = [
-    "MessageRole",
-    "MessageDict",
-    "MessageList",
     "ChatHistory",
     "MOSSearchResult",
+    "MessageDict",
+    "MessageList",
+    "MessageRole",
     "Permission",
     "PermissionDict",
     "UserContext",
@@ -54,7 +59,6 @@ RawMessageList: TypeAlias = list[RawMessageDict]
 
 # Messages Type
 MessagesType: TypeAlias = str | MessageList | RawMessageList
-
 
 
 # Chat history structure

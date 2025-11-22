@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing_extensions import Literal, Required, TypedDict
+from typing import Literal
+
+from typing_extensions import Required, TypedDict
+
 
 __all__ = ["ChatCompletionContentPartInputAudioParam", "InputAudio"]
 
