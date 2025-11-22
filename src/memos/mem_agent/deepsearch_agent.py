@@ -6,6 +6,7 @@ query refinement and memory retrieval to provide comprehensive answers.
 """
 
 import json
+import re
 
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +15,7 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_agent.base import BaseMemAgent
 from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.tree import TreeTextMemory
 from memos.templates.mem_agent_prompts import (
     FINAL_GENERATION_PROMPT,
     QUERY_REWRITE_PROMPT,
@@ -25,91 +27,96 @@ if TYPE_CHECKING:
     from memos.types import MessageList
 
 
+class JSONResponseParser:
+    """Elegant JSON response parser for LLM outputs"""
+
+    @staticmethod
+    def parse(response: str) -> dict[str, Any]:
+        """Parse JSON response from LLM output with fallback strategies"""
+        # Clean response text by removing code block markers
+        cleaned = re.sub(r"^```(?:json)?\s*\n?|```\s*$", "", response.strip(), flags=re.IGNORECASE)
+
+        # Try parsing with multiple strategies
+        for text in [cleaned, re.search(r"\{.*\}", cleaned, re.DOTALL)]:
+            if not text:
+                continue
+            try:
+                return json.loads(text if isinstance(text, str) else text.group())
+            except json.JSONDecodeError:
+                continue
+
+        raise ValueError(f"Cannot parse JSON response: {response[:100]}...")
+
+
 logger = get_logger(__name__)
 
 
 class QueryRewriter(BaseMemAgent):
-    """
-    Specialized agent for rewriting queries based on conversation history.
-    Corresponds to the "LLM subAgent (Rewrite...)" in the architecture diagram.
-    """
+    """Specialized agent for rewriting queries based on conversation history"""
 
     def __init__(self, llm: BaseLLM, name: str = "QueryRewriter"):
         self.llm = llm
         self.name = name
 
     def run(self, query: str, history: list[str] | None = None) -> str:
-        """
-        Rewrite the query to be standalone and more searchable.
+        """Rewrite query to be standalone and more searchable"""
+        history = history or []
+        history_context = self._format_history(history)
 
-        Args:
-            query: Original user query
-            history: List of previous conversation messages
-
-        Returns:
-            Rewritten query string
-        """
-        if history is None:
-            history = []
-
-        history_str = "\n".join([f"- {msg}" for msg in history[-5:]])  # Last 5 messages
-
-        prompt = QUERY_REWRITE_PROMPT.format(
-            history=history_str if history_str else "No previous conversation", query=query
-        )
-
-        messages: MessageList = [{"role": "user", "content": prompt}]
-
+        prompt = QUERY_REWRITE_PROMPT.format(history=history_context, query=query)
+        messages = [{"role": "user", "content": prompt}]
         try:
             response = self.llm.generate(messages)
             logger.info(f"[{self.name}] Rewritten query: {response.strip()}")
             return response.strip()
         except Exception as e:
-            logger.error(f"[{self.name}] Error rewriting query: {e}")
-            return query  # Fallback to original query
+            logger.error(f"[{self.name}] Query rewrite failed: {e}")
+            return query
+
+    def _format_history(self, history: list[str]) -> str:
+        """Format conversation history for prompt context"""
+        if not history:
+            return "No previous conversation"
+        return "\n".join(f"- {msg}" for msg in history[-5:])
 
 
 class ReflectionAgent:
-    """
-    Specialized agent for analyzing information sufficiency.
-    Corresponds to the decision diamond in the architecture diagram.
-    """
+    """Specialized agent for analyzing information sufficiency"""
 
     def __init__(self, llm: BaseLLM, name: str = "Reflector"):
         self.llm = llm
         self.name = name
 
     def run(self, query: str, context: list[str]) -> dict[str, Any]:
-        """
-        Analyze whether retrieved context is sufficient to answer the query.
-
-        Args:
-            query: User query
-            context: List of retrieved context strings
-
-        Returns:
-            Dictionary with status, reasoning, and missing entities
-        """
-        context_str = "\n".join(
-            [f"- {ctx[:200]}..." if len(ctx) > 200 else f"- {ctx}" for ctx in context[:10]]
-        )  # Limit context size
-
-        prompt = REFLECTION_PROMPT.format(query=query, context=context_str)
-        messages: MessageList = [{"role": "user", "content": prompt}]
+        """Analyze whether retrieved context is sufficient to answer the query"""
+        context_summary = self._format_context(context)
+        prompt = REFLECTION_PROMPT.format(query=query, context=context_summary)
 
         try:
-            response = self.llm.generate(messages)
-            result = json.loads(response.strip())
-            logger.info(f"[{self.name}] Reflection result: {result.get('status', 'unknown')}")
+            response = self.llm.generate([{"role": "user", "content": prompt}])
+            logger.info(f"[{self.name}] Reflection response: {response}")
+
+            result = JSONResponseParser.parse(response.strip())
+            logger.info(f"[{self.name}] Reflection result: {result}")
             return result
-        except (json.JSONDecodeError, Exception) as e:
-            logger.error(f"[{self.name}] Error in reflection analysis: {e}")
-            # Fallback response
-            return {
-                "status": "sufficient",
-                "reasoning": "Unable to analyze, proceeding with available information",
-                "missing_entities": [],
-            }
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Reflection analysis failed: {e}")
+            return self._fallback_response()
+
+    def _format_context(self, context: list[str]) -> str:
+        """Format context strings for analysis with length limits"""
+        return "\n".join(
+            f"- {ctx[:200]}..." if len(ctx) > 200 else f"- {ctx}" for ctx in context[:10]
+        )
+
+    def _fallback_response(self) -> dict[str, Any]:
+        """Return safe fallback when reflection fails"""
+        return {
+            "status": "sufficient",
+            "reasoning": "Unable to analyze, proceeding with available information",
+            "missing_entities": [],
+        }
 
 
 class DeepSearchMemAgent(BaseMemAgent):
@@ -123,7 +130,7 @@ class DeepSearchMemAgent(BaseMemAgent):
     def __init__(
         self,
         llm: BaseLLM,
-        memory_retriever: Any | None = None,
+        memory_retriever: TreeTextMemory | None = None,
         config: DeepSearchAgentConfig | None = None,
     ):
         """
@@ -142,12 +149,7 @@ class DeepSearchMemAgent(BaseMemAgent):
         self.reflector: ReflectionAgent = ReflectionAgent(llm, "Reflector")
         self.memory_retriever = memory_retriever
 
-    def _set_memory_retriever(self, retriever) -> None:
-        """Set the memory retrieval interface."""
-        self.memory_retriever = retriever
-        logger.info("Memory retriever interface set")
-
-    def run(self, query: str, **kwargs) -> str:
+    def run(self, query: str, **kwargs) -> str | list[TextualMemoryItem]:
         """
         Main execution method implementing the deep search pipeline.
 
@@ -162,6 +164,7 @@ class DeepSearchMemAgent(BaseMemAgent):
 
         history = kwargs.get("history", [])
         user_id = kwargs.get("user_id")
+        generated_answer = kwargs.get("generated_answer")
 
         # Step 1: Query Rewriting
         current_query = self.query_rewriter.run(query, history)
@@ -175,7 +178,7 @@ class DeepSearchMemAgent(BaseMemAgent):
             logger.info(f"Starting iteration {iteration + 1}/{self.max_iterations}")
 
             search_results = self._perform_memory_search(
-                current_query, keywords=search_keywords, user_id=user_id
+                current_query, keywords=search_keywords, user_id=user_id, history=history
             )
 
             if search_results:
@@ -198,7 +201,8 @@ class DeepSearchMemAgent(BaseMemAgent):
                 elif status == "missing_info":
                     missing_entities = reflection_result.get("missing_entities", [])
                     logger.info(f"Missing information: {missing_entities}")
-                    if missing_entities:
+                    current_query = reflection_result.get("new_search_query")
+                    if not current_query:
                         refined_query = self._refine_query_for_missing_info(
                             current_query, missing_entities
                         )
@@ -211,22 +215,63 @@ class DeepSearchMemAgent(BaseMemAgent):
                 else:
                     break
 
-        # Step 3: Generate final answer
-        final_answer = self._generate_final_answer(
-            original_query=query,
-            search_results=accumulated_memories,
-            context=accumulated_context,
-            missing_info="",
-        )
+        if not generated_answer:
+            return self._remove_duplicate_memories(accumulated_memories)
+        else:
+            return self._generate_final_answer(
+                query, accumulated_memories, accumulated_context, "", history
+            )
 
-        logger.info("Deep search pipeline completed")
-        return final_answer
+    def _remove_duplicate_memories(
+        self, memories: list[TextualMemoryItem]
+    ) -> list[TextualMemoryItem]:
+        """
+        Remove duplicate memories based on memory content.
+
+        Args:
+            memories: List of TextualMemoryItem objects to deduplicate
+
+        Returns:
+            List of unique TextualMemoryItem objects (first occurrence kept)
+        """
+        seen = set()
+        return [
+            memory
+            for memory in memories
+            if (content := getattr(memory, "memory", "").strip())
+            and content not in seen
+            and not seen.add(content)
+        ]
+
+    def _generate_final_answer(
+        self,
+        original_query: str,
+        search_results: list[TextualMemoryItem],
+        context: list[str],
+        missing_info: str = "",
+        history: list[str] | None = None,
+        sources: list[str] | None = None,
+    ) -> str:
+        """
+        Generate the final answer.
+        """
+        context_str = "\n".join([f"- {ctx}" for ctx in context[:20]])
+        prompt = FINAL_GENERATION_PROMPT.format(
+            query=original_query,
+            sources=sources,
+            context=context_str if context_str else "No specific context retrieved",
+            missing_info=missing_info if missing_info else "None identified",
+        )
+        messages: MessageList = [{"role": "user", "content": prompt}]
+        response = self.llm.generate(messages)
+        return response.strip()
 
     def _perform_memory_search(
         self,
         query: str,
         keywords: list[str] | None = None,
         user_id: str | None = None,
+        history: list[str] | None = None,
         top_k: int = 10,
     ) -> list[TextualMemoryItem]:
         """
@@ -254,7 +299,11 @@ class DeepSearchMemAgent(BaseMemAgent):
 
             # Assuming the retriever has a search method similar to TreeTextMemory
             results = self.memory_retriever.search(
-                query=search_query, top_k=top_k, mode="fast", user_name=user_id
+                query=search_query,
+                top_k=top_k,
+                mode="fast",
+                user_name=user_id,
+                info={"history": history},
             )
 
             return results if isinstance(results, list) else []
@@ -316,7 +365,6 @@ class DeepSearchMemAgent(BaseMemAgent):
             context=context_str if context_str else "No specific context retrieved",
             missing_info=missing_info if missing_info else "None identified",
         )
-
         messages: MessageList = [{"role": "user", "content": prompt}]
 
         try:

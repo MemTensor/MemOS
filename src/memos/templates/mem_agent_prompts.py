@@ -25,14 +25,15 @@ Analyze the context and determine the next step. Return your response in JSON fo
 {{
     "status": "sufficient|missing_info|needs_raw",
     "reasoning": "Brief explanation of your decision",
-    "missing_entities": ["entity1", "entity2"] // Only if status is "missing_info",
-
+    "missing_entities": ["entity1", "entity2"],
+    "new_search_query": "new search query",
 }}
 
 Status definitions:
 - "sufficient": Context fully answers the query
 - "missing_info": Key information is missing (e.g., specific dates, locations, details)
 - "needs_raw": Content is relevant but too summarized/vague, need original sources
+- "new_search_query": New search query to retrieve more information
 
 Response:"""
 
