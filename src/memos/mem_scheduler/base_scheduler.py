@@ -152,7 +152,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         if searcher is None:
             self.searcher: Searcher = self.text_mem.get_searcher(
                 manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-                moscube=False,
             )
         else:
             self.searcher = searcher
@@ -577,12 +576,12 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         def _map_label(label: str) -> str:
             from memos.mem_scheduler.schemas.general_schemas import (
-                QUERY_LABEL,
-                ANSWER_LABEL,
                 ADD_LABEL,
-                MEM_UPDATE_LABEL,
-                MEM_ORGANIZE_LABEL,
+                ANSWER_LABEL,
                 MEM_ARCHIVE_LABEL,
+                MEM_ORGANIZE_LABEL,
+                MEM_UPDATE_LABEL,
+                QUERY_LABEL,
             )
 
             mapping = {

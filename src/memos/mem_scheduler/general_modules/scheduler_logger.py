@@ -1,3 +1,5 @@
+import hashlib
+
 from collections.abc import Callable
 
 from memos.log import get_logger
@@ -6,13 +8,13 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     ACTIVATION_MEMORY_TYPE,
     ADD_LABEL,
+    MEM_ARCHIVE_LABEL,
+    MEM_UPDATE_LABEL,
     NOT_INITIALIZED,
     PARAMETER_MEMORY_TYPE,
     TEXT_MEMORY_TYPE,
     USER_INPUT_TYPE,
     WORKING_MEMORY_TYPE,
-    MEM_UPDATE_LABEL,
-    MEM_ARCHIVE_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
@@ -23,7 +25,6 @@ from memos.mem_scheduler.utils.filter_utils import (
 )
 from memos.mem_scheduler.utils.misc_utils import log_exceptions
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-import hashlib
 
 
 logger = get_logger(__name__)
