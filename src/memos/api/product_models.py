@@ -199,22 +199,112 @@ class APISearchRequest(BaseRequest):
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
+    # ==== Basic identifiers ====
     user_id: str = Field(None, description="User ID")
-    mem_cube_id: str | None = Field(None, description="Cube ID")
+    session_id: str | None = Field(
+        None,
+        description="Session ID. If not provided, a default session will be used.",
+    )
+    # ==== Single-cube writing (Deprecated) ====
+    mem_cube_id: str | None = Field(
+        None,
+        description="(Deprecated) Target cube ID for this add request (optional for developer API).",
+    )
+
+    # ==== Multi-cube writing ====
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube add"
     )
-    messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
-    memory_content: str | None = Field(None, description="Memory content to store")
-    doc_path: str | None = Field(None, description="Path to document to store")
-    source: str | None = Field(None, description="Source of the memory")
-    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
-    session_id: str | None = Field(None, description="Session id")
-    operation: list[PermissionDict] | None = Field(
-        None, description="operation ids for multi cubes"
+
+    # ==== Async control ====
+    async_mode: Literal["async", "sync"] = Field(
+        "async",
+        description=(
+            "Whether to add memory in async mode. "
+            "Use 'async' to enqueue background add (non-blocking), "
+            "or 'sync' to add memories in the current call. "
+            "Default: 'async'."
+        ),
     )
-    async_mode: Literal["async", "sync"] | None = Field(
-        None, description="Whether to add memory in async mode"
+
+    # ==== Business tags & info ====
+    custom_tags: list[str] | None = Field(
+        None,
+        description=(
+            "Custom tags for this add request, e.g. ['Travel', 'family']. "
+            "These tags can be used as filters in search."
+        ),
+    )
+
+    info: dict[str, str] | None = Field(
+        None,
+        description=(
+            "Additional metadata for the add request. "
+            "All keys can be used as filters in search. "
+            "Example: "
+            "{'agent_id': 'xxxxxx', "
+            "'app_id': 'xxxx', "
+            "'source_type': 'web', "
+            "'source_url': 'https://www.baidu.com', "
+            "'source_content': '西湖是杭州最著名的景点'}."
+        ),
+    )
+
+    # ==== Input content ====
+    messages: list[MessageDict] | None = Field(
+        None,
+        description=(
+            "List of messages to store. Supports: "
+            "- system / user / assistant messages with 'content' and 'chat_time'; "
+            "- tool messages including: "
+            "  * tool_description (name, description, parameters), "
+            "  * tool_input (call_id, name, argument), "
+            "  * raw tool messages where content is str or list[str], "
+            "  * tool_output with structured output items "
+            "    (input_text / input_image / input_file, etc.). "
+            "Also supports pure input items when there is no dialog."
+        ),
+    )
+
+    # pure input (no role)
+    # e.g. {\"type\": \"input_text\", \"text\": \"你好\"} etc。
+    # If there is no dialog, higher-level code can wrap raw inputs into MessageDict.
+
+    # ==== Chat history ====
+    chat_history: list[MessageDict] | None = Field(
+        None,
+        description=(
+            "Historical chat messages used internally by algorithms. "
+            "If None, internal stored history will be used; "
+            "if provided (even an empty list), this value will be used as-is."
+        ),
+    )
+
+    # ==== Feedback flag ====
+    is_feedback: bool = Field(
+        False,
+        description=("Whether this request represents user feedback. Default: False."),
+    )
+
+    # ==== Backward compatibility fields (will delete later) ====
+    memory_content: str | None = Field(
+        None,
+        description="(Deprecated) Plain memory content to store. Prefer using `messages`.",
+    )
+    doc_path: str | None = Field(
+        None,
+        description="(Deprecated / internal) Path to document to store.",
+    )
+    source: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Simple source tag of the memory. "
+            "Prefer using `info.source_type` / `info.source_url`."
+        ),
+    )
+    operation: list[PermissionDict] | None = Field(
+        None,
+        description=("(Internal) Operation definitions for multi-cube write permissions."),
     )
 
 
