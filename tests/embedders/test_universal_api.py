@@ -30,6 +30,7 @@ class TestUniversalAPIEmbedder(unittest.TestCase):
         mock_openai_client.assert_called_once_with(
             api_key="fake-api-key",
             base_url="https://api.openai.com/v1",
+            default_headers=None,
         )
 
         # Assert embeddings.create called with correct params
