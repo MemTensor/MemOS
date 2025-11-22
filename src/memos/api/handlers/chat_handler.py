@@ -399,7 +399,6 @@ class ChatHandler(BaseHandler):
                         search_response.data.get("text_mem")[0]["memories"]
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
-                    yield f"data: {json.dumps({'type': 'internet_reference', 'data': internet_reference})}\n\n"
 
                     # Prepare preference markdown string
                     if chat_req.include_preference:
@@ -478,6 +477,9 @@ class ChatHandler(BaseHandler):
                         if processed_chunk:
                             chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
                             yield chunk_data
+
+                    # Yield internet reference after text response
+                    yield f"data: {json.dumps({'type': 'internet_reference', 'data': internet_reference})}\n\n"
 
                     # Calculate timing
                     time_end = time.time()
