@@ -473,6 +473,7 @@ class SingleCubeView(MemCubeView):
                 [add_req.messages],
                 type="chat",
                 info={
+                    **(add_req.info or {}),
                     "user_id": add_req.user_id,
                     "session_id": target_session_id,
                     "mem_cube_id": self.cube_id,
@@ -524,6 +525,7 @@ class SingleCubeView(MemCubeView):
             [add_req.messages],
             type="chat",
             info={
+                **(add_req.info or {}),
                 "user_id": add_req.user_id,
                 "session_id": target_session_id,
             },

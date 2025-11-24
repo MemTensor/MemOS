@@ -46,6 +46,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         default="",
         description="user name / display name (optional)",
     )
+    info: dict | None = Field(default=None, description="user custom info")
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(

@@ -121,11 +121,15 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
 
         embedding = embedder.embed([value])[0]
 
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
+                user_id=user_id,
+                session_id=session_id,
                 memory_type="LongTermMemory",
                 status="activated",
                 tags=tags,
@@ -136,6 +140,7 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
                 background="",
                 confidence=0.99,
                 type="fact",
+                info=info_,
             ),
         )
     except Exception as e:
@@ -183,11 +188,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         confidence: float = 0.99,
     ) -> TextualMemoryItem:
         """construct memory item"""
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
+                user_id=user_id,
+                session_id=session_id,
                 memory_type=memory_type,
                 status="activated",
                 tags=tags or [],
@@ -198,6 +207,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 background=background,
                 confidence=confidence,
                 type=type_,
+                info=info_,
             ),
         )
 

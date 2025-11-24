@@ -754,6 +754,7 @@ class GeneralScheduler(BaseScheduler):
                 mem_cube_id = message.mem_cube_id
                 content = message.content
                 messages_list = json.loads(content)
+                info = message.info or {}
 
                 logger.info(f"Processing pref_add for user_id={user_id}, mem_cube_id={mem_cube_id}")
 
@@ -776,7 +777,12 @@ class GeneralScheduler(BaseScheduler):
                 pref_memories = pref_mem.get_memory(
                     messages_list,
                     type="chat",
-                    info={"user_id": user_id, "session_id": session_id, "mem_cube_id": mem_cube_id},
+                    info={
+                        **info,
+                        "user_id": user_id,
+                        "session_id": session_id,
+                        "mem_cube_id": mem_cube_id,
+                    },
                 )
                 # Add pref_mem to vector db
                 pref_ids = pref_mem.add(pref_memories)
