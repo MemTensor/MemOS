@@ -328,7 +328,9 @@ class APIConfig:
                 "top_p": 0.95,
                 "top_k": 20,
                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
-                "api_base": os.getenv("MEMRADER_API_BASE"),
+                # Default to OpenAI base URL when env var is not provided to satisfy pydantic
+                # validation requirements during tests/import.
+                "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
                 "remove_think_prefix": True,
                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             },
@@ -379,7 +381,7 @@ class APIConfig:
                     "url": os.getenv("MOS_RERANKER_URL"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
-                    "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
+                    "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
                     "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
                 },
@@ -405,6 +407,7 @@ class APIConfig:
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
                     "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                    "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                 },
             }

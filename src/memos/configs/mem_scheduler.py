@@ -178,6 +178,13 @@ class RabbitMQConfig(
         ge=1,  # Port must be >= 1
         le=65535,  # Port must be <= 65535
     )
+    exchange_name: str = Field(
+        default="memos-fanout",
+        description="Exchange name for RabbitMQ (e.g., memos-fanout, memos-memory-change)",
+    )
+    exchange_type: str = Field(
+        default="fanout", description="Exchange type for RabbitMQ (fanout or direct)"
+    )
 
 
 class GraphDBAuthConfig(BaseConfig, DictConversionMixin, EnvConfigMixin):

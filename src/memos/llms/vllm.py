@@ -1,4 +1,10 @@
+import json
+
 from typing import Any, cast
+
+import openai
+
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
 
 from memos.configs.llm import VLLMLLMConfig
 from memos.llms.base import BaseLLM
@@ -27,10 +33,10 @@ class VLLMLLM(BaseLLM):
         if not api_key:
             api_key = "dummy"
 
-        import openai
-
         self.client = openai.Client(
-            api_key=api_key, base_url=getattr(self.config, "api_base", "http://localhost:8088/v1")
+            api_key=api_key,
+            base_url=getattr(self.config, "api_base", "http://localhost:8088/v1"),
+            default_headers=self.config.default_headers,
         )
 
     def build_vllm_kv_cache(self, messages: Any) -> str:
@@ -85,36 +91,54 @@ class VLLMLLM(BaseLLM):
 
         return prompt
 
-    def generate(self, messages: list[MessageDict]) -> str:
+    def generate(self, messages: list[MessageDict], **kwargs) -> str:
         """
         Generate a response from the model.
         """
         if self.client:
-            return self._generate_with_api_client(messages)
+            return self._generate_with_api_client(messages, **kwargs)
         else:
             raise RuntimeError("API client is not available")
 
-    def _generate_with_api_client(self, messages: list[MessageDict]) -> str:
+    def _generate_with_api_client(self, messages: list[MessageDict], **kwargs) -> str:
         """
-        Generate response using vLLM API client.
+        Generate response using vLLM API client. detail view https://docs.vllm.ai/en/latest/features/reasoning_outputs/
         """
         if self.client:
             completion_kwargs = {
-                "model": self.config.model_name_or_path,
+                "model": kwargs.get("model_name_or_path", self.config.model_name_or_path),
                 "messages": messages,
-                "temperature": float(getattr(self.config, "temperature", 0.8)),
-                "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
-                "top_p": float(getattr(self.config, "top_p", 0.9)),
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                "temperature": kwargs.get("temperature", self.config.temperature),
+                "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+                "top_p": kwargs.get("top_p", self.config.top_p),
+                "extra_body": {
+                    "chat_template_kwargs": {
+                        "enable_thinking": kwargs.get(
+                            "enable_thinking", self.config.enable_thinking
+                        )
+                    }
+                },
             }
+            if kwargs.get("tools"):
+                completion_kwargs["tools"] = kwargs.get("tools")
+                completion_kwargs["tool_choice"] = kwargs.get("tool_choice", "auto")
 
             response = self.client.chat.completions.create(**completion_kwargs)
+
+            if response.choices[0].message.tool_calls:
+                return self.tool_call_parser(response.choices[0].message.tool_calls)
+
+            reasoning_content = (
+                f"<think>{response.choices[0].message.reasoning}</think>"
+                if hasattr(response.choices[0].message, "reasoning")
+                else ""
+            )
             response_text = response.choices[0].message.content or ""
             logger.info(f"VLLM API response: {response_text}")
             return (
                 remove_thinking_tags(response_text)
                 if getattr(self.config, "remove_think_prefix", False)
-                else response_text
+                else reasoning_content + response_text
             )
         else:
             raise RuntimeError("API client is not available")
@@ -130,26 +154,59 @@ class VLLMLLM(BaseLLM):
             prompt_parts.append(f"{role.capitalize()}: {content}")
         return "\n".join(prompt_parts)
 
-    def generate_stream(self, messages: list[MessageDict]):
+    def generate_stream(self, messages: list[MessageDict], **kwargs):
         """
         Generate a response from the model using streaming.
         Yields content chunks as they are received.
         """
+        if kwargs.get("tools"):
+            logger.info("stream api not support tools")
+            return
+
         if self.client:
             completion_kwargs = {
                 "model": self.config.model_name_or_path,
                 "messages": messages,
-                "temperature": float(getattr(self.config, "temperature", 0.8)),
-                "max_tokens": int(getattr(self.config, "max_tokens", 1024)),
-                "top_p": float(getattr(self.config, "top_p", 0.9)),
-                "stream": True,  # Enable streaming
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+                "temperature": kwargs.get("temperature", self.config.temperature),
+                "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+                "top_p": kwargs.get("top_p", self.config.top_p),
+                "stream": True,
+                "extra_body": {
+                    "chat_template_kwargs": {
+                        "enable_thinking": kwargs.get(
+                            "enable_thinking", self.config.enable_thinking
+                        )
+                    }
+                },
             }
 
             stream = self.client.chat.completions.create(**completion_kwargs)
+
+            reasoning_started = False
             for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    yield content
+                delta = chunk.choices[0].delta
+                if hasattr(delta, "reasoning") and delta.reasoning:
+                    if not reasoning_started and not self.config.remove_think_prefix:
+                        yield "<think>"
+                        reasoning_started = True
+                    yield delta.reasoning
+
+            if hasattr(delta, "content") and delta.content:
+                if reasoning_started and not self.config.remove_think_prefix:
+                    yield "</think>"
+                    reasoning_started = False
+                yield delta.content
+
         else:
             raise RuntimeError("API client is not available")
+
+    def tool_call_parser(self, tool_calls: list[ChatCompletionMessageToolCall]) -> list[dict]:
+        """Parse tool calls from OpenAI response."""
+        return [
+            {
+                "tool_call_id": tool_call.id,
+                "function_name": tool_call.function.name,
+                "arguments": json.loads(tool_call.function.arguments),
+            }
+            for tool_call in tool_calls
+        ]
