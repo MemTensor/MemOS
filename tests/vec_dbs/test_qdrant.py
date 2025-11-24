@@ -135,6 +135,4 @@ def test_qdrant_client_cloud_init():
 
         VecDBFactory.from_config(config)
 
-        mockclient.assert_called_once_with(
-            url="https://cloud.qdrant.example", api_key="secret-key"
-        )
+        mockclient.assert_called_once_with(url="https://cloud.qdrant.example", api_key="secret-key")
