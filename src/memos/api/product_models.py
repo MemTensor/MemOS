@@ -525,6 +525,15 @@ class APIADDRequest(BaseRequest):
         ),
     )
 
+    mode: Literal["fast", "fine"] | None = Field(
+        None,
+        description=(
+            "(Internal) Add mode used only when async_mode='sync'. "
+            "If set to 'fast', the handler will use a fast add pipeline. "
+            "Ignored when async_mode='async'."
+        ),
+    )
+
     # ==== Business tags & info ====
     custom_tags: list[str] | None = Field(
         None,
@@ -620,6 +629,14 @@ class APIADDRequest(BaseRequest):
             - source → info["source"]
             - operation → merged into writable_cube_ids (ignored otherwise)
         """
+        # ---- async_mode / mode relationship ----
+        if self.async_mode == "async" and self.mode is not None:
+            logger.warning(
+                "APIADDRequest.mode is ignored when async_mode='async'. "
+                "Fast add pipeline is only available in sync mode."
+            )
+            self.mode = None
+
         # Convert mem_cube_id to writable_cube_ids (new field takes priority)
         if self.mem_cube_id:
             logger.warning(
