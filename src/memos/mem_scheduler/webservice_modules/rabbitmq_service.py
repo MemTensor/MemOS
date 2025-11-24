@@ -32,8 +32,8 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         # RabbitMQ settings
         self.rabbitmq_config: RabbitMQConfig | None = None
         self.rabbit_queue_name = "memos-scheduler"
-        self.rabbitmq_exchange_name = "memos-fanout"
-        self.rabbitmq_exchange_type = FANOUT_EXCHANGE_TYPE
+        self.rabbitmq_exchange_name = "memos-fanout"  # Default, will be overridden by config
+        self.rabbitmq_exchange_type = FANOUT_EXCHANGE_TYPE  # Default, will be overridden by config
         self.rabbitmq_connection = None
         self.rabbitmq_channel = None
 
@@ -86,6 +86,21 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 self.rabbitmq_config = AuthConfig.from_dict(config).rabbitmq
             else:
                 logger.error("Not implemented")
+
+            # Load exchange configuration from config
+            if self.rabbitmq_config:
+                if (
+                    hasattr(self.rabbitmq_config, "exchange_name")
+                    and self.rabbitmq_config.exchange_name
+                ):
+                    self.rabbitmq_exchange_name = self.rabbitmq_config.exchange_name
+                    logger.info(f"Using configured exchange name: {self.rabbitmq_exchange_name}")
+                if (
+                    hasattr(self.rabbitmq_config, "exchange_type")
+                    and self.rabbitmq_config.exchange_type
+                ):
+                    self.rabbitmq_exchange_type = self.rabbitmq_config.exchange_type
+                    logger.info(f"Using configured exchange type: {self.rabbitmq_exchange_type}")
 
                 # Start connection process
             parameters = self.get_rabbitmq_connection_param()

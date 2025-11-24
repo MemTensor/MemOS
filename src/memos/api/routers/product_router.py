@@ -297,7 +297,8 @@ def chat_complete(chat_req: ChatCompleteRequest):
             history=chat_req.history,
             internet_search=chat_req.internet_search,
             moscube=chat_req.moscube,
-            base_prompt=chat_req.base_prompt,
+            base_prompt=chat_req.base_prompt or chat_req.system_prompt,
+            # will deprecate base_prompt in the future
             top_k=chat_req.top_k,
             threshold=chat_req.threshold,
             session_id=chat_req.session_id,
