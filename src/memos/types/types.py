@@ -27,6 +27,7 @@ __all__ = [
     "MessageDict",
     "MessageList",
     "MessageRole",
+    "MessagesType",
     "Permission",
     "PermissionDict",
     "UserContext",

@@ -2,13 +2,15 @@ import uuid
 
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
+from memos.log import get_logger
 from memos.mem_scheduler.schemas.general_schemas import SearchMode
-from memos.types import MessageDict, PermissionDict
+from memos.types import MessageDict, MessagesType, PermissionDict
 
 
+logger = get_logger(__name__)
 T = TypeVar("T")
 
 
@@ -215,18 +217,11 @@ class APISearchRequest(BaseRequest):
     # ==== Basic inputs ====
     query: str = Field(
         ...,
-        description=("User search query"),
+        description="User search query",
     )
     user_id: str = Field(..., description="User ID")
 
     # ==== Cube scoping ====
-    mem_cube_id: str | None = Field(
-        None,
-        description=(
-            "(Deprecated) Single cube ID to search in. "
-            "Prefer `readable_cube_ids` for multi-cube search."
-        ),
-    )
     readable_cube_ids: list[str] | None = Field(
         None,
         description=(
@@ -297,7 +292,7 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Context ====
-    chat_history: list[MessageDict] | None = Field(
+    chat_history: MessagesType | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -307,6 +302,14 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Backward compatibility ====
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to search in. "
+            "Prefer `readable_cube_ids` for multi-cube search."
+        ),
+    )
+
     moscube: bool = Field(
         False,
         description="(Deprecated / internal) Whether to use legacy MemOSCube path.",
@@ -317,6 +320,41 @@ class APISearchRequest(BaseRequest):
         description="(Internal) Operation definitions for multi-cube read permissions.",
     )
 
+    @model_validator(mode="after")
+    def _convert_deprecated_fields(self) -> "APISearchRequest":
+        """
+        Convert deprecated fields to new fields for backward compatibility.
+        Ensures full backward compatibility:
+            - mem_cube_id → readable_cube_ids
+            - moscube is ignored with warning
+            - operation ignored
+        """
+        # Convert mem_cube_id to readable_cube_ids (new field takes priority)
+        if self.mem_cube_id is not None:
+            if not self.readable_cube_ids:
+                self.readable_cube_ids = [self.mem_cube_id]
+            logger.warning(
+                "Deprecated field `mem_cube_id` is used in APISearchRequest. "
+                "It will be removed in a future version. "
+                "Please migrate to `readable_cube_ids`."
+            )
+
+        # Reject moscube if set to True (no longer supported)
+        if self.moscube:
+            logger.warning(
+                "Deprecated field `moscube` is used in APISearchRequest. "
+                "Legacy MemOSCube pipeline will be removed soon."
+            )
+
+        # Warn about operation (internal)
+        if self.operation:
+            logger.warning(
+                "Internal field `operation` is provided in APISearchRequest. "
+                "This field is deprecated and ignored."
+            )
+
+        return self
+
 
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
@@ -326,12 +364,6 @@ class APIADDRequest(BaseRequest):
     session_id: str | None = Field(
         None,
         description="Session ID. If not provided, a default session will be used.",
-    )
-
-    # ==== Single-cube writing (Deprecated) ====
-    mem_cube_id: str | None = Field(
-        None,
-        description="(Deprecated) Target cube ID for this add request (optional for developer API).",
     )
 
     # ==== Multi-cube writing ====
@@ -374,7 +406,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Input content ====
-    messages: list[MessageDict] | None = Field(
+    messages: MessagesType | None = Field(
         None,
         description=(
             "List of messages to store. Supports: "
@@ -390,7 +422,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Chat history ====
-    chat_history: list[MessageDict] | None = Field(
+    chat_history: MessagesType | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -406,6 +438,11 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Backward compatibility fields (will delete later) ====
+    mem_cube_id: str | None = Field(
+        None,
+        description="(Deprecated) Target cube ID for this add request (optional for developer API).",
+    )
+
     memory_content: str | None = Field(
         None,
         description="(Deprecated) Plain memory content to store. Prefer using `messages`.",
@@ -425,6 +462,78 @@ class APIADDRequest(BaseRequest):
         None,
         description="(Internal) Operation definitions for multi-cube write permissions.",
     )
+
+    @model_validator(mode="after")
+    def _convert_deprecated_fields(self) -> "APIADDRequest":
+        """
+        Convert deprecated fields to new fields for backward compatibility.
+        This keeps the API fully backward-compatible while allowing
+        internal logic to use only the new fields.
+
+        Rules:
+            - mem_cube_id → writable_cube_ids
+            - memory_content → messages
+            - doc_path → messages (input_file)
+            - source → info["source"]
+            - operation → merged into writable_cube_ids (ignored otherwise)
+        """
+        # Convert mem_cube_id to writable_cube_ids (new field takes priority)
+        if self.mem_cube_id:
+            logger.warning(
+                "APIADDRequest.mem_cube_id is deprecated and will be removed in a future version. "
+                "Please use `writable_cube_ids` instead."
+            )
+            if not self.writable_cube_ids:
+                self.writable_cube_ids = [self.mem_cube_id]
+
+        # Handle deprecated operation field
+        if self.operation:
+            logger.warning(
+                "APIADDRequest.operation is deprecated and will be removed. "
+                "Use `writable_cube_ids` for multi-cube writes."
+            )
+
+        # Convert memory_content to messages (new field takes priority)
+        if self.memory_content:
+            logger.warning(
+                "APIADDRequest.memory_content is deprecated. "
+                "Use `messages` with a structured message instead."
+            )
+            if self.messages is None:
+                self.messages = []
+            self.messages.append(
+                {
+                    "type": "text",
+                    "text": self.memory_content,
+                }
+            )
+
+        # Handle deprecated doc_path
+        if self.doc_path:
+            logger.warning(
+                "APIADDRequest.doc_path is deprecated. "
+                "Use `messages` with an input_file item instead."
+            )
+            if self.messages is None:
+                self.messages = []
+            self.messages.append(
+                {
+                    "type": "file",
+                    "file": {"path": self.doc_path},
+                }
+            )
+
+        # Convert source to info.source_type (new field takes priority)
+        if self.source:
+            logger.warning(
+                "APIADDRequest.source is deprecated. "
+                "Use `info['source_type']` / `info['source_url']` instead."
+            )
+            if self.info is None:
+                self.info = {}
+            self.info.setdefault("source", self.source)
+
+        return self
 
 
 class APIChatCompleteRequest(BaseRequest):
