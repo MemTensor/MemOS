@@ -5,8 +5,6 @@ This module provides a class-based implementation of add handlers,
 using dependency injection for better modularity and testability.
 """
 
-from datetime import datetime
-
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIADDRequest, MemoryResponse
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
@@ -39,16 +37,12 @@ class AddHandler(BaseHandler):
         supporting concurrent processing.
 
         Args:
-            add_req: Add memory request
+            add_req: Add memory request (deprecated fields are converted in model validator)
 
         Returns:
             MemoryResponse with added memory information
         """
         self.logger.info(f"[AddHandler] Add Req is: {add_req}")
-
-        if (not add_req.messages) and getattr(add_req, "memory_content", None):
-            add_req.messages = self._convert_content_messsage(add_req.memory_content)
-            self.logger.info(f"[AddHandler] Converted content to messages: {add_req.messages}")
 
         cube_view = self._build_cube_view(add_req)
 
@@ -65,15 +59,11 @@ class AddHandler(BaseHandler):
         """
         Normalize target cube ids from add_req.
         Priority:
-        1) writable_cube_ids
-        2) mem_cube_id
-        3) fallback to user_id
+        1) writable_cube_ids (deprecated mem_cube_id is converted to this in model validator)
+        2) fallback to user_id
         """
-        if getattr(add_req, "writable_cube_ids", None):
+        if add_req.writable_cube_ids:
             return list(dict.fromkeys(add_req.writable_cube_ids))
-
-        if add_req.mem_cube_id:
-            return [add_req.mem_cube_id]
 
         return [add_req.user_id]
 
@@ -106,23 +96,3 @@ class AddHandler(BaseHandler):
                 cube_views=single_views,
                 logger=self.logger,
             )
-
-    def _convert_content_messsage(self, memory_content: str) -> list[dict[str, str]]:
-        """
-        Convert content string to list of message dictionaries.
-
-        Args:
-            content: add content string
-
-        Returns:
-            List of message dictionaries
-        """
-        messages_list = [
-            {
-                "role": "user",
-                "content": memory_content,
-                "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-            }
-        ]
-        # for only user-str input and convert message
-        return messages_list
