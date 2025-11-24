@@ -69,35 +69,173 @@ class MemCubeRegister(BaseRequest):
 
 
 class ChatRequest(BaseRequest):
-    """Request model for chat operations."""
+    """Request model for chat operations.
 
+    This model is used as the algorithm-facing chat interface, while also
+    remaining backward compatible with older developer-facing APIs.
+    """
+
+    # ==== Basic identifiers ====
     user_id: str = Field(..., description="User ID")
-    query: str = Field(..., description="Chat query message")
-    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    session_id: str | None = Field(
+        None,
+        description=(
+            "Session ID. Used as a soft signal to give higher weight to "
+            "recently related memories. Optional for developer API."
+        ),
+    )
+
+    # ==== Query ====
+    query: str = Field(..., description="Chat query message from user")
+
+    # ==== Cube scoping ====
     readable_cube_ids: list[str] | None = Field(
-        None, description="List of cube IDs user can read for multi-cube chat"
+        None,
+        description=(
+            "List of cube IDs user can read for multi-cube chat.\n"
+            "- Algorithm interface: required\n"
+            "- Developer API: optional (can fall back to mem_cube_id or defaults)"
+        ),
     )
+
     writable_cube_ids: list[str] | None = Field(
-        None, description="List of cube IDs user can write for multi-cube chat"
+        None,
+        description=(
+            "List of cube IDs user can write for multi-cube chat.\n"
+            "- Algorithm interface: required\n"
+            "- Developer API: optional (can fall back to mem_cube_id or defaults)"
+        ),
     )
-    history: list[MessageDict] | None = Field(None, description="Chat history")
-    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
-    internet_search: bool = Field(True, description="Whether to use internet search")
-    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
-    top_k: int = Field(10, description="Number of results to return")
-    threshold: float = Field(0.5, description="Threshold for filtering references")
-    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
-    include_preference: bool = Field(True, description="Whether to handle preference memory")
-    pref_top_k: int = Field(6, description="Number of preference results to return")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
-    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
-    max_tokens: int | None = Field(None, description="Max tokens to generate")
-    temperature: float | None = Field(None, description="Temperature for sampling")
-    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
-    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+    # ==== History & filters ====
+    history: MessagesType | None = Field(
+        None,
+        description=(
+            "Chat history (algorithm does NOT persist it). Algorithm interface default: []."
+        ),
+    )
+
+    filter: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Memory filter. Developers can provide custom structured predicates "
+            "to precisely filter memories. Algorithm interface default: {}."
+        ),
+    )
+
+    # ==== Retrieval configuration ====
+    mode: SearchMode = Field(
+        SearchMode.FAST,
+        description="Search mode: fast, fine, or mixture.",
+    )
+
+    top_k: int = Field(
+        10,
+        ge=1,
+        description="Number of memories to retrieve (top-K).",
+    )
+
+    pref_top_k: int = Field(
+        6,
+        ge=0,
+        description="Number of preference memories to retrieve (top-K). Default: 6.",
+    )
+
+    include_preference: bool = Field(
+        True,
+        description=(
+            "Whether to retrieve preference memories. If enabled, the system will "
+            "automatically recall user preferences related to the query. Default: True."
+        ),
+    )
+
+    threshold: float = Field(
+        0.5,
+        description="Internal similarity threshold for filtering references (algorithm internal).",
+    )
+
+    # ==== LLM / generation configuration ====
+    system_prompt: str | None = Field(
+        None,
+        description="Custom system prompt / instruction for this chat.",
+    )
+
+    model_name_or_path: str | None = Field(
+        None,
+        description=("Name or path of the chat model to use.\nAlgorithm default: 'gpt-4o-mini'."),
+    )
+
+    max_tokens: int | None = Field(
+        None,
+        description="Max tokens to generate. Algorithm default: 8192.",
+    )
+
+    temperature: float | None = Field(
+        None,
+        description="Sampling temperature. Algorithm default: 0.7.",
+    )
+
+    top_p: float | None = Field(
+        None,
+        description="Top-p (nucleus) sampling parameter. Algorithm default: 0.95.",
+    )
+
+    add_message_on_answer: bool = Field(
+        True,
+        description="Whether to append dialog messages to memory after chat. Default: True.",
+    )
+
+    # ==== Search / pipeline toggles ====
+    internet_search: bool = Field(
+        True,
+        description=(
+            "Whether to use internet search (internal usage; external API may ignore this flag)."
+        ),
+    )
+
+    # ==== Backward compatibility ====
     moscube: bool = Field(
-        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+        False,
+        description="(Deprecated) Whether to use legacy MemOSCube pipeline.",
     )
+
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to use for chat. "
+            "Prefer `readable_cube_ids` / `writable_cube_ids` for multi-cube chat."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _normalize_for_algorithm(self):
+        """
+        Normalize fields for algorithm interface while preserving backward compatibility.
+
+        Rules:
+        - mem_cube_id → readable_cube_ids / writable_cube_ids if they are missing
+        - moscube: log warning when True (deprecated)
+        """
+
+        # ---- mem_cube_id backward compatibility ----
+        if self.mem_cube_id is not None:
+            logger.warning(
+                "ChatRequest.mem_cube_id is deprecated and will be removed in a future version. "
+                "Please migrate to `readable_cube_ids` / `writable_cube_ids`."
+            )
+            if not self.readable_cube_ids:
+                self.readable_cube_ids = [self.mem_cube_id]
+            if not self.writable_cube_ids:
+                self.writable_cube_ids = [self.mem_cube_id]
+
+        # ---- Deprecated moscube flag ----
+        if self.moscube:
+            logger.warning(
+                "ChatRequest.moscube is deprecated. Legacy MemOSCube pipeline "
+                "will be removed in a future version."
+            )
+
+        return self
 
 
 class ChatCompleteRequest(BaseRequest):
