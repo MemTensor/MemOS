@@ -497,6 +497,9 @@ class APIConfig:
                     "distance_metric": "cosine",
                     "host": os.getenv("QDRANT_HOST", "localhost"),
                     "port": int(os.getenv("QDRANT_PORT", "6333")),
+                    "path": os.getenv("QDRANT_PATH"),
+                    "url": os.getenv("QDRANT_URL"),
+                    "api_key": os.getenv("QDRANT_API_KEY"),
                 },
             },
         }

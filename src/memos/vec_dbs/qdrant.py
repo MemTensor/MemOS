@@ -23,24 +23,49 @@ class QdrantVecDB(BaseVecDB):
         from qdrant_client import QdrantClient
 
         self.config = config
+        # Default payload fields we always index because query filters rely on them
+        self._default_payload_index_fields = [
+            "memory_type",
+            "status",
+            "vector_sync",
+            "user_name",
+        ]
 
-        # If both host and port are None, we are running in local mode
-        if self.config.host is None and self.config.port is None:
-            logger.warning(
-                "Qdrant is running in local mode (host and port are both None). "
-                "In local mode, there may be race conditions during concurrent reads/writes. "
-                "It is strongly recommended to deploy a standalone Qdrant server "
-                "(e.g., via Docker: https://qdrant.tech/documentation/quickstart/)."
+        client_kwargs: dict[str, Any] = {}
+        if self.config.url:
+            client_kwargs["url"] = self.config.url
+            if self.config.api_key:
+                client_kwargs["api_key"] = self.config.api_key
+        else:
+            client_kwargs.update(
+                {
+                    "host": self.config.host,
+                    "port": self.config.port,
+                    "path": self.config.path,
+                }
             )
 
-        self.client = QdrantClient(
-            host=self.config.host, port=self.config.port, path=self.config.path
-        )
+            # If both host and port are None, we are running in local/embedded mode
+            if self.config.host is None and self.config.port is None:
+                logger.warning(
+                    "Qdrant is running in local mode (host and port are both None). "
+                    "In local mode, there may be race conditions during concurrent reads/writes. "
+                    "It is strongly recommended to deploy a standalone Qdrant server "
+                    "(e.g., via Docker: https://qdrant.tech/documentation/quickstart/)."
+                )
+
+        self.client = QdrantClient(**client_kwargs)
         self.create_collection()
+        # Ensure common payload indexes exist (idempotent)
+        try:
+            self.ensure_payload_indexes(self._default_payload_index_fields)
+        except Exception as e:
+            logger.warning(f"Failed to ensure default payload indexes: {e}")
 
     def create_collection(self) -> None:
         """Create a new collection with specified parameters."""
         from qdrant_client.http import models
+        from qdrant_client.http.exceptions import UnexpectedResponse
 
         if self.collection_exists(self.config.collection_name):
             collection_info = self.client.get_collection(self.config.collection_name)
@@ -57,13 +82,25 @@ class QdrantVecDB(BaseVecDB):
             "dot": models.Distance.DOT,
         }
 
-        self.client.create_collection(
-            collection_name=self.config.collection_name,
-            vectors_config=models.VectorParams(
-                size=self.config.vector_dimension,
-                distance=distance_map[self.config.distance_metric],
-            ),
-        )
+        try:
+            self.client.create_collection(
+                collection_name=self.config.collection_name,
+                vectors_config=models.VectorParams(
+                    size=self.config.vector_dimension,
+                    distance=distance_map[self.config.distance_metric],
+                ),
+            )
+        except UnexpectedResponse as err:
+            # Cloud Qdrant returns 409 when the collection already exists; tolerate and continue.
+            if getattr(err, "status_code", None) == 409 or "already exists" in str(err).lower():
+                logger.warning(
+                    f"Collection '{self.config.collection_name}' already exists. Skipping creation."
+                )
+                return
+            raise
+        except Exception:
+            # Bubble up other exceptions so callers can observe failures
+            raise
 
         logger.info(
             f"Collection '{self.config.collection_name}' created with {self.config.vector_dimension} dimensions."
