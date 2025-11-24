@@ -12,6 +12,10 @@ class BaseEmbedderConfig(BaseConfig):
     embedding_dims: int | None = Field(
         default=None, description="Number of dimensions for the embedding"
     )
+    headers_extra: dict[str, Any] | None = Field(
+        default=None,
+        description="Extra headers for the embedding model, only for universal_api backend",
+    )
 
 
 class OllamaEmbedderConfig(BaseEmbedderConfig):
