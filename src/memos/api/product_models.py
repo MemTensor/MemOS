@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 # Import message types from core types module
 from memos.mem_scheduler.schemas.general_schemas import SearchMode
-from memos.types import MessageDict, PermissionDict
+from memos.types import MessageDict, MessagesType, PermissionDict
 
 
 T = TypeVar("T")
@@ -220,13 +220,6 @@ class APISearchRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
 
     # ==== Cube scoping ====
-    mem_cube_id: str | None = Field(
-        None,
-        description=(
-            "(Deprecated) Single cube ID to search in. "
-            "Prefer `readable_cube_ids` for multi-cube search."
-        ),
-    )
     readable_cube_ids: list[str] | None = Field(
         None,
         description=(
@@ -297,7 +290,7 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Context ====
-    chat_history: list[MessageDict] | None = Field(
+    chat_history: MessagesType | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -307,6 +300,14 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Backward compatibility ====
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to search in. "
+            "Prefer `readable_cube_ids` for multi-cube search."
+        ),
+    )
+
     moscube: bool = Field(
         False,
         description="(Deprecated / internal) Whether to use legacy MemOSCube path.",
@@ -326,12 +327,6 @@ class APIADDRequest(BaseRequest):
     session_id: str | None = Field(
         None,
         description="Session ID. If not provided, a default session will be used.",
-    )
-
-    # ==== Single-cube writing (Deprecated) ====
-    mem_cube_id: str | None = Field(
-        None,
-        description="(Deprecated) Target cube ID for this add request (optional for developer API).",
     )
 
     # ==== Multi-cube writing ====
@@ -374,7 +369,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Input content ====
-    messages: list[MessageDict] | None = Field(
+    messages: MessagesType | None = Field(
         None,
         description=(
             "List of messages to store. Supports: "
@@ -390,7 +385,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Chat history ====
-    chat_history: list[MessageDict] | None = Field(
+    chat_history: MessagesType | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -406,6 +401,11 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Backward compatibility fields (will delete later) ====
+    mem_cube_id: str | None = Field(
+        None,
+        description="(Deprecated) Target cube ID for this add request (optional for developer API).",
+    )
+
     memory_content: str | None = Field(
         None,
         description="(Deprecated) Plain memory content to store. Prefer using `messages`.",
