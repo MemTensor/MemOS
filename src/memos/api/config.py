@@ -409,7 +409,6 @@ class APIConfig:
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
-                    "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                 },
             }
         else:  # ollama
