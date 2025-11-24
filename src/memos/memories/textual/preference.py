@@ -190,7 +190,7 @@ class PreferenceTextMemory(BaseTextMemory):
                 return None
             return TextualMemoryItem(
                 id=res.id,
-                memory=res.payload.get("dialog_str", ""),
+                memory=res.memory,
                 metadata=PreferenceTextualMemoryMetadata(**res.payload),
             )
         except Exception as e:
@@ -225,7 +225,7 @@ class PreferenceTextMemory(BaseTextMemory):
             return [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in res
@@ -248,19 +248,43 @@ class PreferenceTextMemory(BaseTextMemory):
             all_memories[collection_name] = [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in items
             ]
         return all_memories
 
+    def get_memory_by_filter(self, filter: dict[str, Any] | None = None) -> list[TextualMemoryItem]:
+        """Get memories by filter.
+        Args:
+            filter (dict[str, Any]): Filter criteria.
+        Returns:
+            list[TextualMemoryItem]: List of memories that match the filter.
+        """
+        collection_list = self.vector_db.config.collection_name
+        all_db_items = []
+        for collection_name in collection_list:
+            db_items = self.vector_db.get_by_filter(collection_name=collection_name, filter=filter)
+            all_db_items.extend(db_items)
+        memories = [
+            TextualMemoryItem(
+                id=memo.id,
+                memory=memo.memory,
+                metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+            )
+            for memo in all_db_items
+        ]
+        return memories
+
     def delete(self, memory_ids: list[str]) -> None:
         """Delete memories.
         Args:
             memory_ids (list[str]): List of memory IDs to delete.
         """
-        raise NotImplementedError
+        collection_list = self.vector_db.config.collection_name
+        for collection_name in collection_list:
+            self.vector_db.delete(collection_name, memory_ids)
 
     def delete_with_collection_name(self, collection_name: str, memory_ids: list[str]) -> None:
         """Delete memories by their IDs and collection name.

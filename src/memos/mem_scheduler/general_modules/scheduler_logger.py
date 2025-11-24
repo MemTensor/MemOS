@@ -1,3 +1,5 @@
+import hashlib
+
 from collections.abc import Callable
 
 from memos.log import get_logger
@@ -6,13 +8,13 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     ACTIVATION_MEMORY_TYPE,
     ADD_LABEL,
+    MEM_ARCHIVE_LABEL,
+    MEM_UPDATE_LABEL,
     NOT_INITIALIZED,
     PARAMETER_MEMORY_TYPE,
     TEXT_MEMORY_TYPE,
     USER_INPUT_TYPE,
     WORKING_MEMORY_TYPE,
-    MEM_UPDATE_LABEL,
-    MEM_ARCHIVE_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
@@ -23,7 +25,6 @@ from memos.mem_scheduler.utils.filter_utils import (
 )
 from memos.mem_scheduler.utils.misc_utils import log_exceptions
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-import hashlib
 
 
 logger = get_logger(__name__)
@@ -180,19 +181,21 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                     or getattr(itm.metadata, "update_at", None),
                 }
             )
-        ev = self.create_event_log(
-            label="scheduleMemory",
-            from_memory_type=TEXT_MEMORY_TYPE,
-            to_memory_type=WORKING_MEMORY_TYPE,
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-            memcube_log_content=memcube_content,
-            metadata=meta,
-            memory_len=len(memcube_content),
-            memcube_name=self._map_memcube_name(mem_cube_id),
-        )
-        log_func_callback([ev])
+        # Only create log if there are actual memory changes
+        if memcube_content:
+            ev = self.create_event_log(
+                label="scheduleMemory",
+                from_memory_type=TEXT_MEMORY_TYPE,
+                to_memory_type=WORKING_MEMORY_TYPE,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+                memcube_log_content=memcube_content,
+                metadata=meta,
+                memory_len=len(memcube_content),
+                memcube_name=self._map_memcube_name(mem_cube_id),
+            )
+            log_func_callback([ev])
 
     @log_exceptions(logger=logger)
     def log_activation_memory_update(
@@ -234,19 +237,21 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                     "updated_at": None,
                 }
             )
-        ev = self.create_event_log(
-            label="scheduleMemory",
-            from_memory_type=ACTIVATION_MEMORY_TYPE,
-            to_memory_type=PARAMETER_MEMORY_TYPE,
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-            memcube_log_content=memcube_content,
-            metadata=meta,
-            memory_len=len(added_memories),
-            memcube_name=self._map_memcube_name(mem_cube_id),
-        )
-        log_func_callback([ev])
+        # Only create log if there are actual memory changes
+        if memcube_content:
+            ev = self.create_event_log(
+                label="scheduleMemory",
+                from_memory_type=ACTIVATION_MEMORY_TYPE,
+                to_memory_type=PARAMETER_MEMORY_TYPE,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+                memcube_log_content=memcube_content,
+                metadata=meta,
+                memory_len=len(added_memories),
+                memcube_name=self._map_memcube_name(mem_cube_id),
+            )
+            log_func_callback([ev])
 
     @log_exceptions(logger=logger)
     def log_adding_memory(

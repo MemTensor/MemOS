@@ -6,7 +6,14 @@ This module handles retrieving all memories or specific subgraphs based on queri
 
 from typing import Any, Literal
 
-from memos.api.product_models import MemoryResponse
+from memos.api.handlers.formatters_handler import format_memory_item
+from memos.api.product_models import (
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    GetMemoryRequest,
+    GetMemoryResponse,
+    MemoryResponse,
+)
 from memos.log import get_logger
 from memos.mem_os.utils.format_utils import (
     convert_graph_to_tree_forworkmem,
@@ -149,3 +156,37 @@ def handle_get_subgraph(
     except Exception as e:
         logger.error(f"Failed to get subgraph: {e}", exc_info=True)
         raise
+
+
+def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> GetMemoryResponse:
+    # TODO: Implement get memory with filter
+    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
+    filter_params: dict[str, Any] = {}
+    if get_mem_req.user_id is not None:
+        filter_params["user_id"] = get_mem_req.user_id
+    if get_mem_req.mem_cube_id is not None:
+        filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
+    preferences = naive_mem_cube.pref_mem.get_memory_by_filter(filter_params)
+    return GetMemoryResponse(
+        message="Memories retrieved successfully",
+        data={
+            "text_mem": memories,
+            "pref_mem": [format_memory_item(mem) for mem in preferences],
+        },
+    )
+
+
+def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: Any):
+    try:
+        naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids)
+        naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
+    except Exception as e:
+        logger.error(f"Failed to delete memories: {e}", exc_info=True)
+        return DeleteMemoryResponse(
+            message="Failed to delete memories",
+            data="failure",
+        )
+    return DeleteMemoryResponse(
+        message="Memories deleted successfully",
+        data={"status": "success"},
+    )

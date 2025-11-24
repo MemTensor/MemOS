@@ -19,7 +19,14 @@ def test_base_llm_config():
         required_fields=[
             "model_name_or_path",
         ],
-        optional_fields=["temperature", "max_tokens", "top_p", "top_k", "remove_think_prefix"],
+        optional_fields=[
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "top_k",
+            "remove_think_prefix",
+            "default_headers",
+        ],
     )
 
     check_config_instantiation_valid(
@@ -48,6 +55,7 @@ def test_openai_llm_config():
             "api_base",
             "remove_think_prefix",
             "extra_body",
+            "default_headers",
         ],
     )
 
@@ -79,6 +87,8 @@ def test_ollama_llm_config():
             "top_k",
             "remove_think_prefix",
             "api_base",
+            "default_headers",
+            "enable_thinking",
         ],
     )
 
@@ -111,6 +121,7 @@ def test_hf_llm_config():
             "do_sample",
             "remove_think_prefix",
             "add_generation_prompt",
+            "default_headers",
         ],
     )
 

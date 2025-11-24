@@ -1,7 +1,6 @@
-import os
 import uuid
 
-from typing import Generic, Literal, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -37,7 +36,7 @@ class UserRegisterRequest(BaseRequest):
     interests: str | None = Field(None, description="User interests")
 
 
-class GetMemoryRequest(BaseRequest):
+class GetMemoryPlaygroundRequest(BaseRequest):
     """Request model for getting memories."""
 
     user_id: str = Field(..., description="User ID")
@@ -80,9 +79,23 @@ class ChatRequest(BaseRequest):
         None, description="List of cube IDs user can write for multi-cube chat"
     )
     history: list[MessageDict] | None = Field(None, description="Chat history")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     internet_search: bool = Field(True, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    top_k: int = Field(10, description="Number of results to return")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+    moscube: bool = Field(
+        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+    )
 
 
 class ChatCompleteRequest(BaseRequest):
@@ -93,11 +106,23 @@ class ChatCompleteRequest(BaseRequest):
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
-    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    system_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+    base_prompt: str | None = Field(None, description="(Deprecated) Base prompt alias")
+    moscube: bool = Field(
+        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+    )
 
 
 class UserCreate(BaseRequest):
@@ -129,6 +154,10 @@ class SuggestionResponse(BaseResponse[list]):
     data: dict[str, list[str]] | None = Field(None, description="Response data")
 
 
+class AddStatusResponse(BaseResponse[dict]):
+    """Response model for add status operations."""
+
+
 class ConfigResponse(BaseResponse[None]):
     """Response model for configuration endpoint."""
 
@@ -139,6 +168,14 @@ class SearchResponse(BaseResponse[dict]):
 
 class ChatResponse(BaseResponse[str]):
     """Response model for chat operations."""
+
+
+class GetMemoryResponse(BaseResponse[dict]):
+    """Response model for getting memories."""
+
+
+class DeleteMemoryResponse(BaseResponse[dict]):
+    """Response model for deleting memories."""
 
 
 class UserResponse(BaseResponse[dict]):
@@ -175,46 +212,218 @@ class SearchRequest(BaseRequest):
 class APISearchRequest(BaseRequest):
     """Request model for searching memories."""
 
-    query: str = Field(..., description="Search query")
-    user_id: str = Field(None, description="User ID")
-    mem_cube_id: str | None = Field(None, description="Cube ID to search in")
+    # ==== Basic inputs ====
+    query: str = Field(
+        ...,
+        description=("User search query"),
+    )
+    user_id: str = Field(..., description="User ID")
+
+    # ==== Cube scoping ====
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to search in. "
+            "Prefer `readable_cube_ids` for multi-cube search."
+        ),
+    )
     readable_cube_ids: list[str] | None = Field(
-        None, description="List of cube IDs user can read for multi-cube search"
+        None,
+        description=(
+            "List of cube IDs that are readable for this request. "
+            "Required for algorithm-facing API; optional for developer-facing API."
+        ),
     )
+
+    # ==== Search mode ====
     mode: SearchMode = Field(
-        os.getenv("SEARCH_MODE", SearchMode.FAST), description="search mode: fast, fine, or mixture"
+        SearchMode.FAST,
+        description="Search mode: fast, fine, or mixture.",
     )
-    internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(False, description="Whether to use MemOSCube")
-    top_k: int = Field(10, description="Number of results to return")
-    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
-    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
+
+    session_id: str | None = Field(
+        None,
+        description=(
+            "Session ID used as a soft signal to prioritize more relevant memories. "
+            "Only used for weighting, not as a hard filter."
+        ),
+    )
+
+    # ==== Result control ====
+    top_k: int = Field(
+        10,
+        ge=1,
+        description="Number of textual memories to retrieve (top-K). Default: 10.",
+    )
+
+    pref_top_k: int = Field(
+        6,
+        ge=0,
+        description="Number of preference memories to retrieve (top-K). Default: 6.",
+    )
+
+    include_preference: bool = Field(
+        True,
+        description=(
+            "Whether to retrieve preference memories along with general memories. "
+            "If enabled, the system will automatically recall user preferences "
+            "relevant to the query. Default: True."
+        ),
+    )
+
+    # ==== Filter conditions ====
+    # TODO: maybe add detailed description later
+    filter: dict[str, Any] | None = Field(
+        None,
+        description=("Filter for the memory"),
+    )
+
+    # ==== Extended capabilities ====
+    internet_search: bool = Field(
+        False,
+        description=(
+            "Whether to enable internet search in addition to memory search. "
+            "Primarily used by internal algorithms. Default: False."
+        ),
+    )
+
+    # Inner user, not supported in API yet
+    threshold: float | None = Field(
+        None,
+        description=(
+            "Internal similarity threshold for searching plaintext memories. "
+            "If None, default thresholds will be applied."
+        ),
+    )
+
+    # ==== Context ====
+    chat_history: list[MessageDict] | None = Field(
+        None,
+        description=(
+            "Historical chat messages used internally by algorithms. "
+            "If None, internal stored history may be used; "
+            "if provided (even an empty list), this value will be used as-is."
+        ),
+    )
+
+    # ==== Backward compatibility ====
+    moscube: bool = Field(
+        False,
+        description="(Deprecated / internal) Whether to use legacy MemOSCube path.",
+    )
+
     operation: list[PermissionDict] | None = Field(
-        None, description="operation ids for multi cubes"
+        None,
+        description="(Internal) Operation definitions for multi-cube read permissions.",
     )
-    include_preference: bool = Field(True, description="Whether to handle preference memory")
-    pref_top_k: int = Field(6, description="Number of preference results to return")
 
 
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
+    # ==== Basic identifiers ====
     user_id: str = Field(None, description="User ID")
-    mem_cube_id: str | None = Field(None, description="Cube ID")
+    session_id: str | None = Field(
+        None,
+        description="Session ID. If not provided, a default session will be used.",
+    )
+
+    # ==== Single-cube writing (Deprecated) ====
+    mem_cube_id: str | None = Field(
+        None,
+        description="(Deprecated) Target cube ID for this add request (optional for developer API).",
+    )
+
+    # ==== Multi-cube writing ====
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube add"
     )
-    messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
-    memory_content: str | None = Field(None, description="Memory content to store")
-    doc_path: str | None = Field(None, description="Path to document to store")
-    source: str | None = Field(None, description="Source of the memory")
-    chat_history: list[MessageDict] | None = Field(None, description="Chat history")
-    session_id: str | None = Field(None, description="Session id")
-    operation: list[PermissionDict] | None = Field(
-        None, description="operation ids for multi cubes"
+
+    # ==== Async control ====
+    async_mode: Literal["async", "sync"] = Field(
+        "async",
+        description=(
+            "Whether to add memory in async mode. "
+            "Use 'async' to enqueue background add (non-blocking), "
+            "or 'sync' to add memories in the current call. "
+            "Default: 'async'."
+        ),
     )
-    async_mode: Literal["async", "sync"] | None = Field(
-        None, description="Whether to add memory in async mode"
+
+    # ==== Business tags & info ====
+    custom_tags: list[str] | None = Field(
+        None,
+        description=(
+            "Custom tags for this add request, e.g. ['Travel', 'family']. "
+            "These tags can be used as filters in search."
+        ),
+    )
+
+    info: dict[str, str] | None = Field(
+        None,
+        description=(
+            "Additional metadata for the add request. "
+            "All keys can be used as filters in search. "
+            "Example: "
+            "{'agent_id': 'xxxxxx', "
+            "'app_id': 'xxxx', "
+            "'source_type': 'web', "
+            "'source_url': 'https://www.baidu.com', "
+            "'source_content': '西湖是杭州最著名的景点'}."
+        ),
+    )
+
+    # ==== Input content ====
+    messages: list[MessageDict] | None = Field(
+        None,
+        description=(
+            "List of messages to store. Supports: "
+            "- system / user / assistant messages with 'content' and 'chat_time'; "
+            "- tool messages including: "
+            "  * tool_description (name, description, parameters), "
+            "  * tool_input (call_id, name, argument), "
+            "  * raw tool messages where content is str or list[str], "
+            "  * tool_output with structured output items "
+            "    (input_text / input_image / input_file, etc.). "
+            "Also supports pure input items when there is no dialog."
+        ),
+    )
+
+    # ==== Chat history ====
+    chat_history: list[MessageDict] | None = Field(
+        None,
+        description=(
+            "Historical chat messages used internally by algorithms. "
+            "If None, internal stored history will be used; "
+            "if provided (even an empty list), this value will be used as-is."
+        ),
+    )
+
+    # ==== Feedback flag ====
+    is_feedback: bool = Field(
+        False,
+        description=("Whether this request represents user feedback. Default: False."),
+    )
+
+    # ==== Backward compatibility fields (will delete later) ====
+    memory_content: str | None = Field(
+        None,
+        description="(Deprecated) Plain memory content to store. Prefer using `messages`.",
+    )
+    doc_path: str | None = Field(
+        None,
+        description="(Deprecated / internal) Path to document to store.",
+    )
+    source: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Simple source tag of the memory. "
+            "Prefer using `info.source_type` / `info.source_url`."
+        ),
+    )
+    operation: list[PermissionDict] | None = Field(
+        None,
+        description="(Internal) Operation definitions for multi-cube write permissions.",
     )
 
 
@@ -232,13 +441,43 @@ class APIChatCompleteRequest(BaseRequest):
     )
     history: list[MessageDict] | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
-    moscube: bool = Field(True, description="Whether to use MemOSCube")
-    base_prompt: str | None = Field(None, description="Base prompt to use for chat")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     top_k: int = Field(10, description="Number of results to return")
     threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(
         "default_session", description="Session ID for soft-filtering memories"
     )
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    pref_top_k: int = Field(6, description="Number of preference results to return")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
+    model_name_or_path: str | None = Field(None, description="Model name to use for chat")
+    max_tokens: int | None = Field(None, description="Max tokens to generate")
+    temperature: float | None = Field(None, description="Temperature for sampling")
+    top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
+    add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+
+class AddStatusRequest(BaseRequest):
+    """Request model for checking add status."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    user_id: str | None = Field(None, description="User ID")
+    session_id: str | None = Field(None, description="Session ID")
+
+
+class GetMemoryRequest(BaseRequest):
+    """Request model for getting memories."""
+
+    mem_cube_id: str = Field(..., description="Cube ID")
+    user_id: str | None = Field(None, description="User ID")
+    include_preference: bool = Field(True, description="Whether to handle preference memory")
+
+
+class DeleteMemoryRequest(BaseRequest):
+    """Request model for deleting memories."""
+
+    memory_ids: list[str] = Field(..., description="Memory IDs")
 
 
 class SuggestionRequest(BaseRequest):

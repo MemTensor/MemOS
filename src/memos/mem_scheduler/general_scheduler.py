@@ -12,14 +12,14 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
+    LONG_TERM_MEMORY_TYPE,
     MEM_ORGANIZE_LABEL,
     MEM_READ_LABEL,
+    NOT_APPLICABLE_TYPE,
     PREF_ADD_LABEL,
     QUERY_LABEL,
-    WORKING_MEMORY_TYPE,
     USER_INPUT_TYPE,
-    NOT_APPLICABLE_TYPE,
-    LONG_TERM_MEMORY_TYPE,
+    WORKING_MEMORY_TYPE,
     MemCubeID,
     UserID,
 )
@@ -30,6 +30,7 @@ from memos.mem_scheduler.utils.filter_utils import (
     is_all_english,
     transform_name_to_key,
 )
+from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.preference import PreferenceTextMemory
 from memos.memories.textual.tree import TreeTextMemory
@@ -157,7 +158,7 @@ class GeneralScheduler(BaseScheduler):
         """
         logger.info(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
 
-        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
+        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=QUERY_LABEL)
 
@@ -201,7 +202,7 @@ class GeneralScheduler(BaseScheduler):
           messages: List of answer messages to process
         """
         logger.info(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
-        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
+        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ANSWER_LABEL)
 
@@ -237,7 +238,7 @@ class GeneralScheduler(BaseScheduler):
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
-        grouped_messages = self.dispatcher._group_messages_by_user_and_mem_cube(messages=messages)
+        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
 
         self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
         try:
@@ -758,8 +759,17 @@ class GeneralScheduler(BaseScheduler):
 
                 # Get the preference memory from the mem_cube
                 pref_mem = mem_cube.pref_mem
+                if pref_mem is None:
+                    logger.warning(
+                        f"Preference memory not initialized for mem_cube_id={mem_cube_id}, "
+                        f"skipping pref_add processing"
+                    )
+                    return
                 if not isinstance(pref_mem, PreferenceTextMemory):
-                    logger.error(f"Expected PreferenceTextMemory but got {type(pref_mem).__name__}")
+                    logger.error(
+                        f"Expected PreferenceTextMemory but got {type(pref_mem).__name__} "
+                        f"for mem_cube_id={mem_cube_id}"
+                    )
                     return
 
                 # Use pref_mem.get_memory to process the memories
