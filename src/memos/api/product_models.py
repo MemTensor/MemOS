@@ -208,7 +208,7 @@ class ChatRequest(BaseRequest):
     )
 
     @model_validator(mode="after")
-    def _normalize_for_algorithm(self):
+    def _convert_deprecated_fields(self):
         """
         Normalize fields for algorithm interface while preserving backward compatibility.
 
