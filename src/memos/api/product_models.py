@@ -541,7 +541,13 @@ class APIChatCompleteRequest(BaseRequest):
 
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
-    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to use for chat. "
+            "Prefer `readable_cube_ids` and `writable_cube_ids` for multi-cube chat."
+        ),
+    )
     readable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can read for multi-cube chat"
     )
@@ -565,6 +571,27 @@ class APIChatCompleteRequest(BaseRequest):
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+    @model_validator(mode="after")
+    def _convert_deprecated_fields(self) -> "APIChatCompleteRequest":
+        """
+        Convert deprecated fields to new fields for backward compatibility.
+        Ensures full backward compatibility:
+            - mem_cube_id → readable_cube_ids and writable_cube_ids
+        """
+        # Convert mem_cube_id to readable_cube_ids and writable_cube_ids
+        if self.mem_cube_id is not None:
+            if not self.readable_cube_ids:
+                self.readable_cube_ids = [self.mem_cube_id]
+            if not self.writable_cube_ids:
+                self.writable_cube_ids = [self.mem_cube_id]
+            logger.warning(
+                "Deprecated field `mem_cube_id` is used in APIChatCompleteRequest. "
+                "It will be removed in a future version. "
+                "Please migrate to `readable_cube_ids` and `writable_cube_ids`."
+            )
+
+        return self
 
 
 class AddStatusRequest(BaseRequest):

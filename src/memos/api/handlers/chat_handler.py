@@ -108,11 +108,14 @@ class ChatHandler(BaseHandler):
             HTTPException: If chat fails
         """
         try:
+            # Resolve readable cube IDs (for search)
+            readable_cube_ids = chat_req.readable_cube_ids or [chat_req.user_id]
+
             # Step 1: Search for relevant memories
             search_req = APISearchRequest(
                 query=chat_req.query,
                 user_id=chat_req.user_id,
-                mem_cube_id=chat_req.mem_cube_id,
+                readable_cube_ids=readable_cube_ids,
                 mode=chat_req.mode,
                 internet_search=chat_req.internet_search,
                 top_k=chat_req.top_k,
@@ -162,9 +165,11 @@ class ChatHandler(BaseHandler):
 
             # Step 4: start add after chat asynchronously
             if chat_req.add_message_on_answer:
+                # Resolve writable cube IDs (for add)
+                writable_cube_ids = chat_req.writable_cube_ids or [chat_req.user_id]
                 self._start_add_to_memory(
                     user_id=chat_req.user_id,
-                    cube_id=chat_req.mem_cube_id,
+                    writable_cube_ids=writable_cube_ids,
                     session_id=chat_req.session_id or "default_session",
                     query=chat_req.query,
                     full_response=response,
@@ -208,10 +213,15 @@ class ChatHandler(BaseHandler):
             def generate_chat_response() -> Generator[str, None, None]:
                 """Generate chat response as SSE stream."""
                 try:
+                    # Resolve readable cube IDs (for search)
+                    readable_cube_ids = chat_req.readable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
+
                     search_req = APISearchRequest(
                         query=chat_req.query,
                         user_id=chat_req.user_id,
-                        mem_cube_id=chat_req.mem_cube_id,
+                        readable_cube_ids=readable_cube_ids,
                         mode=chat_req.mode,
                         internet_search=chat_req.internet_search,
                         top_k=chat_req.top_k,
@@ -224,9 +234,13 @@ class ChatHandler(BaseHandler):
 
                     search_response = self.search_handler.handle_search_memories(search_req)
 
+                    # Use first readable cube ID for scheduler (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
                     self._send_message_to_scheduler(
                         user_id=chat_req.user_id,
-                        mem_cube_id=chat_req.mem_cube_id,
+                        mem_cube_id=scheduler_cube_id,
                         query=chat_req.query,
                         label=QUERY_LABEL,
                     )
@@ -256,7 +270,7 @@ class ChatHandler(BaseHandler):
                     ]
 
                     self.logger.info(
-                        f"user_id: {chat_req.user_id}, cube_id: {chat_req.mem_cube_id}, "
+                        f"user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
                         f"current_system_prompt: {system_prompt}"
                     )
 
@@ -299,9 +313,13 @@ class ChatHandler(BaseHandler):
 
                     current_messages.append({"role": "assistant", "content": full_response})
                     if chat_req.add_message_on_answer:
+                        # Resolve writable cube IDs (for add)
+                        writable_cube_ids = chat_req.writable_cube_ids or (
+                            [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                        )
                         self._start_add_to_memory(
                             user_id=chat_req.user_id,
-                            cube_id=chat_req.mem_cube_id,
+                            writable_cube_ids=writable_cube_ids,
                             session_id=chat_req.session_id or "default_session",
                             query=chat_req.query,
                             full_response=full_response,
@@ -359,10 +377,15 @@ class ChatHandler(BaseHandler):
                     # Step 1: Search for memories using search handler
                     yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
 
+                    # Resolve readable cube IDs (for search)
+                    readable_cube_ids = chat_req.readable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
+
                     search_req = APISearchRequest(
                         query=chat_req.query,
                         user_id=chat_req.user_id,
-                        mem_cube_id=chat_req.mem_cube_id,
+                        readable_cube_ids=readable_cube_ids,
                         mode=chat_req.mode,
                         internet_search=chat_req.internet_search,
                         top_k=chat_req.top_k,
@@ -376,9 +399,13 @@ class ChatHandler(BaseHandler):
                     search_response = self.search_handler.handle_search_memories(search_req)
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
+                    # Use first readable cube ID for scheduler (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
                     self._send_message_to_scheduler(
                         user_id=chat_req.user_id,
-                        mem_cube_id=chat_req.mem_cube_id,
+                        mem_cube_id=scheduler_cube_id,
                         query=chat_req.query,
                         label=QUERY_LABEL,
                     )
@@ -421,7 +448,7 @@ class ChatHandler(BaseHandler):
                     ]
 
                     self.logger.info(
-                        f"user_id: {chat_req.user_id}, cube_id: {chat_req.mem_cube_id}, "
+                        f"user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
                         f"current_system_prompt: {system_prompt}"
                     )
 
@@ -496,9 +523,13 @@ class ChatHandler(BaseHandler):
 
                     yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
+                    # Use first readable cube ID for post-processing (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
                     self._start_post_chat_processing(
                         user_id=chat_req.user_id,
-                        cube_id=chat_req.mem_cube_id,
+                        cube_id=scheduler_cube_id,
                         session_id=chat_req.session_id or "default_session",
                         query=chat_req.query,
                         full_response=full_response,
@@ -509,9 +540,13 @@ class ChatHandler(BaseHandler):
                         current_messages=current_messages,
                     )
 
+                    # Resolve writable cube IDs (for add)
+                    writable_cube_ids = chat_req.writable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
                     self._start_add_to_memory(
                         user_id=chat_req.user_id,
-                        cube_id=chat_req.mem_cube_id,
+                        writable_cube_ids=writable_cube_ids,
                         session_id=chat_req.session_id or "default_session",
                         query=chat_req.query,
                         full_response=full_response,
@@ -867,7 +902,7 @@ class ChatHandler(BaseHandler):
     async def _add_conversation_to_memory(
         self,
         user_id: str,
-        cube_id: str,
+        writable_cube_ids: list[str],
         session_id: str,
         query: str,
         clean_response: str,
@@ -875,7 +910,7 @@ class ChatHandler(BaseHandler):
     ) -> None:
         add_req = APIADDRequest(
             user_id=user_id,
-            mem_cube_id=cube_id,
+            writable_cube_ids=writable_cube_ids,
             session_id=session_id,
             messages=[
                 {
@@ -1090,7 +1125,7 @@ class ChatHandler(BaseHandler):
     def _start_add_to_memory(
         self,
         user_id: str,
-        cube_id: str,
+        writable_cube_ids: list[str],
         session_id: str,
         query: str,
         full_response: str,
@@ -1105,7 +1140,7 @@ class ChatHandler(BaseHandler):
                     loop.run_until_complete(
                         self._add_conversation_to_memory(
                             user_id=user_id,
-                            cube_id=cube_id,
+                            writable_cube_ids=writable_cube_ids,
                             session_id=session_id,
                             query=query,
                             clean_response=clean_response,
@@ -1126,7 +1161,7 @@ class ChatHandler(BaseHandler):
             task = asyncio.create_task(
                 self._add_conversation_to_memory(
                     user_id=user_id,
-                    cube_id=cube_id,
+                    writable_cube_ids=writable_cube_ids,
                     session_id=session_id,
                     query=query,
                     clean_response=clean_response,
