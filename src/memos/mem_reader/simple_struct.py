@@ -7,7 +7,8 @@ import traceback
 
 from abc import ABC
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeAlias
+from urllib.parse import urlparse
 
 from tqdm import tqdm
 
@@ -49,6 +50,12 @@ ChatMessageClasses = (
 )
 
 RawContentClasses = (ChatCompletionContentPartTextParam, File)
+MessageDict: TypeAlias = dict[str, Any]  # (Deprecated) not supported in the future
+SceneDataInput: TypeAlias = (
+    list[list[MessageDict]]  # (Deprecated) legacy chat example: scenes -> messages
+    | list[str]  # (Deprecated) legacy doc example: list of paths / pure text
+    | list[MessagesType]  # new: list of scenes (each scene is MessagesType)
+)
 
 
 logger = log.get_logger(__name__)
@@ -61,6 +68,10 @@ PROMPT_DICT = {
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
 }
+FILE_EXT_RE = re.compile(
+    r"\.(pdf|docx?|pptx?|xlsx?|txt|md|html?|json|csv|png|jpe?g|webp|wav|mp3|m4a)$",
+    re.I,
+)
 
 try:
     import tiktoken
@@ -168,6 +179,51 @@ def _derive_key(text: str, max_len: int = 80) -> str:
         return ""
     sent = re.split(r"[。！？!?]\s*|\n", text.strip())[0]
     return (sent[:max_len]).strip()
+
+
+def _coerce_scene_data(scene_data, type: str):
+    """
+    Normalize ANY allowed SceneDataInput into: list[MessagesType].
+    """
+    if not scene_data:
+        return []
+    head = scene_data[0]
+    if isinstance(head, str | list) and not (type == "doc" and isinstance(head, str)):
+        # For type="doc" AND head is str, this is legacy doc list[str], handle below instead.
+        return scene_data
+
+    # doc: list[str] -> RawMessageList
+    if type == "doc" and isinstance(head, str):
+        raw_items = []
+        for s in scene_data:
+            s = (s or "").strip()
+            parsed = urlparse(s)
+            looks_like_url = parsed.scheme in {"http", "https", "oss", "s3", "gs", "cos"}
+            # treat as file if it looks like a path, a URL, or a known extension.
+            looks_like_path = ("/" in s) or ("\\" in s)
+            looks_like_file = bool(FILE_EXT_RE.search(s)) or looks_like_url or looks_like_path
+
+            if looks_like_file:
+                if looks_like_url:
+                    filename = os.path.basename(parsed.path)
+                else:
+                    # Handle Windows paths (e.g., "C:\Users\Documents\file.txt")
+                    # On Unix, os.path.basename doesn't recognize backslashes as separators
+                    if "\\" in s and re.match(r"^[A-Za-z]:", s):
+                        # Windows absolute path: extract filename after last backslash
+                        # Split on backslashes and take the last non-empty part
+                        parts = [p for p in s.split("\\") if p]
+                        filename = parts[-1] if parts else os.path.basename(s)
+                    else:
+                        filename = os.path.basename(s)
+                raw_items.append(
+                    {"type": "file", "file": {"path": s, "filename": filename or "document"}}
+                )
+            else:
+                raw_items.append({"type": "text", "text": s})
+        return [raw_items]
+    # Keep a tiny fallback for robustness.
+    return [str(scene_data)]
 
 
 class SimpleStructMemReader(BaseMemReader, ABC):
@@ -381,7 +437,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
+        self, scene_data: SceneDataInput, type: str, info: dict[str, Any], mode: str = "fine"
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
@@ -412,6 +468,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if not isinstance(info, dict):
             raise ValueError("info must be a dictionary")
 
+        # TODO: ensure why session_id is required?
         required_fields = {"user_id", "session_id"}
         missing_fields = required_fields - set(info.keys())
         if missing_fields:
