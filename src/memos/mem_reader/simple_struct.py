@@ -29,7 +29,26 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
 )
+from memos.types import MessagesType
+from memos.types.openai_chat_completion_types import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+    File,
+)
 from memos.utils import timed
+
+
+ChatMessageClasses = (
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionToolMessageParam,
+)
+
+RawContentClasses = (ChatCompletionContentPartTextParam, File)
 
 
 logger = log.get_logger(__name__)
@@ -362,7 +381,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fine"
+        self, scene_data: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
@@ -509,16 +528,19 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         return results
 
-    def _complete_chat_time(self, scene_data: list[list[dict]], type: str):
+    def _complete_chat_time(self, scene_data: list[MessagesType], type: str):
         if type != "chat":
             return scene_data
         complete_scene_data = []
 
         for items in scene_data:
+            if not items:
+                continue
+
             chat_time_value = None
 
             for item in items:
-                if "chat_time" in item:
+                if isinstance(item, dict) and "chat_time" in item:
                     chat_time_value = item["chat_time"]
                     break
 
@@ -528,7 +550,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 chat_time_value = session_date.strftime(date_format)
 
             for i in range(len(items)):
-                if "chat_time" not in items[i]:
+                if isinstance(items[i], dict) and "chat_time" not in items[i]:
                     items[i]["chat_time"] = chat_time_value
 
             complete_scene_data.append(items)
