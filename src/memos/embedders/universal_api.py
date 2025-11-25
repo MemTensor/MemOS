@@ -16,7 +16,11 @@ class UniversalAPIEmbedder(BaseEmbedder):
         self.config = config
 
         if self.provider == "openai":
-            self.client = OpenAIClient(api_key=config.api_key, base_url=config.base_url)
+            self.client = OpenAIClient(
+                api_key=config.api_key,
+                base_url=config.base_url,
+                default_headers=config.headers_extra if config.headers_extra else None,
+            )
         elif self.provider == "azure":
             self.client = AzureClient(
                 azure_endpoint=config.base_url,
@@ -26,7 +30,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
         else:
             raise ValueError(f"Embeddings unsupported provider: {self.provider}")
 
-    @timed(log=True, log_prefix="EmbedderAPI")
+    @timed(log=True, log_prefix="model_timed_embedding")
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self.provider == "openai" or self.provider == "azure":
             try:

@@ -53,8 +53,8 @@ Designed for **AI companions, role-playing NPCs, and multi-agent systems**, MemO
 </div>
 
 
-Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=github) 
- 
+Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=github)
+
 
 ---
 
@@ -64,7 +64,7 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 - **Website**: https://memos.openmem.net/
 - **Documentation**: https://memos-docs.openmem.net/home/overview/
-- **API Reference**: https://memos-docs.openmem.net/docs/api/info/
+- **API Reference**: https://memos-docs.openmem.net/api-reference/configure-memos/
 - **Source Code**: https://github.com/MemTensor/MemOS
 
 ## 📰 News

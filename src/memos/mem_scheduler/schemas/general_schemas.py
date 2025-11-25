@@ -29,6 +29,8 @@ ANSWER_LABEL = "answer"
 ADD_LABEL = "add"
 MEM_READ_LABEL = "mem_read"
 MEM_ORGANIZE_LABEL = "mem_organize"
+MEM_UPDATE_LABEL = "mem_update"
+MEM_ARCHIVE_LABEL = "mem_archive"
 API_MIX_SEARCH_LABEL = "api_mix_search"
 PREF_ADD_LABEL = "pref_add"
 

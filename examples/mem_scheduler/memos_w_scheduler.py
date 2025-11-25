@@ -1,9 +1,10 @@
+import re
 import shutil
 import sys
 
+from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import TYPE_CHECKING
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
@@ -12,12 +13,16 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-
-
-if TYPE_CHECKING:
-    from memos.mem_scheduler.schemas.message_schemas import (
-        ScheduleLogForWebItem,
-    )
+from memos.mem_scheduler.schemas.general_schemas import (
+    ADD_LABEL,
+    ANSWER_LABEL,
+    MEM_ARCHIVE_LABEL,
+    MEM_ORGANIZE_LABEL,
+    MEM_UPDATE_LABEL,
+    QUERY_LABEL,
+)
+from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
+from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -70,6 +75,91 @@ def init_task():
     return conversations, questions
 
 
+def _truncate_with_rules(text: str) -> str:
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
+    limit = 32 if has_cjk else 64
+    normalized = text.strip().replace("\n", " ")
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + "..."
+
+
+def _format_title(ts: datetime, title_text: str) -> str:
+    return f"{ts.astimezone().strftime('%H:%M:%S')} {title_text}"
+
+
+def _cube_display_from(mem_cube_id: str) -> str:
+    if "public" in (mem_cube_id or "").lower():
+        return "PublicMemCube"
+    return "UserMemCube"
+
+
+_TYPE_SHORT = {
+    "LongTermMemory": "LTM",
+    "UserMemory": "User",
+    "WorkingMemory": "Working",
+    "ActivationMemory": "Activation",
+    "ParameterMemory": "Parameter",
+    "TextMemory": "Text",
+    "UserInput": "Input",
+    "NotApplicable": "NA",
+}
+
+
+def _format_entry(item: ScheduleLogForWebItem) -> tuple[str, str]:
+    cube_display = getattr(item, "memcube_name", None) or _cube_display_from(item.mem_cube_id)
+    label = item.label
+    content = item.log_content or ""
+    memcube_content = getattr(item, "memcube_log_content", None) or []
+    memory_len = getattr(item, "memory_len", None) or len(memcube_content) or 1
+
+    def _first_content() -> str:
+        if memcube_content:
+            return memcube_content[0].get("content", "") or content
+        return content
+
+    if label in ("addMessage", QUERY_LABEL, ANSWER_LABEL):
+        target_cube = cube_display.replace("MemCube", "")
+        title = _format_title(item.timestamp, f"addMessages to {target_cube} MemCube")
+        return title, _truncate_with_rules(_first_content())
+
+    if label in ("addMemory", ADD_LABEL):
+        title = _format_title(item.timestamp, f"{cube_display} added {memory_len} memories")
+        return title, _truncate_with_rules(_first_content())
+
+    if label in ("updateMemory", MEM_UPDATE_LABEL):
+        title = _format_title(item.timestamp, f"{cube_display} updated {memory_len} memories")
+        return title, _truncate_with_rules(_first_content())
+
+    if label in ("archiveMemory", MEM_ARCHIVE_LABEL):
+        title = _format_title(item.timestamp, f"{cube_display} archived {memory_len} memories")
+        return title, _truncate_with_rules(_first_content())
+
+    if label in ("mergeMemory", MEM_ORGANIZE_LABEL):
+        title = _format_title(item.timestamp, f"{cube_display} merged {memory_len} memories")
+        merged = [c for c in memcube_content if c.get("type") == "merged"]
+        post = [c for c in memcube_content if c.get("type") == "postMerge"]
+        parts = []
+        if merged:
+            parts.append("Merged: " + " | ".join(c.get("content", "") for c in merged))
+        if post:
+            parts.append("Result: " + " | ".join(c.get("content", "") for c in post))
+        detail = " ".join(parts) if parts else _first_content()
+        return title, _truncate_with_rules(detail)
+
+    if label == "scheduleMemory":
+        title = _format_title(item.timestamp, f"{cube_display} scheduled {memory_len} memories")
+        if memcube_content:
+            return title, _truncate_with_rules(memcube_content[0].get("content", ""))
+        key = transform_name_to_key(content)
+        from_short = _TYPE_SHORT.get(item.from_memory_type, item.from_memory_type)
+        to_short = _TYPE_SHORT.get(item.to_memory_type, item.to_memory_type)
+        return title, _truncate_with_rules(f"[{from_short}→{to_short}] {key}: {content}")
+
+    title = _format_title(item.timestamp, f"{cube_display} event")
+    return title, _truncate_with_rules(_first_content())
+
+
 def show_web_logs(mem_scheduler: GeneralScheduler):
     """Display all web log entries from the scheduler's log queue.
 
@@ -84,24 +174,25 @@ def show_web_logs(mem_scheduler: GeneralScheduler):
 
     # Create a temporary queue to preserve the original queue contents
     temp_queue = Queue()
-    log_count = 0
+    collected: list[ScheduleLogForWebItem] = []
 
     while not mem_scheduler._web_log_message_queue.empty():
         log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
+        collected.append(log_item)
         temp_queue.put(log_item)
-        log_count += 1
 
-        # Print log entry details
-        print(f"\nLog Entry #{log_count}:")
-        print(f'- "{log_item.label}" log: {log_item}')
-
+    for idx, log_item in enumerate(sorted(collected, key=lambda x: x.timestamp, reverse=True), 1):
+        title, content = _format_entry(log_item)
+        print(f"\nLog Entry #{idx}:")
+        print(title)
+        print(content)
         print("-" * 50)
 
     # Restore items back to the original queue
     while not temp_queue.empty():
         mem_scheduler._web_log_message_queue.put(temp_queue.get())
 
-    print(f"\nTotal {log_count} web log entries displayed.")
+    print(f"\nTotal {len(collected)} web log entries displayed.")
     print("=" * 110 + "\n")
 
 

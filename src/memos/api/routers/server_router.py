@@ -24,12 +24,18 @@ from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
+    AddStatusRequest,
+    AddStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
     APIFeedbackRequest,
     APISearchRequest,
     ChatRequest,
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    GetMemoryPlaygroundRequest,
     GetMemoryRequest,
+    GetMemoryResponse,
     MemoryResponse,
     SearchResponse,
     SuggestionRequest,
@@ -56,7 +62,11 @@ dependencies = HandlerDependencies.from_init_server(components)
 search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
 chat_handler = ChatHandler(
-    dependencies, search_handler, add_handler, online_bot=components.get("online_bot")
+    dependencies,
+    components["chat_llms"],
+    search_handler,
+    add_handler,
+    online_bot=components.get("online_bot"),
 )
 feedback_handler = FeedbackHandler(dependencies)
 # Extract commonly used components for function-based handlers
@@ -101,11 +111,15 @@ def add_memories(add_req: APIADDRequest):
 # =============================================================================
 
 
-@router.get("/scheduler/status", summary="Get scheduler running status")
-def scheduler_status(user_name: str | None = None):
+@router.get(
+    "/scheduler/status", summary="Get scheduler running status", response_model=AddStatusResponse
+)
+def scheduler_status(add_status_req: AddStatusRequest):
     """Get scheduler running status."""
     return handlers.scheduler_handler.handle_scheduler_status(
-        user_name=user_name,
+        mem_cube_id=add_status_req.mem_cube_id,
+        user_id=add_status_req.user_id,
+        session_id=add_status_req.session_id,
         mem_scheduler=mem_scheduler,
         instance_id=INSTANCE_ID,
     )
@@ -157,8 +171,8 @@ def chat_complete(chat_req: APIChatCompleteRequest):
     return chat_handler.handle_chat_complete(chat_req)
 
 
-@router.post("/chat", summary="Chat with MemOS")
-def chat(chat_req: ChatRequest):
+@router.post("/chat/stream", summary="Chat with MemOS")
+def chat_stream(chat_req: ChatRequest):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
 
@@ -166,6 +180,17 @@ def chat(chat_req: ChatRequest):
     composes SearchHandler and AddHandler for a clean architecture.
     """
     return chat_handler.handle_chat_stream(chat_req)
+
+
+@router.post("/chat/stream/playground", summary="Chat with MemOS playground")
+def chat_stream_playground(chat_req: ChatRequest):
+    """
+    Chat with MemOS for a specific user. Returns SSE stream.
+
+    This endpoint uses the class-based ChatHandler which internally
+    composes SearchHandler and AddHandler for a clean architecture.
+    """
+    return chat_handler.handle_chat_stream_playground(chat_req)
 
 
 # =============================================================================
@@ -190,12 +215,12 @@ def get_suggestion_queries(suggestion_req: SuggestionRequest):
 
 
 # =============================================================================
-# Memory Retrieval API Endpoints
+# Memory Retrieval Delete API Endpoints
 # =============================================================================
 
 
 @router.post("/get_all", summary="Get all memories for user", response_model=MemoryResponse)
-def get_all_memories(memory_req: GetMemoryRequest):
+def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
     """
     Get all memories or subgraph for a specific user.
 
@@ -221,6 +246,23 @@ def get_all_memories(memory_req: GetMemoryRequest):
             memory_type=memory_req.memory_type or "text_mem",
             naive_mem_cube=naive_mem_cube,
         )
+
+
+@router.post("/get_memory", summary="Get memories for user", response_model=GetMemoryResponse)
+def get_memories(memory_req: GetMemoryRequest):
+    return handlers.memory_handler.handle_get_memories(
+        get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.post(
+    "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
+)
+def delete_memories(memory_req: DeleteMemoryRequest):
+    return handlers.memory_handler.handle_delete_memories(
+        delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
+    )
 
 
 # =============================================================================
