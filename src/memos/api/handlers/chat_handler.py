@@ -425,8 +425,6 @@ class ChatHandler(BaseHandler):
                         f"current_system_prompt: {system_prompt}"
                     )
 
-                    yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
-
                     # Step 3: Generate streaming response from LLM
                     if (
                         chat_req.model_name_or_path
@@ -448,9 +446,11 @@ class ChatHandler(BaseHandler):
                     for chunk in response_stream:
                         if chunk == "<think>":
                             in_think = True
+                            yield f"data: {json.dumps({'type': 'status', 'data': 'reasoning'})}\n\n"
                             continue
                         if chunk == "</think>":
                             in_think = False
+                            yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
                             continue
 
                         if in_think:
