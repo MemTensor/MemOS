@@ -365,6 +365,7 @@ class GeneralScheduler(BaseScheduler):
                 mem_cube = self.current_mem_cube
                 content = message.content
                 user_name = message.user_name
+                info = message.info or {}
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
@@ -388,6 +389,7 @@ class GeneralScheduler(BaseScheduler):
                     mem_cube_id=mem_cube_id,
                     text_mem=text_mem,
                     user_name=user_name,
+                    custom_tags=info.get("custom_tags", None),
                 )
 
                 logger.info(
@@ -412,6 +414,7 @@ class GeneralScheduler(BaseScheduler):
         mem_cube_id: str,
         text_mem: TreeTextMemory,
         user_name: str,
+        custom_tags: list[str] | None = None,
     ) -> None:
         """
         Process memories using mem_reader for enhanced memory processing.
@@ -421,6 +424,7 @@ class GeneralScheduler(BaseScheduler):
             user_id: User ID
             mem_cube_id: Memory cube ID
             text_mem: Text memory instance
+            custom_tags: Optional list of custom tags for memory processing
         """
         try:
             # Get the mem_reader from the parent MOSCore
@@ -464,6 +468,7 @@ class GeneralScheduler(BaseScheduler):
                 processed_memories = self.mem_reader.fine_transfer_simple_mem(
                     memory_items,
                     type="chat",
+                    custom_tags=custom_tags,
                 )
             except Exception as e:
                 logger.warning(f"{e}: Fail to transfer mem: {memory_items}")

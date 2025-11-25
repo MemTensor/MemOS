@@ -27,8 +27,10 @@ __all__ = [
     "MessageDict",
     "MessageList",
     "MessageRole",
+    "MessagesType",
     "Permission",
     "PermissionDict",
+    "RawMessageList",
     "UserContext",
 ]
 
@@ -40,7 +42,7 @@ MessageRole: TypeAlias = Literal["user", "assistant", "system"]
 
 # Message structure
 class MessageDict(TypedDict, total=False):
-    """Typed dictionary for chat message dictionaries."""
+    """Typed dictionary for chat message dictionaries, will (Deprecate), use ChatCompletionMessageParam instead."""
 
     role: MessageRole
     content: str

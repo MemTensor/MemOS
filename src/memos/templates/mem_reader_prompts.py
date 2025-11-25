@@ -39,6 +39,8 @@ Language rules:
 - The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input conversation.  **如果输入是中文，请输出中文**
 - Keep `memory_type` in English.
 
+${custom_tags_prompt}
+
 Example:
 Conversation:
 user: [June 26, 2025 at 3:00 PM]: Hi Jerry! Yesterday at 3 PM I had a meeting with my team about the new project.
@@ -132,6 +134,8 @@ SIMPLE_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
 - `key`、`value`、`tags`、`summary` 字段必须与输入对话的主要语言一致。**如果输入是中文，请输出中文**
 - `memory_type` 保持英文。
 
+${custom_tags_prompt}
+
 示例：
 对话：
 user: [2025年6月26日下午3:00]：嗨Jerry！昨天下午3点我和团队开了个会，讨论新项目。
@@ -212,6 +216,8 @@ Language rules:
 - The `key`, `value`, `tags`, `summary` fields must match the mostly used language of the input document summaries.  **如果输入是中文，请输出中文**
 - Keep `memory_type` in English.
 
+{custom_tags_prompt}
+
 Document chunk:
 {chunk_text}
 
@@ -249,6 +255,8 @@ SIMPLE_STRUCT_DOC_READER_PROMPT_ZH = """您是搜索与检索系统的文本分�
 语言规则：
 - `key`、`value`、`tags` 字段必须与输入文档摘要的主要语言一致。**如果输入是中文，请输出中文**
 - `memory_type` 保持英文。
+
+{custom_tags_prompt}
 
 文档片段：
 {chunk_text}
@@ -341,3 +349,13 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
 }
 
 """
+
+
+CUSTOM_TAGS_INSTRUCTION = """Output tags can refer to the following tags:
+{custom_tags}
+You can choose tags from the above list that are relevant to the memory. Additionally, you can freely add tags based on the content of the memory."""
+
+
+CUSTOM_TAGS_INSTRUCTION_ZH = """输出tags可以参考下列标签：
+{custom_tags}
+你可以选择与memory相关的在上述列表中可以加入tags，同时你可以根据memory的内容自由添加tags。"""
