@@ -6,7 +6,6 @@ from memos.api.handlers.scheduler_handler import (
 )
 from memos.api.routers.server_router import mem_scheduler, status_tracker
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.api.product_models import StatusRequest
 
 
 # Debug: Print scheduler configuration

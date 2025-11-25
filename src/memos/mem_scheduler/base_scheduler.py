@@ -4,7 +4,7 @@ import threading
 import time
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
@@ -44,10 +44,12 @@ from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispat
 from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
+from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
 )
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 from memos.memories.activation.kv import KVCacheMemory
@@ -59,13 +61,12 @@ from memos.types.general_types import (
     MemCubeID,
     UserID,
 )
-from memos.mem_scheduler.utils import metrics
-from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 if TYPE_CHECKING:
-    from memos.reranker.http_bge import HTTPBGEReranker
     import redis
+
+    from memos.reranker.http_bge import HTTPBGEReranker
 
 
 logger = get_logger(__name__)

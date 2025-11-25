@@ -1,4 +1,5 @@
 import concurrent
+import os
 import threading
 import time
 
@@ -11,11 +12,12 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
-from memos.mem_scheduler.schemas.general_schemas import DEFAULT_STOP_WAIT
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem, ScheduleLogForWebItem
+from memos.mem_scheduler.schemas.general_schemas import (
+    DEFAULT_STOP_WAIT,
+)
+from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem, ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
-from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
@@ -102,7 +104,6 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if not msgs:
             return
         # This is handled in BaseScheduler now
-        pass
 
     def _create_task_wrapper(self, handler: Callable, task_item: RunningTaskItem):
         """
@@ -210,7 +211,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         mem_cube_id=task_item.mem_cube_id,
                         item_id=task_item.item_id,
                         label=m.label,
-                        log_content=f"Task {task_item.item_id} failed for user {task_item.user_id} with error: {str(e)}.",
+                        log_content=f"Task {task_item.item_id} failed for user {task_item.user_id} with error: {e!s}.",
                         status="failed",
                         exception=str(e)
                     )

@@ -1,7 +1,7 @@
 # src/memos/mem_scheduler/utils/status_tracker.py
 import json
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from memos.dependency import require_python_package

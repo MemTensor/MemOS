@@ -23,8 +23,6 @@ from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
-    AddStatusRequest,
-    AddStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
     APISearchRequest,
@@ -36,10 +34,9 @@ from memos.api.product_models import (
     GetMemoryResponse,
     MemoryResponse,
     SearchResponse,
+    StatusResponse,
     SuggestionRequest,
     SuggestionResponse,
-    StatusRequest,
-    StatusResponse,
 )
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler

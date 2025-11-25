@@ -1,7 +1,10 @@
 # src/memos/mem_scheduler/utils/metrics.py
 import time
+
 from contextlib import ContextDecorator
-from prometheus_client import Counter, Summary, Gauge, Histogram
+
+from prometheus_client import Counter, Gauge, Histogram, Summary
+
 
 # --- Metric Definitions ---
 
