@@ -42,7 +42,7 @@ class SingleCubeView(MemCubeView):
     mem_scheduler: Any
     logger: Any
     searcher: Any
-    deepsearch_agent: Any
+    deepsearch_agent: Any | None = None
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
