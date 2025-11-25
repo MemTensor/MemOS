@@ -381,7 +381,7 @@ class APIConfig:
                     "url": os.getenv("MOS_RERANKER_URL"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
-                    "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
+                    "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
                     "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
                 },
@@ -407,6 +407,7 @@ class APIConfig:
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
                     "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                    "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                 },
             }
