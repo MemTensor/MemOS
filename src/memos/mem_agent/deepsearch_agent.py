@@ -26,6 +26,8 @@ from memos.templates.mem_agent_prompts import (
 if TYPE_CHECKING:
     from memos.types import MessageList
 
+logger = get_logger(__name__)
+
 
 class JSONResponseParser:
     """Elegant JSON response parser for LLM outputs"""
@@ -46,9 +48,6 @@ class JSONResponseParser:
                 continue
 
         raise ValueError(f"Cannot parse JSON response: {response[:100]}...")
-
-
-logger = get_logger(__name__)
 
 
 class QueryRewriter(BaseMemAgent):
@@ -141,7 +140,7 @@ class DeepSearchMemAgent(BaseMemAgent):
             memory_retriever: Memory retrieval interface (e.g., naive_mem_cube.text_mem)
             config: Configuration for deep search behavior
         """
-        self.config = config or DeepSearchAgentConfig()
+        self.config = config or DeepSearchAgentConfig(agent_name="DeepSearchMemAgent")
         self.max_iterations = self.config.max_iterations
         self.timeout = self.config.timeout
         self.llm: BaseLLM = llm
