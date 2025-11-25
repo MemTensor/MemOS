@@ -1,8 +1,14 @@
 # src/memos/mem_scheduler/utils/status_tracker.py
 import json
-from datetime import datetime, timezone
+
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from memos.dependency import require_python_package
+
+
+if TYPE_CHECKING:
+    import redis
 
 
 class TaskStatusTracker:
@@ -22,42 +28,54 @@ class TaskStatusTracker:
             "submitted_at": datetime.now(timezone.utc).isoformat(),
         }
         self.redis.hset(key, task_id, json.dumps(payload))
+        self.redis.expire(key, timedelta(days=7))
 
     def task_started(self, task_id: str, user_id: str):
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
         if not existing_data_json:
-            # 容错处理：如果任务不存在，也创建一个
-            payload = {"status": "in_progress", "started_at": datetime.now(timezone.utc).isoformat()}
+            # 容错处理: 如果任务不存在, 也创建一个
+            payload = {
+                "status": "in_progress",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
         else:
             payload = json.loads(existing_data_json)
             payload["status"] = "in_progress"
             payload["started_at"] = datetime.now(timezone.utc).isoformat()
         self.redis.hset(key, task_id, json.dumps(payload))
+        self.redis.expire(key, timedelta(days=7))
 
     def task_completed(self, task_id: str, user_id: str):
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
-        if not existing_data_json: return
+        if not existing_data_json:
+            return
         payload = json.loads(existing_data_json)
         payload["status"] = "completed"
         payload["completed_at"] = datetime.now(timezone.utc).isoformat()
-        # 设置该任务条目的过期时间，例如 24 小时
-        # 注意：Redis Hash 不能为单个 field 设置 TTL，这里我们可以 通过后台任务清理或在获取时判断时间戳
-        # 简单起见，我们暂时依赖一个后台清理任务
+        # 设置该任务条目的过期时间, 例如 24 小时
+        # 注意: Redis Hash 不能为单个 field 设置 TTL, 这里我们可以 通过后台任务清理或在获取时判断时间戳
+        # 简单起见, 我们暂时依赖一个后台清理任务
         self.redis.hset(key, task_id, json.dumps(payload))
+        self.redis.expire(key, timedelta(days=7))
 
     def task_failed(self, task_id: str, user_id: str, error_message: str):
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
         if not existing_data_json:
-            payload = {"status": "failed", "error": error_message, "failed_at": datetime.now(timezone.utc).isoformat()}
+            payload = {
+                "status": "failed",
+                "error": error_message,
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+            }
         else:
             payload = json.loads(existing_data_json)
             payload["status"] = "failed"
             payload["error"] = error_message
             payload["failed_at"] = datetime.now(timezone.utc).isoformat()
         self.redis.hset(key, task_id, json.dumps(payload))
+        self.redis.expire(key, timedelta(days=7))
 
     def get_task_status(self, task_id: str, user_id: str) -> dict | None:
         key = self._get_key(user_id)

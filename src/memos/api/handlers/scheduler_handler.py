@@ -14,17 +14,18 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from memos.log import get_logger
-
 # Imports for new implementation
-from memos.api.product_models import StatusRequest, StatusResponse, StatusResponseItem
+from memos.api.product_models import StatusResponse, StatusResponseItem
+from memos.log import get_logger
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
 
 
-def handle_scheduler_status(user_id: str, status_tracker: TaskStatusTracker, task_id: str | None = None) -> StatusResponse:
+def handle_scheduler_status(
+    user_id: str, status_tracker: TaskStatusTracker, task_id: str | None = None
+) -> StatusResponse:
     """
     Get scheduler running status for one or all tasks of a user.
 
@@ -41,20 +42,24 @@ def handle_scheduler_status(user_id: str, status_tracker: TaskStatusTracker, tas
     Raises:
         HTTPException: If a specific task is not found.
     """
-    request = StatusRequest(user_id=user_id, task_id=task_id) # Construct StatusRequest internally
     response_data: list[StatusResponseItem] = []
 
     try:
         if task_id:
             task_data = status_tracker.get_task_status(task_id, user_id)
             if not task_data:
-                raise HTTPException(status_code=404, detail=f"Task {task_id} not found for user {user_id}")
+                raise HTTPException(
+                    status_code=404, detail=f"Task {task_id} not found for user {user_id}"
+                )
             response_data.append(StatusResponseItem(task_id=task_id, status=task_data["status"]))
         else:
             all_tasks = status_tracker.get_all_tasks_for_user(user_id)
             # The plan returns an empty list, which is good.
             # No need to check "if not all_tasks" explicitly before the list comprehension
-            response_data = [StatusResponseItem(task_id=tid, status=t_data["status"]) for tid, t_data in all_tasks.items()]
+            response_data = [
+                StatusResponseItem(task_id=tid, status=t_data["status"])
+                for tid, t_data in all_tasks.items()
+            ]
 
         return StatusResponse(data=response_data)
     except HTTPException:
@@ -94,21 +99,19 @@ def handle_scheduler_wait(
         while time.time() - start_time < timeout_seconds:
             # Directly call the new, reliable status logic
             status_response = handle_scheduler_status(
-                user_id=user_name,
-                status_tracker=status_tracker
+                user_id=user_name, status_tracker=status_tracker
             )
 
             # System is idle if the data list is empty or no tasks are active
             is_idle = not status_response.data or all(
-                task.status in ["completed", "failed", "cancelled"]
-                for task in status_response.data
+                task.status in ["completed", "failed", "cancelled"] for task in status_response.data
             )
 
             if is_idle:
                 return {
                     "message": "idle",
                     "data": {
-                        "running_tasks": 0, # Kept for compatibility
+                        "running_tasks": 0,  # Kept for compatibility
                         "waited_seconds": round(time.time() - start_time, 3),
                         "timed_out": False,
                         "user_name": user_name,
@@ -124,7 +127,7 @@ def handle_scheduler_wait(
         return {
             "message": "timeout",
             "data": {
-                "running_tasks": len(active_tasks), # A more accurate count of active tasks
+                "running_tasks": len(active_tasks),  # A more accurate count of active tasks
                 "waited_seconds": round(time.time() - start_time, 3),
                 "timed_out": True,
                 "user_name": user_name,
@@ -134,7 +137,9 @@ def handle_scheduler_wait(
         # Re-raise HTTPException directly to preserve its status code
         raise
     except Exception as err:
-        logger.error(f"Failed while waiting for scheduler for user {user_name}: {traceback.format_exc()}")
+        logger.error(
+            f"Failed while waiting for scheduler for user {user_name}: {traceback.format_exc()}"
+        )
         raise HTTPException(status_code=500, detail="Failed while waiting for scheduler") from err
 
 
@@ -169,8 +174,12 @@ def handle_scheduler_wait_stream(
                 elapsed = time.time() - start_time
                 if elapsed > timeout_seconds:
                     # Send timeout message and break
-                    final_status = handle_scheduler_status(user_id=user_name, status_tracker=status_tracker)
-                    active_tasks = [t for t in final_status.data if t.status in ["waiting", "in_progress"]]
+                    final_status = handle_scheduler_status(
+                        user_id=user_name, status_tracker=status_tracker
+                    )
+                    active_tasks = [
+                        t for t in final_status.data if t.status in ["waiting", "in_progress"]
+                    ]
                     payload = {
                         "user_name": user_name,
                         "active_tasks": len(active_tasks),
@@ -184,10 +193,11 @@ def handle_scheduler_wait_stream(
 
                 # Get status
                 status_response = handle_scheduler_status(
-                    user_id=user_name,
-                    status_tracker=status_tracker
+                    user_id=user_name, status_tracker=status_tracker
                 )
-                active_tasks = [t for t in status_response.data if t.status in ["waiting", "in_progress"]]
+                active_tasks = [
+                    t for t in status_response.data if t.status in ["waiting", "in_progress"]
+                ]
                 num_active = len(active_tasks)
 
                 payload = {
@@ -200,7 +210,7 @@ def handle_scheduler_wait_stream(
                 yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
                 if num_active == 0:
-                    break # Exit loop if idle
+                    break  # Exit loop if idle
 
                 time.sleep(poll_interval)
 
@@ -215,4 +225,3 @@ def handle_scheduler_wait_stream(
             yield "data: " + json.dumps(err_payload, ensure_ascii=False) + "\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-

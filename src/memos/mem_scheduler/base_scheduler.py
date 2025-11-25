@@ -141,6 +141,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             enable_parallel_dispatch=self.enable_parallel_dispatch,
             status_tracker=self.status_tracker,
             metrics=self.metrics,
+            submit_web_logs=self._submit_web_logs,
         )
 
         # other attributes

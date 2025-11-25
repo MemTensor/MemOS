@@ -3595,9 +3595,10 @@ virtualenv = ">=20.10.0"
 name = "prometheus-client"
 version = "0.23.1"
 description = "Python client for the Prometheus monitoring system."
-optional = false
+optional = true
 python-versions = ">=3.9"
 groups = ["main"]
+markers = "extra == \"mem-scheduler\""
 files = [
     {file = "prometheus_client-0.23.1-py3-none-any.whl", hash = "sha256:dd1913e6e76b59cfe44e7a4b83e01afc9873c1bdfd2ed8739f1e76aeca115f99"},
     {file = "prometheus_client-0.23.1.tar.gz", hash = "sha256:6ae8f9081eaaaf153a2e959d2e6c4f4fb57b12ef76c8c7980202f1e57b48b2ce"},
@@ -6413,7 +6414,7 @@ cffi = ["cffi (>=1.11)"]
 [extras]
 all = ["cachetools", "chonkie", "datasketch", "jieba", "markitdown", "neo4j", "pika", "pymilvus", "pymysql", "qdrant-client", "rank-bm25", "redis", "schedule", "sentence-transformers", "torch", "volcengine-python-sdk"]
 mem-reader = ["chonkie", "markitdown"]
-mem-scheduler = ["pika", "redis"]
+mem-scheduler = ["pika", "prometheus-client", "redis"]
 mem-user = ["pymysql"]
 pref-mem = ["datasketch", "pymilvus"]
 tree-mem = ["neo4j", "schedule"]
@@ -6421,4 +6422,4 @@ tree-mem = ["neo4j", "schedule"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "a98b5ddffb4c031342ef1314a93666460ce0903e207bc79d23478b80a99b7f40"
+content-hash = "33c2b037d65f198ae18499ef2734398de6709e073269e360d480b15dac289d95"

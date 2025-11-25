@@ -12,7 +12,7 @@ from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
 from memos.mem_scheduler.schemas.general_schemas import DEFAULT_STOP_WAIT
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem, ScheduleLogForWebItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.mem_scheduler.utils import metrics
@@ -44,6 +44,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         config=None,
         status_tracker: TaskStatusTracker | None = None,
         metrics: Any | None = None,
+        submit_web_logs: Callable | None = None, # ADDED
     ):
         super().__init__()
         self.config = config
@@ -95,6 +96,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         self.metrics = metrics
         self.status_tracker = status_tracker
+        self.submit_web_logs = submit_web_logs # ADDED
 
     def on_messages_enqueued(self, msgs: list[ScheduleMessageItem]) -> None:
         if not msgs:
@@ -153,6 +155,18 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     self.status_tracker.task_completed(task_id=task_item.item_id, user_id=task_item.user_id)
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
 
+                is_cloud_env = os.getenv('MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME') == 'memos-memory-change'
+                if self.submit_web_logs and is_cloud_env:
+                    status_log = ScheduleLogForWebItem(
+                        user_id=task_item.user_id,
+                        mem_cube_id=task_item.mem_cube_id,
+                        item_id=task_item.item_id,
+                        label=m.label,
+                        log_content=f"Task {task_item.item_id} completed successfully for user {task_item.user_id}.",
+                        status="completed"
+                    )
+                    self.submit_web_logs([status_log])
+
                 # acknowledge redis messages
                 if self.use_redis_queue and self.memos_message_queue is not None:
                     for msg in messages:
@@ -188,6 +202,19 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         if len(self._completed_tasks) > self.completed_tasks_max_show_size:
                             self._completed_tasks.pop(0)
                 logger.error(f"Task failed: {task_item.get_execution_info()}, Error: {e}")
+
+                is_cloud_env = os.getenv('MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME') == 'memos-memory-change'
+                if self.submit_web_logs and is_cloud_env:
+                    status_log = ScheduleLogForWebItem(
+                        user_id=task_item.user_id,
+                        mem_cube_id=task_item.mem_cube_id,
+                        item_id=task_item.item_id,
+                        label=m.label,
+                        log_content=f"Task {task_item.item_id} failed for user {task_item.user_id} with error: {str(e)}.",
+                        status="failed",
+                        exception=str(e)
+                    )
+                    self.submit_web_logs([status_log])
                 raise
 
         return wrapped_handler
