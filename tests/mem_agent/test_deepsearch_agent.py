@@ -1,6 +1,5 @@
 """Simplified unit tests for DeepSearchAgent - focusing on core functionality."""
 
-import json
 import uuid
 
 from unittest.mock import MagicMock, patch
@@ -213,8 +212,9 @@ class TestDeepSearchMemAgent:
         """Test full pipeline integration."""
         agent = DeepSearchMemAgent(mock_llm, mock_memory_retriever, config)
 
-        with patch.object(agent.query_rewriter, "run", return_value="Rewritten query"):
-            with patch.object(
+        with (
+            patch.object(agent.query_rewriter, "run", return_value="Rewritten query"),
+            patch.object(
                 agent.reflector,
                 "run",
                 return_value={
@@ -222,12 +222,13 @@ class TestDeepSearchMemAgent:
                     "reasoning": "Info is sufficient",
                     "missing_entities": [],
                 },
-            ):
-                result = agent.run(
-                    "What is Python?", user_id="user123", history=[], generated_answer=True
-                )
+            ),
+        ):
+            result = agent.run(
+                "What is Python?", user_id="user123", history=[], generated_answer=True
+            )
 
-                assert isinstance(result, str)
-                assert result == "Generated answer"
-                mock_memory_retriever.search.assert_called()
-                mock_llm.generate.assert_called()
+            assert isinstance(result, str)
+            assert result == "Generated answer"
+            mock_memory_retriever.search.assert_called()
+            mock_llm.generate.assert_called()
