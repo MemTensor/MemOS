@@ -15,7 +15,7 @@ import os
 import random as _random
 import socket
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
@@ -38,9 +38,12 @@ from memos.api.product_models import (
     SearchResponse,
     SuggestionRequest,
     SuggestionResponse,
+    StatusRequest,
+    StatusResponse,
 )
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
@@ -72,6 +75,8 @@ chat_handler = ChatHandler(
 mem_scheduler: BaseScheduler = components["mem_scheduler"]
 llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
+redis_client = components["redis_client"]
+status_tracker = TaskStatusTracker(redis_client=redis_client)
 
 
 # =============================================================================
@@ -110,17 +115,18 @@ def add_memories(add_req: APIADDRequest):
 # =============================================================================
 
 
-@router.get(
-    "/scheduler/status", summary="Get scheduler running status", response_model=AddStatusResponse
+@router.get( # Changed from post to get
+    "/scheduler/status", summary="Get scheduler running status", response_model=StatusResponse
 )
-def scheduler_status(add_status_req: AddStatusRequest):
+def scheduler_status(
+    user_id: str = Query(..., description="User ID"),
+    task_id: str | None = Query(None, description="Optional Task ID to query a specific task")
+):
     """Get scheduler running status."""
     return handlers.scheduler_handler.handle_scheduler_status(
-        mem_cube_id=add_status_req.mem_cube_id,
-        user_id=add_status_req.user_id,
-        session_id=add_status_req.session_id,
-        mem_scheduler=mem_scheduler,
-        instance_id=INSTANCE_ID,
+        user_id=user_id,
+        task_id=task_id,
+        status_tracker=status_tracker,
     )
 
 
@@ -128,14 +134,14 @@ def scheduler_status(add_status_req: AddStatusRequest):
 def scheduler_wait(
     user_name: str,
     timeout_seconds: float = 120.0,
-    poll_interval: float = 0.2,
+    poll_interval: float = 0.5,
 ):
     """Wait until scheduler is idle for a specific user."""
     return handlers.scheduler_handler.handle_scheduler_wait(
         user_name=user_name,
+        status_tracker=status_tracker,
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,
-        mem_scheduler=mem_scheduler,
     )
 
 
@@ -143,14 +149,14 @@ def scheduler_wait(
 def scheduler_wait_stream(
     user_name: str,
     timeout_seconds: float = 120.0,
-    poll_interval: float = 0.2,
+    poll_interval: float = 0.5,
 ):
     """Stream scheduler progress via Server-Sent Events (SSE)."""
     return handlers.scheduler_handler.handle_scheduler_wait_stream(
         user_name=user_name,
+        status_tracker=status_tracker,
         timeout_seconds=timeout_seconds,
         poll_interval=poll_interval,
-        mem_scheduler=mem_scheduler,
         instance_id=INSTANCE_ID,
     )
 

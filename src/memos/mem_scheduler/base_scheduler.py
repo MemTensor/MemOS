@@ -4,9 +4,9 @@ import threading
 import time
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 from sqlalchemy.engine import Engine
 
@@ -59,10 +59,13 @@ from memos.types.general_types import (
     MemCubeID,
     UserID,
 )
+from memos.mem_scheduler.utils import metrics
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 if TYPE_CHECKING:
     from memos.reranker.http_bge import HTTPBGEReranker
+    import redis
 
 
 logger = get_logger(__name__)
@@ -127,12 +130,17 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.mem_reader = None  # Will be set by MOSCore
+        self.status_tracker: TaskStatusTracker | None = None
+        self.metrics = metrics
+        self._monitor_thread = None
         self.dispatcher = SchedulerDispatcher(
             config=self.config,
             memos_message_queue=self.memos_message_queue,
             use_redis_queue=self.use_redis_queue,
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
+            status_tracker=self.status_tracker,
+            metrics=self.metrics,
         )
 
         # other attributes
@@ -167,11 +175,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         process_llm: BaseLLM | None = None,
         db_engine: Engine | None = None,
         mem_reader=None,
+        redis_client: Union["redis.Redis", None] = None,
     ):
         if process_llm is None:
             process_llm = chat_llm
 
         try:
+            if redis_client:
+                self.status_tracker = TaskStatusTracker(redis_client)
+                if self.dispatcher:
+                    self.dispatcher.status_tracker = self.status_tracker
             # initialize submodules
             self.chat_llm = chat_llm
             self.process_llm = process_llm
@@ -557,6 +570,17 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
+        if isinstance(messages, ScheduleMessageItem):
+            messages = [messages]
+        for message in messages:
+            self.metrics.task_enqueued(user_id=message.user_id, task_type=message.label)
+            if self.status_tracker:
+                self.status_tracker.task_submitted(
+                    task_id=message.item_id,
+                    user_id=message.user_id,
+                    task_type=message.label,
+                    mem_cube_id=message.mem_cube_id,
+                )
         self.memos_message_queue.submit_messages(messages=messages)
 
     def _submit_web_logs(
@@ -672,6 +696,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 messages = self.memos_message_queue.get_messages(batch_size=self.consume_batch)
 
                 if messages:
+                    for msg in messages:
+                        self.metrics.task_dequeued(user_id=msg.user_id, task_type=msg.label)
                     try:
                         import contextlib
 
@@ -692,6 +718,26 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     logger.error(f"Unexpected error in message consumer: {e!s}")
                 time.sleep(self._consume_interval)  # Prevent tight error loops
 
+    def _monitor_loop(self):
+        while self._running:
+            try:
+                q_sizes = self.memos_message_queue.qsize()
+
+                for stream_key, queue_length in q_sizes.items():
+                    # Expected format: "memos:stream:{user_id}:{mem_cube_id}" or "{user_id}"
+                    parts = stream_key.split(":")
+                    if len(parts) >= 3:
+                        user_id = parts[2]
+                        self.metrics.update_queue_length(queue_length, user_id)
+                    elif not self.use_redis_queue: # local queue
+                         user_id = stream_key
+                         self.metrics.update_queue_length(queue_length, user_id)
+
+            except Exception as e:
+                logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)
+
+            time.sleep(15) # 每 15 秒采样一次
+
     def start(self) -> None:
         """
         Start the message consumer thread/process and initialize dispatcher resources.
@@ -707,6 +753,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
 
         self.start_consumer()
+        self.start_background_monitor()
+
+    def start_background_monitor(self):
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            return
+        self._monitor_thread = ContextThread(target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor")
+        self._monitor_thread.start()
+        logger.info("Scheduler metrics monitor thread started.")
 
     def start_consumer(self) -> None:
         """
@@ -793,6 +847,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         # Stop consumer first
         self.stop_consumer()
+
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=2.0)
 
         # Shutdown dispatcher
         if self.dispatcher:
@@ -917,156 +974,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
             raise NotImplementedError()
         return task_status
-
-    def mem_scheduler_wait(
-        self, timeout: float = 180.0, poll: float = 0.1, log_every: float = 0.01
-    ) -> bool:
-        """
-        Uses EWMA throughput, detects leaked `unfinished_tasks`, and waits for dispatcher.
-        """
-        deadline = time.monotonic() + timeout
-        memos_message_queue = self.memos_message_queue.memos_message_queue
-
-        # --- helpers (local, no external deps) ---
-        def _unfinished() -> int:
-            """Prefer `unfinished_tasks`; fallback to `qsize()`."""
-            try:
-                u = getattr(memos_message_queue, "unfinished_tasks", None)
-                if u is not None:
-                    return int(u)
-            except Exception:
-                pass
-            try:
-                return int(memos_message_queue.qsize())
-            except Exception:
-                return 0
-
-        def _fmt_eta(seconds: float | None) -> str:
-            """Format seconds to human-readable string."""
-            if seconds is None or seconds != seconds or seconds == float("inf"):
-                return "unknown"
-            s = max(0, int(seconds))
-            h, s = divmod(s, 3600)
-            m, s = divmod(s, 60)
-            if h > 0:
-                return f"{h:d}h{m:02d}m{s:02d}s"
-            if m > 0:
-                return f"{m:d}m{s:02d}s"
-            return f"{s:d}s"
-
-        # --- EWMA throughput state (tasks/s) ---
-        alpha = 0.3
-        rate = 0.0
-        last_t = None  # type: float | None
-        last_done = 0
-
-        # --- dynamic totals & stuck detection ---
-        init_unfinished = _unfinished()
-        done_total = 0
-        last_unfinished = None
-        stuck_ticks = 0
-        next_log = 0.0
-
-        while True:
-            # 1) read counters
-            curr_unfinished = _unfinished()
-            try:
-                qsz = int(memos_message_queue.qsize())
-            except Exception:
-                qsz = -1
-
-            pend = run = 0
-            stats_fn = getattr(self.dispatcher, "stats", None)
-            if self.enable_parallel_dispatch and self.dispatcher is not None and callable(stats_fn):
-                try:
-                    st = (
-                        stats_fn()
-                    )  # expected: {'pending':int,'running':int,'done':int?,'rate':float?}
-                    run = int(st.get("running", 0))
-
-                except Exception:
-                    pass
-
-            if isinstance(memos_message_queue, SchedulerRedisQueue):
-                # For Redis queue, prefer XINFO GROUPS to compute pending
-                groups_info = memos_message_queue.redis.xinfo_groups(
-                    memos_message_queue.stream_key_prefix
-                )
-                if groups_info:
-                    for group in groups_info:
-                        if group.get("name") == memos_message_queue.consumer_group:
-                            pend = int(group.get("pending", pend))
-                            break
-            else:
-                pend = run
-
-            # 2) dynamic total (allows new tasks queued while waiting)
-            total_now = max(init_unfinished, done_total + curr_unfinished)
-            done_total = max(0, total_now - curr_unfinished)
-
-            # 3) update EWMA throughput
-            now = time.monotonic()
-            if last_t is None:
-                last_t = now
-            else:
-                dt = max(1e-6, now - last_t)
-                dc = max(0, done_total - last_done)
-                inst = dc / dt
-                rate = inst if rate == 0.0 else alpha * inst + (1 - alpha) * rate
-                last_t = now
-                last_done = done_total
-
-            eta = None if rate <= 1e-9 else (curr_unfinished / rate)
-
-            # 4) progress log (throttled)
-            if now >= next_log:
-                print(
-                    f"[mem_scheduler_wait] remaining≈{curr_unfinished} | throughput≈{rate:.2f} msg/s | ETA≈{_fmt_eta(eta)} "
-                    f"| qsize={qsz} pending={pend} running={run}"
-                )
-                next_log = now + max(0.2, log_every)
-
-            # 5) exit / stuck detection
-            idle_dispatcher = (
-                (pend == 0 and run == 0)
-                if (self.enable_parallel_dispatch and self.dispatcher is not None)
-                else True
-            )
-            if curr_unfinished == 0:
-                break
-            if curr_unfinished > 0 and qsz == 0 and idle_dispatcher:
-                if last_unfinished == curr_unfinished:
-                    stuck_ticks += 1
-                else:
-                    stuck_ticks = 0
-            else:
-                stuck_ticks = 0
-            last_unfinished = curr_unfinished
-
-            if stuck_ticks >= 3:
-                logger.warning(
-                    "mem_scheduler_wait: detected leaked 'unfinished_tasks' -> treating queue as drained"
-                )
-                break
-
-            if now >= deadline:
-                logger.warning("mem_scheduler_wait: queue did not drain before timeout")
-                return False
-
-            time.sleep(poll)
-
-        # 6) wait dispatcher (second stage)
-        remaining = max(0.0, deadline - time.monotonic())
-        if self.enable_parallel_dispatch and self.dispatcher is not None:
-            try:
-                ok = self.dispatcher.join(timeout=remaining if remaining > 0 else 0)
-            except TypeError:
-                ok = self.dispatcher.join()
-            if not ok:
-                logger.warning("mem_scheduler_wait: dispatcher did not complete before timeout")
-                return False
-
-        return True
 
     def _gather_queue_stats(self) -> dict:
         """Collect queue/dispatcher stats for reporting."""
