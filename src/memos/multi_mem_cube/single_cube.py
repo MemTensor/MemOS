@@ -45,6 +45,7 @@ class SingleCubeView(MemCubeView):
     mem_scheduler: Any
     logger: Any
     searcher: Any
+    deepsearch_agent: Any
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
@@ -200,6 +201,15 @@ class SingleCubeView(MemCubeView):
             info=info,
         )
         formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+        return formatted_memories
+
+    def _deep_search(
+        self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
+    ) -> list:
+        deepsearch_results = self.deepsearch_agent.run(
+            search_req.query, user_id=user_context.mem_cube_id
+        )
+        formatted_memories = [format_memory_item(data) for data in deepsearch_results]
         return formatted_memories
 
     def _fine_search(

@@ -31,7 +31,9 @@ class SearchHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies("naive_mem_cube", "mem_scheduler", "searcher")
+        self._validate_dependencies(
+            "naive_mem_cube", "mem_scheduler", "searcher", "deepsearch_agent"
+        )
 
     def handle_search_memories(self, search_req: APISearchRequest) -> SearchResponse:
         """
@@ -52,9 +54,10 @@ class SearchHandler(BaseHandler):
 
         results = cube_view.search_memories(search_req)
 
-        self.logger.info(f"[AddHandler] Final add results count={len(results)}")
+        self.logger.info(f"[SearchHandler] Final search results count={len(results)}")
+
         return SearchResponse(
-            message="Memory searched successfully",
+            message="Search completed successfully",
             data=results,
         )
 
@@ -82,6 +85,7 @@ class SearchHandler(BaseHandler):
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
                 searcher=self.searcher,
+                deepsearch_agent=self.deepsearch_agent,
             )
         else:
             single_views = [
@@ -92,6 +96,7 @@ class SearchHandler(BaseHandler):
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
                     searcher=self.searcher,
+                    deepsearch_agent=self.deepsearch_agent,
                 )
                 for cube_id in cube_ids
             ]

@@ -45,6 +45,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree import TreeTextMemory
+from memos.mem_agent.deepsearch_agent import DeepSearchMemAgent
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
@@ -325,6 +326,10 @@ def init_server() -> dict[str, Any]:
         online_bot = get_online_bot_function() if dingding_enabled else None
         logger.info("DingDing bot is enabled")
 
+    deepsearch_agent = DeepSearchMemAgent(
+        llm=llm,
+        memory_retriever=tree_mem,
+    )
     # Return all components as a dictionary for easy access and extension
     return {
         "graph_db": graph_db,
@@ -349,4 +354,5 @@ def init_server() -> dict[str, Any]:
         "pref_mem": pref_mem,
         "online_bot": online_bot,
         "redis_client": redis_client,
+        "deepsearch_agent": deepsearch_agent,
     }
