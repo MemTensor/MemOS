@@ -14,6 +14,7 @@ class TestLLMFactoryWithOpenAIBackend(unittest.TestCase):
         mock_response = MagicMock()
         mock_response.model_dump_json.return_value = '{"id":"chatcmpl-BWoqIrvOeWdnFVZQUFzCcdVEpJ166","choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hello! I\'m an AI language model created by OpenAI. I\'m here to help answer questions, provide information, and assist with a wide range of topics. How can I assist you today?","role":"assistant"}}],"created":1747161634,"model":"gpt-4o-2024-08-06","object":"chat.completion"}'
         mock_response.choices[0].message.content = "Hello! I'm an AI language model created by OpenAI. I'm here to help answer questions, provide information, and assist with a wide range of topics. How can I assist you today?"  # fmt: skip
+        mock_response.choices[0].message.reasoning_content = None
         mock_chat_completions_create.return_value = mock_response
 
         config = LLMConfigFactory.model_validate(

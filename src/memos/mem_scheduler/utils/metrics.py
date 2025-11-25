@@ -188,12 +188,7 @@ class MetricsRegistry:
             inst_rate = (1.0 / max(1e-3, dt)) if dt is not None else 0.0  # first sample: no spike
             ls.last_enqueue_ts = now
             ls.backlog += 1
-            old_lam = ls.lambda_ewma.value_at(now)
             ls.lambda_ewma.update(inst_rate, now)
-            new_lam = ls.lambda_ewma.value_at(now)
-            logger.info(
-                f"[DEBUG enqueue] {label} backlog={ls.backlog} dt={dt if dt is not None else '—'}s inst={inst_rate:.3f} λ {old_lam:.3f}→{new_lam:.3f}"
-            )
             self._label_topk[label].add(mem_cube_id)
             ds = self._get_detail(label, mem_cube_id)
             if ds:
@@ -226,12 +221,7 @@ class MetricsRegistry:
             ls.last_done_ts = now
             if ls.backlog > 0:
                 ls.backlog -= 1
-            old_mu = ls.mu_ewma.value_at(now)
             ls.mu_ewma.update(inst_rate, now)
-            new_mu = ls.mu_ewma.value_at(now)
-            logger.info(
-                f"[DEBUG done] {label} backlog={ls.backlog} dt={dt if dt is not None else '—'}s inst={inst_rate:.3f} μ {old_mu:.3f}→{new_mu:.3f}"
-            )
             ds = self._detail_stats.get((label, mem_cube_id))
             if ds:
                 prev_ts_d = ds.last_done_ts
