@@ -1,10 +1,13 @@
 # src/memos/mem_scheduler/utils/status_tracker.py
 import json
-import redis
 from datetime import datetime, timezone
 
+from memos.dependency import require_python_package
+
+
 class TaskStatusTracker:
-    def __init__(self, redis_client: redis.Redis):
+    @require_python_package(import_name="redis", install_command="pip install redis")
+    def __init__(self, redis_client: "redis.Redis"):
         self.redis = redis_client
 
     def _get_key(self, user_id: str) -> str:
