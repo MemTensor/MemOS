@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
 from memos.log import get_logger
-from memos.mem_scheduler.schemas.general_schemas import SearchMode
-from memos.types import MessageDict, MessagesType, PermissionDict
+from memos.types import MessageDict, MessagesType, PermissionDict, SearchMode
 
 
 logger = get_logger(__name__)
@@ -807,3 +806,28 @@ class MemOSAddResponse(BaseModel):
     def success(self) -> bool:
         """Convenient access to success status."""
         return self.data.success
+
+
+# ─── Scheduler Status Models ───────────────────────────────────────────────────
+
+
+class StatusRequest(BaseRequest):
+    """Request model for querying scheduler task status."""
+
+    user_id: str = Field(..., description="User ID")
+    task_id: str | None = Field(None, description="Optional Task ID to query a specific task")
+
+
+class StatusResponseItem(BaseModel):
+    """Individual task status item."""
+
+    task_id: str = Field(..., description="The ID of the task")
+    status: Literal["in_progress", "completed", "waiting", "failed", "cancelled"] = Field(
+        ..., description="The current status of the task"
+    )
+
+
+class StatusResponse(BaseResponse[list[StatusResponseItem]]):
+    """Response model for scheduler status operations."""
+
+    message: str = "Memory get status successfully"
