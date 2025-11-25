@@ -65,15 +65,11 @@ class SearchHandler(BaseHandler):
         """
         Normalize target cube ids from search_req.
         Priority:
-        1) readable_cube_ids
-        2) mem_cube_id
-        3) fallback to user_id
+        1) readable_cube_ids (deprecated mem_cube_id is converted to this in model validator)
+        2) fallback to user_id
         """
-        if getattr(search_req, "readable_cube_ids", None):
+        if search_req.readable_cube_ids:
             return list(dict.fromkeys(search_req.readable_cube_ids))
-
-        if search_req.mem_cube_id:
-            return [search_req.mem_cube_id]
 
         return [search_req.user_id]
 
