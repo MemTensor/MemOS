@@ -161,6 +161,11 @@ class BaseHandler:
         """Get MOS server instance."""
         return self.deps.mos_server
 
+    @property
+    def deepsearch_agent(self):
+        """Get deepsearch agent instance."""
+        return self.deps.deepsearch_agent
+
     def _validate_dependencies(self, *required_deps: str) -> None:
         """
         Validate that required dependencies are available.

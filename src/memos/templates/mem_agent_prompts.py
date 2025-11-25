@@ -22,12 +22,14 @@ Retrieved Context:
 {context}
 
 Analyze the context and determine the next step. Return your response in JSON format with the following structure:
-{{
+ ```json
+ {{
     "status": "sufficient|missing_info|needs_raw",
     "reasoning": "Brief explanation of your decision",
     "missing_entities": ["entity1", "entity2"],
     "new_search_query": "new search query",
 }}
+```
 
 Status definitions:
 - "sufficient": Context fully answers the query

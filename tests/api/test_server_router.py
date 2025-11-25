@@ -48,6 +48,7 @@ def mock_init_server():
         "pref_mem": None,
         "online_bot": None,
         "chat_llms": Mock(),
+        "deepsearch_agent": Mock(),
     }
 
     with patch("memos.api.handlers.init_server", return_value=mock_components):
