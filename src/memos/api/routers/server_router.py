@@ -112,12 +112,12 @@ def add_memories(add_req: APIADDRequest):
 # =============================================================================
 
 
-@router.get( # Changed from post to get
+@router.get(  # Changed from post to get
     "/scheduler/status", summary="Get scheduler running status", response_model=StatusResponse
 )
 def scheduler_status(
     user_id: str = Query(..., description="User ID"),
-    task_id: str | None = Query(None, description="Optional Task ID to query a specific task")
+    task_id: str | None = Query(None, description="Optional Task ID to query a specific task"),
 ):
     """Get scheduler running status."""
     return handlers.scheduler_handler.handle_scheduler_status(

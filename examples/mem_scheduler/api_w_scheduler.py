@@ -27,7 +27,9 @@ def my_test_handler(messages: list[ScheduleMessageItem]):
     print(f"My test handler received {len(messages)} messages:")
     for msg in messages:
         print(f" my_test_handler - {msg.item_id}: {msg.content}")
-        user_status_running = handle_scheduler_status(user_id=msg.user_id, status_tracker=status_tracker)
+        user_status_running = handle_scheduler_status(
+            user_id=msg.user_id, status_tracker=status_tracker
+        )
         print("[Monitor] Status after submit:", user_status_running)
 
 
@@ -37,9 +39,7 @@ TEST_USER_ID = "test_user"
 mem_scheduler.register_handlers({TEST_HANDLER_LABEL: my_test_handler})
 
 # 2.1 Monitor global scheduler status before submitting tasks
-global_status_before = handle_scheduler_status(
-    user_id=TEST_USER_ID, status_tracker=status_tracker
-)
+global_status_before = handle_scheduler_status(user_id=TEST_USER_ID, status_tracker=status_tracker)
 print("[Monitor] Global status before submit:", global_status_before)
 
 # 3. Create messages
@@ -78,9 +78,7 @@ wait_result = handle_scheduler_wait(
 print(f"[Monitor] Wait result for {USER_MEM_CUBE}:", wait_result)
 
 # 6.2 Monitor global scheduler status after processing
-global_status_after = handle_scheduler_status(
-    user_id=TEST_USER_ID, status_tracker=status_tracker
-)
+global_status_after = handle_scheduler_status(user_id=TEST_USER_ID, status_tracker=status_tracker)
 print("[Monitor] Global status after processing:", global_status_after)
 
 # 7. Stop the scheduler

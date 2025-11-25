@@ -46,7 +46,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         config=None,
         status_tracker: TaskStatusTracker | None = None,
         metrics: Any | None = None,
-        submit_web_logs: Callable | None = None, # ADDED
+        submit_web_logs: Callable | None = None,  # ADDED
     ):
         super().__init__()
         self.config = config
@@ -98,7 +98,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         self.metrics = metrics
         self.status_tracker = status_tracker
-        self.submit_web_logs = submit_web_logs # ADDED
+        self.submit_web_logs = submit_web_logs  # ADDED
 
     def on_messages_enqueued(self, msgs: list[ScheduleMessageItem]) -> None:
         if not msgs:
@@ -120,11 +120,13 @@ class SchedulerDispatcher(BaseSchedulerModule):
         def wrapped_handler(messages: list[ScheduleMessageItem]):
             start_time = time.time()
             if self.status_tracker:
-                self.status_tracker.task_started(task_id=task_item.item_id, user_id=task_item.user_id)
+                self.status_tracker.task_started(
+                    task_id=task_item.item_id, user_id=task_item.user_id
+                )
             try:
                 # --- mark start: record queuing time(now - enqueue_ts)---
                 now = time.time()
-                m = messages[0] # All messages in this batch have same user and type
+                m = messages[0]  # All messages in this batch have same user and type
                 enq_ts = getattr(m, "timestamp", None)
 
                 # Path 1: epoch seconds (preferred)
@@ -145,7 +147,6 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 wait_sec = max(0.0, now - enq_epoch)
                 self.metrics.observe_task_wait_duration(wait_sec, m.user_id, m.label)
 
-
                 # Execute the original handler
                 result = handler(messages)
 
@@ -153,10 +154,14 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 duration = time.time() - start_time
                 self.metrics.observe_task_duration(duration, m.user_id, m.label)
                 if self.status_tracker:
-                    self.status_tracker.task_completed(task_id=task_item.item_id, user_id=task_item.user_id)
+                    self.status_tracker.task_completed(
+                        task_id=task_item.item_id, user_id=task_item.user_id
+                    )
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
 
-                is_cloud_env = os.getenv('MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME') == 'memos-memory-change'
+                is_cloud_env = (
+                    os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
+                )
                 if self.submit_web_logs and is_cloud_env:
                     status_log = ScheduleLogForWebItem(
                         user_id=task_item.user_id,
@@ -164,7 +169,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         item_id=task_item.item_id,
                         label=m.label,
                         log_content=f"Task {task_item.item_id} completed successfully for user {task_item.user_id}.",
-                        status="completed"
+                        status="completed",
                     )
                     self.submit_web_logs([status_log])
 
@@ -194,7 +199,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 m = messages[0]
                 self.metrics.task_failed(m.user_id, m.label, type(e).__name__)
                 if self.status_tracker:
-                    self.status_tracker.task_failed(task_id=task_item.item_id, user_id=task_item.user_id, error_message=str(e))
+                    self.status_tracker.task_failed(
+                        task_id=task_item.item_id, user_id=task_item.user_id, error_message=str(e)
+                    )
                 # Mark task as failed and remove from tracking
                 with self._task_lock:
                     if task_item.item_id in self._running_tasks:
@@ -204,7 +211,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             self._completed_tasks.pop(0)
                 logger.error(f"Task failed: {task_item.get_execution_info()}, Error: {e}")
 
-                is_cloud_env = os.getenv('MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME') == 'memos-memory-change'
+                is_cloud_env = (
+                    os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
+                )
                 if self.submit_web_logs and is_cloud_env:
                     status_log = ScheduleLogForWebItem(
                         user_id=task_item.user_id,
@@ -213,7 +222,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         label=m.label,
                         log_content=f"Task {task_item.item_id} failed for user {task_item.user_id} with error: {e!s}.",
                         status="failed",
-                        exception=str(e)
+                        exception=str(e),
                     )
                     self.submit_web_logs([status_log])
                 raise

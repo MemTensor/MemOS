@@ -141,7 +141,9 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     )
     memcube_name: str | None = Field(default=None, description="Display name for memcube")
     memory_len: int | None = Field(default=None, description="Count of items involved in the event")
-    status: str | None = Field(default=None, description="Completion status of the task (e.g., 'completed', 'failed')")
+    status: str | None = Field(
+        default=None, description="Completion status of the task (e.g., 'completed', 'failed')"
+    )
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""

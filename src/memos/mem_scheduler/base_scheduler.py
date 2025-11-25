@@ -731,14 +731,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     if len(parts) >= 3:
                         user_id = parts[2]
                         self.metrics.update_queue_length(queue_length, user_id)
-                    elif not self.use_redis_queue: # local queue
-                         user_id = stream_key
-                         self.metrics.update_queue_length(queue_length, user_id)
+                    elif not self.use_redis_queue:  # local queue
+                        user_id = stream_key
+                        self.metrics.update_queue_length(queue_length, user_id)
 
             except Exception as e:
                 logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)
 
-            time.sleep(15) # 每 15 秒采样一次
+            time.sleep(15)  # 每 15 秒采样一次
 
     def start(self) -> None:
         """
@@ -760,7 +760,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
     def start_background_monitor(self):
         if self._monitor_thread and self._monitor_thread.is_alive():
             return
-        self._monitor_thread = ContextThread(target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor")
+        self._monitor_thread = ContextThread(
+            target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor"
+        )
         self._monitor_thread.start()
         logger.info("Scheduler metrics monitor thread started.")
 
