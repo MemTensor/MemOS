@@ -187,7 +187,9 @@ def example_03_assistant_with_tool_calls():
 def example_04_extreme_multimodal_single_message():
     """
     Extreme multimodal message:
-    text + image_url + file + audio (in one message).
+    text + image_url + file in one message, and another message with text + file.
+
+    Note: This demonstrates multiple multimodal messages in a single request.
     """
     payload = {
         "user_id": USER_ID,
@@ -209,13 +211,13 @@ def example_04_extreme_multimodal_single_message():
                     {"type": "text", "text": "请再分析一下下面这些信息："},
                     {"type": "file", "file": {"file_id": "f1", "filename": "xx.pdf"}},
                 ],
-                "chat_time": "2025-11-24T10:55:00Z",
-                "message_id": "mix-mm-1",
+                "chat_time": "2025-11-24T10:55:10Z",
+                "message_id": "mix-mm-2",
             },
         ],
         "info": {"source_type": "extreme_multimodal"},
     }
-    call_add_api("18_extreme_multimodal_single_message", payload)
+    call_add_api("04_extreme_multimodal_single_message", payload)
 
 
 # ===========================================================================
@@ -262,7 +264,11 @@ def example_06_multimodal_text_and_file():
     """
     Multimodal user message: text + file (file_id based).
 
-    - Typically used when the file is already uploaded and you only store the reference.
+    - Uses `file_id` when the file has already been uploaded.
+    - Note: According to FileFile type definition (TypedDict, total=False),
+      all fields (`file_id`, `file_data`, `filename`) are optional.
+      However, in practice, you typically need at least `file_id` OR `file_data`
+      to specify the file location.
     """
     payload = {
         "user_id": USER_ID,
@@ -279,7 +285,7 @@ def example_06_multimodal_text_and_file():
                         "type": "file",
                         "file": {
                             "file_id": "file_123",
-                            "filename": "report.pdf",
+                            "filename": "report.pdf",  # optional, but recommended
                         },
                     },
                 ],
@@ -353,12 +359,16 @@ def example_08_pure_text_input_items():
     call_add_api("08_pure_text_input_items", payload)
 
 
-def example_09_pure_file_input_by_path():
+def example_09_pure_file_input_by_file_id():
     """
-    Pure file input item using local file path.
+    Pure file input item using file_id (standard format).
 
-    - This is equivalent to the deprecated `doc_path` field, but preferred
-      in the new design (as a structured file input).
+    - Uses `file_id` when the file has already been uploaded.
+    - Note: All FileFile fields are optional (TypedDict, total=False):
+      * `file_id`: optional, use when file is already uploaded
+      * `file_data`: optional, use for base64-encoded content
+      * `filename`: optional, but recommended for clarity
+    - In practice, you need at least `file_id` OR `file_data` to specify the file.
     """
     payload = {
         "user_id": USER_ID,
@@ -367,14 +377,41 @@ def example_09_pure_file_input_by_path():
             {
                 "type": "file",
                 "file": {
-                    "path": "/path/to/local/document.pdf",
-                    "filename": "document.pdf",
+                    "file_id": "file_uploaded_123",  # at least one of file_id/file_data needed
+                    "filename": "document.pdf",  # optional
                 },
             }
         ],
-        "info": {"source_type": "local_file_ingestion"},
+        "info": {"source_type": "file_ingestion"},
     }
-    call_add_api("09_pure_file_input_by_path", payload)
+    call_add_api("09_pure_file_input_by_file_id", payload)
+
+
+def example_09b_pure_file_input_by_file_data():
+    """
+    Pure file input item using file_data (base64 encoded).
+
+    - Uses `file_data` with base64-encoded file content.
+    - This is the standard format for direct file input without uploading first.
+    - Note: `file_data` is optional in type definition, but required here
+      since we're not using `file_id`. At least one of `file_id` or `file_data`
+      should be provided in practice.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": "base64_encoded_file_content_here",  # at least one of file_id/file_data needed
+                    "filename": "document.pdf",  # optional
+                },
+            }
+        ],
+        "info": {"source_type": "file_ingestion_base64"},
+    }
+    call_add_api("09b_pure_file_input_by_file_data", payload)
 
 
 def example_10_mixed_text_file_image():
@@ -591,11 +628,13 @@ if __name__ == "__main__":
     example_01_string_message_minimal()
     example_02_standard_chat_triplet()
     example_03_assistant_with_tool_calls()
+    example_04_extreme_multimodal_single_message()
     example_05_multimodal_text_and_image()
     example_06_multimodal_text_and_file()
     example_07_audio_only_message()
     example_08_pure_text_input_items()
-    example_09_pure_file_input_by_path()
+    example_09_pure_file_input_by_file_id()
+    example_09b_pure_file_input_by_file_data()
     example_10_mixed_text_file_image()
     example_11_deprecated_memory_content_and_doc_path()
     example_12_async_default_pipeline()
