@@ -218,7 +218,7 @@ class DeepSearchMemAgent(BaseMemAgent):
             return self._remove_duplicate_memories(accumulated_memories)
         else:
             return self._generate_final_answer(
-                query, accumulated_memories, accumulated_context, "", history
+                query, accumulated_memories, accumulated_context, history
             )
 
     def _remove_duplicate_memories(
@@ -247,9 +247,9 @@ class DeepSearchMemAgent(BaseMemAgent):
         original_query: str,
         search_results: list[TextualMemoryItem],
         context: list[str],
-        missing_info: str = "",
         history: list[str] | None = None,
         sources: list[str] | None = None,
+        missing_info: str | None = None,
     ) -> str:
         """
         Generate the final answer.
