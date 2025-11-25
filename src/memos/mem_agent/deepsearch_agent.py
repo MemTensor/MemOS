@@ -183,8 +183,6 @@ class DeepSearchMemAgent(BaseMemAgent):
             if search_results:
                 context_batch = [self._extract_context_from_memory(mem) for mem in search_results]
                 accumulated_context.extend(context_batch)
-                accumulated_memories.extend(search_results)
-
                 reflection_result = self.reflector.run(current_query, context_batch)
                 status = reflection_result.get("status", "sufficient")
                 reasoning = reflection_result.get("reasoning", "")
@@ -193,11 +191,14 @@ class DeepSearchMemAgent(BaseMemAgent):
 
                 if status == "sufficient":
                     logger.info("Sufficient information collected")
+                    accumulated_memories.extend(search_results)
                     break
                 elif status == "needs_raw":
                     logger.info("Need original sources, retrieving raw content")
+                    accumulated_memories.extend(self._set_source_from_memory(search_results))
                     break
                 elif status == "missing_info":
+                    accumulated_memories.extend(search_results)
                     missing_entities = reflection_result.get("missing_entities", [])
                     logger.info(f"Missing information: {missing_entities}")
                     current_query = reflection_result.get("new_search_query")
@@ -330,6 +331,22 @@ class DeepSearchMemAgent(BaseMemAgent):
         refined_query = f"{query} {entities_str}"
 
         return refined_query
+
+    def _set_source_from_memory(
+        self, memory_items: list[TextualMemoryItem]
+    ) -> list[TextualMemoryItem]:
+        """set source from memory item"""
+        for memory_item in memory_items:
+            if not hasattr(memory_item.metadata, "sources"):
+                continue
+            chat_sources = [
+                f"{source.chat_time} {source.role}: {source.content}"
+                for source in memory_item.metadata.sources
+                if hasattr(source, "type") and source.type == "chat"
+            ]
+            if chat_sources:
+                memory_item.memory = "\n".join(chat_sources) + "\n"
+        return memory_items
 
     def _generate_final_answer(
         self,
