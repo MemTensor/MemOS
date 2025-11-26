@@ -55,6 +55,22 @@ class MultiModelParser:
         self.tool_parser = ToolParser(embedder, llm)
         self.text_content_parser = TextContentParser(embedder, llm)
         self.file_content_parser = FileContentParser(embedder, llm, parser)
+        self.image_parser = None  # future
+        self.audio_parser = None  # future
+
+        self.role_parsers = {
+            "system": SystemParser(embedder, llm),
+            "user": UserParser(embedder, llm),
+            "assistant": AssistantParser(embedder, llm),
+            "tool": ToolParser(embedder, llm),
+        }
+
+        self.type_parsers = {
+            "text": self.text_content_parser,
+            "file": self.file_content_parser,
+            "image": self.image_parser,
+            "audio": self.audio_parser,
+        }
 
     def _get_parser(self, message: Any) -> BaseMessageParser | None:
         """
@@ -78,34 +94,16 @@ class MultiModelParser:
         # Check if it's a RawMessageList item (text or file)
         if "type" in message:
             msg_type = message.get("type")
-            if msg_type == "text":
-                return self.text_content_parser
-            elif msg_type == "file":
-                return self.file_content_parser
+            parser = self.type_parsers.get(msg_type)
+            if parser:
+                return parser
 
         # Check if it's a MessageList item (system, user, assistant, tool)
         role = extract_role(message)
-        parser_map = {
-            "system": self.system_parser,
-            "user": self.user_parser,
-            "assistant": self.assistant_parser,
-            "tool": self.tool_parser,
-        }
-
-        if role in parser_map:
-            return parser_map[role]
-
-        # Try to infer from structure
-        role = extract_role(message)
-        parser_map = {
-            "system": self.system_parser,
-            "user": self.user_parser,
-            "assistant": self.assistant_parser,
-            "tool": self.tool_parser,
-        }
-
-        if role in parser_map:
-            return parser_map[role]
+        if role:
+            parser = self.role_parsers.get(role)
+            if parser:
+                return parser
 
         logger.warning(f"[MultiModelParser] Could not determine parser for message: {message}")
         return None
@@ -131,11 +129,7 @@ class MultiModelParser:
         """
         # Handle list of messages (MessageList or RawMessageList)
         if isinstance(message, list):
-            all_items = []
-            for item in message:
-                items = self.parse(item, info, mode, **kwargs)
-                all_items.extend(items)
-            return all_items
+            return [item for msg in message for item in self.parse(msg, info, mode, **kwargs)]
 
         # Get appropriate parser
         parser = self._get_parser(message)
