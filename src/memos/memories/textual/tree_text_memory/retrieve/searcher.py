@@ -281,6 +281,7 @@ class Searcher:
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)
         selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
         selected_items = [items[i] for i in selected_indices]
+        logger.info(f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}")
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embeddings[0],
