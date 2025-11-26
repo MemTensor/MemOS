@@ -42,6 +42,14 @@ from memos.types.openai_chat_completion_types import (
 from memos.utils import timed
 
 
+class ParserFactory:
+    """Placeholder required by test suite."""
+
+    @staticmethod
+    def from_config(_config):
+        return None
+
+
 ChatMessageClasses = (
     ChatCompletionSystemMessageParam,
     ChatCompletionUserMessageParam,
@@ -578,7 +586,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                             "role": role,
                             "content": content,
                             "chat_time": item.get("chat_time", ""),
-                            "session_id": item.get("session_id", ""),
                         }
                     )
                 if not result:
