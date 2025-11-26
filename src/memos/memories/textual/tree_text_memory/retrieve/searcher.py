@@ -105,9 +105,10 @@ class Searcher:
         top_k: int,
         user_name: str | None = None,
         info=None,
+        plugin=False,
     ):
         deduped = self._deduplicate_results(retrieved_results)
-        final_results = self._sort_and_trim(deduped, top_k)
+        final_results = self._sort_and_trim(deduped, top_k, plugin)
         self._update_usage_history(final_results, info, user_name)
         return final_results
 
@@ -170,6 +171,7 @@ class Searcher:
             top_k=top_k,
             user_name=user_name,
             info=None,
+            plugin=kwargs.get("plugin", False),
         )
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
@@ -281,7 +283,9 @@ class Searcher:
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)
         selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
         selected_items = [items[i] for i in selected_indices]
-        logger.info(f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}")
+        logger.info(
+            f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
+        )
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embeddings[0],
@@ -541,12 +545,14 @@ class Searcher:
         return list(deduped.values())
 
     @timed
-    def _sort_and_trim(self, results, top_k):
+    def _sort_and_trim(self, results, top_k, plugin=False):
         """Sort results by score and trim to top_k"""
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
         final_items = []
         for item, score in sorted_results:
+            if plugin and round(score, 2) == 0.00:
+                continue
             meta_data = item.metadata.model_dump()
             meta_data["relativity"] = score
             final_items.append(
