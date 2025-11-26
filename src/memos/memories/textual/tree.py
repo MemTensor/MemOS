@@ -16,11 +16,13 @@ from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.advanced_searcher import (
+    AdvancedSearcher as Searcher,
+)
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.factory import RerankerFactory
 from memos.types import MessageList
 
@@ -127,8 +129,7 @@ class TreeTextMemory(BaseTextMemory):
         return self.memory_manager.get_current_memory_size(user_name=user_name)
 
     def get_searcher(
-        self,
-        manual_close_internet: bool = False,
+        self, manual_close_internet: bool = False, moscube: bool = False, process_llm=None
     ):
         if (self.internet_retriever is not None) and manual_close_internet:
             logger.warning(
@@ -140,6 +141,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.embedder,
                 self.reranker,
                 internet_retriever=None,
+                process_llm=process_llm,
             )
         else:
             searcher = Searcher(
@@ -148,6 +150,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.embedder,
                 self.reranker,
                 internet_retriever=self.internet_retriever,
+                process_llm=process_llm,
             )
         return searcher
 

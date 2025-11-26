@@ -45,6 +45,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import MemoryManag
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree import TreeTextMemory
+from memos.mem_agent.deepsearch_agent import DeepSearchMemAgent
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
@@ -127,6 +128,21 @@ def init_server() -> dict[str, Any]:
         existing code that uses the components.
     """
     logger.info("Initializing MemOS server components...")
+
+    # Initialize Redis client first as it is a core dependency for features like scheduler status tracking
+    try:
+        from memos.mem_scheduler.orm_modules.api_redis_model import APIRedisDBManager
+
+        redis_client = APIRedisDBManager.load_redis_engine_from_env()
+        if redis_client:
+            logger.info("Redis client initialized successfully.")
+        else:
+            logger.error(
+                "Failed to initialize Redis client. Check REDIS_HOST etc. in environment variables."
+            )
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis client: {e}", exc_info=True)
+        redis_client = None  # Ensure redis_client exists even on failure
 
     # Get default cube configuration
     default_cube_config = APIConfig.get_default_cube_config()
@@ -271,6 +287,8 @@ def init_server() -> dict[str, Any]:
     tree_mem: TreeTextMemory = naive_mem_cube.text_mem
     searcher: Searcher = tree_mem.get_searcher(
         manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+        moscube=False,
+        process_llm=mem_reader.llm,
     )
     logger.debug("Searcher created")
 
@@ -285,6 +303,7 @@ def init_server() -> dict[str, Any]:
         process_llm=mem_reader.llm,
         db_engine=BaseDBManager.create_default_sqlite_engine(),
         mem_reader=mem_reader,
+        redis_client=redis_client,
     )
     mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube, searcher=searcher)
     logger.debug("Scheduler initialized")
@@ -307,6 +326,10 @@ def init_server() -> dict[str, Any]:
         online_bot = get_online_bot_function() if dingding_enabled else None
         logger.info("DingDing bot is enabled")
 
+    deepsearch_agent = DeepSearchMemAgent(
+        llm=llm,
+        memory_retriever=tree_mem,
+    )
     # Return all components as a dictionary for easy access and extension
     return {
         "graph_db": graph_db,
@@ -330,4 +353,6 @@ def init_server() -> dict[str, Any]:
         "text_mem": text_mem,
         "pref_mem": pref_mem,
         "online_bot": online_bot,
+        "redis_client": redis_client,
+        "deepsearch_agent": deepsearch_agent,
     }

@@ -4,8 +4,11 @@ This module defines commonly used type aliases, protocols, and custom types
 used throughout the MemOS project to improve type safety and code clarity.
 """
 
+import os
+
 from datetime import datetime
-from typing import Literal, TypeAlias
+from enum import Enum
+from typing import Literal, NewType, TypeAlias
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -22,15 +25,21 @@ from .openai_chat_completion_types import (
 
 
 __all__ = [
+    "FINE_STRATEGY",
     "ChatHistory",
+    "FineStrategy",
     "MOSSearchResult",
+    "MemCubeID",
     "MessageDict",
     "MessageList",
     "MessageRole",
     "MessagesType",
     "Permission",
     "PermissionDict",
+    "RawMessageList",
+    "SearchMode",
     "UserContext",
+    "UserID",
 ]
 
 # ─── Message Types ──────────────────────────────────────────────────────────────
@@ -41,7 +50,7 @@ MessageRole: TypeAlias = Literal["user", "assistant", "system"]
 
 # Message structure
 class MessageDict(TypedDict, total=False):
-    """Typed dictionary for chat message dictionaries."""
+    """Typed dictionary for chat message dictionaries, will (Deprecate), use ChatCompletionMessageParam instead."""
 
     role: MessageRole
     content: str
@@ -71,6 +80,42 @@ class ChatHistory(BaseModel):
     created_at: datetime
     total_messages: int
     chat_history: MessageList
+
+
+# ─── Search ────────────────────────────────────────────────────────────────────
+# new types
+UserID = NewType("UserID", str)
+MemCubeID = NewType("CubeID", str)
+
+
+class SearchMode(str, Enum):
+    """Enumeration for search modes."""
+
+    FAST = "fast"
+    FINE = "fine"
+    MIXTURE = "mixture"
+
+
+class FineStrategy(str, Enum):
+    """Enumeration for fine strategies."""
+
+    REWRITE = "rewrite"
+    RECREATE = "recreate"
+    DEEP_SEARCH = "deep_search"
+
+
+# algorithm strategies
+DEFAULT_FINE_STRATEGY = FineStrategy.DEEP_SEARCH
+FINE_STRATEGY = DEFAULT_FINE_STRATEGY
+
+# Read fine strategy from environment variable `FINE_STRATEGY`.
+# If provided and valid, use it; otherwise fall back to default.
+_env_fine_strategy = os.getenv("FINE_STRATEGY")
+if _env_fine_strategy:
+    try:
+        FINE_STRATEGY = FineStrategy(_env_fine_strategy)
+    except ValueError:
+        FINE_STRATEGY = DEFAULT_FINE_STRATEGY
 
 
 # ─── MemOS ────────────────────────────────────────────────────────────────────

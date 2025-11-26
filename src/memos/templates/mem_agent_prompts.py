@@ -22,18 +22,26 @@ Retrieved Context:
 {context}
 
 Analyze the context and determine the next step. Return your response in JSON format with the following structure:
-{{
+ ```json
+ {{
     "status": "sufficient|missing_info|needs_raw",
     "reasoning": "Brief explanation of your decision",
     "missing_entities": ["entity1", "entity2"],
     "new_search_query": "new search query",
 }}
+```
 
 Status definitions:
 - "sufficient": Context fully answers the query
 - "missing_info": Key information is missing (e.g., specific dates, locations, details)
 - "needs_raw": Content is relevant but too summarized/vague, need original sources
-- "new_search_query": New search query to retrieve more information
+
+IMPORTANT for "new_search_query":
+- MUST preserve ALL specific entities from the original query (names, dates, times, locations, etc.)
+- DO NOT replace specific information with generic terms like "user", "person", "they", etc.
+- Keep the exact same subjects, time references, and key details as in the original query
+- Only modify the query to focus on the missing information while maintaining all original specifics
+- Example: If original query mentions "May 2024", keep "May 2024" in new query, don't change to "that month"
 
 Response:"""
 

@@ -2,12 +2,83 @@ import json
 import re
 
 from pathlib import Path
+from typing import Any
 
 from memos.dependency import require_python_package
 from memos.log import get_logger
 
 
 logger = get_logger(__name__)
+
+
+def parse_structured_output(content: str) -> dict[str, str | list[str]]:
+    """
+    Parse structured text containing arbitrary XML-like tags in the format <tag_name>content</tag_name>.
+
+    This function extracts all tagged content and automatically determines whether each tag's content
+    should be returned as a string or a list of strings based on its format:
+
+    - If the content consists of multiple non-empty lines, and each line starts with "- ",
+      it is interpreted as a list (e.g., a bullet-point list of phrases).
+    - Otherwise, the entire content is returned as a single string.
+
+    The function is generic and supports any tag name (e.g., <can_answer>, <reason>, <missing_phrases>).
+
+    Args:
+        content (str): Raw text containing one or more <tag_name>...</tag_name> blocks.
+
+    Returns:
+        Dict[str, Union[str, List[str]]]: A dictionary where keys are tag names and values are either:
+            - a string (for single-line or non-list content)
+            - a list of strings (for content formatted as bullet points with "- " prefix)
+
+    Example:
+        Input:
+            <can_answer>
+            true
+            </can_answer>
+            <missing_phrases>
+            - phrase 1
+            - phrase 2
+            </missing_phrases>
+
+        Output:
+            {
+                'can_answer': 'true',
+                'missing_phrases': ['phrase 1', 'phrase 2']
+            }
+    """
+    result = {}
+
+    # Regex pattern to match any tag with name and content (supports multi-line content via DOTALL)
+    # Pattern explanation:
+    # <([a-zA-Z_][a-zA-Z0-9_]*)>  : Captures valid tag name (letter/underscore + alphanumeric)
+    # (.*?)                        : Non-greedy capture of content (including newlines)
+    # </\1>                        : Closing tag matching the captured name
+    tag_pattern = r"<([a-zA-Z_][a-zA-Z0-9_]*)>(.*?)</\1>"
+    matches = re.findall(tag_pattern, content, re.DOTALL)
+
+    for tag_name, raw_content in matches:
+        content = raw_content.strip()  # Remove leading/trailing whitespace
+
+        # If content is empty, store as empty string
+        if not content:
+            result[tag_name] = ""
+            continue
+
+        # Split content into lines and filter out empty ones
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+
+        # Check if content is formatted as a bullet list: all non-empty lines start with "- "
+        if lines and all(line.startswith("-") for line in lines):
+            # Extract the text after the "- " prefix from each line
+            items = [line[1:].strip() for line in lines]
+            result[tag_name] = items
+        else:
+            # Treat as plain string (preserve original formatting if multi-line)
+            result[tag_name] = content
+
+    return result
 
 
 def find_project_root(marker=".git"):
@@ -376,3 +447,19 @@ def detect_lang(text):
         return "en"
     except Exception:
         return "en"
+
+
+def format_memory_item(memory_data: Any) -> dict[str, Any]:
+    memory = memory_data.model_dump()
+    memory_id = memory["id"]
+    ref_id = f"[{memory_id.split('-')[0]}]"
+
+    memory["ref_id"] = ref_id
+    memory["metadata"]["embedding"] = []
+    memory["metadata"]["sources"] = []
+    memory["metadata"]["usage"] = []
+    memory["metadata"]["ref_id"] = ref_id
+    memory["metadata"]["id"] = memory_id
+    memory["metadata"]["memory"] = memory["memory"]
+
+    return memory

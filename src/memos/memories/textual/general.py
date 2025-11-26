@@ -56,7 +56,9 @@ class GeneralTextMemory(BaseTextMemory):
             [message["role"] + ":" + message["content"] for message in messages]
         )
 
-        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", str_messages)
+        prompt = SIMPLE_STRUCT_MEM_READER_PROMPT.replace("${conversation}", str_messages).replace(
+            "${custom_tags_prompt}", ""
+        )
         messages = [{"role": "user", "content": prompt}]
         response_text = self.extractor_llm.generate(messages)
         response_json = self.parse_json_result(response_text)

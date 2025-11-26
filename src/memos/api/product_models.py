@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
 from memos.log import get_logger
-from memos.mem_scheduler.schemas.general_schemas import SearchMode
-from memos.types import MessageDict, MessagesType, PermissionDict
+from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 
 
 logger = get_logger(__name__)
@@ -73,40 +72,57 @@ class ChatRequest(BaseRequest):
 
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
-    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     readable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can read for multi-cube chat"
     )
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube chat"
     )
-    history: list[MessageDict] | None = Field(None, description="Chat history")
+    history: MessageList | None = Field(None, description="Chat history")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
-    internet_search: bool = Field(True, description="Whether to use internet search")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
-    threshold: float = Field(0.5, description="Threshold for filtering references")
     session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     model_name_or_path: str | None = Field(None, description="Model name to use for chat")
     max_tokens: int | None = Field(None, description="Max tokens to generate")
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+    # ==== Filter conditions ====
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="""
+        Filter for the memory, example:
+        {
+            "`and` or `or`": [
+                {"id": "uuid-xxx"},
+                {"created_at": {"gt": "2024-01-01"}},
+            ]
+        }
+        """,
+    )
+
+    # ==== Extended capabilities ====
+    internet_search: bool = Field(True, description="Whether to use internet search")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
+
+    # ==== Backward compatibility ====
+    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     moscube: bool = Field(
         False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
     )
 
 
 class ChatCompleteRequest(BaseRequest):
-    """Request model for chat operations."""
+    """Request model for chat operations. will (Deprecated), instead use APIChatCompleteRequest."""
 
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
-    history: list[MessageDict] | None = Field(None, description="Chat history")
+    history: MessageList | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
     system_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -192,7 +208,7 @@ class MemoryCreateRequest(BaseRequest):
     """Request model for creating memories."""
 
     user_id: str = Field(..., description="User ID")
-    messages: list[MessageDict] | None = Field(None, description="List of messages to store.")
+    messages: MessagesType | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="Cube ID")
@@ -270,7 +286,15 @@ class APISearchRequest(BaseRequest):
     # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
         None,
-        description=("Filter for the memory"),
+        description="""
+        Filter for the memory, example:
+        {
+            "`and` or `or`": [
+                {"id": "uuid-xxx"},
+                {"created_at": {"gt": "2024-01-01"}},
+            ]
+        }
+        """,
     )
 
     # ==== Extended capabilities ====
@@ -292,7 +316,7 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Context ====
-    chat_history: MessagesType | None = Field(
+    chat_history: MessageList | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -422,7 +446,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Chat history ====
-    chat_history: MessagesType | None = Field(
+    chat_history: MessageList | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -541,30 +565,48 @@ class APIChatCompleteRequest(BaseRequest):
 
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
-    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     readable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can read for multi-cube chat"
     )
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube chat"
     )
-    history: list[MessageDict] | None = Field(None, description="Chat history")
-    internet_search: bool = Field(False, description="Whether to use internet search")
-    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
+    history: MessageList | None = Field(None, description="Chat history")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
+    system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
-    threshold: float = Field(0.5, description="Threshold for filtering references")
-    session_id: str | None = Field(
-        "default_session", description="Session ID for soft-filtering memories"
-    )
+    session_id: str | None = Field(None, description="Session ID for soft-filtering memories")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
-    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     model_name_or_path: str | None = Field(None, description="Model name to use for chat")
     max_tokens: int | None = Field(None, description="Max tokens to generate")
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+
+    # ==== Filter conditions ====
+    filter: dict[str, Any] | None = Field(
+        None,
+        description="""
+        Filter for the memory, example:
+        {
+            "`and` or `or`": [
+                {"id": "uuid-xxx"},
+                {"created_at": {"gt": "2024-01-01"}},
+            ]
+        }
+        """,
+    )
+
+    # ==== Extended capabilities ====
+    internet_search: bool = Field(True, description="Whether to use internet search")
+    threshold: float = Field(0.5, description="Threshold for filtering references")
+
+    # ==== Backward compatibility ====
+    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
+    moscube: bool = Field(
+        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+    )
 
 
 class AddStatusRequest(BaseRequest):
@@ -595,7 +637,7 @@ class SuggestionRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     mem_cube_id: str = Field(..., description="Cube ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
-    message: list[MessageDict] | None = Field(None, description="List of messages to store.")
+    message: MessagesType | None = Field(None, description="List of messages to store.")
 
 
 # ─── MemOS Client Response Models ──────────────────────────────────────────────
@@ -678,3 +720,28 @@ class MemOSAddResponse(BaseModel):
     def success(self) -> bool:
         """Convenient access to success status."""
         return self.data.success
+
+
+# ─── Scheduler Status Models ───────────────────────────────────────────────────
+
+
+class StatusRequest(BaseRequest):
+    """Request model for querying scheduler task status."""
+
+    user_id: str = Field(..., description="User ID")
+    task_id: str | None = Field(None, description="Optional Task ID to query a specific task")
+
+
+class StatusResponseItem(BaseModel):
+    """Individual task status item."""
+
+    task_id: str = Field(..., description="The ID of the task")
+    status: Literal["in_progress", "completed", "waiting", "failed", "cancelled"] = Field(
+        ..., description="The current status of the task"
+    )
+
+
+class StatusResponse(BaseResponse[list[StatusResponseItem]]):
+    """Response model for scheduler status operations."""
+
+    message: str = "Memory get status successfully"
