@@ -432,6 +432,7 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
+                    info=add_req.info,
                 )
                 self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -504,6 +505,7 @@ class SingleCubeView(MemCubeView):
                 [add_req.messages],
                 type="chat",
                 info={
+                    **(add_req.info or {}),
                     "user_id": add_req.user_id,
                     "session_id": target_session_id,
                     "mem_cube_id": self.cube_id,
@@ -567,6 +569,8 @@ class SingleCubeView(MemCubeView):
             [add_req.messages],
             type="chat",
             info={
+                **(add_req.info or {}),
+                "custom_tags": add_req.custom_tags,
                 "user_id": add_req.user_id,
                 "session_id": target_session_id,
             },

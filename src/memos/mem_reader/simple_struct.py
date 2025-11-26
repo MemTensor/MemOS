@@ -23,6 +23,8 @@ from memos.memories.textual.item import (
     TreeNodeTextualMemoryMetadata,
 )
 from memos.templates.mem_reader_prompts import (
+    CUSTOM_TAGS_INSTRUCTION,
+    CUSTOM_TAGS_INSTRUCTION_ZH,
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
@@ -67,6 +69,7 @@ PROMPT_DICT = {
         "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
+    "custom_tags": {"en": CUSTOM_TAGS_INSTRUCTION, "zh": CUSTOM_TAGS_INSTRUCTION_ZH},
 }
 
 try:
@@ -147,11 +150,15 @@ def _build_node(idx, message, info, source_info, llm, parse_json_result, embedde
 
         embedding = embedder.embed([value])[0]
 
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
+                user_id=user_id,
+                session_id=session_id,
                 memory_type="LongTermMemory",
                 status="activated",
                 tags=tags,
@@ -162,6 +169,7 @@ def _build_node(idx, message, info, source_info, llm, parse_json_result, embedde
                 background="",
                 confidence=0.99,
                 type="fact",
+                info=info_,
             ),
         )
     except Exception as e:
@@ -209,11 +217,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         confidence: float = 0.99,
     ) -> TextualMemoryItem:
         """construct memory item"""
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
+                user_id=user_id,
+                session_id=session_id,
                 memory_type=memory_type,
                 status="activated",
                 tags=tags or [],
@@ -224,14 +236,23 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 background=background,
                 confidence=confidence,
                 type=type_,
+                info=info_,
             ),
         )
 
-    def _get_llm_response(self, mem_str: str) -> dict:
+    def _get_llm_response(self, mem_str: str, custom_tags: list[str] | None) -> dict:
         lang = detect_lang(mem_str)
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
         prompt = template.replace("${conversation}", mem_str)
+
+        custom_tags_prompt = (
+            PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
+            if custom_tags
+            else ""
+        )
+        prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
+
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
@@ -300,6 +321,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         windows = list(self._iter_chat_windows(scene_data_info))
+        custom_tags = info.pop(
+            "custom_tags", None
+        )  # msut pop here, avoid add to info, only used in sync fine mode
 
         if mode == "fast":
             logger.debug("Using unified Fast Mode")
@@ -330,7 +354,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             logger.debug("Using unified Fine Mode")
             chat_read_nodes = []
             for w in windows:
-                resp = self._get_llm_response(w["text"])
+                resp = self._get_llm_response(w["text"], custom_tags)
                 for m in resp.get("memory list", []):
                     try:
                         memory_type = (
@@ -352,9 +376,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         logger.error(f"[ChatFine] parse error: {e}")
             return chat_read_nodes
 
-    def _process_transfer_chat_data(self, raw_node: TextualMemoryItem):
+    def _process_transfer_chat_data(
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+    ):
         raw_memory = raw_node.memory
-        response_json = self._get_llm_response(raw_memory)
+        response_json = self._get_llm_response(raw_memory, custom_tags)
+
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
             try:
@@ -368,6 +395,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 node_i = self._make_memory_item(
                     value=memory_i_raw.get("value", ""),
                     info={
+                        **(raw_node.metadata.info or {}),
                         "user_id": raw_node.metadata.user_id,
                         "session_id": raw_node.metadata.session_id,
                     },
@@ -479,7 +507,10 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return memory_list
 
     def fine_transfer_simple_mem(
-        self, input_memories: list[TextualMemoryItem], type: str
+        self,
+        input_memories: list[TextualMemoryItem],
+        type: str,
+        custom_tags: list[str] | None = None,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
@@ -496,7 +527,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(processing_func, scene_data_info)
+                executor.submit(processing_func, scene_data_info, custom_tags)
                 for scene_data_info in input_memories
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -621,6 +652,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if mode == "fast":
             raise NotImplementedError
 
+        custom_tags = info.pop("custom_tags", None)
+
         if not scene_data_info or len(scene_data_info) != 1:
             logger.error(
                 "[DocReader] scene_data_info must contain exactly 1 item after normalization"
@@ -659,6 +692,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             lang = detect_lang(chunk.text)
             template = PROMPT_DICT["doc"][lang]
             prompt = template.replace("{chunk_text}", chunk.text)
+            custom_tags_prompt = (
+                PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
+                if custom_tags
+                else ""
+            )
+            prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
             message = [{"role": "user", "content": prompt}]
             messages.append(message)
 
@@ -692,7 +731,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(f"[DocReader] Future task failed: {e}")
         return doc_nodes
 
-    def _process_transfer_doc_data(self, raw_node: TextualMemoryItem):
+    def _process_transfer_doc_data(
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+    ):
         raise NotImplementedError
 
     def parse_json_result(self, response_text: str) -> dict:

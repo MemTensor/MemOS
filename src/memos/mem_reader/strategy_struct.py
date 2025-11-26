@@ -8,6 +8,8 @@ from memos.configs.parser import ParserConfigFactory
 from memos.mem_reader.simple_struct import SimpleStructMemReader, detect_lang
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
+    CUSTOM_TAGS_INSTRUCTION,
+    CUSTOM_TAGS_INSTRUCTION_ZH,
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
@@ -28,6 +30,7 @@ STRATEGY_PROMPT_DICT = {
         "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
+    "custom_tags": {"en": CUSTOM_TAGS_INSTRUCTION, "zh": CUSTOM_TAGS_INSTRUCTION_ZH},
 }
 
 
@@ -38,11 +41,19 @@ class StrategyStructMemReader(SimpleStructMemReader, ABC):
         super().__init__(config)
         self.chat_chunker = config.chat_chunker["config"]
 
-    def _get_llm_response(self, mem_str: str) -> dict:
+    def _get_llm_response(self, mem_str: str, custom_tags: list[str] | None) -> dict:
         lang = detect_lang(mem_str)
         template = STRATEGY_PROMPT_DICT["chat"][lang]
         examples = STRATEGY_PROMPT_DICT["chat"][f"{lang}_example"]
         prompt = template.replace("${conversation}", mem_str)
+
+        custom_tags_prompt = (
+            STRATEGY_PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
+            if custom_tags
+            else ""
+        )
+        prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
+
         if self.config.remove_prompt_example:  # TODO unused
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
