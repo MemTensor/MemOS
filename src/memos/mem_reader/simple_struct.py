@@ -509,31 +509,90 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(traceback.format_exc())
         return memory_list
 
-    def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
+    def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
         """
-        Get raw information from scene_data.
-        If scene_data contains dictionaries, convert them to strings.
-        If scene_data contains file paths, parse them using the parser.
-
-        Args:
-            scene_data: List of dialogue information or document paths
-            type: Type of scene data: ['doc', 'chat']
-        Returns:
-            List of strings containing the processed scene data
+        Convert normalized MessagesType scenes into typical MessagesType this reader can
+        handle.
+        SimpleStructMemReader only supports text-only chat messages with roles.
+        For chat scenes we:
+          - skip unsupported scene types (e.g. `str` scenes)
+          - drop non-dict messages
+          - keep only roles in {user, assistant, system}
+          - coerce OpenAI multimodal `content` (list[parts]) into a single plain-text string
+          - then apply the existing windowing logic (<=10 messages with 2-message overlap)
+        For doc scenes we pass through; doc handling is done in `_process_doc_data`.
         """
-        results = []
+        results: list[list[Any]] = []
 
         if type == "chat":
+            allowed_roles = {"user", "assistant", "system"}
             for items in scene_data:
+                if isinstance(items, str):
+                    logger.warning(
+                        "SimpleStruct MemReader does not support "
+                        "str message data now, your messages "
+                        f"contains {items}, skipping"
+                    )
+                    continue
+                if not isinstance(items, list):
+                    logger.warning(
+                        "SimpleStruct MemReader expects message as "
+                        f"list[dict], your messages contains"
+                        f"{items}, skipping"
+                    )
+                    continue
+                # Filter messages within this message
                 result = []
-                for i, item in enumerate(items):
-                    result.append(item)
-                    if len(result) >= 10:
-                        results.append(result)
-                        context = copy.deepcopy(result[-2:]) if i + 1 < len(items) else []
-                        result = context
-                if result:
-                    results.append(result)
+                for _i, item in enumerate(items):
+                    if not isinstance(item, dict):
+                        logger.warning(
+                            "SimpleStruct MemReader expects message as "
+                            f"list[dict], your messages contains"
+                            f"{item}, skipping"
+                        )
+                        continue
+                    role = item.get("role") or ""
+                    role = role if isinstance(role, str) else str(role)
+                    role = role.strip().lower()
+                    if role not in allowed_roles:
+                        logger.warning(
+                            f"SimpleStruct MemReader expects message with "
+                            f"role in {allowed_roles}, your messages contains"
+                            f"role {role}, skipping"
+                        )
+                        continue
+
+                    content = item.get("content", "")
+                    if not isinstance(content, str):
+                        logger.warning(
+                            f"SimpleStruct MemReader expects message content "
+                            f"with str, your messages content"
+                            f"is {content!s}, skipping"
+                        )
+                        continue
+                    if not content:
+                        continue
+
+                    result.append(
+                        {
+                            "role": role,
+                            "content": content,
+                            "chat_time": item.get("chat_time", ""),
+                            "session_id": item.get("session_id", ""),
+                        }
+                    )
+                if not result:
+                    continue
+                window = []
+                for i, item in enumerate(result):
+                    window.append(item)
+                    if len(window) >= 10:
+                        results.append(window)
+                        context = copy.deepcopy(window[-2:]) if i + 1 < len(result) else []
+                        window = context
+
+                if window:
+                    results.append(window)
         elif type == "doc":
             results = scene_data
         return results

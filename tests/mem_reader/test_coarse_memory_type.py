@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rewritten test script for the updated _coerce_scene_data function.
+Rewritten test script for the updated coerce_scene_data function.
 
 This version matches the NEW behavior:
 - Local file path → parsed into text (type="text")
@@ -17,7 +17,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
-from memos.mem_reader.simple_struct import _coerce_scene_data
+from memos.mem_reader.simple_struct import coerce_scene_data
 
 
 # ------------------------------------------------------------------------------
@@ -50,31 +50,41 @@ def create_temp_file(content="hello world", suffix=".txt"):
 
 
 def test_empty_inputs():
-    result = _coerce_scene_data([], "chat")
+    result = coerce_scene_data([], "chat")
     assert_equal(result, [], "Empty input should return empty list")
 
 
 def test_chat_passthrough():
-    result = _coerce_scene_data(["hello"], "chat")
+    result = coerce_scene_data(["hello"], "chat")
     assert_equal(result, ["hello"], "Chat mode should passthrough list[str]")
 
     msg_list = [{"role": "user", "content": "hi"}]
-    result = _coerce_scene_data([msg_list], "chat")
+    result = coerce_scene_data([msg_list], "chat")
     assert_equal(result, [msg_list], "Chat mode should passthrough MessageList")
 
 
 def test_doc_local_file():
     local_path, content = create_temp_file("test local file content")
-    result = _coerce_scene_data([local_path], "doc")
+    result = coerce_scene_data([local_path], "doc")
 
-    # Should parse into text, not file
-    expected = [[{"type": "text", "text": "test local file content"}]]
-    assert_equal(result, expected, "Local file should be parsed into text")
+    filename = os.path.basename(local_path)
+    expected = [
+        [
+            {
+                "type": "file",
+                "file": {
+                    "filename": filename,
+                    "file_data": "test local file content",
+                },
+            }
+        ]
+    ]
+    assert_equal(result, expected, "Local file should be wrapped as file with parsed text")
 
 
 def test_doc_remote_url():
     url = "https://example.com/file.pdf"
-    result = _coerce_scene_data([url], "doc")
+    result = coerce_scene_data([url], "doc")
 
     filename = "file.pdf"
     expected = [[{"type": "file", "file": {"filename": filename, "file_data": url}}]]
@@ -83,7 +93,7 @@ def test_doc_remote_url():
 
 def test_doc_unknown_path():
     path = "/nonexistent/path/file.docx"
-    result = _coerce_scene_data([path], "doc")
+    result = coerce_scene_data([path], "doc")
 
     expected = [[{"type": "file", "file": {"filename": "file.docx", "file_data": path}}]]
     assert_equal(result, expected, "Unknown path should be treated as file_data")
@@ -91,7 +101,7 @@ def test_doc_unknown_path():
 
 def test_doc_plain_text():
     text = "this is plain text"
-    result = _coerce_scene_data([text], "doc")
+    result = coerce_scene_data([text], "doc")
 
     expected = [[{"type": "text", "text": "this is plain text"}]]
     assert_equal(result, expected, "Plain text should produce text content")
@@ -102,20 +112,35 @@ def test_doc_mixed():
     url = "https://example.com/x.pdf"
     plain = "hello world"
 
-    result = _coerce_scene_data([plain, local_path, url], "doc")
+    result = coerce_scene_data([plain, local_path, url], "doc")
 
+    filename = os.path.basename(local_path)
     expected = [
+        [{"type": "text", "text": plain}],
         [
-            {"type": "text", "text": plain},
-            {"type": "text", "text": "local file content"},  # parsed from local file
-            {"type": "file", "file": {"filename": "x.pdf", "file_data": url}},
-        ]
+            {
+                "type": "file",
+                "file": {
+                    "filename": filename,
+                    "file_data": "local file content",
+                },
+            }
+        ],
+        [
+            {
+                "type": "file",
+                "file": {
+                    "filename": "x.pdf",
+                    "file_data": url,
+                },
+            }
+        ],
     ]
     assert_equal(result, expected, "Mixed doc inputs should be normalized correctly")
 
 
 def test_fallback():
-    result = _coerce_scene_data([123], "chat")
+    result = coerce_scene_data([123], "chat")
     expected = ["[123]"]
     assert_equal(result, expected, "Unexpected input should fallback to str(scene_data)")
 
@@ -127,7 +152,7 @@ def test_fallback():
 
 def main():
     print("\n========================================")
-    print("Running NEW tests for _coerce_scene_data")
+    print("Running NEW tests for coerce_scene_data")
     print("========================================")
 
     test_empty_inputs()
