@@ -5,7 +5,6 @@ import re
 import traceback
 
 from abc import ABC
-from datetime import datetime, timezone
 from typing import Any, TypeAlias
 
 from tqdm import tqdm
@@ -65,10 +64,6 @@ PROMPT_DICT = {
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
 }
-FILE_EXT_RE = re.compile(
-    r"\.(pdf|docx?|pptx?|xlsx?|txt|md|html?|json|csv|png|jpe?g|webp|wav|mp3|m4a)$",
-    re.I,
-)
 
 try:
     import tiktoken
@@ -431,9 +426,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Backward compatibility, after coercing scene_data, we only tackle
         # with standard scene_data type: MessagesType
         standard_scene_data = coerce_scene_data(scene_data, type)
-        return self._get_standard_memory(standard_scene_data, type, info, mode)
+        return self._read_memory(standard_scene_data, type, info, mode)
 
-    def _get_standard_memory(
+    def _read_memory(
         self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
     ):
         """
@@ -452,11 +447,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             [ ... ]
         ]
         """
-        messages = self._complete_chat_time(messages, type)
-        list_scene_data_info = self.get_scene_data_info(messages, type)
+        list_scene_data_info = self._get_scene_data_info(messages, type)
 
         memory_list = []
-
         if type == "chat":
             processing_func = self._process_chat_data
         elif type == "doc":
@@ -511,7 +504,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(traceback.format_exc())
         return memory_list
 
-    def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
+    def _get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
         """
         Get raw information from scene_data.
         If scene_data contains dictionaries, convert them to strings.
@@ -537,34 +530,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 if result:
                     results.append(result)
         return results
-
-    def _complete_chat_time(self, scene_data: list[MessagesType], type: str):
-        if type != "chat":
-            return scene_data
-        complete_scene_data = []
-
-        for items in scene_data:
-            if not items:
-                continue
-
-            chat_time_value = None
-
-            for item in items:
-                if isinstance(item, dict) and "chat_time" in item:
-                    chat_time_value = item["chat_time"]
-                    break
-
-            if chat_time_value is None:
-                session_date = datetime.now(timezone.utc)
-                date_format = "%I:%M %p on %d %B, %Y UTC"
-                chat_time_value = session_date.strftime(date_format)
-
-            for i in range(len(items)):
-                if isinstance(items[i], dict) and "chat_time" not in items[i]:
-                    items[i]["chat_time"] = chat_time_value
-
-            complete_scene_data.append(items)
-        return complete_scene_data
 
     def _process_doc_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
