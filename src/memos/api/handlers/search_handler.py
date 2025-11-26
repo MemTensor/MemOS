@@ -191,7 +191,7 @@ class SearchHandler(BaseHandler):
         """
         target_session_id = search_req.session_id or "default_session"
         search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
+        plugin = bool(search_req.info is not None and search_req.info.get("origin_model"))
         search_results = self.naive_mem_cube.text_mem.search(
             query=search_req.query,
             user_name=user_context.mem_cube_id,
@@ -205,6 +205,7 @@ class SearchHandler(BaseHandler):
                 "session_id": target_session_id,
                 "chat_history": search_req.chat_history,
             },
+            plugin=plugin,
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]

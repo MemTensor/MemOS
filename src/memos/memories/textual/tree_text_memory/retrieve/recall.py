@@ -143,6 +143,26 @@ class GraphMemoryRetriever:
 
         return list(combined.values())
 
+    def retrieve_from_mixed(
+        self,
+        top_k: int,
+        memory_scope: str | None = None,
+        query_embedding: list[list[float]] | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        use_fast_graph: bool = False,
+    ) -> list[TextualMemoryItem]:
+        """Retrieve from mixed and memory"""
+        vector_results = self._vector_recall(
+            query_embedding or [],
+            memory_scope,
+            top_k,
+            search_filter=search_filter,
+            user_name=user_name,
+        )  # Merge and deduplicate by ID
+        combined = {item.id: item for item in vector_results}
+        return list(combined.values())
+
     def _graph_recall(
         self, parsed_goal: ParsedTaskGoal, memory_scope: str, user_name: str | None = None, **kwargs
     ) -> list[TextualMemoryItem]:
@@ -270,7 +290,7 @@ class GraphMemoryRetriever:
         query_embedding: list[list[float]],
         memory_scope: str,
         top_k: int = 20,
-        max_num: int = 5,
+        max_num: int = 20,
         status: str = "activated",
         cube_name: str | None = None,
         search_filter: dict | None = None,

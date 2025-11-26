@@ -3,6 +3,8 @@ import re
 
 from pathlib import Path
 
+import numpy as np
+
 from memos.dependency import require_python_package
 from memos.log import get_logger
 
@@ -376,3 +378,28 @@ def detect_lang(text):
         return "en"
     except Exception:
         return "en"
+
+
+def find_best_unrelated_subgroup(sentences: list, similarity_matrix: list, bar: float = 0.8):
+    assert len(sentences) == len(similarity_matrix)
+
+    num_sentence = len(sentences)
+    selected_sentences = []
+    selected_indices = []
+    for i in range(num_sentence):
+        can_add = True
+        for j in selected_indices:
+            if similarity_matrix[i][j] > bar:
+                can_add = False
+                break
+        if can_add:
+            selected_sentences.append(i)
+            selected_indices.append(i)
+    return selected_sentences, selected_indices
+
+
+def cosine_similarity_matrix(embeddings: list[list[float]]) -> list[list[float]]:
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    x_normalized = embeddings / norms
+    similarity_matrix = np.dot(x_normalized, x_normalized.T)
+    return similarity_matrix

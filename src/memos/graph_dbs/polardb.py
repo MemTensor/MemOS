@@ -1451,6 +1451,115 @@ class PolarDBGraphDB(BaseGraphDB):
         raise NotImplementedError
 
     @timed
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        tsvector_field: str = "properties_tsvector_zh",
+        tsquery_config: str = "jiebaqry",
+        **kwargs,
+    ) -> list[dict]:
+        """
+        Full-text search functionality using PostgreSQL's full-text search capabilities.
+
+        Args:
+            query_text: query text
+            top_k: maximum number of results to return
+            scope: memory type filter (memory_type)
+            status: status filter, defaults to "activated"
+            threshold: similarity threshold filter
+            search_filter: additional property filter conditions
+            user_name: username filter
+            tsvector_field: full-text index field name, defaults to properties_tsvector_zh_1
+            tsquery_config: full-text search configuration, defaults to jiebaqry (Chinese word segmentation)
+            **kwargs: other parameters (e.g. cube_name)
+
+        Returns:
+            list[dict]: result list containing id and score
+        """
+        # Build WHERE clause dynamically, same as search_by_embedding
+        where_clauses = []
+
+        if scope:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+            )
+        if status:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+            )
+        else:
+            where_clauses.append(
+                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+            )
+
+        # Add user_name filter
+        user_name = user_name if user_name else self.config.user_name
+        where_clauses.append(
+            f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
+        )
+
+        # Add search_filter conditions
+        if search_filter:
+            for key, value in search_filter.items():
+                if isinstance(value, str):
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                    )
+                else:
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                    )
+
+        # Add fulltext search condition
+        # Convert query_text to OR query format: "word1 | word2 | word3"
+        tsquery_string = " | ".join(query_words)
+
+        where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
+
+        where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        # Build fulltext search query
+        query = f"""
+            SELECT
+                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                agtype_object_field_text(properties, 'memory') as memory_text,
+                ts_rank({tsvector_field}, to_tsquery('{tsquery_config}', %s)) as rank
+            FROM "{self.db_name}_graph"."Memory"
+            {where_clause}
+            ORDER BY rank DESC
+            LIMIT {top_k};
+        """
+
+        params = [tsquery_string, tsquery_string]
+
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                results = cursor.fetchall()
+                output = []
+                for row in results:
+                    oldid = row[0]  # old_id
+                    rank = row[2]  # rank score
+
+                    id_val = str(oldid)
+                    score_val = float(rank)
+
+                    # Apply threshold filter if specified
+                    if threshold is None or score_val >= threshold:
+                        output.append({"id": id_val, "score": score_val})
+
+                return output[:top_k]
+        finally:
+            self._return_connection(conn)
+
+    @timed
     def search_by_embedding(
         self,
         vector: list[float],

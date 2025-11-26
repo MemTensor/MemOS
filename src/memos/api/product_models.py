@@ -185,6 +185,7 @@ class APISearchRequest(BaseRequest):
     )
     include_preference: bool = Field(True, description="Whether to handle preference memory")
     pref_top_k: int = Field(6, description="Number of preference results to return")
+    info: dict | None = Field(None, description="Info for search")
 
 
 class APIADDRequest(BaseRequest):

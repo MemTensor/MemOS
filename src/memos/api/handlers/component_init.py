@@ -40,6 +40,7 @@ from memos.memories.textual.prefer_text_memory.factory import (
 from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 
 
 if TYPE_CHECKING:
@@ -142,7 +143,7 @@ def init_server() -> dict[str, Any]:
     )
 
     logger.debug("Memory manager initialized")
-
+    tokenizer = FastTokenizer()
     # Initialize text memory
     text_mem = SimpleTreeTextMemory(
         llm=llm,
@@ -153,6 +154,7 @@ def init_server() -> dict[str, Any]:
         memory_manager=memory_manager,
         config=default_cube_config.text_mem.config,
         internet_retriever=internet_retriever,
+        tokenizer=tokenizer,
     )
 
     logger.debug("Text memory initialized")
@@ -270,7 +272,6 @@ def init_server() -> dict[str, Any]:
 
         online_bot = get_online_bot_function() if dingding_enabled else None
         logger.info("DingDing bot is enabled")
-
     # Return all components as a dictionary for easy access and extension
     return {
         "graph_db": graph_db,
