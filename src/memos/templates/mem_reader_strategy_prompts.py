@@ -61,6 +61,7 @@ Return a valid JSON object with the following structure:
 Language rules:
 - The `key`, `value`, `tags`, `summary` and `memory_type` fields must be in English.
 
+${custom_tags_prompt}
 
 Example:
 Conversations:
@@ -157,6 +158,7 @@ STRATEGY_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
 语言规则：
 - `key`、`value`、`tags`、`summary` 、`memory_type` 字段必须输出中文
 
+${custom_tags_prompt}
 
 示例1：
 对话：
