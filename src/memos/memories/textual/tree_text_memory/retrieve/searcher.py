@@ -275,6 +275,7 @@ class Searcher:
             user_name=user_name,
             use_fast_graph=self.use_fast_graph,
         )
+        logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
         documents = [getattr(item, "memory", "") for item in items]
         documents_embeddings = self.embedder.embed(documents)
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)

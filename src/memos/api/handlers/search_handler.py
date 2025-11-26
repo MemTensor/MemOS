@@ -191,7 +191,7 @@ class SearchHandler(BaseHandler):
         """
         target_session_id = search_req.session_id or "default_session"
         search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-        plugin = bool(search_req.info is not None and search_req.info.get("origin_model"))
+        plugin = bool(search_req.source is not None and search_req.source == "plugin")
         search_results = self.naive_mem_cube.text_mem.search(
             query=search_req.query,
             user_name=user_context.mem_cube_id,
