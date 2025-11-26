@@ -295,6 +295,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         windows = list(self._iter_chat_windows(scene_data_info))
+        custom_tags = info.pop(
+            "custom_tags", None
+        )  # msut pop here, avoid add to info, only used in sync fine mode
 
         if mode == "fast":
             logger.debug("Using unified Fast Mode")
@@ -324,7 +327,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         else:
             logger.debug("Using unified Fine Mode")
             chat_read_nodes = []
-            custom_tags = info.pop("custom_tags", None)
             for w in windows:
                 resp = self._get_llm_response(w["text"], custom_tags)
                 for m in resp.get("memory list", []):
@@ -353,6 +355,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     ):
         raw_memory = raw_node.memory
         response_json = self._get_llm_response(raw_memory, custom_tags)
+
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
             try:
