@@ -150,10 +150,15 @@ def coerce_scene_data(scene_data, scene_type: str) -> list[MessagesType]:
                     # parse local file into text
                     parsed_text = parser.parse(s)
                     raw_items.append(
-                        {
-                            "type": "file",
-                            "file": {"filename": filename or "document", "file_data": parsed_text},
-                        }
+                        [
+                            {
+                                "type": "file",
+                                "file": {
+                                    "filename": filename or "document",
+                                    "file_data": parsed_text,
+                                },
+                            }
+                        ]
                     )
                 except Exception as e:
                     logger.error(f"[SceneParser] Error parsing {s}: {e}")
@@ -171,14 +176,14 @@ def coerce_scene_data(scene_data, scene_type: str) -> list[MessagesType]:
                     else:
                         filename = os.path.basename(s)
                 raw_items.append(
-                    {"type": "file", "file": {"filename": filename or "document", "file_data": s}}
+                    [{"type": "file", "file": {"filename": filename or "document", "file_data": s}}]
                 )
                 continue
 
             # Case C: Pure text
-            raw_items.append({"type": "text", "text": s})
+            raw_items.append([{"type": "text", "text": s}])
 
-        return [raw_items]
+        return raw_items
 
     # fallback
     return [str(scene_data)]

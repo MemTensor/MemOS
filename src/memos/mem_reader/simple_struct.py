@@ -108,7 +108,7 @@ def detect_lang(text):
         return "en"
 
 
-def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder):
+def _build_node(idx, message, info, source_info, llm, parse_json_result, embedder):
     # generate
     try:
         raw = llm.generate(message)
@@ -154,7 +154,7 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
                 key=key,
                 embedding=embedding,
                 usage=[],
-                sources=[{"type": "doc", "doc_path": f"{scene_file}_{idx}"}],
+                sources=source_info,
                 background="",
                 confidence=0.99,
                 type="fact",
@@ -435,10 +435,11 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         1. raw file:
         [
             [
-                {"type": "file", "file": "local_path"},
-                {"type": "file", "file": "str"},
-                ...
-            ]
+                {"type": "file", "file": "str"}
+            ],
+            [
+                {"type": "file", "file": "str"}
+            ],...
         ]
         2. text chat:
         scene_data = [
@@ -532,10 +533,66 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return results
 
     def _process_doc_data(self, scene_data_info, info, **kwargs):
+        """
+        Process doc data after being normalized to new RawMessageList format.
+
+        scene_data_info format (length always == 1):
+        [
+            {"type": "file", "file": {"filename": "...", "file_data": "..."}}
+        ]
+        OR
+        [
+            {"type": "text", "text": "..."}
+        ]
+
+        Behavior:
+        - Merge all text/file_data into a single "full text"
+        - Chunk the text
+        - Build prompts
+        - Send to LLM
+        - Parse results and build memory nodes
+        """
         mode = kwargs.get("mode", "fine")
         if mode == "fast":
             raise NotImplementedError
-        chunks = self.chunker.chunk(scene_data_info["text"])
+
+        if not scene_data_info or len(scene_data_info) != 1:
+            logger.error(
+                "[DocReader] scene_data_info must contain exactly 1 item after normalization"
+            )
+            return []
+
+        item = scene_data_info[0]
+        text_content = ""
+        source_info = {}
+
+        # Determine content and source metadata
+        if item.get("type") == "file":
+            f = item["file"]
+            filename = f.get("filename") or "document"
+            file_data = f.get("file_data") or ""
+
+            text_content = file_data
+            # origin 可以是 url / path / local content
+            source_info = {
+                "type": "doc",
+                "filename": filename,
+                "origin": file_data if isinstance(file_data, str) else "",
+            }
+
+        elif item.get("type") == "text":
+            text_content = item.get("text", "")
+            source_info = {
+                "type": "doc",
+                "origin": "inline-text",
+            }
+
+        text_content = (text_content or "").strip()
+        if not text_content:
+            logger.warning("[DocReader] Empty document text after normalization.")
+            return []
+
+        chunks = self.chunker.chunk(text_content)
         messages = []
         for chunk in chunks:
             lang = detect_lang(chunk.text)
@@ -545,7 +602,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             messages.append(message)
 
         doc_nodes = []
-        scene_file = scene_data_info["file"]
 
         with ContextThreadPoolExecutor(max_workers=50) as executor:
             futures = {
@@ -554,7 +610,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     idx,
                     msg,
                     info,
-                    scene_file,
+                    source_info,
                     self.llm,
                     self.parse_json_result,
                     self.embedder,
