@@ -1,27 +1,19 @@
 import concurrent.futures
-import copy
-import json
 import os
 import re
-import traceback
 
 from abc import ABC
-from datetime import datetime, timezone
 from typing import Any, TypeAlias
 from urllib.parse import urlparse
-
-from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.configs.parser import ParserConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
-from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
@@ -116,63 +108,6 @@ def detect_lang(text):
         return "en"
 
 
-def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder):
-    # generate
-    try:
-        raw = llm.generate(message)
-        if not raw:
-            logger.warning(f"[LLM] Empty generation for input: {message}")
-            return None
-    except Exception as e:
-        logger.error(f"[LLM] Exception during generation: {e}")
-        return None
-
-    # parse_json_result
-    try:
-        chunk_res = parse_json_result(raw)
-        if not chunk_res:
-            logger.warning(f"[Parse] Failed to parse result: {raw}")
-            return None
-    except Exception as e:
-        logger.error(f"[Parse] Exception during JSON parsing: {e}")
-        return None
-
-    try:
-        value = chunk_res.get("value", "").strip()
-        if not value:
-            logger.warning("[BuildNode] value is empty")
-            return None
-
-        tags = chunk_res.get("tags", [])
-        if not isinstance(tags, list):
-            tags = []
-
-        key = chunk_res.get("key", None)
-
-        embedding = embedder.embed([value])[0]
-
-        return TextualMemoryItem(
-            memory=value,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
-                memory_type="LongTermMemory",
-                status="activated",
-                tags=tags,
-                key=key,
-                embedding=embedding,
-                usage=[],
-                sources=[{"type": "doc", "doc_path": f"{scene_file}_{idx}"}],
-                background="",
-                confidence=0.99,
-                type="fact",
-            ),
-        )
-    except Exception as e:
-        logger.error(f"[BuildNode] Error building node: {e}")
-        return None
-
-
 def _derive_key(text: str, max_len: int = 80) -> str:
     """default key when without LLM: first max_len words"""
     if not text:
@@ -184,84 +119,50 @@ def _derive_key(text: str, max_len: int = 80) -> str:
 def _coerce_scene_data(scene_data, type: str) -> list[MessagesType]:
     """
     Normalize ANY allowed SceneDataInput into: list[MessagesType].
-    Supports:
-    - Already normalized scene_data → passthrough
-    - doc: legacy list[str] → automatically detect:
-        * local file path  → read & parse into text
-        * remote URL/path  → keep as file part
-        * pure text        → text part
-    - fallback: wrap unknown → [str(scene_data)]
     """
     if not scene_data:
         return []
     head = scene_data[0]
-
-    # passthrough: already str or list structures except doc-mode list[str]
     if isinstance(head, str | list) and not (type == "doc" and isinstance(head, str)):
+        # For type="doc" AND head is str, this is legacy doc list[str], handle below instead.
         return scene_data
 
     # doc: list[str] -> RawMessageList
     if type == "doc" and isinstance(head, str):
         raw_items = []
-
-        # prepare parser
-        parser_config = ParserConfigFactory.model_validate(
-            {
-                "backend": "markitdown",
-                "config": {},
-            }
-        )
-        parser = ParserFactory.from_config(parser_config)
-
         for s in scene_data:
             s = (s or "").strip()
-            if not s:
-                continue
-
             parsed = urlparse(s)
             looks_like_url = parsed.scheme in {"http", "https", "oss", "s3", "gs", "cos"}
+            # treat as file if it looks like a path, a URL, or a known extension.
             looks_like_path = ("/" in s) or ("\\" in s)
             looks_like_file = bool(FILE_EXT_RE.search(s)) or looks_like_url or looks_like_path
 
-            # Case A: Local filesystem path
-            if os.path.exists(s):
-                filename = os.path.basename(s) or "document"
-                try:
-                    # parse local file into text
-                    parsed_text = parser.parse(s)
-                    raw_items.append(
-                        {
-                            "type": "file",
-                            "file": {"filename": filename or "document", "file_data": parsed_text},
-                        }
-                    )
-                except Exception as e:
-                    logger.error(f"[SceneParser] Error parsing {s}: {e}")
-                continue
-
-            # Case B: URL or non-local file path
             if looks_like_file:
                 if looks_like_url:
                     filename = os.path.basename(parsed.path)
                 else:
-                    # Windows absolute path detection
+                    # Handle Windows paths (e.g., "C:\Users\Documents\file.txt")
+                    # On Unix, os.path.basename doesn't recognize backslashes as separators
                     if "\\" in s and re.match(r"^[A-Za-z]:", s):
+                        # Windows absolute path: extract filename after last backslash
+                        # Split on backslashes and take the last non-empty part
                         parts = [p for p in s.split("\\") if p]
                         filename = parts[-1] if parts else os.path.basename(s)
                     else:
                         filename = os.path.basename(s)
                 raw_items.append(
-                    {"type": "file", "file": {"filename": filename or "document", "file_data": s}}
+                    {"type": "file", "file": {"path": s, "filename": filename or "document"}}
                 )
-                continue
-
-            # Case C: Pure text
-            raw_items.append({"type": "text", "text": s})
-
+            else:
+                raw_items.append({"type": "text", "text": s})
         return [raw_items]
-
-    # fallback
+    # Keep a tiny fallback for robustness.
     return [str(scene_data)]
+
+
+def _get_simple_scene_data(scene_data: list[MessagesType]) -> list[MessagesType]:
+    """Only get Simple File and Simple Chat"""
 
 
 class SimpleStructMemReader(BaseMemReader, ABC):
@@ -506,6 +407,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if not isinstance(info, dict):
             raise ValueError("info must be a dictionary")
 
+        # TODO: ensure why session_id is required?
         required_fields = {"user_id", "session_id"}
         missing_fields = required_fields - set(info.keys())
         if missing_fields:
@@ -513,232 +415,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not all(isinstance(info[field], str) for field in required_fields):
             raise ValueError("user_id and session_id must be strings")
-
-        # Backward compatibility, after coercing scene_data, we only tackle
-        # with standard scene_data type: MessagesType
         standard_scene_data = _coerce_scene_data(scene_data, type)
-        return self._get_standard_memory(standard_scene_data, type, info, mode)
-
-    def _get_standard_memory(
-        self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
-    ):
-        """
-        1. raw file:
-        [
-            [
-                {"type": "file", "file": "local_path"},
-                {"type": "file", "file": "str"},
-                ...
-            ]
-        ]
-        2. text chat:
-        scene_data = [
-            [ {role: user, ...}, {role: assistant, ...}, ... ],
-            [ {role: user, ...}, {role: assistant, ...}, ... ],
-            [ ... ]
-        ]
-        """
-        messages = self._complete_chat_time(messages, type)
-        list_scene_data_info = self.get_scene_data_info(messages, type)
-
-        memory_list = []
-
-        if type == "chat":
-            processing_func = self._process_chat_data
-        elif type == "doc":
-            processing_func = self._process_doc_data
-        else:
-            processing_func = self._process_doc_data
-
-        # Process Q&A pairs concurrently with context propagation
-        with ContextThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(processing_func, scene_data_info, info, mode=mode)
-                for scene_data_info in list_scene_data_info
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    res_memory = future.result()
-                    if res_memory is not None:
-                        memory_list.append(res_memory)
-                except Exception as e:
-                    logger.error(f"Task failed with exception: {e}")
-                    logger.error(traceback.format_exc())
-        return memory_list
+        return standard_scene_data
 
     def fine_transfer_simple_mem(
         self, input_memories: list[TextualMemoryItem], type: str
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
-
-        memory_list = []
-
-        if type == "chat":
-            processing_func = self._process_transfer_chat_data
-        elif type == "doc":
-            processing_func = self._process_transfer_doc_data
-        else:
-            processing_func = self._process_transfer_doc_data
-
-        # Process Q&A pairs concurrently with context propagation
-        with ContextThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(processing_func, scene_data_info)
-                for scene_data_info in input_memories
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    res_memory = future.result()
-                    if res_memory is not None:
-                        memory_list.append(res_memory)
-                except Exception as e:
-                    logger.error(f"Task failed with exception: {e}")
-                    logger.error(traceback.format_exc())
-        return memory_list
-
-    def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
-        """
-        Get raw information from scene_data.
-        If scene_data contains dictionaries, convert them to strings.
-        If scene_data contains file paths, parse them using the parser.
-
-        Args:
-            scene_data: List of dialogue information or document paths
-            type: Type of scene data: ['doc', 'chat']
-        Returns:
-            List of strings containing the processed scene data
-        """
-        results = []
-
-        if type == "chat":
-            for items in scene_data:
-                result = []
-                for i, item in enumerate(items):
-                    result.append(item)
-                    if len(result) >= 10:
-                        results.append(result)
-                        context = copy.deepcopy(result[-2:]) if i + 1 < len(items) else []
-                        result = context
-                if result:
-                    results.append(result)
-        return results
-
-    def _complete_chat_time(self, scene_data: list[MessagesType], type: str):
-        if type != "chat":
-            return scene_data
-        complete_scene_data = []
-
-        for items in scene_data:
-            if not items:
-                continue
-
-            chat_time_value = None
-
-            for item in items:
-                if isinstance(item, dict) and "chat_time" in item:
-                    chat_time_value = item["chat_time"]
-                    break
-
-            if chat_time_value is None:
-                session_date = datetime.now(timezone.utc)
-                date_format = "%I:%M %p on %d %B, %Y UTC"
-                chat_time_value = session_date.strftime(date_format)
-
-            for i in range(len(items)):
-                if isinstance(items[i], dict) and "chat_time" not in items[i]:
-                    items[i]["chat_time"] = chat_time_value
-
-            complete_scene_data.append(items)
-        return complete_scene_data
-
-    def _process_doc_data(self, scene_data_info, info, **kwargs):
-        mode = kwargs.get("mode", "fine")
-        if mode == "fast":
-            raise NotImplementedError
-        chunks = self.chunker.chunk(scene_data_info["text"])
-        messages = []
-        for chunk in chunks:
-            lang = detect_lang(chunk.text)
-            template = PROMPT_DICT["doc"][lang]
-            prompt = template.replace("{chunk_text}", chunk.text)
-            message = [{"role": "user", "content": prompt}]
-            messages.append(message)
-
-        doc_nodes = []
-        scene_file = scene_data_info["file"]
-
-        with ContextThreadPoolExecutor(max_workers=50) as executor:
-            futures = {
-                executor.submit(
-                    _build_node,
-                    idx,
-                    msg,
-                    info,
-                    scene_file,
-                    self.llm,
-                    self.parse_json_result,
-                    self.embedder,
-                ): idx
-                for idx, msg in enumerate(messages)
-            }
-            total = len(futures)
-
-            for future in tqdm(
-                concurrent.futures.as_completed(futures), total=total, desc="Processing"
-            ):
-                try:
-                    node = future.result()
-                    if node:
-                        doc_nodes.append(node)
-                except Exception as e:
-                    tqdm.write(f"[ERROR] {e}")
-                    logger.error(f"[DocReader] Future task failed: {e}")
-        return doc_nodes
-
-    def _process_transfer_doc_data(self, raw_node: TextualMemoryItem):
-        raise NotImplementedError
-
-    def parse_json_result(self, response_text: str) -> dict:
-        s = (response_text or "").strip()
-
-        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.I)
-        s = (m.group(1) if m else s.replace("```", "")).strip()
-
-        i = s.find("{")
-        if i == -1:
-            return {}
-        s = s[i:].strip()
-
-        try:
-            return json.loads(s)
-        except json.JSONDecodeError:
-            pass
-
-        j = max(s.rfind("}"), s.rfind("]"))
-        if j != -1:
-            try:
-                return json.loads(s[: j + 1])
-            except json.JSONDecodeError:
-                pass
-
-        def _cheap_close(t: str) -> str:
-            t += "}" * max(0, t.count("{") - t.count("}"))
-            t += "]" * max(0, t.count("[") - t.count("]"))
-            return t
-
-        t = _cheap_close(s)
-        try:
-            return json.loads(t)
-        except json.JSONDecodeError as e:
-            if "Invalid \\escape" in str(e):
-                s = s.replace("\\", "\\\\")
-                return json.loads(s)
-            logger.error(
-                f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \
-                json: {s}"
-            )
-            return {}
-
-    def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:
-        pass
+        return []

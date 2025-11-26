@@ -17,6 +17,8 @@ class FileFile(TypedDict, total=False):
     """
     The base64 encoded file data, used when passing the file to the model as a
     string.
+    or a url.
+    or just string which is the content of the file.
     """
 
     file_id: str
