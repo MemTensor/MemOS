@@ -361,16 +361,6 @@ class Searcher:
                         "memos_cube01",
                     )
                 )
-            if kwargs.get("keywords"):
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_fulltext,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                    )
-                )
             results = []
             for t in tasks:
                 results.extend(t.result())
