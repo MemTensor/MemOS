@@ -189,9 +189,7 @@ class MemosApiClient:
         )
         response = requests.request("POST", url, data=payload, headers=self.headers)
         assert response.status_code == 200, response.text
-        assert json.loads(response.text)["message"] == "Search completed successfully", (
-            response.text
-        )
+        assert json.loads(response.text)["message"] == "Memory searched successfully", response.text
         return json.loads(response.text)["data"]
 
 

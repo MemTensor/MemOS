@@ -402,9 +402,9 @@ class ChatHandler(BaseHandler):
 
                     # Prepare preference markdown string
                     if chat_req.include_preference:
-                        pref_md_string = self._build_pref_md_string_for_playground(
-                            search_response.data["pref_mem"][0].get("memories", [])
-                        )
+                        pref_list = search_response.data.get("pref_mem") or []
+                        pref_memories = pref_list[0].get("memories", []) if pref_list else []
+                        pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
                         yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
 
                     # Step 2: Build system prompt with memories
@@ -564,17 +564,17 @@ class ChatHandler(BaseHandler):
         explicit = []
         implicit = []
         for pref_mem in pref_mem_list:
-            if pref_mem["metadata"]["preference_type"] == "explicit":
+            if pref_mem["metadata"]["preference_type"] == "explicit_preference":
                 explicit.append(
                     {
-                        "content": pref_mem["preference"],
+                        "content": pref_mem["metadata"]["preference"],
                         "reasoning": pref_mem["metadata"]["reasoning"],
                     }
                 )
-            elif pref_mem["metadata"]["preference_type"] == "implicit":
+            elif pref_mem["metadata"]["preference_type"] == "implicit_preference":
                 implicit.append(
                     {
-                        "content": pref_mem["preference"],
+                        "content": pref_mem["metadata"]["preference"],
                         "reasoning": pref_mem["metadata"]["reasoning"],
                     }
                 )

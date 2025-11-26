@@ -5,6 +5,7 @@ This module provides a Redis-based queue implementation that can replace
 the local memos_message_queue functionality in BaseScheduler.
 """
 
+import os
 import re
 import time
 
@@ -33,7 +34,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
     def __init__(
         self,
-        stream_key_prefix: str = "scheduler:messages:stream",
+        stream_key_prefix: str = os.getenv(
+            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX", "scheduler:messages:stream"
+        ),
         consumer_group: str = "scheduler_group",
         consumer_name: str | None = "scheduler_consumer",
         max_len: int = 10000,
@@ -80,6 +83,10 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             self._is_connected = True
 
         self.seen_streams = set()
+
+        # Task Broker
+
+        # Task Orchestrator
 
     def get_stream_key(self, user_id: str, mem_cube_id: str) -> str:
         stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}"
@@ -256,7 +263,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             user_id=user_id, mem_cube_id=mem_cube_id, block=False, batch_size=batch_size
         )
 
-    def qsize(self) -> int:
+    def qsize(self) -> dict:
         """
         Get the current size of the Redis queue (Queue-compatible interface).
 
@@ -271,19 +278,22 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         total_size = 0
         try:
+            qsize_stats = {}
             # Scan for all stream keys matching the prefix
-            for stream_key in self._redis_conn.scan_iter(f"{self.stream_key_prefix}:*"):
-                try:
-                    # Get the length of each stream and add to total
-                    total_size += self._redis_conn.xlen(stream_key)
-                except Exception as e:
-                    logger.debug(f"Failed to get length for stream {stream_key}: {e}")
-            return total_size
+            redis_pattern = f"{self.stream_key_prefix}:*"
+            for stream_key in self._redis_conn.scan_iter(redis_pattern):
+                # Get the length of each stream and add to total
+                stream_qsize = self._redis_conn.xlen(stream_key)
+                qsize_stats[stream_key] = stream_qsize
+                total_size += stream_qsize
+            qsize_stats["total_size"] = total_size
+            return qsize_stats
+
         except Exception as e:
             logger.error(f"Failed to get Redis queue size: {e}")
-            return 0
+            return {}
 
-    def get_stream_keys(self) -> list[str]:
+    def get_stream_keys(self, stream_key_prefix: str | None = None) -> list[str]:
         """
         List all Redis stream keys that match this queue's prefix.
 
@@ -293,16 +303,15 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         if not self._redis_conn:
             return []
 
+        if stream_key_prefix is None:
+            stream_key_prefix = self.stream_key_prefix
         # First, get all keys that might match (using Redis pattern matching)
-        redis_pattern = f"{self.stream_key_prefix}:*"
-        raw_keys = [
-            key.decode("utf-8") if isinstance(key, bytes) else key
-            for key in self._redis_conn.scan_iter(match=redis_pattern)
-        ]
+        redis_pattern = f"{stream_key_prefix}:*"
+        raw_keys = self._redis_conn.scan_iter(match=redis_pattern)
 
         # Second, filter using Python regex to ensure exact prefix match
         # Escape special regex characters in the prefix, then add :.*
-        escaped_prefix = re.escape(self.stream_key_prefix)
+        escaped_prefix = re.escape(stream_key_prefix)
         regex_pattern = f"^{escaped_prefix}:"
         stream_keys = [key for key in raw_keys if re.match(regex_pattern, key)]
 
