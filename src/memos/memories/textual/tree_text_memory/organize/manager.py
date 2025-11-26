@@ -132,7 +132,7 @@ class MemoryManager:
             self.graph_store.update_node(_id, field, user_name)
 
         graph_class_name = self.graph_store.__class__.__name__
-        logger.info(f"Updated {graph_class_name}")
+        logger.info(f"[MemoryManager] Updated {graph_class_name}")
         return memories_ids
 
     def replace_working_memory(

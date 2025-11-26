@@ -4,6 +4,8 @@ import json
 
 from datetime import datetime
 
+from tenacity import retry, stop_after_attempt, wait_exponential
+
 from memos import log
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
@@ -64,12 +66,18 @@ class MemFeedback(BaseMemFeedback):
         )
 
     def _pure_add(self, user_name: str, feedback_content: str, feedback_time: str, info: dict):
-        """Directly add new memory"""
+        """
+        Directly add new memory
+        """
         scene_data = [[{"role": "user", "content": feedback_content, "chat_time": feedback_time}]]
         memories = self.mem_reader.get_memory(scene_data, type="chat", info=info)
         to_add_memories = [item for scene in memories for item in scene]
-        added_ids = self.memory_manager.add(to_add_memories, user_name=user_name)
-        logger.info(f"[Feedback Core] Added {len(added_ids)} memories for user {user_name}.")
+        added_ids = self._retry_db_operation(
+            lambda: self.memory_manager.add(to_add_memories, user_name=user_name)
+        )
+        logger.info(
+            f"[Feedback Core: _pure_add] Added {len(added_ids)} memories for user {user_name}."
+        )
         return {
             "record": {
                 "add": [
@@ -88,17 +96,21 @@ class MemFeedback(BaseMemFeedback):
         """
         lang = detect_lang(feedback_content)
         template = FEEDBACK_PROMPT_DICT["judge"][lang]
-        chat_history_str = str(chat_history[-4:])
-        prompt = (
-            template.replace("{chat_history}", chat_history_str)
-            .replace("{user_feedback}", feedback_content)
-            .replace("{feedback_time}", feedback_time)
+        chat_history_lis = [f"""{msg["role"]}: {msg["content"]}""" for msg in chat_history[-4:]]
+        chat_history_str = "\n".join(chat_history_lis)
+        prompt = template.format(
+            chat_history=chat_history_str,
+            user_feedback=feedback_content,
+            feedback_time=feedback_time,
         )
+
         judge_res = self._get_llm_response(prompt)
         if judge_res:
             return judge_res
         else:
-            logger.warning("[Feedback Core]: feedback judgement failed, return []")
+            logger.warning(
+                "[Feedback Core: _feedback_judgement] feedback judgement failed, return []"
+            )
             return []
 
     def _feedback_memory(
@@ -106,16 +118,36 @@ class MemFeedback(BaseMemFeedback):
     ) -> dict:
         sync_mode = kwargs.get("sync_mode")
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
+        chat_history = kwargs.get("chat_history", [])
+        feedback_content = kwargs.get("feedback_content", "")
+
+        chat_history_lis = [f"""{msg["role"]}: {msg["content"]}""" for msg in chat_history[-4:]]
+        fact_history = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
+
         retrieved_memories = [self.graph_store.get_node(_id) for _id in retrieved_memory_ids]
+        filterd_ids = [
+            item["id"] for item in retrieved_memories if "mode:fast" in item["metadata"]["tags"]
+        ]
+        if filterd_ids:
+            logger.warning(
+                f"[Feedback Core: _feedback_memory] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
+            )
+
         current_memories = [
-            {"id": item["id"], "text": item["memory"]} for item in retrieved_memories
+            {"id": item["id"], "text": item["memory"]}
+            for item in retrieved_memories
+            if "mode:fast" not in item["metadata"]["tags"]
         ]
 
         def _single_add_operation(
             memory_item: TextualMemoryItem, user_name: str, sync_mode: str
         ) -> dict:
-            """处理单个添加操作"""
-            added_ids = self.memory_manager.add([memory_item], user_name=user_name, mode=sync_mode)
+            """
+            Individual addition operations
+            """
+            added_ids = self._retry_db_operation(
+                lambda: self.memory_manager.add([memory_item], user_name=user_name, mode=sync_mode)
+            )
             logger.info(f"[Memory Feedback ADD] {added_ids[0]}")
 
             return {"id": added_ids[0], "text": memory_item.memory}
@@ -123,10 +155,14 @@ class MemFeedback(BaseMemFeedback):
         def _single_update_operation(
             op: dict, memory_item: TextualMemoryItem, user_name: str, sync_mode: str
         ) -> dict:
-            """处理单个更新操作"""
+            """
+            Individual update operations
+            """
             update_id = op.get("id")
-            updated_ids = self.memory_manager.update(
-                [update_id], [memory_item], user_name=user_name, mode=sync_mode
+            updated_ids = self._retry_db_operation(
+                lambda: self.memory_manager.update(
+                    [update_id], [memory_item], user_name=user_name, mode=sync_mode
+                )
             )
             log_update_info = op.get("old_memory", "") + " >> " + op.get("text", "")
             logger.info(f"[Memory Feedback UPDATE] {updated_ids[0]}, info: {log_update_info}")
@@ -137,7 +173,9 @@ class MemFeedback(BaseMemFeedback):
                 "text": op.get("text", ""),
             }
 
-        def _add_or_update(memory_item: TextualMemoryItem, current_memories: list):
+        def _add_or_update(
+            memory_item: TextualMemoryItem, current_memories: list, fact_history: str
+        ):
             if current_memories == []:
                 current_memories = self._vec_query(
                     memory_item.metadata.embedding, user_name=user_name
@@ -146,9 +184,12 @@ class MemFeedback(BaseMemFeedback):
             if current_memories:
                 lang = detect_lang("".join(memory_item.memory))
                 template = FEEDBACK_PROMPT_DICT["compare"][lang]
-                prompt = template.replace("{current_memories}", str(current_memories)).replace(
-                    "{new_facts}", memory_item.memory
+                prompt = template.format(
+                    current_memories=str(current_memories),
+                    new_facts=memory_item.memory,
+                    chat_history=fact_history,
                 )
+
                 operations = self._get_llm_response(prompt).get("operation", [])
                 operations = self._id_dehallucination(operations, current_memories)
             else:
@@ -187,13 +228,16 @@ class MemFeedback(BaseMemFeedback):
                         elif result_type == "update":
                             update_results.append(result)
                     except Exception as e:
-                        logger.error(f"Operation failed for {original_op}: {e}")
+                        logger.error(
+                            f"[Feedback Core: _add_or_update] Operation failed for {original_op}: {e}",
+                            exc_info=True,
+                        )
 
             return {"record": {"add": add_results, "update": update_results}}
 
         with ContextThreadPoolExecutor(max_workers=3) as ex:
             futures = {
-                ex.submit(_add_or_update, mem, current_memories): i
+                ex.submit(_add_or_update, mem, current_memories, fact_history): i
                 for i, mem in enumerate(feedback_memories)
             }
             results = [None] * len(futures)
@@ -204,7 +248,10 @@ class MemFeedback(BaseMemFeedback):
                     if node:
                         results[i] = node
                 except Exception as e:
-                    logger.error(f"[FeedBack] error: {e}")
+                    logger.error(
+                        f"[Feedback Core: _feedback_memory] Error processing memory index {i}: {e}",
+                        exc_info=True,
+                    )
             mem_res = [r for r in results if r]
 
         return {
@@ -216,22 +263,34 @@ class MemFeedback(BaseMemFeedback):
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
         retrieved_ids = self.graph_store.search_by_embedding(
-            new_memories_embedding, user_name=user_name
+            new_memories_embedding, user_name=user_name, top_k=5
         )
         current_memories = [self.graph_store.get_node(item["id"]) for item in retrieved_ids]
+        if not retrieved_ids:
+            logger.info(
+                f"[Feedback Core: _vec_query] No similar memories found for embedding query for user {user_name}."
+            )
 
+        filterd_ids = [
+            item["id"] for item in current_memories if "mode:fast" in item["metadata"]["tags"]
+        ]
+        if filterd_ids:
+            logger.warning(
+                f"[Feedback Core: _vec_query] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
+            )
         return [
             {
                 "id": item["id"],
                 "text": item["memory"],
             }
             for item in current_memories
+            if "mode:fast" not in item["metadata"]["tags"]
         ]
 
     def _get_llm_response(self, prompt: str, dsl: bool = True) -> dict:
         messages = [{"role": "user", "content": prompt}]
         try:
-            response_text = self.llm.generate(messages)
+            response_text = self.llm.generate(messages, temperature=0.3)
             if dsl:
                 response_text = response_text.replace("```", "").replace("json", "")
                 response_json = json.loads(response_text)
@@ -275,7 +334,7 @@ class MemFeedback(BaseMemFeedback):
         """
         Answer generation to facilitate concurrent submission.
         """
-        if not corrected_answer:
+        if not corrected_answer or feedback_content.strip() == "":
             return ""
         lang = detect_lang(feedback_content)
         template = FEEDBACK_PROMPT_DICT["generation"][lang]
@@ -283,9 +342,8 @@ class MemFeedback(BaseMemFeedback):
             [f"{item['role']}: {item['content']}" for item in chat_history]
         )
         chat_history_str = chat_history_str if chat_history_str else "none"
-        prompt = template.replace("{chat_history}", chat_history_str).replace(
-            "{question}", feedback_content
-        )
+        prompt = template.format(chat_history=chat_history_str, question=feedback_content)
+
         return self._get_llm_response(prompt, dsl=False)
 
     def process_feedback_core(
@@ -298,16 +356,28 @@ class MemFeedback(BaseMemFeedback):
         """
         Core feedback processing: judgment, memory extraction, addition/update. Return record.
         """
+
+        def check_validity(item):
+            return (
+                "validity" in item
+                and item["validity"].lower() == "true"
+                and "corrected_info" in item
+                and item["corrected_info"].strip()
+                and "key" in item
+                and "tags" in item
+            )
+
         try:
             feedback_time = kwargs.get("feedback_time") or datetime.now().isoformat()
             session_id = kwargs.get("session_id")
             allow_knowledgebase_write = bool(kwargs.get("allow_knowledgebase_write"))
-            if not allow_knowledgebase_write:
+            if feedback_content.strip() == "" or not allow_knowledgebase_write:
                 return {"record": {"add": [], "update": []}}
 
             info = {"user_id": user_name, "session_id": session_id}
-            logger.info(f"[Feedback Core] Starting memory feedback process for user {user_name}")
-
+            logger.info(
+                f"[Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
+            )
             if not chat_history:
                 return self._pure_add(user_name, feedback_content, feedback_time, info)
 
@@ -316,13 +386,7 @@ class MemFeedback(BaseMemFeedback):
                     chat_history, feedback_content, feedback_time=feedback_time
                 )
                 valid_feedback = (
-                    [
-                        item
-                        for item in raw_judge
-                        if item["validity"].lower() == "true" and item["corrected_info"].strip()
-                    ]
-                    if raw_judge
-                    else []
+                    [item for item in raw_judge if check_validity(item)] if raw_judge else []
                 )
                 if (
                     raw_judge
@@ -333,14 +397,25 @@ class MemFeedback(BaseMemFeedback):
 
                 if not valid_feedback:
                     logger.warning(
-                        f"[Feedback Core] No valid judgements for user {user_name}: {raw_judge}."
+                        f"[Feedback Core: process_feedback_core] No valid judgements for user {user_name}: {raw_judge}."
                     )
                     return {"record": {"add": [], "update": []}}
 
                 feedback_memories = []
-                feedback_memories_embeddings = self.embedder.embed(
-                    [item["corrected_info"] for item in valid_feedback]
-                )
+
+                corrected_infos = [item["corrected_info"] for item in valid_feedback]
+                embed_bs = 5
+                feedback_memories_embeddings = []
+                for i in range(0, len(corrected_infos), embed_bs):
+                    batch = corrected_infos[i : i + embed_bs]
+                    try:
+                        feedback_memories_embeddings.extend(self.embedder.embed(batch))
+                    except Exception as e:
+                        logger.error(
+                            f"[Feedback Core: process_feedback_core] Embedding batch failed: {e}",
+                            exc_info=True,
+                        )
+
                 for item, embedding in zip(
                     valid_feedback, feedback_memories_embeddings, strict=False
                 ):
@@ -367,14 +442,20 @@ class MemFeedback(BaseMemFeedback):
                         )
                     )
 
-                mem_record = self._feedback_memory(user_name, feedback_memories, **kwargs)
+                mem_record = self._feedback_memory(
+                    user_name,
+                    feedback_memories,
+                    chat_history=chat_history,
+                    feedback_content=feedback_content,
+                    **kwargs,
+                )
                 logger.info(
-                    f"[Feedback Core] Processed {len(feedback_memories)} feedback memories for user {user_name}."
+                    f"[Feedback Core: process_feedback_core] Processed {len(feedback_memories)} feedback memories for user {user_name}."
                 )
                 return mem_record
 
         except Exception as e:
-            logger.error(f"[Feedback Core] Error for user {user_name}: {e}")
+            logger.error(f"[Feedback Core: process_feedback_core] Error for user {user_name}: {e}")
             return {"record": {"add": [], "update": []}}
 
     def process_feedback(
@@ -414,17 +495,25 @@ class MemFeedback(BaseMemFeedback):
                     feedback_content,
                     **kwargs,
                 )
-                concurrent.futures.wait([answer_future, core_future])
+                done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
+                for fut in pending:
+                    fut.cancel()
                 try:
                     answer = answer_future.result()
                     record = core_future.result()
                     logger.info(
-                        f"[process_feedback sync] Completed concurrently for user {user_name} with full results."
+                        f"[MemFeedback sync] Completed concurrently for user {user_name} with full results."
                     )
                     return {"answer": answer, "record": record["record"]}
+                except concurrent.futures.TimeoutError:
+                    logger.error(
+                        f"[MemFeedback sync] Timeout in sync mode for {user_name}", exc_info=True
+                    )
+                    return {"answer": "", "record": {"add": [], "update": []}}
                 except Exception as e:
                     logger.error(
-                        f"[process_feedback sync] Error in concurrent tasks for {user_name}: {e}"
+                        f"[MemFeedback sync] Error in concurrent tasks for {user_name}: {e}",
+                        exc_info=True,
                     )
                     return {"answer": "", "record": {"add": [], "update": []}}
         else:
@@ -444,14 +533,34 @@ class MemFeedback(BaseMemFeedback):
 
             def log_completion(f):
                 try:
-                    result = f.result()
-                    logger.info(f"[Background Feedback] Completed for {user_name}: {result}")
+                    result = f.result(timeout=600)
+                    logger.info(f"[MemFeedback async] Completed for {user_name}: {result}")
+                except concurrent.futures.TimeoutError:
+                    logger.error(
+                        f"[MemFeedback async] Background task timeout for {user_name}",
+                        exc_info=True,
+                    )
+                    f.cancel()
                 except Exception as e:
-                    logger.error(f"[Background Feedback] Error for {user_name}: {e}")
+                    logger.error(
+                        f"[MemFeedback async] Background Feedback Error for {user_name}: {e}",
+                        exc_info=True,
+                    )
 
             future.add_done_callback(log_completion)
 
             logger.info(
-                f"[process_feedback async] Returned answer, background task started for {user_name}."
+                f"[MemFeedback async] Returned answer, background task started for {user_name}."
             )
             return {"answer": answer, "record": {"add": [], "update": []}}
+
+    #  Helper for DB operations with retry
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    def _retry_db_operation(self, operation):
+        try:
+            return operation()
+        except Exception as e:
+            logger.error(
+                f"[MemFeedback: _retry_db_operation] DB operation failed: {e}", exc_info=True
+            )
+            raise

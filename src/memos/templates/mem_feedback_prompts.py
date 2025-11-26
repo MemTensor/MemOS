@@ -3,40 +3,33 @@ FEEDBACK_JUDGEMENT_PROMPT = """You are a answer quality analysis expert. Please 
 Analysis Steps and Criteria:
 1. *Validity Judgment*:
  - Valid (true): The content of the user's feedback is related to the topic, task, or the assistant's last response in the chat history. For example: asking follow-up questions, making corrections, providing supplements, or evaluating the last response.
- - Invalid (false): The user’s feedback is entirely unrelated to the conversation history, with no semantic, topical, or lexical connection to any prior content.
+ - Invalid (false): The user's feedback is entirely unrelated to the conversation history, with no semantic, topical, or lexical connection to any prior content.
 
 2. *User Attitude Judgment*:
  - Dissatisfied: The feedback shows negative emotions, such as directly pointing out errors, expressing confusion, complaining, criticizing, or explicitly stating that the problem remains unsolved.
  - Satisfied: The feedback shows positive emotions, such as expressing thanks or giving praise.
  - Irrelevant: The content of the feedback is unrelated to evaluating the assistant's answer.
 
-3. *Assistant Response Effectiveness Type Judgment*:
- - Wrong: The assistant provided incorrect information.
- - Missing: The assistant's response was correct in direction but incomplete, omitting key details.
- - None: The user feedback does not point to any shortcomings in the assistant's response.
-
-4. *Summary Information Generation*(corrected_info field):
+3. *Summary Information Generation*(corrected_info field):
  - Generate a concise list of factual statements that summarize the core information from the user's feedback.
- — Focus on objective facts, corrections, or confirmations.
- - Express time information as concrete, unambiguous date(s) or period(s) (e.g., “March 2023”, “2024-07”, or “May–June 2022”).
- - For 'Satisfied' or 'None' types, this list may contain confirming statements or be empty if no new facts are provided.
- - For example: "The user completed the Everest Circuit trek with colleagues in March 2023."
+ - When the feedback provides corrections, focus only on the corrected information.
+ - When the feedback provides supplements, integrate all valid information (both old and new).
+ - It is very important to keep any relevant time information and express time information as concrete, unambiguous date(s) or period(s) (e.g., "March 2023", "2024-07", or "May–June 2022").
+ - For 'satisfied' attitude, this list may contain confirming statements or be empty if no new facts are provided.
+ - Focus on statement of objective facts. For example: "The user completed the Everest Circuit trek with colleagues in March 2023."
 
 Output Format:
 [
-    {
+    {{
         "validity": "<string, 'true' or 'false'>",
         "user_attitude": "<string, 'dissatisfied' or 'satisfied' or 'irrelevant'>",
-        "error_type": "<string, 'wrong' or 'missing' or 'none'>",
         "corrected_info": "<string, factual information records written in English>",
-        "key": <string, a unique, concise memory title>,
-        "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>
-    },
-    ...
+        "key": "<string, anique and concise memory title in English for quick identification of the core content (2-5 words)>",
+        "tags": "<A list of relevant thematic keywords in English for categorization and retrieval (1-3 words per tag, e.g., ['deadline', 'team', 'planning'])>"
+    }}
 ]
 
 Example1:
-
 Dialogue History:
 user: I can't eat spicy food these days. Can you recommend some suitable restaurants for me?
 assistant: Sure, I recommend the Fish Restaurant near you. Their signature dishes include various types of steamed seafood and sashimi of sea fish.
@@ -47,147 +40,183 @@ Oh，No！I'm allergic to seafood！And I don't like eating raw fish.
 
 Output:
 [
-    {
-    "validity": "true",
-    "user_attitude": "dissatisfied",
-    "error_type": "wrong",
-    "corrected_info": "User is allergic to seafood",
-    "key": "allergic to seafood",
-    "tags": ["allergic", "seafood"]
-    },
-    {
-    "validity": "true",
-    "user_attitude": "dissatisfied",
-    "error_type": "wrong",
-    "corrected_info": "User does not like eating raw fish.",
-    "key": "dislike eating raw fish.",
-    "tags": ["dislike", "raw fish"]
-    }
+    {{
+        "validity": "true",
+        "user_attitude": "dissatisfied",
+        "corrected_info": "User is allergic to seafood and does not like eating raw fish.",
+        "key": "dietary restrictions",
+        "tags": ["allergic", "seafood", "raw fish", "food preference"]
+    }}
 ]
 
 Example2:
-
 Dialogue History:
-user: When did Jhon graduated?
-assistant: 2014
-feedback time: 2025-11-18T20:45:00.875249
+user: When did I bought on November 25, 2025?
+assistant: A red coat
+feedback time: 2025-11-28T20:45:00.875249
 
 User Feedback:
-Wrong. He graduated the following year.
+No, I also bought a blue shirt.
 
 Output:
 [
-    {
-    "validity": "true",
-    "user_attitude": "dissatisfied",
-    "error_type": "wrong",
-    "corrected_info": "Jhon was graduated at 2015",
-    "key": "Jhon graduated time",
-    "tags": ["Jhon", "graduated", "year"]
-    }
+    {{
+        "validity": "true",
+        "user_attitude": "dissatisfied",
+        "corrected_info": "User bought a red coat and a blue shirt on November 25, 2025",
+        "key": "shopping record",
+        "tags": ["purchase", "clothing", "shopping"]
+    }}
 ]
+
+Example3:
+Dialogue History:
+user: What's my favorite food?
+assistant: Pizza and sushi
+feedback time: 2024-07-15T10:30:00.000000
+
+User Feedback:
+Wrong! I hate sushi. I like burgers.
+
+Output:
+[
+    {{
+        "validity": "true",
+        "user_attitude": "dissatisfied",
+        "corrected_info": "User likes pizza and burgers, but hates sushi.",
+        "key": "food preferences",
+        "tags": ["food preferences", "pizza", "burgers", "sushi"]
+    }}
+]
+
 Dialogue History:
 {chat_history}
+
 feedback time: {feedback_time}
 
 User Feedback:
 {user_feedback}
 
-Output:
-"""
+Output:"""
 
+FEEDBACK_JUDGEMENT_PROMPT_ZH = """您是一个回答质量分析专家。请严格按照以下步骤和标准分析提供的"用户与助手聊天历史"和"用户反馈"，并将最终评估结果填入指定的JSON格式中。
 
-FEEDBACK_JUDGEMENT_PROMPT_ZH = """你是一个对话质量分析专家。请严格根据以下步骤和标准，对提供的“用户和助理的对话历史”和“用户反馈”进行分析，并将最终判定结果填入指定的JSON格式中。
+分析步骤和标准：
+1. *有效性判断*：(validity字段)
+   - 有效（true）：用户反馈的内容与聊天历史中的主题、任务或助手的最后回复相关。例如：提出后续问题、进行纠正、提供补充或评估最后回复。
+   - 无效（false）：用户反馈与对话历史完全无关，与之前内容没有任何语义、主题或词汇联系。
 
-分析步骤与判定标准:
-1. *有效性判定*
- - 有效(true)：用户反馈的内容与对话历史的主题、任务或上一次助理的回答*有关联*。例如：针对回答进行追问、纠正、补充或评价。
- - 无效(false)：用户的反馈与对话历史*完全无关*，与任何先前内容之间不存在语义、主题或词汇上的联系。
-2. *用户态度判定*
- - 不满意(dissatisfied)：反馈中表现出负面情绪，如直接指出错误、表达困惑、抱怨、批评，或明确表示问题未解决。
- - 满意(satisfied)：反馈中表现出正面情绪，如表示感谢或给予称赞。
- - 无关(irrelevant)：反馈内容与评价助理回答无关。
-3. *助理回答效果类型判定*
- - 错误(wrong)：助理提供了不正确的信息。
- - 缺漏(missing)：助理的回答方向正确但不完整，遗漏了关键细节。
- - 无(none)：用户反馈并未指向助理回答的任何不足。
-4. *总结信息生成*
- - 生成一份简洁的事实陈述列表，该列表概括了用户反馈中的核心信息。
- - 重点放在客观事实、更正或确认上。
- - 对于“满意”或“无”类型的反馈，该列表可能包含确认性的陈述，或者如果未提供新事实，则可能为空。
- - 例如：“用户在2023年3月与同事完成了珠峰环线徒步旅行。”
+2. *用户态度判断*：(user_attitude字段)
+   - 不满意：反馈显示负面情绪，如直接指出错误、表达困惑、抱怨、批评，或明确表示问题未解决。
+   - 满意：反馈显示正面情绪，如表达感谢或给予赞扬。
+   - 无关：反馈内容与评估助手回答无关。
+
+3. *摘要信息生成*（corrected_info字段）：
+   - 从用户反馈中总结核心信息，生成简洁的事实陈述列表。
+   - 当反馈提供纠正时，仅关注纠正后的信息。
+   - 当反馈提供补充时，整合所有有效信息（包括旧信息和新信息）。
+   - 非常重要：保留相关时间信息，并以具体、明确的日期或时间段表达（例如："2023年3月"、"2024年7月"或"2022年5月至6月"）。
+   - 对于"满意"态度，此列表可能包含确认性陈述，如果没有提供新事实则为空。
+   - 专注于客观事实陈述。例如："用户于2023年3月与同事完成了珠峰环线徒步。"
 
 输出格式：
 [
-    {
-        "validity": <字符串，"true" 或 "false">,
-        "user_attitude": <字符串，"dissatisfied" 或 "satisfied" 或 "irrelevant">,
-        "error_type": <字符串，"wrong" 或 "missing" 或 "irrelevant">,
-        "corrected_info": <字符串，中文书写正确的信息记录>,
-        "key": <字符串，唯一且简洁的记忆标题>,
-        "tags": <相关主题关键词列表（例如，["截止日期", "团队", "计划"]）>
-    },
-    ...
+    {{
+        "validity": "<字符串，'true' 或 'false'>",
+        "user_attitude": "<字符串，'dissatisfied' 或 'satisfied' 或 'irrelevant'>",
+        "corrected_info": "<字符串，用中文书写的事实信息记录>",
+        "key": "<字符串，简洁的中文记忆标题，用于快速识别该条目的核心内容（2-5个汉字）>",
+        "tags": "<列表，中文关键词列表（每个标签1-3个汉字），用于分类和检索>"
+    }}
 ]
 
-示例：
-
-用户和助理的对话历史：
-user: 这两天我吃不了辣椒，给我推荐一些适合的餐厅吧。
-assistant: 好的，推荐您附近的新荣记餐厅，黄鱼年糕以及各类清蒸海鲜是这件餐厅的招牌菜。
+示例1：
+对话历史：
+用户：这些天我不能吃辣。能给我推荐一些合适的餐厅吗？
+助手：好的，我推荐您附近的鱼类餐厅。他们的招牌菜包括各种蒸海鲜和海鱼生鱼片。
 反馈时间：2023-1-18T14:25:00.856481
 
 用户反馈：
-你忘记我海鲜过敏这件事了吗？而且我不喜欢年糕的口感。
+哦，不！我对海鲜过敏！而且我不喜欢吃生鱼。
 
 输出：
 [
-    {
-    "validity": "true",
-    "user_attitude": "dissatisfied",
-    "error_type": "wrong",
-    "corrected_info": "用户对海鲜过敏。",
-    "key": "海鲜过敏",
-    "tags": ["海鲜", "过敏"]
-    },
-    {
-    "validity": "true",
-    "user_attitude": "dissatisfied",
-    "error_type": "wrong",
-    "corrected_info": "用户不喜欢年糕的口感。",
-    "key": "不喜欢年糕",
-    "tags": ["不喜欢年糕", "年糕", "口感"]
-    }
+    {{
+        "validity": "true",
+        "user_attitude": "dissatisfied",
+        "corrected_info": "用户对海鲜过敏且不喜欢吃生鱼",
+        "key": "饮食限制",
+        "tags": ["过敏", "海鲜", "生鱼", "饮食偏好"]
+    }}
 ]
 
+示例2：
+对话历史：
+用户：我2025年11月25日买了什么？
+助手：一件红色外套
+反馈时间：2025-11-28T20:45:00.875249
 
-用户和助理的对话历史：
+用户反馈：
+不对，我还买了一件蓝色衬衫。
+
+输出：
+[
+    {{
+        "validity": "true",
+        "user_attitude": "dissatisfied",
+        "corrected_info": "用户于2025年11月25日购买了一件红色外套和一件蓝色衬衫",
+        "key": "购物记录",
+        "tags": ["红色外套", "蓝色衬衫", "服装购物"]
+    }}
+]
+
+示例3：
+对话历史：
+用户：我最喜欢的食物是什么？
+助手：披萨和寿司
+反馈时间：2024-07-15T10:30:00.000000
+
+用户反馈：
+错了！我讨厌寿司。我喜欢汉堡。
+
+输出：
+[
+    {{
+        "validity": "true",
+        "user_attitude": "dissatisfied",
+        "corrected_info": "用户喜欢披萨和汉堡，但讨厌寿司",
+        "key": "食物偏好",
+        "tags": ["偏好", "披萨和汉堡"]
+    }}
+]
+
+对话历史：
 {chat_history}
+
 反馈时间：{feedback_time}
 
 用户反馈：
 {user_feedback}
 
-输出：
-"""
+输出："""
 
 
 UPDATE_FORMER_MEMORIES = """Please analyze the newly acquired factual information and determine how this information should be updated to the memory database: add, update, or keep unchanged, and provide final operation recommendations.
 
 You must strictly return the response in the following JSON format:
 
-{
+{{
     "operation":
         [
-            {
+            {{
                 "id": "<memory ID>",
                 "text": "<memory content>",
                 "event": "<operation type, must be one of 'ADD', 'UPDATE', 'NONE'>",
                 "old_memory": "<original memory content, required only when operation is 'UPDATE'>"
-            },
+            }},
             ...
         ]
-}
+}}
 
 *Requirements*:
 1. If the new fact does not provide additional information to the existing memory item, the existing memory can override the new fact, and the operation is set to "NONE."
@@ -211,113 +240,126 @@ If the new fact contradicts existing memory in key information (such as time, lo
 
 Example1:
 Current Memories:
-{
+{{
     "memory": [
-        {
+        {{
             "id": "0911",
             "text": "The user is a senior full-stack developer working at Company B"
-        },
-        {
+        }},
+        {{
             "id": "123",
             "text": "The user works as a software engineer at Company A, primarily responsible for front-end development"
-        },
-        {
+        }},
+        {{
             "id": "648",
             "text": "The user is responsible for front-end development of software at Company A"
-        },
-        {
+        }},
+        {{
             "id": "7210",
             "text": "The user is responsible for front-end development of software at Company A"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "The user enjoys fishing with friends on weekends"
-        }
+        }}
     ]
-}
+}}
+
+The background of the new fact being put forward:
+user: Do you remember where I work？
+assistant: Company A.
+user feedback: I work at Company B, and I am a senior full-stack developer.
 
 Newly facts:
 "The user works as a senior full-stack developer at Company B"
 
 Operation recommendations:
-{
+{{
     "operation":
         [
-            {
+            {{
                 "id": "0911",
                 "text": "The user is a senior full-stack developer working at Company B",
                 "event": "NONE"
-            },
-            {
+            }},
+            {{
                 "id": "123",
                 "text": "The user works as a senior full-stack developer at Company B",
                 "event": "UPDATE",
                 "old_memory": "The user works as a software engineer at Company A, primarily responsible for front-end development"
-            },
-            {
+            }},
+            {{
                 "id": "648",
                 "text": "The user works as a senior full-stack developer at Company B",
                 "event": "UPDATE",
                 "old_memory": "The user is responsible for front-end development of software at Company A"
-            },
-            {
+            }},
+            {{
                 "id": "7210",
                 "text": "The user works as a senior full-stack developer at Company B",
                 "event": "UPDATE",
                 "old_memory": "The user is responsible for front-end development of software at Company A"
-            },
-            {
+            }},
+            {{
                 "id": "908",
                 "text": "The user enjoys fishing with friends on weekends",
                 "event": "NONE"
-            }
+            }}
         ]
-}
+}}
 
 Example2:
 Current Memories:
-{
+{{
     "memory": [
-        {
+        {{
             "id": "123",
             "text": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "The user likes to go fishing with friends on weekends"
-        }
+        }}
     ]
-}
+}}
+
+The background of the new fact being put forward:
+user: Guess where I live？
+assistant: Hehuan Community.
+user feedback: Wrong, update my address: Mingyue Community, Chaoyang District, Beijing
 
 Newly facts:
 "The user's residential address is Mingyue Community, Chaoyang District, Beijing"
 
 Operation recommendations:
-{
+{{
     "operation":
         [
-            {
+            {{
                 "id": "123",
                 "text": "The user works as a software engineer at Company A, primarily responsible for front-end development",
                 "event": "NONE"
-            },
-            {
+            }},
+            {{
                 "id": "908",
                 "text": "The user enjoys fishing with friends on weekends",
                 "event": "NONE"
-            },
-            {
+            }},
+            {{
                 "id": "4567",
                 "text": "The user's residential address is Mingyue Community, Chaoyang District, Beijing",
                 "event": "ADD"
-            }
+            }}
         ]
-}
+}}
 
-Current Memories
+**Current Memories**
 {current_memories}
 
-Newly facts:
+**The background of the new fact being put forward**
+{chat_history}
+
+**Newly facts**
 {new_facts}
 
 Operation recommendations:
@@ -328,18 +370,18 @@ UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这�
 
 你必须严格按照以下JSON格式返回响应：
 
-{
+{{
     "operation":
         [
-            {
+            {{
                 "id": "<记忆ID>",
                 "text": "<记忆内容>",
                 "event": "<操作类型，必须是 "ADD", "UPDATE", "NONE" 之一>",
                 "old_memory": "<原记忆内容，仅当操作为"UPDATE"时需要提供>"
-            },
+            }},
             ...
         ]
-}
+}}
 
 要求：
 1. 如果新事实对现有记忆item没有额外补充，现有记忆的信息可以覆盖新事实，设置操作为"NONE"
@@ -360,113 +402,127 @@ ID管理规则：
 
 示例1：
 现有记忆记录：
-{
+{{
     "memory": [
-        {
+        {{
             "id": "0911",
             "text": "用户是高级全栈开发工程师，在B公司工作"
-        },
-        {
+        }},
+        {{
             "id": "123",
             "text": "用户在公司A担任软件工程师，主要负责前端开发"
-        },
-        {
+        }},
+        {{
             "id": "648",
             "text": "用户在公司A负责软件的前端开发工作"
-        },
-        {
+        }},
+        {{
             "id": "7210",
             "text": "用户在公司A负责软件的前端开发工作"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "用户周末喜欢和朋友一起钓鱼"
-        }
+        }}
     ]
-}
+}}
+
+提出新事实的背景：
+user: 你还记得我现在在哪里工作吗？
+assistant: A公司
+user feedback: 实际上，我在公司B工作，是一名高级全栈开发人员。
+
 
 新获取的事实：
 "用户现在在公司B担任高级全栈开发工程师"
 
 操作建议：
-{
+{{
     "operation":
         [
-            {
+            {{
                 "id": "0911",
                 "text": "用户是高级全栈开发工程师，在B公司工作",
                 "event": "NONE"
-            },
-            {
+            }},
+            {{
                 "id": "123",
                 "text": "用户现在在公司B担任高级全栈开发工程师",
                 "event": "UPDATE",
                 "old_memory": "用户在公司A担任软件工程师，主要负责前端开发"
-            },
-            {
+            }},
+            {{
                 "id": "648",
                 "text": "用户现在在公司B担任高级全栈开发工程师",
                 "event": "UPDATE",
                 "old_memory": "用户在公司A负责软件的前端开发工作"
-            },
-            {
+            }},
+            {{
                 "id": "7210",
                 "text": "用户现在在公司B担任高级全栈开发工程师",
                 "event": "UPDATE",
                 "old_memory": "用户在公司A负责软件的前端开发工作"
-            },
-            {
+            }},
+            {{
                 "id": "908",
                 "text": "用户周末喜欢和朋友一起钓鱼",
                 "event": "NONE"
-            }
+            }}
         ]
-}
+}}
 
 示例2：
 现有记忆记录：
-{
+{{
     "memory": [
-        {
+        {{
             "id": "123",
             "text": "用户在公司A担任软件工程师，主要负责前端开发"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "用户周末喜欢和朋友一起钓鱼"
-        }
+        }}
     ]
-}
+}}
+
+提出新事实的背景：
+user: 猜猜我住在哪里？
+assistant: 合欢社区
+user feedback: 错了，请更新我的地址：北京市朝阳区明月社区
 
 新获取的事实：
 "用户的居住地址是北京市朝阳区明月小区"
 
 操作建议：
-{
+{{
     "operation":
         [
-            {
+            {{
                 "id": "123",
                 "text": "用户在公司A担任软件工程师，主要负责前端开发",
                 "event": "NONE"
-            },
-            {
+            }},
+            {{
                 "id": "908",
                 "text": "用户周末喜欢和朋友一起钓鱼",
                 "event": "NONE"
-            },
-            {
+            }},
+            {{
             "id": "4567",
             "text": "用户的居住地址是北京市朝阳区明月小区",
             "event": "ADD"
-            }
+            }}
         ]
-}
+}}
 
-现有记忆记录：
+**现有记忆记录：**
 {current_memories}
 
-新获取的事实：
+**提出新事实的背景：**
+{chat_history}
+
+**新获取的事实：**
 {new_facts}
 
 操作建议：
@@ -477,17 +533,17 @@ GROUP_UPDATE_FORMER_MEMORIES = """Please analyze the newly acquired factual info
 
 You must strictly return the response in the following JSON format:
 
-{
+{{
     "operation": [
-        {
+        {{
             "id": "<memory ID>",
             "text": "<memory content>",
             "event": "<operation type, must be one of 'ADD', 'UPDATE', 'NONE'>",
             "old_memory": "<original memory content, required only when operation is 'UPDATE'>"
-        },
+        }},
         ...
     ]
-}
+}}
 
 *Requirements*:
 1. If the new fact provides no additional supplement to existing memory, set operation to "NONE"
@@ -507,43 +563,43 @@ You must strictly return the response in the following JSON format:
 
 Example:
 Current Memories:
-{
+{{
     "memory": [
-        {
+        {{
             "id": "123",
             "text": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "The user likes to go fishing with friends on weekends"
-        }
+        }}
     ]
-}
+}}
 
 Newly facts:
 ["The user is currently working as a senior full-stack development engineer at Company B", "The user's residential address is Mingyue Community, Chaoyang District, Beijing", "The user goes fishing on weekends"]
 
 Operation recommendations:
-{
+{{
     "operation": [
-        {
+        {{
             "id": "123",
             "text": "The user is currently working as a senior full-stack development engineer at Company B",
             "event": "UPDATE",
             "old_memory": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-        },
-        {
+        }},
+        {{
             "id": "4567",
             "text": "The user's residential address is Mingyue Community, Chaoyang District, Beijing",
             "event": "ADD"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "The user likes to go fishing with friends on weekends",
             "event": "NONE"
-        }
+        }}
     ]
-}
+}}
 
 Current Memories
 {current_memories}
@@ -559,17 +615,17 @@ GROUP_UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决�
 
 你必须严格按照以下JSON格式返回响应：
 
-{
+{{
     "operation": [
-        {
+        {{
             "id": "<记忆ID>",
             "text": "<记忆内容>",
             "event": "<操作类型，必须是 "ADD", "UPDATE", "NONE" 之一>",
             "old_memory": "<原记忆内容，仅当操作为"UPDATE"时需要提供>"
-        },
+        }},
         ...
     ]
-}
+}}
 
 要求：
 1. 如果新事实对现有记忆没有额外补充，设置操作为"NONE"
@@ -589,43 +645,43 @@ ID管理规则：
 
 示例：
 现有记忆记录：
-{
+{{
     "memory": [
-        {
+        {{
             "id": "123",
             "text": "用户在公司A担任软件工程师，主要负责前端开发"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "用户周末喜欢和朋友一起钓鱼"
-        }
+        }}
     ]
-}
+}}
 
 新获取的事实：
 ["用户现在在公司B担任高级全栈开发工程师", "用户的居住地址是北京市朝阳区明月小区", "用户在周末会去钓鱼"]
 
 操作建议：
-{
+{{
     "operation": [
-        {
+        {{
             "id": "123",
             "text": "用户在公司B担任高级全栈开发工程师",
             "event": "UPDATE",
             "old_memory": "用户在公司A担任软件工程师，主要负责前端开发"
-        },
-        {
+        }},
+        {{
             "id": "4567",
             "text": "用户的居住地址是北京市朝阳区明月小区",
             "event": "ADD"
-        },
-        {
+        }},
+        {{
             "id": "908",
             "text": "用户周末喜欢和朋友一起钓鱼",
             "event": "NONE"
-        }
+        }}
     ]
-}
+}}
 
 现有记忆记录：
 {current_memories}
