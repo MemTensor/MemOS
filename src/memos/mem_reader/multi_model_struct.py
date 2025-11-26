@@ -1,17 +1,18 @@
 import concurrent.futures
-import re
+import traceback
 
 from abc import ABC
 from typing import Any, TypeAlias
 
 from memos import log
 from memos.chunkers import ChunkerFactory
-from memos.configs.mem_reader import SimpleStructMemReaderConfig
+from memos.configs.mem_reader import MultiModelStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
 from memos.mem_reader.read_multi_model import coerce_scene_data
+from memos.mem_reader.simple_struct import _count_tokens_text, _derive_key, detect_lang
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
@@ -59,70 +60,12 @@ PROMPT_DICT = {
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
 }
-FILE_EXT_RE = re.compile(
-    r"\.(pdf|docx?|pptx?|xlsx?|txt|md|html?|json|csv|png|jpe?g|webp|wav|mp3|m4a)$",
-    re.I,
-)
-
-try:
-    import tiktoken
-
-    try:
-        _ENC = tiktoken.encoding_for_model("gpt-4o-mini")
-    except Exception:
-        _ENC = tiktoken.get_encoding("cl100k_base")
-
-    def _count_tokens_text(s: str) -> int:
-        return len(_ENC.encode(s or ""))
-except Exception:
-    # Heuristic fallback: zh chars ~1 token, others ~1 token per ~4 chars
-    def _count_tokens_text(s: str) -> int:
-        if not s:
-            return 0
-        zh_chars = re.findall(r"[\u4e00-\u9fff]", s)
-        zh = len(zh_chars)
-        rest = len(s) - zh
-        return zh + max(1, rest // 4)
 
 
-def detect_lang(text):
-    try:
-        if not text or not isinstance(text, str):
-            return "en"
-        cleaned_text = text
-        # remove role and timestamp
-        cleaned_text = re.sub(
-            r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
-        )
-        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
-
-        # extract chinese characters
-        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
-        chinese_chars = re.findall(chinese_pattern, cleaned_text)
-        text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
-        if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
-            return "zh"
-        return "en"
-    except Exception:
-        return "en"
-
-
-def _derive_key(text: str, max_len: int = 80) -> str:
-    """default key when without LLM: first max_len words"""
-    if not text:
-        return ""
-    sent = re.split(r"[。！？!?]\s*|\n", text.strip())[0]
-    return (sent[:max_len]).strip()
-
-
-def _get_simple_scene_data(scene_data: list[MessagesType]) -> list[MessagesType]:
-    """Only get Simple File and Simple Chat"""
-
-
-class SimpleStructMemReader(BaseMemReader, ABC):
+class MultiModelStructMemReader(BaseMemReader, ABC):
     """Naive implementation of MemReader."""
 
-    def __init__(self, config: SimpleStructMemReaderConfig):
+    def __init__(self, config: MultiModelStructMemReaderConfig):
         """
         Initialize the NaiveMemReader with configuration.
 
@@ -239,7 +182,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             yield {"text": "".join(buf), "sources": sources.copy(), "start_idx": start_idx}
 
     @timed
-    def _process_chat_data(self, scene_data_info, info, **kwargs):
+    def _process_multi_model_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         windows = list(self._iter_chat_windows(scene_data_info))
 
@@ -294,7 +237,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         logger.error(f"[ChatFine] parse error: {e}")
             return chat_read_nodes
 
-    def _process_transfer_chat_data(self, raw_node: TextualMemoryItem):
+    @timed
+    def _process_transfer_multi_model_data(self, raw_node: TextualMemoryItem):
         raw_memory = raw_node.memory
         response_json = self._get_llm_response(raw_memory)
         chat_read_nodes = []
@@ -361,7 +305,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if not isinstance(info, dict):
             raise ValueError("info must be a dictionary")
 
-        # TODO: ensure why session_id is required?
         required_fields = {"user_id", "session_id"}
         missing_fields = required_fields - set(info.keys())
         if missing_fields:
@@ -370,11 +313,52 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if not all(isinstance(info[field], str) for field in required_fields):
             raise ValueError("user_id and session_id must be strings")
         standard_scene_data = coerce_scene_data(scene_data, type)
-        return standard_scene_data
+        return self._read_memory(standard_scene_data, info, mode)
+
+    def get_scene_data_info(self, messages: list[MessagesType]) -> list[list[Any]]:
+        # TODO: split messages
+        return messages
+
+    def _read_memory(self, messages: list[MessagesType], info: dict[str, Any], mode: str = "fine"):
+        list_scene_data_info = self.get_scene_data_info(messages)
+
+        memory_list = []
+        # Process Q&A pairs concurrently with context propagation
+        with ContextThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(self._process_multi_model_data, scene_data_info, info, mode=mode)
+                for scene_data_info in list_scene_data_info
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    res_memory = future.result()
+                    if res_memory is not None:
+                        memory_list.append(res_memory)
+                except Exception as e:
+                    logger.error(f"Task failed with exception: {e}")
+                    logger.error(traceback.format_exc())
+        return memory_list
 
     def fine_transfer_simple_mem(
-        self, input_memories: list[TextualMemoryItem], type: str
+        self, input_memories: list[TextualMemoryItem], **kwargs
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
-        return []
+
+        memory_list = []
+
+        # Process Q&A pairs concurrently with context propagation
+        with ContextThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(self._process_transfer_multi_model_data, scene_data_info)
+                for scene_data_info in input_memories
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    res_memory = future.result()
+                    if res_memory is not None:
+                        memory_list.append(res_memory)
+                except Exception as e:
+                    logger.error(f"Task failed with exception: {e}")
+                    logger.error(traceback.format_exc())
+        return memory_list

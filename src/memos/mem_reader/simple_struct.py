@@ -735,6 +735,3 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 json: {s}"
             )
             return {}
-
-    def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:
-        pass
