@@ -111,7 +111,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
                 },
             ],
         ]
-        result = self.reader._get_scene_data_info(scene_data, type="chat")
+        result = self.reader.get_scene_data_info(scene_data, type="chat")
 
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 1)
@@ -133,7 +133,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
 
         scene_data = ["/fake/path/to/doc.txt"]
         with patch("os.path.exists", return_value=True):
-            result = self.reader._get_scene_data_info(scene_data, type="doc")
+            result = self.reader.get_scene_data_info(scene_data, type="doc")
 
         self.assertIsInstance(result, list)
         self.assertEqual(result[0]["text"], "Parsed document text.\n")

@@ -448,7 +448,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             [ ... ]
         ]
         """
-        list_scene_data_info = self._get_scene_data_info(messages, type)
+        list_scene_data_info = self.get_scene_data_info(messages, type)
 
         memory_list = []
         if type == "chat":
@@ -505,7 +505,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(traceback.format_exc())
         return memory_list
 
-    def _get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
+    def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
         """
         Get raw information from scene_data.
         If scene_data contains dictionaries, convert them to strings.
