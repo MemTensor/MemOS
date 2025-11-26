@@ -9,13 +9,13 @@ from memos.log import get_logger
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_MAX_QUERY_KEY_WORDS,
-    UserID,
 )
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree import TextualMemoryItem
+    from memos.types import UserID
 
 
 logger = get_logger(__name__)
