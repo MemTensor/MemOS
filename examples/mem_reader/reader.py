@@ -548,8 +548,8 @@ def main():
     print("\n=== Processing Documents (Fine Mode Only) ===")
     # Example document paths (you should replace these with actual document paths)
     doc_paths = [
-        "examples/mem_reader/text1.txt",
-        "examples/mem_reader/text2.txt",
+        "text1.txt",
+        "text2.txt",
     ]
 
     try:

@@ -17,7 +17,11 @@ from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
 from memos.mem_reader.read_multi_model import coerce_scene_data
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
@@ -530,6 +534,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         result = context
                 if result:
                     results.append(result)
+        elif type == "doc":
+            results = scene_data
         return results
 
     def _process_doc_data(self, scene_data_info, info, **kwargs):
@@ -564,7 +570,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         item = scene_data_info[0]
         text_content = ""
-        source_info = {}
+        source_info_list = []
 
         # Determine content and source metadata
         if item.get("type") == "file":
@@ -573,19 +579,15 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             file_data = f.get("file_data") or ""
 
             text_content = file_data
-            # origin 可以是 url / path / local content
-            source_info = {
+            source_dict = {
                 "type": "doc",
-                "filename": filename,
-                "origin": file_data if isinstance(file_data, str) else "",
+                "doc_path": filename,
             }
+            source_info_list = [SourceMessage(**source_dict)]
 
         elif item.get("type") == "text":
             text_content = item.get("text", "")
-            source_info = {
-                "type": "doc",
-                "origin": "inline-text",
-            }
+            source_info_list = [SourceMessage(type="doc", doc_path="inline-text")]
 
         text_content = (text_content or "").strip()
         if not text_content:
@@ -610,7 +612,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     idx,
                     msg,
                     info,
-                    source_info,
+                    source_info_list,
                     self.llm,
                     self.parse_json_result,
                     self.embedder,
