@@ -1,27 +1,24 @@
 import concurrent.futures
 import copy
 import json
-import os
 import re
 import traceback
 
 from abc import ABC
 from datetime import datetime, timezone
 from typing import Any, TypeAlias
-from urllib.parse import urlparse
 
 from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.configs.parser import ParserConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
+from memos.mem_reader.read_multi_model import coerce_scene_data
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
-from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
@@ -179,89 +176,6 @@ def _derive_key(text: str, max_len: int = 80) -> str:
         return ""
     sent = re.split(r"[。！？!?]\s*|\n", text.strip())[0]
     return (sent[:max_len]).strip()
-
-
-def _coerce_scene_data(scene_data, type: str) -> list[MessagesType]:
-    """
-    Normalize ANY allowed SceneDataInput into: list[MessagesType].
-    Supports:
-    - Already normalized scene_data → passthrough
-    - doc: legacy list[str] → automatically detect:
-        * local file path  → read & parse into text
-        * remote URL/path  → keep as file part
-        * pure text        → text part
-    - fallback: wrap unknown → [str(scene_data)]
-    """
-    if not scene_data:
-        return []
-    head = scene_data[0]
-
-    # passthrough: already str or list structures except doc-mode list[str]
-    if isinstance(head, str | list) and not (type == "doc" and isinstance(head, str)):
-        return scene_data
-
-    # doc: list[str] -> RawMessageList
-    if type == "doc" and isinstance(head, str):
-        raw_items = []
-
-        # prepare parser
-        parser_config = ParserConfigFactory.model_validate(
-            {
-                "backend": "markitdown",
-                "config": {},
-            }
-        )
-        parser = ParserFactory.from_config(parser_config)
-
-        for s in scene_data:
-            s = (s or "").strip()
-            if not s:
-                continue
-
-            parsed = urlparse(s)
-            looks_like_url = parsed.scheme in {"http", "https", "oss", "s3", "gs", "cos"}
-            looks_like_path = ("/" in s) or ("\\" in s)
-            looks_like_file = bool(FILE_EXT_RE.search(s)) or looks_like_url or looks_like_path
-
-            # Case A: Local filesystem path
-            if os.path.exists(s):
-                filename = os.path.basename(s) or "document"
-                try:
-                    # parse local file into text
-                    parsed_text = parser.parse(s)
-                    raw_items.append(
-                        {
-                            "type": "file",
-                            "file": {"filename": filename or "document", "file_data": parsed_text},
-                        }
-                    )
-                except Exception as e:
-                    logger.error(f"[SceneParser] Error parsing {s}: {e}")
-                continue
-
-            # Case B: URL or non-local file path
-            if looks_like_file:
-                if looks_like_url:
-                    filename = os.path.basename(parsed.path)
-                else:
-                    # Windows absolute path detection
-                    if "\\" in s and re.match(r"^[A-Za-z]:", s):
-                        parts = [p for p in s.split("\\") if p]
-                        filename = parts[-1] if parts else os.path.basename(s)
-                    else:
-                        filename = os.path.basename(s)
-                raw_items.append(
-                    {"type": "file", "file": {"filename": filename or "document", "file_data": s}}
-                )
-                continue
-
-            # Case C: Pure text
-            raw_items.append({"type": "text", "text": s})
-
-        return [raw_items]
-
-    # fallback
-    return [str(scene_data)]
 
 
 class SimpleStructMemReader(BaseMemReader, ABC):
@@ -516,7 +430,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         # Backward compatibility, after coercing scene_data, we only tackle
         # with standard scene_data type: MessagesType
-        standard_scene_data = _coerce_scene_data(scene_data, type)
+        standard_scene_data = coerce_scene_data(scene_data, type)
         return self._get_standard_memory(standard_scene_data, type, info, mode)
 
     def _get_standard_memory(

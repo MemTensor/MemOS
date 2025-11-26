@@ -22,9 +22,7 @@ from .system_parser import SystemParser
 from .text_content_parser import TextContentParser
 from .tool_parser import ToolParser
 from .user_parser import UserParser
-from .utils import (
-    extract_role,
-)
+from .utils import coerce_scene_data, extract_role
 
 
 __all__ = [
@@ -37,5 +35,6 @@ __all__ = [
     "TextContentParser",
     "ToolParser",
     "UserParser",
+    "coerce_scene_data",
     "extract_role",
 ]

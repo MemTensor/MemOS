@@ -1,10 +1,8 @@
 import concurrent.futures
-import os
 import re
 
 from abc import ABC
 from typing import Any, TypeAlias
-from urllib.parse import urlparse
 
 from memos import log
 from memos.chunkers import ChunkerFactory
@@ -13,6 +11,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
+from memos.mem_reader.read_multi_model import coerce_scene_data
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT,
@@ -114,51 +113,6 @@ def _derive_key(text: str, max_len: int = 80) -> str:
         return ""
     sent = re.split(r"[。！？!?]\s*|\n", text.strip())[0]
     return (sent[:max_len]).strip()
-
-
-def _coerce_scene_data(scene_data, type: str) -> list[MessagesType]:
-    """
-    Normalize ANY allowed SceneDataInput into: list[MessagesType].
-    """
-    if not scene_data:
-        return []
-    head = scene_data[0]
-    if isinstance(head, str | list) and not (type == "doc" and isinstance(head, str)):
-        # For type="doc" AND head is str, this is legacy doc list[str], handle below instead.
-        return scene_data
-
-    # doc: list[str] -> RawMessageList
-    if type == "doc" and isinstance(head, str):
-        raw_items = []
-        for s in scene_data:
-            s = (s or "").strip()
-            parsed = urlparse(s)
-            looks_like_url = parsed.scheme in {"http", "https", "oss", "s3", "gs", "cos"}
-            # treat as file if it looks like a path, a URL, or a known extension.
-            looks_like_path = ("/" in s) or ("\\" in s)
-            looks_like_file = bool(FILE_EXT_RE.search(s)) or looks_like_url or looks_like_path
-
-            if looks_like_file:
-                if looks_like_url:
-                    filename = os.path.basename(parsed.path)
-                else:
-                    # Handle Windows paths (e.g., "C:\Users\Documents\file.txt")
-                    # On Unix, os.path.basename doesn't recognize backslashes as separators
-                    if "\\" in s and re.match(r"^[A-Za-z]:", s):
-                        # Windows absolute path: extract filename after last backslash
-                        # Split on backslashes and take the last non-empty part
-                        parts = [p for p in s.split("\\") if p]
-                        filename = parts[-1] if parts else os.path.basename(s)
-                    else:
-                        filename = os.path.basename(s)
-                raw_items.append(
-                    {"type": "file", "file": {"path": s, "filename": filename or "document"}}
-                )
-            else:
-                raw_items.append({"type": "text", "text": s})
-        return [raw_items]
-    # Keep a tiny fallback for robustness.
-    return [str(scene_data)]
 
 
 def _get_simple_scene_data(scene_data: list[MessagesType]) -> list[MessagesType]:
@@ -415,7 +369,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not all(isinstance(info[field], str) for field in required_fields):
             raise ValueError("user_id and session_id must be strings")
-        standard_scene_data = _coerce_scene_data(scene_data, type)
+        standard_scene_data = coerce_scene_data(scene_data, type)
         return standard_scene_data
 
     def fine_transfer_simple_mem(
