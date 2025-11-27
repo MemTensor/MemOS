@@ -434,6 +434,7 @@ class SingleCubeView(MemCubeView):
                     label=MEM_READ_LABEL,
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
+                    user_name=self.cube_id,
                     info=add_req.info,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
