@@ -5,7 +5,7 @@ from typing import Any
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import SourceMessage, TextualMemoryItem
 from memos.parsers.factory import ParserFactory
 from memos.types.openai_chat_completion_types import File
 
@@ -34,6 +34,40 @@ class FileContentParser(BaseMessageParser):
         """
         super().__init__(embedder, llm)
         self.parser = parser
+
+    def create_source(
+        self,
+        message: File,
+        info: dict[str, Any],
+    ) -> SourceMessage:
+        """Create SourceMessage from file content part."""
+        if isinstance(message, dict):
+            file_info = message.get("file", {})
+            return SourceMessage(
+                type="file",
+                doc_path=file_info.get("filename") or file_info.get("file_id", ""),
+                content=file_info.get("file_data", ""),
+                original_part=message,
+            )
+        return SourceMessage(type="file", doc_path=str(message))
+
+    def rebuild_from_source(
+        self,
+        source: SourceMessage,
+    ) -> File:
+        """Rebuild file content part from SourceMessage."""
+        # Use original_part if available
+        if hasattr(source, "original_part") and source.original_part:
+            return source.original_part
+
+        # Rebuild from source fields
+        return {
+            "type": "file",
+            "file": {
+                "filename": source.doc_path or "",
+                "file_data": source.content or "",
+            },
+        }
 
     def _parse_file(self, file_info: dict[str, Any]) -> str:
         """

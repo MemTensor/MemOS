@@ -69,6 +69,44 @@ class BaseMessageParser(ABC):
         self.embedder = embedder
         self.llm = llm
 
+    @abstractmethod
+    def create_source(
+        self,
+        message: Any,
+        info: dict[str, Any],
+    ) -> SourceMessage | list[SourceMessage]:
+        """
+        Create SourceMessage(s) from the message.
+
+        Each parser decides how to create sources:
+        - Simple messages: return single SourceMessage
+        - Multimodal messages: return list of SourceMessage (one per part)
+
+        Args:
+            message: The message to create source from
+            info: Dictionary containing user_id and session_id
+
+        Returns:
+            SourceMessage or list of SourceMessage
+        """
+
+    @abstractmethod
+    def rebuild_from_source(
+        self,
+        source: SourceMessage,
+    ) -> Any:
+        """
+        Rebuild original message from SourceMessage.
+
+        Each parser knows how to reconstruct its own message type.
+
+        Args:
+            source: SourceMessage to rebuild from
+
+        Returns:
+            Rebuilt message in original format
+        """
+
     def parse_fast(
         self,
         message: Any,
@@ -107,14 +145,12 @@ class BaseMessageParser(ABC):
         role = message.get("role", "").strip().lower()
         memory_type = "UserMemory" if role == "user" else "LongTermMemory"
 
-        # Create source info
-        source_info = SourceMessage(
-            type="chat",
-            role=role if role else None,
-            chat_time=message.get("chat_time"),
-            message_id=message.get("message_id"),
-            content=content,
-        )
+        # Create source(s) using parser's create_source method
+        sources = self.create_source(message, info)
+        if isinstance(sources, SourceMessage):
+            sources = [sources]
+        elif not sources:
+            return []
 
         # Extract info fields
         info_ = info.copy()
@@ -133,7 +169,7 @@ class BaseMessageParser(ABC):
                 key=_derive_key(content),
                 embedding=self.embedder.embed([content])[0],
                 usage=[],
-                sources=[source_info],
+                sources=sources,
                 background="",
                 confidence=0.99,
                 type="fact",
