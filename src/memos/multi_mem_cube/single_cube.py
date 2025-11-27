@@ -491,6 +491,7 @@ class SingleCubeView(MemCubeView):
                     label=PREF_ADD_LABEL,
                     content=json.dumps(messages_list),
                     timestamp=datetime.utcnow(),
+                    info=add_req.info,
                 )
                 self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
