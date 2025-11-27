@@ -48,6 +48,10 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         description="user name / display name (optional)",
     )
     info: dict | None = Field(default=None, description="user custom info")
+    task_id: str | None = Field(
+        default=None,
+        description="Optional business-level task ID. Multiple items can share the same task_id.",
+    )
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(

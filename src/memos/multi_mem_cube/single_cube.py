@@ -436,8 +436,9 @@ class SingleCubeView(MemCubeView):
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
                     info=add_req.info,
+                    task_id=add_req.task_id,
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_read])
+                self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
                     f"[SingleCubeView] cube={self.cube_id} Submitted async MEM_READ: {json.dumps(mem_ids)}"
                 )
@@ -457,8 +458,9 @@ class SingleCubeView(MemCubeView):
                 content=json.dumps(mem_ids),
                 timestamp=datetime.utcnow(),
                 user_name=self.cube_id,
+                task_id=add_req.task_id,
             )
-            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_add])
+            self.mem_scheduler.submit_messages(messages=[message_item_add])
 
     def _process_pref_mem(
         self,
@@ -497,8 +499,9 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(messages_list),
                     timestamp=datetime.utcnow(),
                     info=add_req.info,
+                    task_id=add_req.task_id,
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_pref])
+                self.mem_scheduler.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
             except Exception as e:
                 self.logger.error(
