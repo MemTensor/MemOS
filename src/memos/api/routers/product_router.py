@@ -196,12 +196,16 @@ def create_memory(memory_req: MemoryCreateRequest):
         mos_product = get_mos_product_instance()
 
         # Track task if task_id is provided
+        item_id: str | None = None
         if (
             memory_req.task_id
             and hasattr(mos_product, "mem_scheduler")
             and mos_product.mem_scheduler
         ):
             from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
+            from uuid import uuid4
+
+            item_id = str(uuid4()) # Generate a unique item_id for this submission
 
             # Get Redis client from scheduler
             if (
@@ -211,13 +215,14 @@ def create_memory(memory_req: MemoryCreateRequest):
                 status_tracker = TaskStatusTracker(mos_product.mem_scheduler.redis_client)
                 # Submit task with "product_add" type
                 status_tracker.task_submitted(
-                    task_id=memory_req.task_id,
+                    task_id=item_id, # Use generated item_id for internal tracking
                     user_id=memory_req.user_id,
                     task_type="product_add",
                     mem_cube_id=memory_req.mem_cube_id or memory_req.user_id,
-                    business_task_id=None,  # This IS the business task, not an item
+                    business_task_id=memory_req.task_id,  # Use memory_req.task_id as business_task_id
                 )
-                status_tracker.task_started(memory_req.task_id, memory_req.user_id)
+                status_tracker.task_started(item_id, memory_req.user_id) # Use item_id here
+
 
         # Execute the add operation
         mos_product.add(
@@ -229,11 +234,12 @@ def create_memory(memory_req: MemoryCreateRequest):
             source=memory_req.source,
             user_profile=memory_req.user_profile,
             session_id=memory_req.session_id,
+            task_id=memory_req.task_id,
         )
 
         # Mark task as completed
-        if status_tracker and memory_req.task_id:
-            status_tracker.task_completed(memory_req.task_id, memory_req.user_id)
+        if status_tracker and item_id:
+            status_tracker.task_completed(item_id, memory_req.user_id)
 
         logger.info(
             f"time add api : add time user_id: {memory_req.user_id} time is: {time.time() - time_start_add}"
@@ -242,13 +248,13 @@ def create_memory(memory_req: MemoryCreateRequest):
 
     except ValueError as err:
         # Mark task as failed if tracking
-        if status_tracker and memory_req.task_id:
-            status_tracker.task_failed(memory_req.task_id, memory_req.user_id, str(err))
+        if status_tracker and item_id:
+            status_tracker.task_failed(item_id, memory_req.user_id, str(err))
         raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
     except Exception as err:
         # Mark task as failed if tracking
-        if status_tracker and memory_req.task_id:
-            status_tracker.task_failed(memory_req.task_id, memory_req.user_id, str(err))
+        if status_tracker and item_id:
+            status_tracker.task_failed(item_id, memory_req.user_id, str(err))
         logger.error(f"Failed to create memory: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 

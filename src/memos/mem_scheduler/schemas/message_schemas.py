@@ -33,7 +33,6 @@ DEFAULT_MEMORY_CAPACITIES = {
 
 class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
-    task_id: str | None = Field(default=None, description="Parent task ID, if applicable")
     redis_message_id: str = Field(default="", description="the message get from redis stream")
     user_id: str = Field(..., description="user id")
     mem_cube_id: str = Field(..., description="memcube id")
