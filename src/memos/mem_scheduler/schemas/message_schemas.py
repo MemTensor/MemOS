@@ -33,6 +33,7 @@ DEFAULT_MEMORY_CAPACITIES = {
 
 class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
+    task_id: str | None = Field(default=None, description="Parent task ID, if applicable")
     redis_message_id: str = Field(default="", description="the message get from redis stream")
     user_id: str = Field(..., description="user id")
     mem_cube_id: str = Field(..., description="memcube id")
@@ -114,13 +115,14 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
         description="Unique identifier for the log entry", default_factory=lambda: str(uuid4())
     )
+    task_id: str | None = Field(default=None, description="Identifier for the parent task")
     user_id: str = Field(..., description="Identifier for the user associated with the log")
     mem_cube_id: str = Field(
         ..., description="Identifier for the memcube associated with this log entry"
     )
     label: str = Field(..., description="Label categorizing the type of log")
-    from_memory_type: str = Field(..., description="Source memory type")
-    to_memory_type: str = Field(..., description="Destination memory type")
+    from_memory_type: str | None = Field(None, description="Source memory type")
+    to_memory_type: str | None = Field(None, description="Destination memory type")
     log_content: str = Field(..., description="Detailed content of the log entry")
     current_memory_sizes: MemorySizes = Field(
         default_factory=lambda: dict(DEFAULT_MEMORY_SIZES),

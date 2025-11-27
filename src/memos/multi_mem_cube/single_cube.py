@@ -203,7 +203,7 @@ class SingleCubeView(MemCubeView):
         formatted_memories = [format_memory_item(data) for data in enhanced_memories]
         return formatted_memories
 
-    def _deep_search(
+    def _agentic_search(
         self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
     ) -> list:
         deepsearch_results = self.deepsearch_agent.run(
@@ -229,6 +229,8 @@ class SingleCubeView(MemCubeView):
         """
         if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
             return self._deep_search(search_req=search_req, user_context=user_context)
+        elif FINE_STRATEGY == FineStrategy.AGENTIC_SEARCH:
+            return self._agentic_search(search_req=search_req, user_context=user_context)
 
         target_session_id = search_req.session_id or "default_session"
         search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
@@ -425,6 +427,7 @@ class SingleCubeView(MemCubeView):
             try:
                 message_item_read = ScheduleMessageItem(
                     user_id=add_req.user_id,
+                    task_id=add_req.task_id,
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
@@ -446,6 +449,7 @@ class SingleCubeView(MemCubeView):
         else:
             message_item_add = ScheduleMessageItem(
                 user_id=add_req.user_id,
+                task_id=add_req.task_id,
                 session_id=target_session_id,
                 mem_cube_id=self.cube_id,
                 mem_cube=self.naive_mem_cube,
@@ -485,6 +489,7 @@ class SingleCubeView(MemCubeView):
                 messages_list = [add_req.messages]
                 message_item_pref = ScheduleMessageItem(
                     user_id=add_req.user_id,
+                    task_id=add_req.task_id,
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
