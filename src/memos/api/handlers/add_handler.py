@@ -7,6 +7,9 @@ using dependency injection for better modularity and testability.
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIADDRequest, MemoryResponse
+from memos.memories.textual.item import (
+    list_all_fields,
+)
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
@@ -43,6 +46,13 @@ class AddHandler(BaseHandler):
             MemoryResponse with added memory information
         """
         self.logger.info(f"[AddHandler] Add Req is: {add_req}")
+
+        if add_req.info:
+            exclude_fields = list_all_fields()
+            info_len = len(add_req.info)
+            add_req.info = {k: v for k, v in add_req.info.items() if k not in exclude_fields}
+            if len(add_req.info) < info_len:
+                self.logger.warning(f"[AddHandler] info fields can not contain {exclude_fields}.")
 
         cube_view = self._build_cube_view(add_req)
 

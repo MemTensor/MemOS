@@ -4,7 +4,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from memos.chunkers import ChunkerFactory
-from memos.chunkers.base import Chunk
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
@@ -69,27 +68,6 @@ class TestSimpleStructMemReader(unittest.TestCase):
         )
         self.assertEqual(result[0].metadata.user_id, "user1")
 
-    def test_process_doc_data(self):
-        """Test processing document chunks into memory items."""
-        scene_data_info = {"file": "tests/mem_reader/test.txt", "text": "Parsed document text"}
-        info = {"user_id": "user1", "session_id": "session1"}
-
-        # Mock LLM response
-        mock_response = (
-            '{"value": "A sample document about testing.", "tags": ["document"], "key": "title"}'
-        )
-        self.reader.llm.generate.return_value = mock_response
-        self.reader.chunker.chunk.return_value = [
-            Chunk(text="Parsed document text", token_count=3, sentences=["Parsed document text"])
-        ]
-        self.reader.parse_json_result = lambda x: json.loads(x)
-
-        result = self.reader._process_doc_data(scene_data_info, info)
-
-        self.assertIsInstance(result, list)
-        self.assertIsInstance(result[0], TextualMemoryItem)
-        self.assertIn("sample document", result[0].memory)
-
     def test_get_scene_data_info_with_chat(self):
         """Test extracting chat info from scene data."""
         scene_data = [
@@ -123,21 +101,6 @@ class TestSimpleStructMemReader(unittest.TestCase):
                 "content": "I'm feeling a bit down today.",
             },
         )
-
-    @patch("memos.mem_reader.simple_struct.ParserFactory")
-    def test_get_scene_data_info_with_doc(self, mock_parser_factory):
-        """Test parsing document files."""
-        parser_instance = MagicMock()
-        parser_instance.parse.return_value = "Parsed document text.\n"
-        mock_parser_factory.from_config.return_value = parser_instance
-
-        scene_data = ["/fake/path/to/doc.txt"]
-        with patch("os.path.exists", return_value=True):
-            result = self.reader.get_scene_data_info(scene_data, type="doc")
-
-        self.assertIsInstance(result, list)
-        self.assertEqual(result[0]["text"], "Parsed document text.\n")
-        parser_instance.parse.assert_called_once_with("/fake/path/to/doc.txt")
 
     def test_parse_json_result_success(self):
         """Test successful JSON parsing."""

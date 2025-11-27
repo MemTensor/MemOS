@@ -16,15 +16,18 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.general_schemas import (
     ADD_LABEL,
-    FINE_STRATEGY,
     MEM_READ_LABEL,
     PREF_ADD_LABEL,
-    FineStrategy,
-    SearchMode,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.multi_mem_cube.views import MemCubeView
-from memos.types import MOSSearchResult, UserContext
+from memos.types.general_types import (
+    FINE_STRATEGY,
+    FineStrategy,
+    MOSSearchResult,
+    SearchMode,
+    UserContext,
+)
 
 
 logger = get_logger(__name__)
@@ -42,6 +45,7 @@ class SingleCubeView(MemCubeView):
     mem_scheduler: Any
     logger: Any
     searcher: Any
+    deepsearch_agent: Any | None = None
 
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
@@ -125,7 +129,6 @@ class SingleCubeView(MemCubeView):
         )
 
         self.logger.info(f"Search memories result: {memories_result}")
-
         return memories_result
 
     def _get_search_mode(self, mode: str) -> str:
@@ -146,7 +149,7 @@ class SingleCubeView(MemCubeView):
         user_context: UserContext,
         search_mode: str,
     ) -> list[dict[str, Any]]:
-        """
+        """G
         Search text memories based on mode.
 
         Args:
@@ -167,12 +170,135 @@ class SingleCubeView(MemCubeView):
             else:
                 self.logger.error(f"Unsupported search mode: {search_mode}")
                 return []
-
             return text_memories
 
         except Exception as e:
             self.logger.error("Error in search_text: %s; traceback: %s", e, traceback.format_exc())
             return []
+
+    def _deep_search(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+    ) -> list:
+        target_session_id = search_req.session_id or "default_session"
+        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+
+        info = {
+            "user_id": search_req.user_id,
+            "session_id": target_session_id,
+            "chat_history": search_req.chat_history,
+        }
+
+        enhanced_memories = self.searcher.deep_search(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=SearchMode.FINE,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            info=info,
+        )
+        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+        return formatted_memories
+
+    def _deep_search(
+        self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
+    ) -> list:
+        deepsearch_results = self.deepsearch_agent.run(
+            search_req.query, user_id=user_context.mem_cube_id
+        )
+        formatted_memories = [format_memory_item(data) for data in deepsearch_results]
+        return formatted_memories
+
+    def _fine_search(
+        self,
+        search_req: APISearchRequest,
+        user_context: UserContext,
+    ) -> list:
+        """
+        Fine-grained search with query enhancement.
+
+        Args:
+            search_req: Search request
+            user_context: User context
+
+        Returns:
+            List of enhanced search results
+        """
+        if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
+            return self._deep_search(search_req=search_req, user_context=user_context)
+
+        target_session_id = search_req.session_id or "default_session"
+        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+
+        info = {
+            "user_id": search_req.user_id,
+            "session_id": target_session_id,
+            "chat_history": search_req.chat_history,
+        }
+
+        # Fine retrieve
+        raw_retrieved_memories = self.searcher.retrieve(
+            query=search_req.query,
+            user_name=user_context.mem_cube_id,
+            top_k=search_req.top_k,
+            mode=SearchMode.FINE,
+            manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
+            search_filter=search_filter,
+            info=info,
+        )
+
+        # Post retrieve
+        raw_memories = self.searcher.post_retrieve(
+            retrieved_results=raw_retrieved_memories,
+            top_k=search_req.top_k,
+            user_name=user_context.mem_cube_id,
+            info=info,
+        )
+
+        # Enhance with query
+        enhanced_memories, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
+            query_history=[search_req.query],
+            memories=raw_memories,
+        )
+
+        if len(enhanced_memories) < len(raw_memories):
+            logger.info(
+                f"Enhanced memories ({len(enhanced_memories)}) are less than raw memories ({len(raw_memories)}). Recalling for more."
+            )
+            missing_info_hint, trigger = self.mem_scheduler.retriever.recall_for_missing_memories(
+                query=search_req.query,
+                memories=raw_memories,
+            )
+            retrieval_size = len(raw_memories) - len(enhanced_memories)
+            logger.info(f"Retrieval size: {retrieval_size}")
+            if trigger:
+                logger.info(f"Triggering additional search with hint: {missing_info_hint}")
+                additional_memories = self.searcher.search(
+                    query=missing_info_hint,
+                    user_name=user_context.mem_cube_id,
+                    top_k=retrieval_size,
+                    mode=SearchMode.FAST,
+                    memory_type="All",
+                    search_filter=search_filter,
+                    info=info,
+                )
+            else:
+                logger.info("Not triggering additional search, using fast memories.")
+                additional_memories = raw_memories[:retrieval_size]
+
+            enhanced_memories += additional_memories
+            logger.info(
+                f"Added {len(additional_memories)} more memories. Total enhanced memories: {len(enhanced_memories)}"
+            )
+        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+
+        logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
+
+        return formatted_memories
 
     def _search_pref(
         self,
@@ -244,101 +370,6 @@ class SingleCubeView(MemCubeView):
 
         return formatted_memories
 
-    def _deep_search(
-        self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
-    ) -> list:
-        logger.error("waiting to be implemented")
-        return []
-
-    def _fine_search(
-        self,
-        search_req: APISearchRequest,
-        user_context: UserContext,
-    ) -> list:
-        """
-        Fine-grained search with query enhancement.
-
-        Args:
-            search_req: Search request
-            user_context: User context
-
-        Returns:
-            List of enhanced search results
-        """
-        if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
-            return self._deep_search(
-                search_req=search_req, user_context=user_context, max_thinking_depth=3
-            )
-
-        target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
-
-        info = {
-            "user_id": search_req.user_id,
-            "session_id": target_session_id,
-            "chat_history": search_req.chat_history,
-        }
-
-        # Fast retrieve
-        fast_retrieved_memories = self.searcher.retrieve(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
-            mode=SearchMode.FINE,
-            manual_close_internet=not search_req.internet_search,
-            search_filter=search_filter,
-            info=info,
-        )
-
-        # Post retrieve
-        raw_memories = self.searcher.post_retrieve(
-            retrieved_results=fast_retrieved_memories,
-            top_k=search_req.top_k,
-            user_name=user_context.mem_cube_id,
-            info=info,
-        )
-
-        # Enhance with query
-        enhanced_memories, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
-            query_history=[search_req.query],
-            memories=raw_memories,
-        )
-
-        if len(enhanced_memories) < len(raw_memories):
-            logger.info(
-                f"Enhanced memories ({len(enhanced_memories)}) are less than raw memories ({len(raw_memories)}). Recalling for more."
-            )
-            missing_info_hint, trigger = self.mem_scheduler.retriever.recall_for_missing_memories(
-                query=search_req.query,
-                memories=raw_memories,
-            )
-            retrieval_size = len(raw_memories) - len(enhanced_memories)
-            logger.info(f"Retrieval size: {retrieval_size}")
-            if trigger:
-                logger.info(f"Triggering additional search with hint: {missing_info_hint}")
-                additional_memories = self.searcher.search(
-                    query=missing_info_hint,
-                    user_name=user_context.mem_cube_id,
-                    top_k=retrieval_size,
-                    mode=SearchMode.FAST,
-                    memory_type="All",
-                    search_filter=search_filter,
-                    info=info,
-                )
-            else:
-                logger.info("Not triggering additional search, using fast memories.")
-                additional_memories = raw_memories[:retrieval_size]
-
-            enhanced_memories += additional_memories
-            logger.info(
-                f"Added {len(additional_memories)} more memories. Total enhanced memories: {len(enhanced_memories)}"
-            )
-        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
-
-        logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
-
-        return formatted_memories
-
     def _mix_search(
         self,
         search_req: APISearchRequest,
@@ -401,6 +432,7 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
+                    info=add_req.info,
                 )
                 self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -473,6 +505,7 @@ class SingleCubeView(MemCubeView):
                 [add_req.messages],
                 type="chat",
                 info={
+                    **(add_req.info or {}),
                     "user_id": add_req.user_id,
                     "session_id": target_session_id,
                     "mem_cube_id": self.cube_id,
@@ -514,9 +547,21 @@ class SingleCubeView(MemCubeView):
         """
         target_session_id = add_req.session_id or "default_session"
 
+        # Decide extraction mode:
+        # - async: always fast (ignore add_req.mode)
+        # - sync: use add_req.mode == "fast" to switch to fast pipeline, otherwise fine
+        if sync_mode == "async":
+            extract_mode = "fast"
+        else:  # sync
+            extract_mode = "fast" if add_req.mode == "fast" else "fine"
+
         self.logger.info(
-            f"[SingleCubeView] cube={user_context.mem_cube_id} "
-            f"Processing text memory with mode: {sync_mode}"
+            "[SingleCubeView] cube=%s Processing text memory "
+            "with sync_mode=%s, extract_mode=%s, add_mode=%s",
+            user_context.mem_cube_id,
+            sync_mode,
+            extract_mode,
+            add_req.mode,
         )
 
         # Extract memories
@@ -524,10 +569,12 @@ class SingleCubeView(MemCubeView):
             [add_req.messages],
             type="chat",
             info={
+                **(add_req.info or {}),
+                "custom_tags": add_req.custom_tags,
                 "user_id": add_req.user_id,
                 "session_id": target_session_id,
             },
-            mode="fast" if sync_mode == "async" else "fine",
+            mode=extract_mode,
         )
         flattened_local = [mm for m in memories_local for mm in m]
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")

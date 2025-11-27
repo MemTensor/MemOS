@@ -11,8 +11,6 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
     DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
-    FINE_STRATEGY,
-    FineStrategy,
     TreeTextMemory_FINE_SEARCH_METHOD,
     TreeTextMemory_SEARCH_METHOD,
 )
@@ -24,6 +22,7 @@ from memos.mem_scheduler.utils.filter_utils import (
 from memos.mem_scheduler.utils.misc_utils import extract_json_obj, extract_list_items_in_answer
 from memos.memories.textual.item import TextualMemoryMetadata
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
+from memos.types.general_types import FINE_STRATEGY, FineStrategy
 
 # Extract JSON response
 from .memory_filter import MemoryFilter
