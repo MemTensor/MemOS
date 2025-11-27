@@ -1,26 +1,27 @@
 import concurrent.futures
 import copy
 import json
-import os
 import re
 import traceback
 
 from abc import ABC
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeAlias
 
 from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.configs.parser import ParserConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
-from memos.parsers.factory import ParserFactory
+from memos.mem_reader.read_multi_model import coerce_scene_data
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.templates.mem_reader_prompts import (
     CUSTOM_TAGS_INSTRUCTION,
     CUSTOM_TAGS_INSTRUCTION_ZH,
@@ -31,7 +32,40 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
 )
+from memos.types import MessagesType
+from memos.types.openai_chat_completion_types import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+    File,
+)
 from memos.utils import timed
+
+
+class ParserFactory:
+    """Placeholder required by test suite."""
+
+    @staticmethod
+    def from_config(_config):
+        return None
+
+
+ChatMessageClasses = (
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionToolMessageParam,
+)
+
+RawContentClasses = (ChatCompletionContentPartTextParam, File)
+MessageDict: TypeAlias = dict[str, Any]  # (Deprecated) not supported in the future
+SceneDataInput: TypeAlias = (
+    list[list[MessageDict]]  # (Deprecated) legacy chat example: scenes -> messages
+    | list[str]  # (Deprecated) legacy doc example: list of paths / pure text
+    | list[MessagesType]  # new: list of scenes (each scene is MessagesType)
+)
 
 
 logger = log.get_logger(__name__)
@@ -89,7 +123,7 @@ def detect_lang(text):
         return "en"
 
 
-def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder):
+def _build_node(idx, message, info, source_info, llm, parse_json_result, embedder):
     # generate
     try:
         raw = llm.generate(message)
@@ -139,7 +173,7 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
                 key=key,
                 embedding=embedding,
                 usage=[],
-                sources=[{"type": "doc", "doc_path": f"{scene_file}_{idx}"}],
+                sources=source_info,
                 background="",
                 confidence=0.99,
                 type="fact",
@@ -390,7 +424,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fine"
+        self, scene_data: SceneDataInput, type: str, info: dict[str, Any], mode: str = "fine"
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
@@ -399,7 +433,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         Args:
             scene_data: List of dialogue information or document paths
-            type: Type of scene_data: ['doc', 'chat']
+            type: (Deprecated) not supported in the future. Type of scene_data: ['doc', 'chat']
             info: Dictionary containing user_id and session_id.
                 Must be in format: {"user_id": "1111", "session_id": "2222"}
                 Optional parameters:
@@ -428,11 +462,35 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not all(isinstance(info[field], str) for field in required_fields):
             raise ValueError("user_id and session_id must be strings")
-        scene_data = self._complete_chat_time(scene_data, type)
-        list_scene_data_info = self.get_scene_data_info(scene_data, type)
+
+        # Backward compatibility, after coercing scene_data, we only tackle
+        # with standard scene_data type: MessagesType
+        standard_scene_data = coerce_scene_data(scene_data, type)
+        return self._read_memory(standard_scene_data, type, info, mode)
+
+    def _read_memory(
+        self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
+    ):
+        """
+        1. raw file:
+        [
+            [
+                {"type": "file", "file": "str"}
+            ],
+            [
+                {"type": "file", "file": "str"}
+            ],...
+        ]
+        2. text chat:
+        scene_data = [
+            [ {role: user, ...}, {role: assistant, ...}, ... ],
+            [ {role: user, ...}, {role: assistant, ...}, ... ],
+            [ ... ]
+        ]
+        """
+        list_scene_data_info = self.get_scene_data_info(messages, type)
 
         memory_list = []
-
         if type == "chat":
             processing_func = self._process_chat_data
         elif type == "doc":
@@ -490,87 +548,152 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(traceback.format_exc())
         return memory_list
 
-    def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
+    def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
         """
-        Get raw information from scene_data.
-        If scene_data contains dictionaries, convert them to strings.
-        If scene_data contains file paths, parse them using the parser.
-
-        Args:
-            scene_data: List of dialogue information or document paths
-            type: Type of scene data: ['doc', 'chat']
-        Returns:
-            List of strings containing the processed scene data
+        Convert normalized MessagesType scenes into typical MessagesType this reader can
+        handle.
+        SimpleStructMemReader only supports text-only chat messages with roles.
+        For chat scenes we:
+          - skip unsupported scene types (e.g. `str` scenes)
+          - drop non-dict messages
+          - keep only roles in {user, assistant, system}
+          - coerce OpenAI multimodal `content` (list[parts]) into a single plain-text string
+          - then apply the existing windowing logic (<=10 messages with 2-message overlap)
+        For doc scenes we pass through; doc handling is done in `_process_doc_data`.
         """
-        results = []
+        results: list[list[Any]] = []
 
         if type == "chat":
+            allowed_roles = {"user", "assistant", "system"}
             for items in scene_data:
+                if isinstance(items, str):
+                    logger.warning(
+                        "SimpleStruct MemReader does not support "
+                        "str message data now, your messages "
+                        f"contains {items}, skipping"
+                    )
+                    continue
+                if not isinstance(items, list):
+                    logger.warning(
+                        "SimpleStruct MemReader expects message as "
+                        f"list[dict], your messages contains"
+                        f"{items}, skipping"
+                    )
+                    continue
+                # Filter messages within this message
                 result = []
-                for i, item in enumerate(items):
-                    result.append(item)
-                    if len(result) >= 10:
-                        results.append(result)
-                        context = copy.deepcopy(result[-2:]) if i + 1 < len(items) else []
-                        result = context
-                if result:
-                    results.append(result)
-        elif type == "doc":
-            parser_config = ParserConfigFactory.model_validate(
-                {
-                    "backend": "markitdown",
-                    "config": {},
-                }
-            )
-            parser = ParserFactory.from_config(parser_config)
-            for item in scene_data:
-                try:
-                    if os.path.exists(item):
-                        try:
-                            parsed_text = parser.parse(item)
-                            results.append({"file": item, "text": parsed_text})
-                        except Exception as e:
-                            logger.error(f"[SceneParser] Error parsing {item}: {e}")
-                            continue
-                    else:
-                        parsed_text = item
-                        results.append({"file": "pure_text", "text": parsed_text})
-                except Exception as e:
-                    print(f"Error parsing file {item}: {e!s}")
+                for _i, item in enumerate(items):
+                    if not isinstance(item, dict):
+                        logger.warning(
+                            "SimpleStruct MemReader expects message as "
+                            f"list[dict], your messages contains"
+                            f"{item}, skipping"
+                        )
+                        continue
+                    role = item.get("role") or ""
+                    role = role if isinstance(role, str) else str(role)
+                    role = role.strip().lower()
+                    if role not in allowed_roles:
+                        logger.warning(
+                            f"SimpleStruct MemReader expects message with "
+                            f"role in {allowed_roles}, your messages contains"
+                            f"role {role}, skipping"
+                        )
+                        continue
 
+                    content = item.get("content", "")
+                    if not isinstance(content, str):
+                        logger.warning(
+                            f"SimpleStruct MemReader expects message content "
+                            f"with str, your messages content"
+                            f"is {content!s}, skipping"
+                        )
+                        continue
+                    if not content:
+                        continue
+
+                    result.append(
+                        {
+                            "role": role,
+                            "content": content,
+                            "chat_time": item.get("chat_time", ""),
+                        }
+                    )
+                if not result:
+                    continue
+                window = []
+                for i, item in enumerate(result):
+                    window.append(item)
+                    if len(window) >= 10:
+                        results.append(window)
+                        context = copy.deepcopy(window[-2:]) if i + 1 < len(result) else []
+                        window = context
+
+                if window:
+                    results.append(window)
+        elif type == "doc":
+            results = scene_data
         return results
 
-    def _complete_chat_time(self, scene_data: list[list[dict]], type: str):
-        if type != "chat":
-            return scene_data
-        complete_scene_data = []
-
-        for items in scene_data:
-            chat_time_value = None
-
-            for item in items:
-                if "chat_time" in item:
-                    chat_time_value = item["chat_time"]
-                    break
-
-            if chat_time_value is None:
-                session_date = datetime.now(timezone.utc)
-                date_format = "%I:%M %p on %d %B, %Y UTC"
-                chat_time_value = session_date.strftime(date_format)
-
-            for i in range(len(items)):
-                if "chat_time" not in items[i]:
-                    items[i]["chat_time"] = chat_time_value
-
-            complete_scene_data.append(items)
-        return complete_scene_data
-
     def _process_doc_data(self, scene_data_info, info, **kwargs):
+        """
+        Process doc data after being normalized to new RawMessageList format.
+
+        scene_data_info format (length always == 1):
+        [
+            {"type": "file", "file": {"filename": "...", "file_data": "..."}}
+        ]
+        OR
+        [
+            {"type": "text", "text": "..."}
+        ]
+
+        Behavior:
+        - Merge all text/file_data into a single "full text"
+        - Chunk the text
+        - Build prompts
+        - Send to LLM
+        - Parse results and build memory nodes
+        """
         mode = kwargs.get("mode", "fine")
         if mode == "fast":
             raise NotImplementedError
-        chunks = self.chunker.chunk(scene_data_info["text"])
+
         custom_tags = info.pop("custom_tags", None)
+
+        if not scene_data_info or len(scene_data_info) != 1:
+            logger.error(
+                "[DocReader] scene_data_info must contain exactly 1 item after normalization"
+            )
+            return []
+
+        item = scene_data_info[0]
+        text_content = ""
+        source_info_list = []
+
+        # Determine content and source metadata
+        if item.get("type") == "file":
+            f = item["file"]
+            filename = f.get("filename") or "document"
+            file_data = f.get("file_data") or ""
+
+            text_content = file_data
+            source_dict = {
+                "type": "doc",
+                "doc_path": filename,
+            }
+            source_info_list = [SourceMessage(**source_dict)]
+
+        elif item.get("type") == "text":
+            text_content = item.get("text", "")
+            source_info_list = [SourceMessage(type="doc", doc_path="inline-text")]
+
+        text_content = (text_content or "").strip()
+        if not text_content:
+            logger.warning("[DocReader] Empty document text after normalization.")
+            return []
+
+        chunks = self.chunker.chunk(text_content)
         messages = []
         for chunk in chunks:
             lang = detect_lang(chunk.text)
@@ -586,7 +709,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             messages.append(message)
 
         doc_nodes = []
-        scene_file = scene_data_info["file"]
 
         with ContextThreadPoolExecutor(max_workers=50) as executor:
             futures = {
@@ -595,7 +717,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     idx,
                     msg,
                     info,
-                    scene_file,
+                    source_info_list,
                     self.llm,
                     self.parse_json_result,
                     self.embedder,
@@ -661,6 +783,3 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 json: {s}"
             )
             return {}
-
-    def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:
-        pass

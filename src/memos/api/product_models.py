@@ -68,8 +68,13 @@ class MemCubeRegister(BaseRequest):
 
 
 class ChatRequest(BaseRequest):
-    """Request model for chat operations."""
+    """Request model for chat operations.
 
+    This model is used as the algorithm-facing chat interface, while also
+    remaining backward compatible with older developer-facing APIs.
+    """
+
+    # ==== Basic identifiers ====
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     readable_cube_ids: list[str] | None = Field(
@@ -110,10 +115,48 @@ class ChatRequest(BaseRequest):
     threshold: float = Field(0.5, description="Threshold for filtering references")
 
     # ==== Backward compatibility ====
-    mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
     moscube: bool = Field(
-        False, description="(Deprecated) Whether to use legacy MemOSCube pipeline"
+        False,
+        description="(Deprecated) Whether to use legacy MemOSCube pipeline.",
     )
+
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to use for chat. "
+            "Prefer `readable_cube_ids` / `writable_cube_ids` for multi-cube chat."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _convert_deprecated_fields(self):
+        """
+        Normalize fields for algorithm interface while preserving backward compatibility.
+
+        Rules:
+        - mem_cube_id → readable_cube_ids / writable_cube_ids if they are missing
+        - moscube: log warning when True (deprecated)
+        """
+
+        # ---- mem_cube_id backward compatibility ----
+        if self.mem_cube_id is not None:
+            logger.warning(
+                "ChatRequest.mem_cube_id is deprecated and will be removed in a future version. "
+                "Please migrate to `readable_cube_ids` / `writable_cube_ids`."
+            )
+            if not self.readable_cube_ids:
+                self.readable_cube_ids = [self.mem_cube_id]
+            if not self.writable_cube_ids:
+                self.writable_cube_ids = [self.mem_cube_id]
+
+        # ---- Deprecated moscube flag ----
+        if self.moscube:
+            logger.warning(
+                "ChatRequest.moscube is deprecated. Legacy MemOSCube pipeline "
+                "will be removed in a future version."
+            )
+
+        return self
 
 
 class ChatCompleteRequest(BaseRequest):
@@ -389,6 +432,7 @@ class APIADDRequest(BaseRequest):
         None,
         description="Session ID. If not provided, a default session will be used.",
     )
+    task_id: str | None = Field(None, description="Task ID for monitering async tasks")
 
     # ==== Multi-cube writing ====
     writable_cube_ids: list[str] | None = Field(
@@ -403,6 +447,15 @@ class APIADDRequest(BaseRequest):
             "Use 'async' to enqueue background add (non-blocking), "
             "or 'sync' to add memories in the current call. "
             "Default: 'async'."
+        ),
+    )
+
+    mode: Literal["fast", "fine"] | None = Field(
+        None,
+        description=(
+            "(Internal) Add mode used only when async_mode='sync'. "
+            "If set to 'fast', the handler will use a fast add pipeline. "
+            "Ignored when async_mode='async'."
         ),
     )
 
@@ -501,6 +554,14 @@ class APIADDRequest(BaseRequest):
             - source → info["source"]
             - operation → merged into writable_cube_ids (ignored otherwise)
         """
+        # ---- async_mode / mode relationship ----
+        if self.async_mode == "async" and self.mode is not None:
+            logger.warning(
+                "APIADDRequest.mode is ignored when async_mode='async'. "
+                "Fast add pipeline is only available in sync mode."
+            )
+            self.mode = None
+
         # Convert mem_cube_id to writable_cube_ids (new field takes priority)
         if self.mem_cube_id:
             logger.warning(
