@@ -1499,14 +1499,21 @@ class MOSProduct(MOSCore):
         source: str | None = None,
         user_profile: bool = False,
         session_id: str | None = None,
-        task_id: str | None = None, # Add task_id parameter
+        task_id: str | None = None,  # Add task_id parameter
     ):
         """Add memory for a specific user."""
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
         result = super().add(
-            messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id, task_id=task_id
+            messages,
+            memory_content,
+            doc_path,
+            mem_cube_id,
+            user_id,
+            session_id=session_id,
+            task_id=task_id,
+        )
         if user_profile:
             try:
                 user_interests = memory_content.split("'userInterests': '")[1].split("', '")[0]
