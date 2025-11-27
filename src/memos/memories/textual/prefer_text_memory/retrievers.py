@@ -140,23 +140,18 @@ class NaiveRetriever(BaseRetriever):
             "original_text": self._original_text_reranker,
         }
         reranker_func = reranker_map["naive"]
-        explicit_prefs_mem = reranker_func(
-            query=query, prefs_mem=explicit_prefs_mem, prefs=explicit_prefs, top_k=top_k
-        )
-        implicit_prefs_mem = reranker_func(
-            query=query, prefs_mem=implicit_prefs_mem, prefs=implicit_prefs, top_k=top_k
+        prefs_mem = reranker_func(
+            query=query,
+            prefs_mem=explicit_prefs_mem + implicit_prefs_mem,
+            prefs=explicit_prefs + implicit_prefs,
+            top_k=top_k,
         )
 
         # filter explicit mem by score bigger than threshold
-        explicit_prefs_mem = [
+        prefs_mem = [
             item
-            for item in explicit_prefs_mem
-            if item.metadata.score >= float(os.getenv("PREFERENCE_SEARCH_THRESHOLD", 0.0))
-        ]
-        implicit_prefs_mem = [
-            item
-            for item in implicit_prefs_mem
+            for item in prefs_mem
             if item.metadata.score >= float(os.getenv("PREFERENCE_SEARCH_THRESHOLD", 0.0))
         ]
 
-        return explicit_prefs_mem + implicit_prefs_mem
+        return prefs_mem
