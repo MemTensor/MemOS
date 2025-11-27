@@ -427,6 +427,7 @@ class SingleCubeView(MemCubeView):
             try:
                 message_item_read = ScheduleMessageItem(
                     user_id=add_req.user_id,
+                    task_id=add_req.task_id,
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
@@ -448,6 +449,7 @@ class SingleCubeView(MemCubeView):
         else:
             message_item_add = ScheduleMessageItem(
                 user_id=add_req.user_id,
+                task_id=add_req.task_id,
                 session_id=target_session_id,
                 mem_cube_id=self.cube_id,
                 mem_cube=self.naive_mem_cube,
@@ -487,6 +489,7 @@ class SingleCubeView(MemCubeView):
                 messages_list = [add_req.messages]
                 message_item_pref = ScheduleMessageItem(
                     user_id=add_req.user_id,
+                    task_id=add_req.task_id,
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
