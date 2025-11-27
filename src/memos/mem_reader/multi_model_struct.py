@@ -29,7 +29,8 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         """
         from memos.configs.mem_reader import SimpleStructMemReaderConfig
 
-        simple_config = SimpleStructMemReaderConfig(**config.model_dump())
+        config_dict = config.model_dump(exclude_none=True)
+        simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
         # Initialize MultiModelParser for routing to different parsers
