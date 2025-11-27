@@ -202,10 +202,11 @@ def create_memory(memory_req: MemoryCreateRequest):
             and hasattr(mos_product, "mem_scheduler")
             and mos_product.mem_scheduler
         ):
-            from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
             from uuid import uuid4
 
-            item_id = str(uuid4()) # Generate a unique item_id for this submission
+            from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
+
+            item_id = str(uuid4())  # Generate a unique item_id for this submission
 
             # Get Redis client from scheduler
             if (
@@ -215,14 +216,13 @@ def create_memory(memory_req: MemoryCreateRequest):
                 status_tracker = TaskStatusTracker(mos_product.mem_scheduler.redis_client)
                 # Submit task with "product_add" type
                 status_tracker.task_submitted(
-                    task_id=item_id, # Use generated item_id for internal tracking
+                    task_id=item_id,  # Use generated item_id for internal tracking
                     user_id=memory_req.user_id,
                     task_type="product_add",
                     mem_cube_id=memory_req.mem_cube_id or memory_req.user_id,
                     business_task_id=memory_req.task_id,  # Use memory_req.task_id as business_task_id
                 )
-                status_tracker.task_started(item_id, memory_req.user_id) # Use item_id here
-
+                status_tracker.task_started(item_id, memory_req.user_id)  # Use item_id here
 
         # Execute the add operation
         mos_product.add(
