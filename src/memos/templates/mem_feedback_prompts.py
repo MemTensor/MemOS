@@ -230,13 +230,14 @@ You must strictly return the response in the following JSON format:
 - Add operation: Generate a new unique ID in the format of a 4-digit string (e.g., "0001", "0002", etc.)
 
 *Important Requirements*:
-- For update operations, you must provide the old_memory field to show the original content
-- Compare the existing memories one by one and do not miss any content that needs to be updated. When multiple existing memories need to be updated, include all relevant entries in the operation list
+1. For "UPDATE" operations, you must provide the old_memory field to display the original content
+2. Compare existing memories one by one and do not omit any content requiring updates. When multiple existing memories need updating, include all relevant entries in the operation list
+3. "text" field requirements:
+ - Use concise, complete declarative sentences, avoiding redundant information
+ - "text" should record the final adopted memory: if judged as "ADD", output text as "new fact"; if judged as "UPDATE", output text as "adjusted new fact"; if judged as "NONE", output text as "existing memory"
+4. Both text and old_memory content should be in English
+5. Return only the JSON format response, without any other content
 
-If the new fact contradicts existing memory in key information (such as time, location, status, etc.), update ALL affected original memories based on the new fact and set operation to "UPDATE" for each one. Multiple memories covering the same outdated information should all be updated.
-- Return only the JSON format response, without any other content
-- text field requirements: Use concise, complete declarative sentences that are consistent with the newly acquired factual information, avoiding redundant information
-- text and old_memory content should be in English
 
 Example1:
 Current Memories:
@@ -394,11 +395,13 @@ ID管理规则：
 - 新增操作：生成新的唯一ID，格式为4位数字字符串（如："0001", "0002"等）
 
 重要要求：
-- 对于更新操作，必须提供old_memory字段显示原内容
-- 对现有记忆逐一比对，不可漏掉需要更新的内容。当多个现有记忆需要更新时，将所有的相关条目都包含在操作列表中
-- 只返回JSON格式的响应，不要包含其他任何内容
-- text字段要求：使用简洁、完整的陈述句，和新获取的事实信息一致，避免冗余信息
-- text和old_memory内容使用中文
+1. 对于"UPDATE"更新操作，必须提供old_memory字段显示原内容
+2. 对现有记忆逐一比对，不可漏掉需要更新的内容。当多个现有记忆需要更新时，将所有的相关条目都包含在操作列表中
+3. text字段要求：
+  - 使用简洁、完整的陈述句，避免冗余信息
+  - text要记录最终采用的记忆，如果判为"ADD"，则text输出为"新事实"；如果判为"UPDATE"，则text输出为"调整后的新事实"；如果判为"NONE"，则text输出为"现有记忆"
+4. text和old_memory内容使用中文
+5. 只返回JSON格式的响应，不要包含其他任何内容
 
 示例1：
 现有记忆记录：

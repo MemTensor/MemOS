@@ -194,7 +194,7 @@ class MemFeedback(BaseMemFeedback):
                 operations = self._id_dehallucination(operations, current_memories)
             else:
                 operations = [{"event": "ADD"}]
-
+            # TODO based on the operation, change memory_item memory info
             logger.info(f"[Feedback memory operations]: {operations!s}")
 
             if not operations:
@@ -263,7 +263,7 @@ class MemFeedback(BaseMemFeedback):
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
         retrieved_ids = self.graph_store.search_by_embedding(
-            new_memories_embedding, user_name=user_name, top_k=10, threshold=0.75
+            new_memories_embedding, user_name=user_name, top_k=10, threshold=0.7
         )
         current_memories = [self.graph_store.get_node(item["id"]) for item in retrieved_ids]
         if not retrieved_ids:
