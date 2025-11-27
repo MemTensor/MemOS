@@ -636,7 +636,7 @@ class GeneralScheduler(BaseScheduler):
             )
 
     def _mem_reorganize_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {MEM_ORGANIZE_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
             try:
@@ -652,7 +652,7 @@ class GeneralScheduler(BaseScheduler):
                     return
 
                 logger.info(
-                    f"Processing mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
+                    f"Processing mem_reorganize for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
                 )
 
                 # Get the text memory from the mem_cube
@@ -795,11 +795,11 @@ class GeneralScheduler(BaseScheduler):
                         self._submit_web_logs([event])
 
                 logger.info(
-                    f"Successfully processed mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                    f"Successfully processed mem_reorganize for user_id={user_id}, mem_cube_id={mem_cube_id}"
                 )
 
             except Exception as e:
-                logger.error(f"Error processing mem_read message: {e}", exc_info=True)
+                logger.error(f"Error processing mem_reorganize message: {e}", exc_info=True)
 
         with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
             futures = [executor.submit(process_message, msg) for msg in messages]
@@ -858,7 +858,7 @@ class GeneralScheduler(BaseScheduler):
 
         except Exception:
             logger.error(
-                f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
+                f"Error in _process_memories_with_reorganize: {traceback.format_exc()}", exc_info=True
             )
 
     def _pref_add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
