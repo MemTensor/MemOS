@@ -25,8 +25,7 @@ class ToolParser(BaseMessageParser):
             embedder: Embedder for generating embeddings
             llm: Optional LLM for fine mode processing
         """
-        self.embedder = embedder
-        self.llm = llm
+        super().__init__(embedder, llm)
 
     def parse_fast(
         self,

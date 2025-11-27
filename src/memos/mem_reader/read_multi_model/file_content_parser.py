@@ -32,8 +32,7 @@ class FileContentParser(BaseMessageParser):
             llm: Optional LLM for fine mode processing
             parser: Optional parser for parsing file contents
         """
-        self.embedder = embedder
-        self.llm = llm
+        super().__init__(embedder, llm)
         self.parser = parser
 
     def _parse_file(self, file_info: dict[str, Any]) -> str:

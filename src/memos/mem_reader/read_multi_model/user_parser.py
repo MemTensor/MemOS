@@ -15,7 +15,11 @@ logger = get_logger(__name__)
 
 
 class UserParser(BaseMessageParser):
-    """Parser for user messages."""
+    """Parser for user messages.
+
+    Uses the default parse_fast implementation from BaseMessageParser.
+    Can override parse_fine for custom fine mode behavior.
+    """
 
     def __init__(self, embedder: BaseEmbedder, llm: BaseLLM | None = None):
         """
@@ -25,8 +29,7 @@ class UserParser(BaseMessageParser):
             embedder: Embedder for generating embeddings
             llm: Optional LLM for fine mode processing
         """
-        self.embedder = embedder
-        self.llm = llm
+        super().__init__(embedder, llm)
 
     def parse_fast(
         self,

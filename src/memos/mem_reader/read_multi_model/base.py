@@ -4,20 +4,71 @@ This module defines the base interface for parsing different message types
 in both fast and fine modes.
 """
 
+import re
+
 from abc import ABC, abstractmethod
 from typing import Any
 
 from memos import log
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 
 
 logger = log.get_logger(__name__)
 
 
+def _derive_key(text: str, max_len: int = 80) -> str:
+    """Default key when without LLM: first max_len words."""
+    if not text:
+        return ""
+    sent = re.split(r"[。！？!?]\s*|\n", text.strip())[0]
+    return (sent[:max_len]).strip()
+
+
+def _extract_text_from_content(content: Any) -> str:
+    """
+    Extract text from message content.
+    Handles str, list of parts, or None.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, dict):
+                part_type = part.get("type", "")
+                if part_type == "text":
+                    texts.append(part.get("text", ""))
+                elif part_type == "file":
+                    file_info = part.get("file", {})
+                    texts.append(file_info.get("file_data") or file_info.get("filename", "[file]"))
+                else:
+                    texts.append(f"[{part_type}]")
+            else:
+                texts.append(str(part))
+        return " ".join(texts)
+    return str(content)
+
+
 class BaseMessageParser(ABC):
     """Base interface for message type parsers."""
 
-    @abstractmethod
+    def __init__(self, embedder, llm=None):
+        """
+        Initialize BaseMessageParser.
+
+        Args:
+            embedder: Embedder for generating embeddings
+            llm: Optional LLM for fine mode processing
+        """
+        self.embedder = embedder
+        self.llm = llm
+
     def parse_fast(
         self,
         message: Any,
@@ -25,7 +76,15 @@ class BaseMessageParser(ABC):
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """
-        Parse message in fast mode (no LLM calls, quick processing).
+        Default parse_fast implementation (equivalent to simple_struct fast mode).
+
+        Fast mode logic:
+        - Extract text content from message
+        - Determine memory_type based on role (UserMemory for user, LongTermMemory otherwise)
+        - Create TextualMemoryItem with tags=["mode:fast"]
+        - No LLM calls, quick processing
+
+        Subclasses can override this method for custom behavior.
 
         Args:
             message: The message to parse
@@ -35,37 +94,54 @@ class BaseMessageParser(ABC):
         Returns:
             List of TextualMemoryItem objects
         """
-        res = []
-        allowed_roles = {"user", "assistant", "system"}
         if not isinstance(message, dict):
-            logger.warning(
-                "Base Parser can only tackle with Naive Chat message, "
-                f"your messages is {message}, skipping"
-            )
-            return res
+            logger.warning(f"[BaseParser] Expected dict, got {type(message)}")
+            return []
 
-        role = message.get("role") or ""
-        role = role if isinstance(role, str) else str(role)
-        role = role.strip().lower()
-        if role not in allowed_roles:
-            logger.warning(
-                f"Base Parser can only tackle with Naive Chat message with "
-                f"role in {allowed_roles}, your messages role is {role}, "
-                f"skipping"
-            )
-            return res
-
-        content = message.get("content", "")
-        if not isinstance(content, str):
-            logger.warning(
-                f"Base Parser expects message content with str, your messages content"
-                f"is {content!s}, skipping"
-            )
-            return res
+        # Extract text content
+        content = _extract_text_from_content(message.get("content"))
         if not content:
-            return res
+            return []
 
-        return TextualMemoryItem()
+        # Determine memory_type based on role (equivalent to simple_struct logic)
+        role = message.get("role", "").strip().lower()
+        memory_type = "UserMemory" if role == "user" else "LongTermMemory"
+
+        # Create source info
+        source_info = SourceMessage(
+            type="chat",
+            role=role if role else None,
+            chat_time=message.get("chat_time"),
+            message_id=message.get("message_id"),
+            content=content,
+        )
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # Create memory item (equivalent to _make_memory_item)
+        memory_item = TextualMemoryItem(
+            memory=content,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=user_id,
+                session_id=session_id,
+                memory_type=memory_type,
+                status="activated",
+                tags=["mode:fast"],
+                key=_derive_key(content),
+                embedding=self.embedder.embed([content])[0],
+                usage=[],
+                sources=[source_info],
+                background="",
+                confidence=0.99,
+                type="fact",
+                info=info_,
+            ),
+        )
+
+        return [memory_item]
 
     @abstractmethod
     def parse_fine(
