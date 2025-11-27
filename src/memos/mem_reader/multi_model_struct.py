@@ -39,8 +39,16 @@ class MultiModelStructMemReader(SimpleStructMemReader):
             parser=None,
         )
 
+    def _concat_multi_model_memories(
+        self, all_memory_items: list[TextualMemoryItem]
+    ) -> list[TextualMemoryItem]:
+        # TODO: concat multi_model_memories
+        return all_memory_items
+
     @timed
-    def _process_multi_model_data(self, scene_data_info: MessagesType, info, **kwargs):
+    def _process_multi_model_data(
+        self, scene_data_info: MessagesType, info, **kwargs
+    ) -> list[TextualMemoryItem]:
         """
         Process multi-model data using MultiModelParser.
 
@@ -59,14 +67,44 @@ class MultiModelStructMemReader(SimpleStructMemReader):
             for msg in scene_data_info:
                 items = self.multi_model_parser.parse(msg, info, mode=mode, **kwargs)
                 all_memory_items.extend(items)
-            return all_memory_items
+            fast_memory_items = self._concat_multi_model_memories(all_memory_items)
+
         else:
             # Parse as single message
-            return self.multi_model_parser.parse(scene_data_info, info, mode=mode, **kwargs)
+            fast_memory_items = self.multi_model_parser.parse(
+                scene_data_info, info, mode=mode, **kwargs
+            )
+
+        if mode == "fast":
+            return fast_memory_items
+        else:
+            # TODO: parallel call llm and get fine multi model items
+            # Part A: call llm
+            fine_memory_items = []
+            fine_memory_items_string_parser = []
+            fine_memory_items.extend(fine_memory_items_string_parser)
+            # Part B: get fine multi model items
+
+            for fast_item in fast_memory_items:
+                sources = fast_item.metadata.sources
+                for source in sources:
+                    items = self.multi_model_parser.process_transfer(
+                        source, context_items=[fast_item]
+                    )
+                    fine_memory_items.extend(items)
+            logger.warning("Not Implemented Now!")
+            return fine_memory_items
 
     @timed
-    def _process_transfer_multi_model_data(self, raw_node: TextualMemoryItem):
-        raise NotImplementedError
+    def _process_transfer_multi_model_data(
+        self, raw_node: TextualMemoryItem
+    ) -> list[TextualMemoryItem]:
+        sources = raw_node.metadata.sources
+        fine_memory_items = []
+        for source in sources:
+            items = self.multi_model_parser.process_transfer(source, context_items=[raw_node])
+            fine_memory_items.extend(items)
+        return fine_memory_items
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
         """
@@ -106,7 +144,10 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         return memory_list
 
     def fine_transfer_simple_mem(
-        self, input_memories: list[TextualMemoryItem], type: str
+        self,
+        input_memories: list[TextualMemoryItem],
+        type: str,
+        custom_tags: list[str] | None = None,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
