@@ -68,14 +68,14 @@ class MultiModelStructMemReader(SimpleStructMemReader):
             # Parse each message in the list
             all_memory_items = []
             for msg in scene_data_info:
-                items = self.multi_model_parser.parse(msg, info, mode=mode, **kwargs)
+                items = self.multi_model_parser.parse(msg, info, mode="fast", **kwargs)
                 all_memory_items.extend(items)
             fast_memory_items = self._concat_multi_model_memories(all_memory_items)
 
         else:
             # Parse as single message
             fast_memory_items = self.multi_model_parser.parse(
-                scene_data_info, info, mode=mode, **kwargs
+                scene_data_info, info, mode="fast", **kwargs
             )
 
         if mode == "fast":
@@ -123,6 +123,10 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         }
 
         fine_memory_items = []
+        # Part A: call llm
+        fine_memory_items_string_parser = []
+        fine_memory_items.extend(fine_memory_items_string_parser)
+        # Part B: get fine multi model items
         for source in sources:
             items = self.multi_model_parser.process_transfer(
                 source, context_items=[raw_node], info=info, custom_tags=custom_tags
