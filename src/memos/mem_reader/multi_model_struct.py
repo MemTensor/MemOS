@@ -58,6 +58,9 @@ class MultiModelStructMemReader(SimpleStructMemReader):
             **kwargs: Additional parameters (mode, etc.)
         """
         mode = kwargs.get("mode", "fine")
+        # Pop custom_tags from info (same as simple_struct.py)
+        # must pop here, avoid add to info, only used in sync fine mode
+        custom_tags = info.pop("custom_tags", None) if isinstance(info, dict) else None
 
         # Use MultiModelParser to parse the scene data
         # If it's a list, parse each item; otherwise parse as single message
@@ -89,7 +92,7 @@ class MultiModelStructMemReader(SimpleStructMemReader):
                 sources = fast_item.metadata.sources
                 for source in sources:
                     items = self.multi_model_parser.process_transfer(
-                        source, context_items=[fast_item]
+                        source, context_items=[fast_item], custom_tags=custom_tags
                     )
                     fine_memory_items.extend(items)
             logger.warning("Not Implemented Now!")
@@ -97,12 +100,33 @@ class MultiModelStructMemReader(SimpleStructMemReader):
 
     @timed
     def _process_transfer_multi_model_data(
-        self, raw_node: TextualMemoryItem
+        self,
+        raw_node: TextualMemoryItem,
+        custom_tags: list[str] | None = None,
     ) -> list[TextualMemoryItem]:
-        sources = raw_node.metadata.sources
+        """
+        Process transfer for multi-model data.
+
+        Each source is processed independently by its corresponding parser,
+        which knows how to rebuild the original message and parse it in fine mode.
+        """
+        sources = raw_node.metadata.sources or []
+        if not sources:
+            logger.warning("[MultiModelStruct] No sources found in raw_node")
+            return []
+
+        # Extract info from raw_node (same as simple_struct.py)
+        info = {
+            "user_id": raw_node.metadata.user_id,
+            "session_id": raw_node.metadata.session_id,
+            **(raw_node.metadata.info or {}),
+        }
+
         fine_memory_items = []
         for source in sources:
-            items = self.multi_model_parser.process_transfer(source, context_items=[raw_node])
+            items = self.multi_model_parser.process_transfer(
+                source, context_items=[raw_node], info=info, custom_tags=custom_tags
+            )
             fine_memory_items.extend(items)
         return fine_memory_items
 
@@ -157,7 +181,9 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(self._process_transfer_multi_model_data, scene_data_info)
+                executor.submit(
+                    self._process_transfer_multi_model_data, scene_data_info, custom_tags
+                )
                 for scene_data_info in input_memories
             ]
             for future in concurrent.futures.as_completed(futures):

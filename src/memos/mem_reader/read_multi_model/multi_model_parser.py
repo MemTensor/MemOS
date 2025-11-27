@@ -186,7 +186,7 @@ class MultiModelParser:
         Args:
             source: SourceMessage to process
             context_items: Optional list of TextualMemoryItem for context
-            **kwargs: Additional parameters (e.g., info dict with user_id, session_id)
+            **kwargs: Additional parameters (e.g., info dict with user_id, session_id, custom_tags)
 
         Returns:
             List of TextualMemoryItem objects from fine mode parsing
@@ -194,12 +194,6 @@ class MultiModelParser:
         if not self.llm:
             logger.warning("[MultiModelParser] LLM not available for process_transfer")
             return []
-
-        # Determine which parser to use based on source type
-        # Try to rebuild a message from source to determine parser
-        # We need to find the parser that created this source
-        # For now, try each parser's rebuild_from_source to see which one works
-        # Or we could add a parser_id field to SourceMessage
 
         # Extract info from context_items if available
         info = kwargs.get("info", {})
@@ -210,6 +204,9 @@ class MultiModelParser:
                     "user_id": first_item.metadata.user_id,
                     "session_id": first_item.metadata.session_id,
                 }
+
+        # Extract custom_tags from kwargs (same as simple_struct.py)
+        custom_tags = kwargs.get("custom_tags")
 
         # Try to determine parser from source.type
         parser = None
@@ -232,9 +229,11 @@ class MultiModelParser:
             logger.error(f"[MultiModelParser] Error rebuilding message from source: {e}")
             return []
 
-        # Parse in fine mode
+        # Parse in fine mode (pass custom_tags to parse_fine)
         try:
-            return parser.parse_fine(message, info, context_items=context_items, **kwargs)
+            return parser.parse_fine(
+                message, info, context_items=context_items, custom_tags=custom_tags, **kwargs
+            )
         except Exception as e:
             logger.error(f"[MultiModelParser] Error parsing in fine mode: {e}")
             return []
