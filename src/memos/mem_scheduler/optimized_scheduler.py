@@ -13,16 +13,18 @@ from memos.mem_scheduler.general_modules.api_misc import SchedulerAPIModule
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
     API_MIX_SEARCH_LABEL,
-    MemCubeID,
-    SearchMode,
-    UserID,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.utils.api_utils import format_textual_memory_item
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.types import UserContext
+from memos.types import (
+    MemCubeID,
+    SearchMode,
+    UserContext,
+    UserID,
+)
 
 
 if TYPE_CHECKING:

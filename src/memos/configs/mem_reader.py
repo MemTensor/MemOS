@@ -45,6 +45,10 @@ class SimpleStructMemReaderConfig(BaseMemReaderConfig):
     """SimpleStruct MemReader configuration class."""
 
 
+class MultiModelStructMemReaderConfig(BaseMemReaderConfig):
+    """MultiModelStruct MemReader configuration class."""
+
+
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):
     """StrategyStruct MemReader configuration class."""
 
@@ -57,6 +61,7 @@ class MemReaderConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "simple_struct": SimpleStructMemReaderConfig,
+        "multimodel_struct": MultiModelStructMemReaderConfig,
         "strategy_struct": StrategyStructMemReaderConfig,
     }
 
