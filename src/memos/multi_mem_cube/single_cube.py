@@ -436,7 +436,6 @@ class SingleCubeView(MemCubeView):
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
                     info=add_req.info,
-                    task_id=add_req.task_id,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -458,7 +457,6 @@ class SingleCubeView(MemCubeView):
                 content=json.dumps(mem_ids),
                 timestamp=datetime.utcnow(),
                 user_name=self.cube_id,
-                task_id=add_req.task_id,
             )
             self.mem_scheduler.submit_messages(messages=[message_item_add])
 
@@ -491,7 +489,6 @@ class SingleCubeView(MemCubeView):
                 messages_list = [add_req.messages]
                 message_item_pref = ScheduleMessageItem(
                     user_id=add_req.user_id,
-                    task_id=add_req.task_id,
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
@@ -499,6 +496,7 @@ class SingleCubeView(MemCubeView):
                     content=json.dumps(messages_list),
                     timestamp=datetime.utcnow(),
                     info=add_req.info,
+                    user_name=self.cube_id,
                     task_id=add_req.task_id,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_pref])
