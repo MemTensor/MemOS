@@ -324,35 +324,35 @@ class GeneralScheduler(BaseScheduler):
 
                         events = []
                         if add_content:
-                            events.append(
-                                self.create_event_log(
-                                    label="addMemory",
-                                    from_memory_type=USER_INPUT_TYPE,
-                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    user_id=msg.user_id,
-                                    mem_cube_id=msg.mem_cube_id,
-                                    mem_cube=self.current_mem_cube,
-                                    memcube_log_content=add_content,
-                                    metadata=add_meta,
-                                    memory_len=len(add_content),
-                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
-                                )
+                            event = self.create_event_log(
+                                label="addMemory",
+                                from_memory_type=USER_INPUT_TYPE,
+                                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                                user_id=msg.user_id,
+                                mem_cube_id=msg.mem_cube_id,
+                                mem_cube=self.current_mem_cube,
+                                memcube_log_content=add_content,
+                                metadata=add_meta,
+                                memory_len=len(add_content),
+                                memcube_name=self._map_memcube_name(msg.mem_cube_id),
                             )
+                            event.task_id = msg.task_id
+                            events.append(event)
                         if update_content:
-                            events.append(
-                                self.create_event_log(
-                                    label="updateMemory",
-                                    from_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    user_id=msg.user_id,
-                                    mem_cube_id=msg.mem_cube_id,
-                                    mem_cube=self.current_mem_cube,
-                                    memcube_log_content=update_content,
-                                    metadata=update_meta,
-                                    memory_len=len(update_content),
-                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
-                                )
+                            event = self.create_event_log(
+                                label="updateMemory",
+                                from_memory_type=LONG_TERM_MEMORY_TYPE,
+                                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                                user_id=msg.user_id,
+                                mem_cube_id=msg.mem_cube_id,
+                                mem_cube=self.current_mem_cube,
+                                memcube_log_content=update_content,
+                                metadata=update_meta,
+                                memory_len=len(update_content),
+                                memcube_name=self._map_memcube_name(msg.mem_cube_id),
                             )
+                            event.task_id = msg.task_id
+                            events.append(event)
                         if events:
                             self._submit_web_logs(events)
 
