@@ -858,7 +858,8 @@ class GeneralScheduler(BaseScheduler):
 
         except Exception:
             logger.error(
-                f"Error in _process_memories_with_reorganize: {traceback.format_exc()}", exc_info=True
+                f"Error in _process_memories_with_reorganize: {traceback.format_exc()}",
+                exc_info=True,
             )
 
     def _pref_add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
