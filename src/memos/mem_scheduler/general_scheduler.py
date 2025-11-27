@@ -1,6 +1,7 @@
 import concurrent.futures
 import contextlib
 import json
+import os
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -19,7 +20,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
     PREF_ADD_LABEL,
     QUERY_LABEL,
     USER_INPUT_TYPE,
-    WORKING_MEMORY_TYPE,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
