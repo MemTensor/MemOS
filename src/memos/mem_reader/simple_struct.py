@@ -331,7 +331,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         windows = list(self._iter_chat_windows(scene_data_info))
         custom_tags = info.pop(
             "custom_tags", None
-        )  # msut pop here, avoid add to info, only used in sync fine mode
+        )  # must pop here, avoid add to info, only used in sync fine mode
 
         if mode == "fast":
             logger.debug("Using unified Fast Mode")
@@ -470,7 +470,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def _read_memory(
         self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
-    ):
+    ) -> list[list[TextualMemoryItem]]:
         """
         1. raw file:
         [

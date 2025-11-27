@@ -85,7 +85,7 @@ class MultiModelStructMemReader(SimpleStructMemReader):
 
     def _read_memory(
         self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
-    ):
+    ) -> list[list[TextualMemoryItem]]:
         list_scene_data_info = self.get_scene_data_info(messages, type)
 
         memory_list = []

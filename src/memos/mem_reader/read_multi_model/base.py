@@ -7,7 +7,11 @@ in both fast and fine modes.
 from abc import ABC, abstractmethod
 from typing import Any
 
+from memos import log
 from memos.memories.textual.item import TextualMemoryItem
+
+
+logger = log.get_logger(__name__)
 
 
 class BaseMessageParser(ABC):
@@ -31,6 +35,37 @@ class BaseMessageParser(ABC):
         Returns:
             List of TextualMemoryItem objects
         """
+        res = []
+        allowed_roles = {"user", "assistant", "system"}
+        if not isinstance(message, dict):
+            logger.warning(
+                "Base Parser can only tackle with Naive Chat message, "
+                f"your messages is {message}, skipping"
+            )
+            return res
+
+        role = message.get("role") or ""
+        role = role if isinstance(role, str) else str(role)
+        role = role.strip().lower()
+        if role not in allowed_roles:
+            logger.warning(
+                f"Base Parser can only tackle with Naive Chat message with "
+                f"role in {allowed_roles}, your messages role is {role}, "
+                f"skipping"
+            )
+            return res
+
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            logger.warning(
+                f"Base Parser expects message content with str, your messages content"
+                f"is {content!s}, skipping"
+            )
+            return res
+        if not content:
+            return res
+
+        return TextualMemoryItem()
 
     @abstractmethod
     def parse_fine(
