@@ -547,9 +547,21 @@ class SingleCubeView(MemCubeView):
         """
         target_session_id = add_req.session_id or "default_session"
 
+        # Decide extraction mode:
+        # - async: always fast (ignore add_req.mode)
+        # - sync: use add_req.mode == "fast" to switch to fast pipeline, otherwise fine
+        if sync_mode == "async":
+            extract_mode = "fast"
+        else:  # sync
+            extract_mode = "fast" if add_req.mode == "fast" else "fine"
+
         self.logger.info(
-            f"[SingleCubeView] cube={user_context.mem_cube_id} "
-            f"Processing text memory with mode: {sync_mode}"
+            "[SingleCubeView] cube=%s Processing text memory "
+            "with sync_mode=%s, extract_mode=%s, add_mode=%s",
+            user_context.mem_cube_id,
+            sync_mode,
+            extract_mode,
+            add_req.mode,
         )
 
         # Extract memories
@@ -562,7 +574,7 @@ class SingleCubeView(MemCubeView):
                 "user_id": add_req.user_id,
                 "session_id": target_session_id,
             },
-            mode="fast" if sync_mode == "async" else "fine",
+            mode=extract_mode,
         )
         flattened_local = [mm for m in memories_local for mm in m]
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
