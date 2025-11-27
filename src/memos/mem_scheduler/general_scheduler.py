@@ -189,6 +189,7 @@ class GeneralScheduler(BaseScheduler):
                             memory_len=1,
                             memcube_name=self._map_memcube_name(msg.mem_cube_id),
                         )
+                        event.task_id = msg.task_id
                         self._submit_web_logs([event])
                 except Exception:
                     logger.exception("Failed to record addMessage log for query")
@@ -233,6 +234,7 @@ class GeneralScheduler(BaseScheduler):
                             memory_len=1,
                             memcube_name=self._map_memcube_name(msg.mem_cube_id),
                         )
+                        event.task_id = msg.task_id
                         self._submit_web_logs([event])
                 except Exception:
                     logger.exception("Failed to record addMessage log for answer")
@@ -797,6 +799,50 @@ class GeneralScheduler(BaseScheduler):
                 logger.info(
                     f"Successfully processed and add preferences for user_id={user_id}, mem_cube_id={mem_cube_id}, pref_ids={pref_ids}"
                 )
+
+                # Create and submit log for web display
+                # Only send logs if RabbitMQ is configured with direct exchange (cloud service scenario)
+                should_send_log = (
+                    self.rabbitmq_config is not None
+                    and hasattr(self.rabbitmq_config, "exchange_type")
+                    and self.rabbitmq_config.exchange_type == "direct"
+                )
+                if pref_ids and should_send_log:
+                    pref_content = []
+                    pref_meta = []
+                    for i, pref_mem_item in enumerate(pref_memories):
+                        if i < len(pref_ids):
+                            pref_content.append(
+                                {
+                                    "content": pref_mem_item.memory,
+                                    "ref_id": pref_ids[i],
+                                }
+                            )
+                            pref_meta.append(
+                                {
+                                    "ref_id": pref_ids[i],
+                                    "id": pref_ids[i],
+                                    "memory": pref_mem_item.memory,
+                                    "memory_type": getattr(
+                                        pref_mem_item.metadata, "memory_type", "preference"
+                                    ),
+                                }
+                            )
+
+                    event = self.create_event_log(
+                        label="addMemory",
+                        from_memory_type=USER_INPUT_TYPE,
+                        to_memory_type=LONG_TERM_MEMORY_TYPE,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        memcube_log_content=pref_content,
+                        metadata=pref_meta,
+                        memory_len=len(pref_content),
+                        memcube_name=self._map_memcube_name(mem_cube_id),
+                    )
+                    event.task_id = message.task_id
+                    self._submit_web_logs([event])
 
             except Exception as e:
                 logger.error(f"Error processing pref_add message: {e}", exc_info=True)

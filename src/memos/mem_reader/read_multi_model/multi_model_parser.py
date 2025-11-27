@@ -9,7 +9,7 @@ from typing import Any
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import SourceMessage, TextualMemoryItem
 from memos.types import MessagesType
 
 from .assistant_parser import AssistantParser
@@ -168,3 +168,72 @@ class MultiModelParser:
             items = self.parse(message, info, mode, **kwargs)
             results.append(items)
         return results
+
+    def process_transfer(
+        self,
+        source: SourceMessage,
+        context_items: list[TextualMemoryItem] | None = None,
+        **kwargs,
+    ) -> list[TextualMemoryItem]:
+        """
+        Process transfer from SourceMessage to fine memory items.
+
+        This method:
+        1. Determines which parser to use based on source type
+        2. Rebuilds message from source using parser's rebuild_from_source
+        3. Calls parse_fine on the appropriate parser
+
+        Args:
+            source: SourceMessage to process
+            context_items: Optional list of TextualMemoryItem for context
+            **kwargs: Additional parameters (e.g., info dict with user_id, session_id, custom_tags)
+
+        Returns:
+            List of TextualMemoryItem objects from fine mode parsing
+        """
+        if not self.llm:
+            logger.warning("[MultiModelParser] LLM not available for process_transfer")
+            return []
+
+        # Extract info from context_items if available
+        info = kwargs.get("info", {})
+        if context_items and len(context_items) > 0:
+            first_item = context_items[0]
+            if not info:
+                info = {
+                    "user_id": first_item.metadata.user_id,
+                    "session_id": first_item.metadata.session_id,
+                }
+
+        # Extract custom_tags from kwargs (same as simple_struct.py)
+        custom_tags = kwargs.get("custom_tags")
+
+        # Try to determine parser from source.type
+        parser = None
+        if source.type == "file":
+            parser = self.file_content_parser
+        elif source.type == "text":
+            parser = self.text_content_parser
+        elif source.role:
+            # Chat message, use role parser
+            parser = self.role_parsers.get(source.role)
+
+        if not parser:
+            logger.warning(f"[MultiModelParser] Could not determine parser for source: {source}")
+            return []
+
+        # Rebuild message from source using parser's method
+        try:
+            message = parser.rebuild_from_source(source)
+        except Exception as e:
+            logger.error(f"[MultiModelParser] Error rebuilding message from source: {e}")
+            return []
+
+        # Parse in fine mode (pass custom_tags to parse_fine)
+        try:
+            return parser.parse_fine(
+                message, info, context_items=context_items, custom_tags=custom_tags, **kwargs
+            )
+        except Exception as e:
+            logger.error(f"[MultiModelParser] Error parsing in fine mode: {e}")
+            return []
