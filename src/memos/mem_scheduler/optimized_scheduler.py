@@ -13,16 +13,18 @@ from memos.mem_scheduler.general_modules.api_misc import SchedulerAPIModule
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.schemas.general_schemas import (
     API_MIX_SEARCH_LABEL,
-    MemCubeID,
-    SearchMode,
-    UserID,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.utils.api_utils import format_textual_memory_item
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
-from memos.types import UserContext
+from memos.types import (
+    MemCubeID,
+    SearchMode,
+    UserContext,
+    UserID,
+)
 
 
 if TYPE_CHECKING:
@@ -69,7 +71,6 @@ class OptimizedScheduler(GeneralScheduler):
                 "session_id": session_id,
                 "top_k": search_req.top_k,
                 "internet_search": search_req.internet_search,
-                "moscube": search_req.moscube,
                 "chat_history": search_req.chat_history,
             },
             "user_context": {"mem_cube_id": user_context.mem_cube_id},
@@ -112,7 +113,6 @@ class OptimizedScheduler(GeneralScheduler):
             top_k=search_req.top_k,
             mode=mode,
             manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
             search_filter=search_filter,
             info={
                 "user_id": search_req.user_id,
@@ -154,7 +154,6 @@ class OptimizedScheduler(GeneralScheduler):
             top_k=search_req.top_k,
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
-            moscube=search_req.moscube,
             search_filter=search_filter,
             info=info,
         )

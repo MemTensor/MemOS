@@ -1,24 +1,4 @@
-import os
-
-from enum import Enum
 from pathlib import Path
-from typing import NewType
-
-
-class SearchMode(str, Enum):
-    """Enumeration for search modes."""
-
-    FAST = "fast"
-    FINE = "fine"
-    MIXTURE = "mixture"
-
-
-class FineStrategy(str, Enum):
-    """Enumeration for fine strategies."""
-
-    REWRITE = "rewrite"
-    RECREATE = "recreate"
-    DEEP_SEARCH = "deep_search"
 
 
 FILE_PATH = Path(__file__).absolute()
@@ -29,6 +9,8 @@ ANSWER_LABEL = "answer"
 ADD_LABEL = "add"
 MEM_READ_LABEL = "mem_read"
 MEM_ORGANIZE_LABEL = "mem_organize"
+MEM_UPDATE_LABEL = "mem_update"
+MEM_ARCHIVE_LABEL = "mem_archive"
 API_MIX_SEARCH_LABEL = "api_mix_search"
 PREF_ADD_LABEL = "pref_add"
 
@@ -79,22 +61,3 @@ MONITOR_ACTIVATION_MEMORY_TYPE = "MonitorActivationMemoryType"
 DEFAULT_MAX_QUERY_KEY_WORDS = 1000
 DEFAULT_WEIGHT_VECTOR_FOR_RANKING = [0.9, 0.05, 0.05]
 DEFAULT_MAX_WEB_LOG_QUEUE_SIZE = 50
-
-
-# new types
-UserID = NewType("UserID", str)
-MemCubeID = NewType("CubeID", str)
-
-# algorithm strategies
-DEFAULT_FINE_STRATEGY = FineStrategy.REWRITE
-
-# Read fine strategy from environment variable `FINE_STRATEGY`.
-# If provided and valid, use it; otherwise fall back to default.
-_env_fine_strategy = os.getenv("FINE_STRATEGY")
-if _env_fine_strategy:
-    try:
-        FINE_STRATEGY = FineStrategy(_env_fine_strategy)
-    except ValueError:
-        FINE_STRATEGY = DEFAULT_FINE_STRATEGY
-else:
-    FINE_STRATEGY = DEFAULT_FINE_STRATEGY

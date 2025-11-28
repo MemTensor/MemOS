@@ -14,196 +14,215 @@ from typing import Any
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from memos.api.handlers.formatters_handler import to_iter
+# Imports for new implementation
+from memos.api.product_models import StatusResponse, StatusResponseItem
 from memos.log import get_logger
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
 
 
 def handle_scheduler_status(
-    user_name: str | None = None,
-    mem_scheduler: Any | None = None,
-    instance_id: str = "",
-) -> dict[str, Any]:
+    user_id: str, status_tracker: TaskStatusTracker, task_id: str | None = None
+) -> StatusResponse:
     """
-    Get scheduler running status.
+    Get scheduler running status for one or all tasks of a user.
 
-    Retrieves the number of running tasks for a specific user or globally.
+    Retrieves task statuses from the persistent TaskStatusTracker.
 
     Args:
-        user_name: Optional specific user name to filter tasks
-        mem_scheduler: Scheduler instance
-        instance_id: Instance ID for response
+        user_id: User ID to query for.
+        status_tracker: The TaskStatusTracker instance.
+        task_id: Optional Task ID to query. Can be either:
+                 - business_task_id (will aggregate all related item statuses)
+                 - item_id (will return single item status)
 
     Returns:
-        Dictionary with status information
+        StatusResponse with a list of task statuses.
 
     Raises:
-        HTTPException: If status retrieval fails
+        HTTPException: If a specific task is not found.
     """
+    response_data: list[StatusResponseItem] = []
+
     try:
-        if user_name:
-            running = mem_scheduler.dispatcher.get_running_tasks(
-                lambda task: getattr(task, "mem_cube_id", None) == user_name
-            )
-            tasks_iter = to_iter(running)
-            running_count = len(tasks_iter)
-            return {
-                "message": "ok",
-                "data": {
-                    "scope": "user",
-                    "user_name": user_name,
-                    "running_tasks": running_count,
-                    "timestamp": time.time(),
-                    "instance_id": instance_id,
-                },
-            }
+        if task_id:
+            # First try as business_task_id (aggregated query)
+            business_task_data = status_tracker.get_task_status_by_business_id(task_id, user_id)
+            if business_task_data:
+                response_data.append(
+                    StatusResponseItem(task_id=task_id, status=business_task_data["status"])
+                )
+            else:
+                # Fallback: try as item_id (single item query)
+                item_task_data = status_tracker.get_task_status(task_id, user_id)
+                if not item_task_data:
+                    raise HTTPException(
+                        status_code=404, detail=f"Task {task_id} not found for user {user_id}"
+                    )
+                response_data.append(
+                    StatusResponseItem(task_id=task_id, status=item_task_data["status"])
+                )
         else:
-            running_all = mem_scheduler.dispatcher.get_running_tasks(lambda _t: True)
-            tasks_iter = to_iter(running_all)
-            running_count = len(tasks_iter)
+            all_tasks = status_tracker.get_all_tasks_for_user(user_id)
+            # The plan returns an empty list, which is good.
+            # No need to check "if not all_tasks" explicitly before the list comprehension
+            response_data = [
+                StatusResponseItem(task_id=tid, status=t_data["status"])
+                for tid, t_data in all_tasks.items()
+            ]
 
-            task_count_per_user: dict[str, int] = {}
-            for task in tasks_iter:
-                cube = getattr(task, "mem_cube_id", "unknown")
-                task_count_per_user[cube] = task_count_per_user.get(cube, 0) + 1
-
-            try:
-                metrics_snapshot = mem_scheduler.dispatcher.metrics.snapshot()
-            except Exception:
-                metrics_snapshot = {}
-
-            return {
-                "message": "ok",
-                "data": {
-                    "scope": "global",
-                    "running_tasks": running_count,
-                    "task_count_per_user": task_count_per_user,
-                    "timestamp": time.time(),
-                    "instance_id": instance_id,
-                    "metrics": metrics_snapshot,
-                },
-            }
+        return StatusResponse(data=response_data)
+    except HTTPException:
+        # Re-raise HTTPException directly to preserve its status code (e.g., 404)
+        raise
     except Exception as err:
-        logger.error("Failed to get scheduler status: %s", traceback.format_exc())
+        logger.error(f"Failed to get scheduler status for user {user_id}: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Failed to get scheduler status") from err
 
 
 def handle_scheduler_wait(
     user_name: str,
+    status_tracker: TaskStatusTracker,
     timeout_seconds: float = 120.0,
-    poll_interval: float = 0.2,
-    mem_scheduler: Any | None = None,
+    poll_interval: float = 0.5,
 ) -> dict[str, Any]:
     """
-    Wait until scheduler is idle for a specific user.
+    Wait until the scheduler is idle for a specific user.
 
-    Blocks until scheduler has no running tasks for the given user, or timeout.
+    Blocks and polls the new /scheduler/status endpoint until no tasks are in
+    'waiting' or 'in_progress' state, or until a timeout is reached.
 
     Args:
-        user_name: User name to wait for
-        timeout_seconds: Maximum wait time in seconds
-        poll_interval: Polling interval in seconds
-        mem_scheduler: Scheduler instance
+        user_name: User name to wait for.
+        status_tracker: The TaskStatusTracker instance.
+        timeout_seconds: Maximum wait time in seconds.
+        poll_interval: Polling interval in seconds.
 
     Returns:
-        Dictionary with wait result and statistics
+        Dictionary with wait result and statistics.
 
     Raises:
-        HTTPException: If wait operation fails
+        HTTPException: If wait operation fails.
     """
-    start = time.time()
+    start_time = time.time()
     try:
-        while True:
-            running = mem_scheduler.dispatcher.get_running_tasks(
-                lambda task: task.mem_cube_id == user_name
+        while time.time() - start_time < timeout_seconds:
+            # Directly call the new, reliable status logic
+            status_response = handle_scheduler_status(
+                user_id=user_name, status_tracker=status_tracker
             )
-            running_count = len(running)
-            elapsed = time.time() - start
 
-            # success -> scheduler is idle
-            if running_count == 0:
+            # System is idle if the data list is empty or no tasks are active
+            is_idle = not status_response.data or all(
+                task.status in ["completed", "failed", "cancelled"] for task in status_response.data
+            )
+
+            if is_idle:
                 return {
                     "message": "idle",
                     "data": {
-                        "running_tasks": 0,
-                        "waited_seconds": round(elapsed, 3),
+                        "running_tasks": 0,  # Kept for compatibility
+                        "waited_seconds": round(time.time() - start_time, 3),
                         "timed_out": False,
-                        "user_name": user_name,
-                    },
-                }
-
-            # timeout check
-            if elapsed > timeout_seconds:
-                return {
-                    "message": "timeout",
-                    "data": {
-                        "running_tasks": running_count,
-                        "waited_seconds": round(elapsed, 3),
-                        "timed_out": True,
                         "user_name": user_name,
                     },
                 }
 
             time.sleep(poll_interval)
 
+        # Timeout occurred
+        final_status = handle_scheduler_status(user_id=user_name, status_tracker=status_tracker)
+        active_tasks = [t for t in final_status.data if t.status in ["waiting", "in_progress"]]
+
+        return {
+            "message": "timeout",
+            "data": {
+                "running_tasks": len(active_tasks),  # A more accurate count of active tasks
+                "waited_seconds": round(time.time() - start_time, 3),
+                "timed_out": True,
+                "user_name": user_name,
+            },
+        }
+    except HTTPException:
+        # Re-raise HTTPException directly to preserve its status code
+        raise
     except Exception as err:
-        logger.error("Failed while waiting for scheduler: %s", traceback.format_exc())
+        logger.error(
+            f"Failed while waiting for scheduler for user {user_name}: {traceback.format_exc()}"
+        )
         raise HTTPException(status_code=500, detail="Failed while waiting for scheduler") from err
 
 
 def handle_scheduler_wait_stream(
     user_name: str,
+    status_tracker: TaskStatusTracker,
     timeout_seconds: float = 120.0,
-    poll_interval: float = 0.2,
-    mem_scheduler: Any | None = None,
+    poll_interval: float = 0.5,
     instance_id: str = "",
 ) -> StreamingResponse:
     """
-    Stream scheduler progress via Server-Sent Events (SSE).
+    Stream scheduler progress via Server-Sent Events (SSE) using the new status endpoint.
 
-    Emits periodic heartbeat frames while tasks are running, then final
+    Emits periodic heartbeat frames while tasks are active, then a final
     status frame indicating idle or timeout.
 
     Args:
-        user_name: User name to monitor
-        timeout_seconds: Maximum stream duration in seconds
-        poll_interval: Polling interval between updates
-        mem_scheduler: Scheduler instance
-        instance_id: Instance ID for response
+        user_name: User name to monitor.
+        status_tracker: The TaskStatusTracker instance.
+        timeout_seconds: Maximum stream duration in seconds.
+        poll_interval: Polling interval between updates.
+        instance_id: Instance ID for response.
 
     Returns:
-        StreamingResponse with SSE formatted progress updates
-
-    Example:
-        curl -N "http://localhost:8000/product/scheduler/wait/stream?timeout_seconds=10"
+        StreamingResponse with SSE formatted progress updates.
     """
 
     def event_generator():
-        start = time.time()
+        start_time = time.time()
         try:
             while True:
-                running = mem_scheduler.dispatcher.get_running_tasks(
-                    lambda task: task.mem_cube_id == user_name
+                elapsed = time.time() - start_time
+                if elapsed > timeout_seconds:
+                    # Send timeout message and break
+                    final_status = handle_scheduler_status(
+                        user_id=user_name, status_tracker=status_tracker
+                    )
+                    active_tasks = [
+                        t for t in final_status.data if t.status in ["waiting", "in_progress"]
+                    ]
+                    payload = {
+                        "user_name": user_name,
+                        "active_tasks": len(active_tasks),
+                        "elapsed_seconds": round(elapsed, 3),
+                        "status": "timeout",
+                        "timed_out": True,
+                        "instance_id": instance_id,
+                    }
+                    yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+                    break
+
+                # Get status
+                status_response = handle_scheduler_status(
+                    user_id=user_name, status_tracker=status_tracker
                 )
-                running_count = len(running)
-                elapsed = time.time() - start
+                active_tasks = [
+                    t for t in status_response.data if t.status in ["waiting", "in_progress"]
+                ]
+                num_active = len(active_tasks)
 
                 payload = {
                     "user_name": user_name,
-                    "running_tasks": running_count,
+                    "active_tasks": num_active,
                     "elapsed_seconds": round(elapsed, 3),
-                    "status": "running" if running_count > 0 else "idle",
+                    "status": "running" if num_active > 0 else "idle",
                     "instance_id": instance_id,
                 }
                 yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
 
-                if running_count == 0 or elapsed > timeout_seconds:
-                    payload["status"] = "idle" if running_count == 0 else "timeout"
-                    payload["timed_out"] = running_count > 0
-                    yield "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
-                    break
+                if num_active == 0:
+                    break  # Exit loop if idle
 
                 time.sleep(poll_interval)
 

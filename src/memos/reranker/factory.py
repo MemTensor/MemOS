@@ -1,6 +1,8 @@
 # memos/reranker/factory.py
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING, Any
 
 # Import singleton decorator
@@ -28,12 +30,19 @@ class RerankerFactory:
         backend = (cfg.backend or "").lower()
         c: dict[str, Any] = cfg.config or {}
 
+        headers_extra = c.get("headers_extra")
+        if isinstance(headers_extra, str):
+            try:
+                headers_extra = json.loads(headers_extra)
+            except Exception:
+                headers_extra = None
+
         if backend in {"http_bge", "bge"}:
             return HTTPBGEReranker(
                 reranker_url=c.get("url") or c.get("endpoint") or c.get("reranker_url"),
                 model=c.get("model", "bge-reranker-v2-m3"),
                 timeout=int(c.get("timeout", 10)),
-                headers_extra=c.get("headers_extra"),
+                headers_extra=headers_extra,
                 rerank_source=c.get("rerank_source"),
             )
 
@@ -51,7 +60,7 @@ class RerankerFactory:
                 reranker_url=c.get("url") or c.get("endpoint") or c.get("reranker_url"),
                 model=c.get("model", "bge-reranker-v2-m3"),
                 timeout=int(c.get("timeout", 10)),
-                headers_extra=c.get("headers_extra"),
+                headers_extra=headers_extra,
                 rerank_source=c.get("rerank_source"),
                 reranker_strategy=c.get("reranker_strategy"),
             )

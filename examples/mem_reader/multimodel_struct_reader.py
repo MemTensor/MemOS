@@ -1,7 +1,14 @@
+import argparse
+import json
+import os
 import time
 
-from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.mem_reader.simple_struct import SimpleStructMemReader
+from typing import Any
+
+from dotenv import load_dotenv
+
+from memos.configs.mem_reader import MultiModelStructMemReaderConfig
+from memos.mem_reader.multi_model_struct import MultiModelStructMemReader
 from memos.memories.textual.item import (
     SourceMessage,
     TextualMemoryItem,
@@ -9,12 +16,225 @@ from memos.memories.textual.item import (
 )
 
 
-def main():
-    # 1. Create Configuration
-    reader_config = SimpleStructMemReaderConfig.from_json_file(
-        "examples/data/config/simple_struct_reader_config.json"
+# Load environment variables from .env file
+load_dotenv()
+
+
+def print_textual_memory_item(
+    item: TextualMemoryItem, max_memory_length: int = 200, indent: int = 0
+):
+    """
+    Print a TextualMemoryItem in a structured format.
+
+    Args:
+        item: The TextualMemoryItem to print
+        max_memory_length: Maximum length of memory content to display
+        indent: Number of spaces for indentation
+    """
+    indent_str = " " * indent
+    print(f"{indent_str}{'=' * 80}")
+    print(f"{indent_str}TextualMemoryItem")
+    print(f"{indent_str}{'=' * 80}")
+    print(f"{indent_str}ID: {item.id}")
+    print(
+        f"{indent_str}Memory: {item.memory[:max_memory_length]}{'...' if len(item.memory) > max_memory_length else ''}"
     )
-    reader = SimpleStructMemReader(reader_config)
+    print(f"{indent_str}Memory Length: {len(item.memory)} characters")
+
+    # Print metadata
+    if hasattr(item.metadata, "user_id"):
+        print(f"{indent_str}User ID: {item.metadata.user_id}")
+    if hasattr(item.metadata, "session_id"):
+        print(f"{indent_str}Session ID: {item.metadata.session_id}")
+    if hasattr(item.metadata, "memory_type"):
+        print(f"{indent_str}Memory Type: {item.metadata.memory_type}")
+    if hasattr(item.metadata, "type"):
+        print(f"{indent_str}Type: {item.metadata.type}")
+    if hasattr(item.metadata, "key") and item.metadata.key:
+        print(f"{indent_str}Key: {item.metadata.key}")
+    if hasattr(item.metadata, "tags") and item.metadata.tags:
+        print(f"{indent_str}Tags: {', '.join(item.metadata.tags)}")
+    if hasattr(item.metadata, "confidence"):
+        print(f"{indent_str}Confidence: {item.metadata.confidence}")
+    if hasattr(item.metadata, "status"):
+        print(f"{indent_str}Status: {item.metadata.status}")
+    if hasattr(item.metadata, "background") and item.metadata.background:
+        bg_preview = (
+            item.metadata.background[:100] + "..."
+            if len(item.metadata.background) > 100
+            else item.metadata.background
+        )
+        print(f"{indent_str}Background: {bg_preview}")
+    if hasattr(item.metadata, "sources") and item.metadata.sources:
+        print(f"{indent_str}Sources ({len(item.metadata.sources)}):")
+        for i, source in enumerate(item.metadata.sources):
+            source_info = []
+            if hasattr(source, "type"):
+                source_info.append(f"type={source.type}")
+            if hasattr(source, "role"):
+                source_info.append(f"role={source.role}")
+            if hasattr(source, "doc_path"):
+                source_info.append(f"doc_path={source.doc_path}")
+            if hasattr(source, "chat_time"):
+                source_info.append(f"chat_time={source.chat_time}")
+            if hasattr(source, "index") and source.index is not None:
+                source_info.append(f"index={source.index}")
+            print(f"{indent_str}  [{i + 1}] {', '.join(source_info)}")
+    if hasattr(item.metadata, "created_at"):
+        print(f"{indent_str}Created At: {item.metadata.created_at}")
+    if hasattr(item.metadata, "updated_at"):
+        print(f"{indent_str}Updated At: {item.metadata.updated_at}")
+    if hasattr(item.metadata, "embedding") and item.metadata.embedding:
+        print(f"{indent_str}Embedding: [vector of {len(item.metadata.embedding)} dimensions]")
+    print(f"{indent_str}{'=' * 80}\n")
+
+
+def print_textual_memory_item_json(item: TextualMemoryItem, indent: int = 2):
+    """
+    Print a TextualMemoryItem as formatted JSON.
+
+    Args:
+        item: The TextualMemoryItem to print
+        indent: JSON indentation level
+    """
+    # Convert to dict and exclude embedding for readability
+    data = item.to_dict()
+    if "metadata" in data and "embedding" in data["metadata"]:
+        embedding = data["metadata"]["embedding"]
+        if embedding:
+            data["metadata"]["embedding"] = f"[vector of {len(embedding)} dimensions]"
+
+    print(json.dumps(data, indent=indent, ensure_ascii=False))
+
+
+def get_reader_config() -> dict[str, Any]:
+    """
+    Get reader configuration from environment variables.
+
+    Returns a dictionary that can be used to create MultiModelStructMemReaderConfig.
+    Similar to APIConfig.get_reader_config() in server_router_api.py.
+
+    Returns:
+        Configuration dictionary for MultiModelStructMemReaderConfig
+    """
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    openai_base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    ollama_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+
+    # Get LLM backend and config
+    llm_backend = os.getenv("MEM_READER_LLM_BACKEND", "openai")
+    if llm_backend == "ollama":
+        llm_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": os.getenv("MEM_READER_LLM_MODEL", "qwen3:0.6b"),
+                "api_base": ollama_api_base,
+                "temperature": float(os.getenv("MEM_READER_LLM_TEMPERATURE", "0.0")),
+                "remove_think_prefix": os.getenv(
+                    "MEM_READER_LLM_REMOVE_THINK_PREFIX", "true"
+                ).lower()
+                == "true",
+                "max_tokens": int(os.getenv("MEM_READER_LLM_MAX_TOKENS", "8192")),
+            },
+        }
+    else:  # openai
+        llm_config = {
+            "backend": "openai",
+            "config": {
+                "model_name_or_path": os.getenv("MEM_READER_LLM_MODEL", "gpt-4o-mini"),
+                "api_key": openai_api_key or os.getenv("MEMRADER_API_KEY", "EMPTY"),
+                "api_base": openai_base_url,
+                "temperature": float(os.getenv("MEM_READER_LLM_TEMPERATURE", "0.5")),
+                "remove_think_prefix": os.getenv(
+                    "MEM_READER_LLM_REMOVE_THINK_PREFIX", "true"
+                ).lower()
+                == "true",
+                "max_tokens": int(os.getenv("MEM_READER_LLM_MAX_TOKENS", "8192")),
+            },
+        }
+
+    # Get embedder backend and config
+    embedder_backend = os.getenv(
+        "MEM_READER_EMBEDDER_BACKEND", os.getenv("MOS_EMBEDDER_BACKEND", "ollama")
+    )
+    if embedder_backend == "universal_api":
+        embedder_config = {
+            "backend": "universal_api",
+            "config": {
+                "provider": os.getenv(
+                    "MEM_READER_EMBEDDER_PROVIDER", os.getenv("MOS_EMBEDDER_PROVIDER", "openai")
+                ),
+                "api_key": os.getenv(
+                    "MEM_READER_EMBEDDER_API_KEY",
+                    os.getenv("MOS_EMBEDDER_API_KEY", openai_api_key or "sk-xxxx"),
+                ),
+                "model_name_or_path": os.getenv(
+                    "MEM_READER_EMBEDDER_MODEL",
+                    os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                ),
+                "base_url": os.getenv(
+                    "MEM_READER_EMBEDDER_API_BASE",
+                    os.getenv("MOS_EMBEDDER_API_BASE", openai_base_url),
+                ),
+            },
+        }
+    else:  # ollama
+        embedder_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": os.getenv(
+                    "MEM_READER_EMBEDDER_MODEL",
+                    os.getenv("MOS_EMBEDDER_MODEL", "nomic-embed-text:latest"),
+                ),
+                "api_base": ollama_api_base,
+            },
+        }
+
+    return {
+        "llm": llm_config,
+        "embedder": embedder_config,
+        "chunker": {
+            "backend": "sentence",
+            "config": {
+                "tokenizer_or_token_counter": "gpt2",
+                "chunk_size": 512,
+                "chunk_overlap": 128,
+                "min_sentences_per_chunk": 1,
+            },
+        },
+    }
+
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Test Mem-Reader with structured output")
+    parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format: 'text' for structured text, 'json' for JSON format (default: text)",
+    )
+    parser.add_argument(
+        "--max-memory-length",
+        type=int,
+        default=200,
+        help="Maximum length of memory content to display in text format (default: 200)",
+    )
+    args = parser.parse_args()
+
+    # 1. Create Configuration from environment variables or JSON file
+    # Try to get config from environment variables first
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if openai_api_key:
+        # Use environment variables (similar to server_router_api.py)
+        config_dict = get_reader_config()
+        reader_config = MultiModelStructMemReaderConfig.model_validate(config_dict)
+    else:
+        # Fall back to JSON file
+        reader_config = MultiModelStructMemReaderConfig.from_json_file(
+            "examples/data/config/simple_struct_reader_config.json"
+        )
+    reader = MultiModelStructMemReader(reader_config)
 
     # 2. Define scene data
     scene_data = [
@@ -225,12 +445,24 @@ def main():
     print("\n--- FINE Mode Results (first 3 items) ---")
     for i, mem_list in enumerate(fine_memory[:3]):
         for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
-            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+            print(f"\n[Scene {i}][Item {j}]")
+            if args.format == "json":
+                print_textual_memory_item_json(mem_item, indent=2)
+            else:
+                print_textual_memory_item(
+                    mem_item, max_memory_length=args.max_memory_length, indent=2
+                )
 
     print("\n--- FAST Mode Results (first 3 items) ---")
     for i, mem_list in enumerate(fast_memory[:3]):
         for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
-            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+            print(f"\n[Scene {i}][Item {j}]")
+            if args.format == "json":
+                print_textual_memory_item_json(mem_item, indent=2)
+            else:
+                print_textual_memory_item(
+                    mem_item, max_memory_length=args.max_memory_length, indent=2
+                )
 
     # 7. Example of transfer fast mode result into fine result
     fast_mode_memories = [
@@ -542,14 +774,20 @@ def main():
     print("\n--- Transfer Mode Results (first 3 items) ---")
     for i, mem_list in enumerate(fine_memories[:3]):
         for j, mem_item in enumerate(mem_list[:2]):  # Show first 2 items from each list
-            print(f"  [{i}][{j}] {mem_item.memory[:100]}...")
+            print(f"\n[Scene {i}][Item {j}]")
+            if args.format == "json":
+                print_textual_memory_item_json(mem_item, indent=2)
+            else:
+                print_textual_memory_item(
+                    mem_item, max_memory_length=args.max_memory_length, indent=2
+                )
 
     # 7. Example of processing documents (only in fine mode)
     print("\n=== Processing Documents (Fine Mode Only) ===")
     # Example document paths (you should replace these with actual document paths)
     doc_paths = [
-        "examples/mem_reader/text1.txt",
-        "examples/mem_reader/text2.txt",
+        "text1.txt",
+        "text2.txt",
     ]
 
     try:
@@ -563,9 +801,21 @@ def main():
             },
             mode="fine",
         )
-        print(
-            f"\n📄 Document Memory generated {sum(len(mem_list) for mem_list in doc_memory)} items"
-        )
+        total_items = sum(len(mem_list) for mem_list in doc_memory)
+        print(f"\n📄 Document Memory generated {total_items} items")
+
+        # Print structured document memory items
+        if doc_memory:
+            print("\n--- Document Memory Items (first 3) ---")
+            for i, mem_list in enumerate(doc_memory[:3]):
+                for j, mem_item in enumerate(mem_list[:3]):  # Show first 3 items from each document
+                    print(f"\n[Document {i}][Item {j}]")
+                    if args.format == "json":
+                        print_textual_memory_item_json(mem_item, indent=2)
+                    else:
+                        print_textual_memory_item(
+                            mem_item, max_memory_length=args.max_memory_length, indent=2
+                        )
     except Exception as e:
         print(f"⚠️  Document processing failed: {e}")
         print("   (This is expected if document files don't exist)")

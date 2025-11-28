@@ -9,7 +9,7 @@ from typing import Any
 
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
+from memos.memories.textual.tree_text_memory.retrieve.advanced_searcher import AdvancedSearcher
 
 
 logger = get_logger(__name__)
@@ -132,7 +132,7 @@ class BaseHandler:
         return self.deps.mem_scheduler
 
     @property
-    def searcher(self) -> Searcher:
+    def searcher(self) -> AdvancedSearcher:
         """Get scheduler instance."""
         return self.deps.searcher
 
@@ -160,6 +160,11 @@ class BaseHandler:
     def mos_server(self):
         """Get MOS server instance."""
         return self.deps.mos_server
+
+    @property
+    def deepsearch_agent(self):
+        """Get deepsearch agent instance."""
+        return self.deps.deepsearch_agent
 
     def _validate_dependencies(self, *required_deps: str) -> None:
         """

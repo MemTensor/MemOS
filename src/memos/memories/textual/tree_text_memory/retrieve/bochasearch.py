@@ -200,9 +200,11 @@ class BochaAISearchRetriever:
         """Process one Bocha search result into TextualMemoryItem."""
         title = result.get("name", "")
         content = result.get("summary", "") or result.get("snippet", "")
-        summary = result.get("snippet", "")
+        summary = result.get("summary", "") or result.get("snippet", "")
         url = result.get("url", "")
         publish_time = result.get("datePublished", "")
+        site_name = result.get("siteName", "")
+        site_icon = result.get("siteIcon")
 
         if publish_time:
             try:
@@ -229,5 +231,12 @@ class BochaAISearchRetriever:
             read_item_i.metadata.memory_type = "OuterMemory"
             read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
             read_item_i.metadata.visibility = "public"
+            read_item_i.metadata.internet_info = {
+                "title": title,
+                "url": url,
+                "site_name": site_name,
+                "site_icon": site_icon,
+                "summary": summary,
+            }
             memory_items.append(read_item_i)
         return memory_items

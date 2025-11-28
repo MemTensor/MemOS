@@ -16,11 +16,13 @@ from memos.log import get_logger
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.advanced_searcher import (
+    AdvancedSearcher as Searcher,
+)
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.factory import RerankerFactory
 from memos.types import MessageList
 
@@ -127,9 +129,7 @@ class TreeTextMemory(BaseTextMemory):
         return self.memory_manager.get_current_memory_size(user_name=user_name)
 
     def get_searcher(
-        self,
-        manual_close_internet: bool = False,
-        moscube: bool = False,
+        self, manual_close_internet: bool = False, moscube: bool = False, process_llm=None
     ):
         if (self.internet_retriever is not None) and manual_close_internet:
             logger.warning(
@@ -141,7 +141,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.embedder,
                 self.reranker,
                 internet_retriever=None,
-                moscube=moscube,
+                process_llm=process_llm,
             )
         else:
             searcher = Searcher(
@@ -150,7 +150,7 @@ class TreeTextMemory(BaseTextMemory):
                 self.embedder,
                 self.reranker,
                 internet_retriever=self.internet_retriever,
-                moscube=moscube,
+                process_llm=process_llm,
             )
         return searcher
 
@@ -162,7 +162,6 @@ class TreeTextMemory(BaseTextMemory):
         mode: str = "fast",
         memory_type: str = "All",
         manual_close_internet: bool = True,
-        moscube: bool = False,
         search_filter: dict | None = None,
         user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
@@ -179,7 +178,6 @@ class TreeTextMemory(BaseTextMemory):
             memory_type (str): Type restriction for search.
             ['All', 'WorkingMemory', 'LongTermMemory', 'UserMemory']
             manual_close_internet (bool): If True, the internet retriever will be closed by this search, it high priority than config.
-            moscube (bool): whether you use moscube to answer questions
             search_filter (dict, optional): Optional metadata filters for search results.
                 - Keys correspond to memory metadata fields (e.g., "user_id", "session_id").
                 - Values are exact-match conditions.
@@ -196,7 +194,6 @@ class TreeTextMemory(BaseTextMemory):
                 self.reranker,
                 bm25_retriever=self.bm25_retriever,
                 internet_retriever=None,
-                moscube=moscube,
                 search_strategy=self.search_strategy,
                 manual_close_internet=manual_close_internet,
             )
@@ -208,7 +205,6 @@ class TreeTextMemory(BaseTextMemory):
                 self.reranker,
                 bm25_retriever=self.bm25_retriever,
                 internet_retriever=self.internet_retriever,
-                moscube=moscube,
                 search_strategy=self.search_strategy,
                 manual_close_internet=manual_close_internet,
             )

@@ -114,6 +114,7 @@ class NaiveExtractor(BaseExtractor):
             vector_info = {
                 "embedding": self.embedder.embed([pref["context_summary"]])[0],
             }
+
             extract_info = {**basic_info, **pref, **vector_info, **info}
 
             metadata = PreferenceTextualMemoryMetadata(

@@ -7,6 +7,7 @@ consolidating all chat-related logic without depending on mos_server.
 
 import asyncio
 import json
+import re
 import traceback
 
 from collections.abc import Generator
@@ -32,7 +33,6 @@ from memos.mem_os.utils.reference_utils import (
 from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     QUERY_LABEL,
-    SearchMode,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.templates.mos_prompts import (
@@ -53,6 +53,7 @@ class ChatHandler(BaseHandler):
     def __init__(
         self,
         dependencies: HandlerDependencies,
+        chat_llms: dict[str, Any],
         search_handler=None,
         add_handler=None,
         online_bot=None,
@@ -62,6 +63,7 @@ class ChatHandler(BaseHandler):
 
         Args:
             dependencies: HandlerDependencies instance
+            chat_llms: Dictionary mapping model names to LLM instances
             search_handler: Optional SearchHandler instance (created if not provided)
             add_handler: Optional AddHandler instance (created if not provided)
             online_bot: Optional DingDing bot function for notifications
@@ -80,6 +82,7 @@ class ChatHandler(BaseHandler):
 
             add_handler = AddHandler(dependencies)
 
+        self.chat_llms = chat_llms
         self.search_handler = search_handler
         self.add_handler = add_handler
         self.online_bot = online_bot
@@ -105,21 +108,22 @@ class ChatHandler(BaseHandler):
             HTTPException: If chat fails
         """
         try:
-            import time
-
-            time_start = time.time()
+            # Resolve readable cube IDs (for search)
+            readable_cube_ids = chat_req.readable_cube_ids or [chat_req.user_id]
 
             # Step 1: Search for relevant memories
             search_req = APISearchRequest(
-                user_id=chat_req.user_id,
-                mem_cube_id=chat_req.mem_cube_id,
                 query=chat_req.query,
-                top_k=chat_req.top_k or 10,
-                session_id=chat_req.session_id,
-                mode=SearchMode.FAST,
+                user_id=chat_req.user_id,
+                readable_cube_ids=readable_cube_ids,
+                mode=chat_req.mode,
                 internet_search=chat_req.internet_search,
-                moscube=chat_req.moscube,
+                top_k=chat_req.top_k,
                 chat_history=chat_req.history,
+                session_id=chat_req.session_id,
+                include_preference=chat_req.include_preference,
+                pref_top_k=chat_req.pref_top_k,
+                filter=chat_req.filter,
             )
 
             search_response = self.search_handler.handle_search_memories(search_req)
@@ -137,7 +141,9 @@ class ChatHandler(BaseHandler):
             )
 
             # Step 2: Build system prompt
-            system_prompt = self._build_system_prompt(filtered_memories, chat_req.base_prompt)
+            system_prompt = self._build_system_prompt(
+                filtered_memories, search_response.data["pref_string"], chat_req.system_prompt
+            )
 
             # Prepare message history
             history_info = chat_req.history[-20:] if chat_req.history else []
@@ -150,28 +156,35 @@ class ChatHandler(BaseHandler):
             self.logger.info("Starting to generate complete response...")
 
             # Step 3: Generate complete response from LLM
-            response = self.llm.generate(current_messages)
+            if chat_req.model_name_or_path and chat_req.model_name_or_path not in self.chat_llms:
+                return {
+                    "message": f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}"
+                }
+            model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+            response = self.chat_llms[model].generate(current_messages, model_name_or_path=model)
 
-            time_end = time.time()
+            # Step 4: start add after chat asynchronously
+            if chat_req.add_message_on_answer:
+                # Resolve writable cube IDs (for add)
+                writable_cube_ids = chat_req.writable_cube_ids or [chat_req.user_id]
+                self._start_add_to_memory(
+                    user_id=chat_req.user_id,
+                    writable_cube_ids=writable_cube_ids,
+                    session_id=chat_req.session_id or "default_session",
+                    query=chat_req.query,
+                    full_response=response,
+                    async_mode="async",
+                )
 
-            # Step 4: Start post-chat processing asynchronously
-            self._start_post_chat_processing(
-                user_id=chat_req.user_id,
-                cube_id=chat_req.mem_cube_id,
-                session_id=chat_req.session_id or "default_session",
-                query=chat_req.query,
-                full_response=response,
-                system_prompt=system_prompt,
-                time_start=time_start,
-                time_end=time_end,
-                speed_improvement=0.0,
-                current_messages=current_messages,
+            match = re.search(r"<think>([\s\S]*?)</think>", response)
+            reasoning_text = match.group(1) if match else None
+            final_text = (
+                re.sub(r"<think>[\s\S]*?</think>", "", response, count=1) if match else response
             )
 
-            # Return the complete response
             return {
                 "message": "Chat completed successfully",
-                "data": {"response": response, "references": filtered_memories},
+                "data": {"response": final_text, "reasoning": reasoning_text},
             }
 
         except ValueError as err:
@@ -200,6 +213,163 @@ class ChatHandler(BaseHandler):
             def generate_chat_response() -> Generator[str, None, None]:
                 """Generate chat response as SSE stream."""
                 try:
+                    # Resolve readable cube IDs (for search)
+                    readable_cube_ids = chat_req.readable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
+
+                    search_req = APISearchRequest(
+                        query=chat_req.query,
+                        user_id=chat_req.user_id,
+                        readable_cube_ids=readable_cube_ids,
+                        mode=chat_req.mode,
+                        internet_search=chat_req.internet_search,
+                        top_k=chat_req.top_k,
+                        chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=chat_req.include_preference,
+                        pref_top_k=chat_req.pref_top_k,
+                        filter=chat_req.filter,
+                    )
+
+                    search_response = self.search_handler.handle_search_memories(search_req)
+
+                    # Use first readable cube ID for scheduler (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
+                    self._send_message_to_scheduler(
+                        user_id=chat_req.user_id,
+                        mem_cube_id=scheduler_cube_id,
+                        query=chat_req.query,
+                        label=QUERY_LABEL,
+                    )
+                    # Extract memories from search results
+                    memories_list = []
+                    if search_response.data and search_response.data.get("text_mem"):
+                        text_mem_results = search_response.data["text_mem"]
+                        if text_mem_results and text_mem_results[0].get("memories"):
+                            memories_list = text_mem_results[0]["memories"]
+
+                    # Filter memories by threshold
+                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+
+                    # Step 2: Build system prompt with memories
+                    system_prompt = self._build_system_prompt(
+                        filtered_memories,
+                        search_response.data["pref_string"],
+                        chat_req.system_prompt,
+                    )
+
+                    # Prepare messages
+                    history_info = chat_req.history[-20:] if chat_req.history else []
+                    current_messages = [
+                        {"role": "system", "content": system_prompt},
+                        *history_info,
+                        {"role": "user", "content": chat_req.query},
+                    ]
+
+                    self.logger.info(
+                        f"user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
+                        f"current_system_prompt: {system_prompt}"
+                    )
+
+                    # Step 3: Generate streaming response from LLM
+                    if (
+                        chat_req.model_name_or_path
+                        and chat_req.model_name_or_path not in self.chat_llms
+                    ):
+                        return {
+                            "message": f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}"
+                        }
+                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    response_stream = self.chat_llms[model].generate_stream(
+                        current_messages, model_name_or_path=model
+                    )
+
+                    # Stream the response
+                    buffer = ""
+                    full_response = ""
+                    in_think = False
+
+                    for chunk in response_stream:
+                        if chunk == "<think>":
+                            in_think = True
+                            continue
+                        if chunk == "</think>":
+                            in_think = False
+                            continue
+
+                        if in_think:
+                            chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
+                            yield chunk_data
+                            continue
+
+                        buffer += chunk
+                        full_response += chunk
+
+                        chunk_data = f"data: {json.dumps({'type': 'text', 'data': chunk}, ensure_ascii=False)}\n\n"
+                        yield chunk_data
+
+                    current_messages.append({"role": "assistant", "content": full_response})
+                    if chat_req.add_message_on_answer:
+                        # Resolve writable cube IDs (for add)
+                        writable_cube_ids = chat_req.writable_cube_ids or (
+                            [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                        )
+                        self._start_add_to_memory(
+                            user_id=chat_req.user_id,
+                            writable_cube_ids=writable_cube_ids,
+                            session_id=chat_req.session_id or "default_session",
+                            query=chat_req.query,
+                            full_response=full_response,
+                            async_mode="async",
+                        )
+
+                except Exception as e:
+                    self.logger.error(f"Error in chat stream: {e}", exc_info=True)
+                    error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
+                    yield error_data
+
+            return StreamingResponse(
+                generate_chat_response(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/event-stream",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Methods": "*",
+                },
+            )
+
+        except ValueError as err:
+            raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+        except Exception as err:
+            self.logger.error(f"Failed to start chat stream: {traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+    def handle_chat_stream_playground(self, chat_req: ChatRequest) -> StreamingResponse:
+        """
+        Chat with MemOS via Server-Sent Events (SSE) stream using search/add handlers.
+
+        This implementation directly uses search_handler and add_handler.
+
+        Args:
+            chat_req: Chat stream request
+
+        Returns:
+            StreamingResponse with SSE formatted chat stream
+
+        Raises:
+            HTTPException: If stream initialization fails
+        """
+        try:
+
+            def generate_chat_response() -> Generator[str, None, None]:
+                """Generate chat response as SSE stream."""
+                try:
                     import time
 
                     time_start = time.time()
@@ -207,24 +377,35 @@ class ChatHandler(BaseHandler):
                     # Step 1: Search for memories using search handler
                     yield f"data: {json.dumps({'type': 'status', 'data': '0'})}\n\n"
 
+                    # Resolve readable cube IDs (for search)
+                    readable_cube_ids = chat_req.readable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
+
                     search_req = APISearchRequest(
-                        user_id=chat_req.user_id,
-                        mem_cube_id=chat_req.mem_cube_id,
                         query=chat_req.query,
-                        top_k=20,
-                        session_id=chat_req.session_id,
-                        mode=SearchMode.FAST,
-                        internet_search=chat_req.internet_search,  # TODO this param is not worked at fine mode
-                        moscube=chat_req.moscube,
+                        user_id=chat_req.user_id,
+                        readable_cube_ids=readable_cube_ids,
+                        mode=chat_req.mode,
+                        internet_search=chat_req.internet_search,
+                        top_k=chat_req.top_k,
                         chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=chat_req.include_preference,
+                        pref_top_k=chat_req.pref_top_k,
+                        filter=chat_req.filter,
                     )
 
                     search_response = self.search_handler.handle_search_memories(search_req)
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
+                    # Use first readable cube ID for scheduler (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
                     self._send_message_to_scheduler(
                         user_id=chat_req.user_id,
-                        mem_cube_id=chat_req.mem_cube_id,
+                        mem_cube_id=scheduler_cube_id,
                         query=chat_req.query,
                         label=QUERY_LABEL,
                     )
@@ -240,10 +421,23 @@ class ChatHandler(BaseHandler):
 
                     # Prepare reference data
                     reference = prepare_reference_data(filtered_memories)
+                    # get internet reference
+                    internet_reference = self._get_internet_reference(
+                        search_response.data.get("text_mem")[0]["memories"]
+                    )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
+                    # Prepare preference markdown string
+                    if chat_req.include_preference:
+                        pref_list = search_response.data.get("pref_mem") or []
+                        pref_memories = pref_list[0].get("memories", []) if pref_list else []
+                        pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
+                        yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
+
                     # Step 2: Build system prompt with memories
-                    system_prompt = self._build_enhance_system_prompt(filtered_memories)
+                    system_prompt = self._build_enhance_system_prompt(
+                        filtered_memories, search_response.data["pref_string"]
+                    )
 
                     # Prepare messages
                     history_info = chat_req.history[-20:] if chat_req.history else []
@@ -254,21 +448,41 @@ class ChatHandler(BaseHandler):
                     ]
 
                     self.logger.info(
-                        f"user_id: {chat_req.user_id}, cube_id: {chat_req.mem_cube_id}, "
+                        f"user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
                         f"current_system_prompt: {system_prompt}"
                     )
 
-                    yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
-
                     # Step 3: Generate streaming response from LLM
-                    response_stream = self.llm.generate_stream(current_messages)
+                    if (
+                        chat_req.model_name_or_path
+                        and chat_req.model_name_or_path not in self.chat_llms
+                    ):
+                        return {
+                            "message": f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}"
+                        }
+                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    response_stream = self.chat_llms[model].generate_stream(
+                        current_messages, model_name_or_path=model
+                    )
 
                     # Stream the response
                     buffer = ""
                     full_response = ""
+                    in_think = False
 
                     for chunk in response_stream:
-                        if chunk in ["<think>", "</think>"]:
+                        if chunk == "<think>":
+                            in_think = True
+                            yield f"data: {json.dumps({'type': 'status', 'data': 'reasoning'})}\n\n"
+                            continue
+                        if chunk == "</think>":
+                            in_think = False
+                            yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
+                            continue
+
+                        if in_think:
+                            chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
+                            yield chunk_data
                             continue
 
                         buffer += chunk
@@ -291,6 +505,9 @@ class ChatHandler(BaseHandler):
                             chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
                             yield chunk_data
 
+                    # Yield internet reference after text response
+                    yield f"data: {json.dumps({'type': 'internet_reference', 'data': internet_reference})}\n\n"
+
                     # Calculate timing
                     time_end = time.time()
                     speed_improvement = round(float((len(system_prompt) / 2) * 0.0048 + 44.5), 1)
@@ -306,10 +523,13 @@ class ChatHandler(BaseHandler):
 
                     yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
-                    # Step 4: Add conversation to memory asynchronously
+                    # Use first readable cube ID for post-processing (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
                     self._start_post_chat_processing(
                         user_id=chat_req.user_id,
-                        cube_id=chat_req.mem_cube_id,
+                        cube_id=scheduler_cube_id,
                         session_id=chat_req.session_id or "default_session",
                         query=chat_req.query,
                         full_response=full_response,
@@ -318,6 +538,19 @@ class ChatHandler(BaseHandler):
                         time_end=time_end,
                         speed_improvement=speed_improvement,
                         current_messages=current_messages,
+                    )
+
+                    # Resolve writable cube IDs (for add)
+                    writable_cube_ids = chat_req.writable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        writable_cube_ids=writable_cube_ids,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=full_response,
+                        async_mode="sync",
                     )
 
                 except Exception as e:
@@ -344,9 +577,62 @@ class ChatHandler(BaseHandler):
             self.logger.error(f"Failed to start chat stream: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 
+    def _get_internet_reference(
+        self, search_response: list[dict[str, any]]
+    ) -> list[dict[str, any]]:
+        """Get internet reference from search response."""
+        unique_set = set()
+        result = []
+
+        for item in search_response:
+            meta = item.get("metadata", {})
+            if meta.get("source") == "web" and meta.get("internet_info"):
+                info = meta.get("internet_info")
+                key = json.dumps(info, sort_keys=True)
+                if key not in unique_set:
+                    unique_set.add(key)
+                    result.append(info)
+        return result
+
+    def _build_pref_md_string_for_playground(self, pref_mem_list: list[any]) -> str:
+        """Build preference markdown string for playground."""
+        explicit = []
+        implicit = []
+        for pref_mem in pref_mem_list:
+            if pref_mem["metadata"]["preference_type"] == "explicit_preference":
+                explicit.append(
+                    {
+                        "content": pref_mem["metadata"]["preference"],
+                        "reasoning": pref_mem["metadata"]["reasoning"],
+                    }
+                )
+            elif pref_mem["metadata"]["preference_type"] == "implicit_preference":
+                implicit.append(
+                    {
+                        "content": pref_mem["metadata"]["preference"],
+                        "reasoning": pref_mem["metadata"]["reasoning"],
+                    }
+                )
+
+        explicit_md = "\n\n".join(
+            [
+                f"显性偏好 {i + 1}:\n- 抽取内容: {pref['content']}\n- 抽取理由: {pref['reasoning']}"
+                for i, pref in enumerate(explicit)
+            ]
+        )
+        implicit_md = "\n\n".join(
+            [
+                f"隐性偏好 {i + 1}:\n- 抽取内容: {pref['content']}\n- 抽取理由: {pref['reasoning']}"
+                for i, pref in enumerate(implicit)
+            ]
+        )
+
+        return f"{explicit_md}\n\n{implicit_md}"
+
     def _build_system_prompt(
         self,
         memories: list | None = None,
+        pref_string: str | None = None,
         base_prompt: str | None = None,
         **kwargs,
     ) -> str:
@@ -366,6 +652,8 @@ class ChatHandler(BaseHandler):
                 text_memory = memory.get("memory", "")
                 memory_list.append(f"{i}. {text_memory}")
             memory_context = "\n".join(memory_list)
+        if pref_string:
+            memory_context += f"\n\n{pref_string}"
 
         if "{memories}" in base_prompt:
             return base_prompt.format(memories=memory_context)
@@ -378,6 +666,7 @@ class ChatHandler(BaseHandler):
     def _build_enhance_system_prompt(
         self,
         memories_list: list,
+        pref_string: str = "",
         tone: str = "friendly",
         verbosity: str = "mid",
     ) -> str:
@@ -386,6 +675,7 @@ class ChatHandler(BaseHandler):
 
         Args:
             memories_list: List of memory items
+            pref_string: Preference string
             tone: Tone of the prompt
             verbosity: Verbosity level
 
@@ -407,6 +697,7 @@ class ChatHandler(BaseHandler):
             + mem_block_p
             + "\n## OuterMemory (ordered)\n"
             + mem_block_o
+            + f"\n\n{pref_string}"
         )
 
     def _format_mem_block(
@@ -603,10 +894,40 @@ class ChatHandler(BaseHandler):
                 content=query,
                 timestamp=datetime.utcnow(),
             )
-            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+            self.mem_scheduler.submit_messages(messages=[message_item])
             self.logger.info(f"Sent message to scheduler with label: {label}")
         except Exception as e:
             self.logger.error(f"Failed to send message to scheduler: {e}", exc_info=True)
+
+    async def _add_conversation_to_memory(
+        self,
+        user_id: str,
+        writable_cube_ids: list[str],
+        session_id: str,
+        query: str,
+        clean_response: str,
+        async_mode: Literal["async", "sync"] = "sync",
+    ) -> None:
+        add_req = APIADDRequest(
+            user_id=user_id,
+            writable_cube_ids=writable_cube_ids,
+            session_id=session_id,
+            messages=[
+                {
+                    "role": "user",
+                    "content": query,
+                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                },
+                {
+                    "role": "assistant",
+                    "content": clean_response,
+                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                },
+            ],
+            async_mode=async_mode,
+        )
+
+        self.add_handler.handle_add_memories(add_req)
 
     async def _post_chat_processing(
         self,
@@ -700,28 +1021,6 @@ class ChatHandler(BaseHandler):
             self._send_message_to_scheduler(
                 user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
             )
-
-            # Add conversation to memory using add handler
-            add_req = APIADDRequest(
-                user_id=user_id,
-                mem_cube_id=cube_id,
-                session_id=session_id,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": query,
-                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                    },
-                    {
-                        "role": "assistant",
-                        "content": clean_response,  # Store clean text without reference markers
-                        "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                    },
-                ],
-                async_mode="sync",  # set suync for playground
-            )
-
-            self.add_handler.handle_add_memories(add_req)
 
             self.logger.info(f"Post-chat processing completed for user {user_id}")
 
@@ -819,6 +1118,68 @@ class ChatHandler(BaseHandler):
             thread = ContextThread(
                 target=run_async_in_thread,
                 name=f"PostChatProcessing-{user_id}",
+                daemon=True,
+            )
+            thread.start()
+
+    def _start_add_to_memory(
+        self,
+        user_id: str,
+        writable_cube_ids: list[str],
+        session_id: str,
+        query: str,
+        full_response: str,
+        async_mode: Literal["async", "sync"] = "sync",
+    ) -> None:
+        def run_async_in_thread():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    clean_response, _ = self._extract_references_from_response(full_response)
+                    loop.run_until_complete(
+                        self._add_conversation_to_memory(
+                            user_id=user_id,
+                            writable_cube_ids=writable_cube_ids,
+                            session_id=session_id,
+                            query=query,
+                            clean_response=clean_response,
+                            async_mode=async_mode,
+                        )
+                    )
+                finally:
+                    loop.close()
+            except Exception as e:
+                self.logger.error(
+                    f"Error in thread-based add to memory for user {user_id}: {e}",
+                    exc_info=True,
+                )
+
+        try:
+            asyncio.get_running_loop()
+            clean_response, _ = self._extract_references_from_response(full_response)
+            task = asyncio.create_task(
+                self._add_conversation_to_memory(
+                    user_id=user_id,
+                    writable_cube_ids=writable_cube_ids,
+                    session_id=session_id,
+                    query=query,
+                    clean_response=clean_response,
+                    async_mode=async_mode,
+                )
+            )
+            task.add_done_callback(
+                lambda t: self.logger.error(
+                    f"Error in background add to memory for user {user_id}: {t.exception()}",
+                    exc_info=True,
+                )
+                if t.exception()
+                else None
+            )
+        except RuntimeError:
+            thread = ContextThread(
+                target=run_async_in_thread,
+                name=f"AddToMemory-{user_id}",
                 daemon=True,
             )
             thread.start()
