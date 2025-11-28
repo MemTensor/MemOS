@@ -15,6 +15,7 @@ from memos.api.product_models import (
     MemoryResponse,
 )
 from memos.log import get_logger
+from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_os.utils.format_utils import (
     convert_graph_to_tree_forworkmem,
     ensure_unique_tree_ids,
@@ -162,11 +163,13 @@ def handle_get_subgraph(
         raise
 
 
-def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> GetMemoryResponse:
+def handle_get_memories(
+    get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
     # TODO: Implement get memory with filter
     memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
     preferences: list[TextualMemoryItem] = []
-    if get_mem_req.include_preference:
+    if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
             filter_params["user_id"] = get_mem_req.user_id
@@ -183,10 +186,11 @@ def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> G
     )
 
 
-def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: Any):
+def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
     try:
         naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids)
-        naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
+        if naive_mem_cube.pref_mem is not None:
+            naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(

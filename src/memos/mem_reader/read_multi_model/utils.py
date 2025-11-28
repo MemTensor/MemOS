@@ -67,7 +67,7 @@ def _is_message_list(obj):
     return True
 
 
-def coerce_scene_data(scene_data, scene_type: str) -> list[MessagesType]:
+def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[MessagesType]:
     """
     Normalize ANY allowed SceneDataInput into: list[MessagesType].
     Supports:

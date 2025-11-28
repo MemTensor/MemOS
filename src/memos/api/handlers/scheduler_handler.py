@@ -34,7 +34,9 @@ def handle_scheduler_status(
     Args:
         user_id: User ID to query for.
         status_tracker: The TaskStatusTracker instance.
-        task_id: Optional Task ID to query a specific task.
+        task_id: Optional Task ID to query. Can be either:
+                 - business_task_id (will aggregate all related item statuses)
+                 - item_id (will return single item status)
 
     Returns:
         StatusResponse with a list of task statuses.
@@ -46,12 +48,22 @@ def handle_scheduler_status(
 
     try:
         if task_id:
-            task_data = status_tracker.get_task_status(task_id, user_id)
-            if not task_data:
-                raise HTTPException(
-                    status_code=404, detail=f"Task {task_id} not found for user {user_id}"
+            # First try as business_task_id (aggregated query)
+            business_task_data = status_tracker.get_task_status_by_business_id(task_id, user_id)
+            if business_task_data:
+                response_data.append(
+                    StatusResponseItem(task_id=task_id, status=business_task_data["status"])
                 )
-            response_data.append(StatusResponseItem(task_id=task_id, status=task_data["status"]))
+            else:
+                # Fallback: try as item_id (single item query)
+                item_task_data = status_tracker.get_task_status(task_id, user_id)
+                if not item_task_data:
+                    raise HTTPException(
+                        status_code=404, detail=f"Task {task_id} not found for user {user_id}"
+                    )
+                response_data.append(
+                    StatusResponseItem(task_id=task_id, status=item_task_data["status"])
+                )
         else:
             all_tasks = status_tracker.get_all_tasks_for_user(user_id)
             # The plan returns an empty list, which is good.

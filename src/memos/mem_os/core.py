@@ -687,6 +687,7 @@ class MOSCore:
         mem_cube_id: str | None = None,
         user_id: str | None = None,
         session_id: str | None = None,
+        task_id: str | None = None,  # New: Add task_id parameter
         **kwargs,
     ) -> None:
         """
@@ -773,6 +774,7 @@ class MOSCore:
                                 label=MEM_READ_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
+                                task_id=task_id,
                             )
                             self.mem_scheduler.memos_message_queue.submit_messages(
                                 messages=[message_item]
@@ -784,6 +786,7 @@ class MOSCore:
                                 label=ADD_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
+                                task_id=task_id,
                             )
                             self.mem_scheduler.memos_message_queue.submit_messages(
                                 messages=[message_item]
