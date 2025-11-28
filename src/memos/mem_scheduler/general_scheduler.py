@@ -633,7 +633,7 @@ class GeneralScheduler(BaseScheduler):
                                     "original_content": None,
                                     "source_doc_id": getattr(item.metadata, "source_doc_id", None),
                                 }
-                        )
+                            )
                         if kb_log_content:
                             event = self.create_event_log(
                                 label="knowledgeBaseUpdate",
