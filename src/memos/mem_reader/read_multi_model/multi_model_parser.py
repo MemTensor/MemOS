@@ -231,6 +231,9 @@ class MultiModelParser:
 
         # Parse in fine mode (pass custom_tags to parse_fine)
         try:
+            context_items = kwargs.pop("custom_tags", None)
+            custom_tags = kwargs.pop("custom_tags", None)
+            info = kwargs.pop("info", None)
             return parser.parse_fine(
                 message, info, context_items=context_items, custom_tags=custom_tags, **kwargs
             )
