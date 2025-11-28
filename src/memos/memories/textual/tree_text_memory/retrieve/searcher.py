@@ -41,8 +41,8 @@ class Searcher:
         reranker: BaseReranker,
         bm25_retriever: EnhancedBM25 | None = None,
         internet_retriever: None = None,
-        moscube: bool = False,
         search_strategy: dict | None = None,
+        manual_close_internet: bool = True,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -55,10 +55,9 @@ class Searcher:
 
         # Create internet retriever from config if provided
         self.internet_retriever = internet_retriever
-        self.moscube = moscube
         self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
         self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
-
+        self.manual_close_internet = manual_close_internet
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
     @timed
@@ -72,7 +71,7 @@ class Searcher:
         search_filter: dict | None = None,
         user_name: str | None = None,
         **kwargs,
-    ) -> list[TextualMemoryItem]:
+    ) -> list[tuple[TextualMemoryItem, float]]:
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
@@ -94,7 +93,7 @@ class Searcher:
 
     def post_retrieve(
         self,
-        retrieved_results: list[TextualMemoryItem],
+        retrieved_results: list[tuple[TextualMemoryItem, float]],
         top_k: int,
         user_name: str | None = None,
         info=None,
@@ -108,7 +107,7 @@ class Searcher:
     def search(
         self,
         query: str,
-        top_k: int,
+        top_k: int = 10,
         info=None,
         mode="fast",
         memory_type="All",
@@ -182,7 +181,7 @@ class Searcher:
         query_embedding = None
 
         # fine mode will trigger initial embedding search
-        if mode == "fine":
+        if mode == "fine_old":
             logger.info("[SEARCH] Fine mode: embedding search")
             query_embedding = self.embedder.embed([query])[0]
 
@@ -296,17 +295,6 @@ class Searcher:
                     user_name,
                 )
             )
-            if self.moscube:
-                tasks.append(
-                    executor.submit(
-                        self._retrieve_from_memcubes,
-                        query,
-                        parsed_goal,
-                        query_embedding,
-                        top_k,
-                        "memos_cube01",
-                    )
-                )
 
             results = []
             for t in tasks:
@@ -458,7 +446,7 @@ class Searcher:
         user_id: str | None = None,
     ):
         """Retrieve and rerank from Internet source"""
-        if not self.internet_retriever or mode == "fast":
+        if not self.internet_retriever or self.manual_close_internet:
             logger.info(f"[PATH-C] '{query}' Skipped (no retriever, fast mode)")
             return []
         if memory_type not in ["All"]:

@@ -12,12 +12,14 @@ class TestDeepSeekLLM(unittest.TestCase):
         """Test DeepSeekLLM generate method with and without <think> tag removal."""
 
         # Simulated full content including <think> tag
-        full_content = "<think>Thinking in progress...</think>Hello from DeepSeek!"
+        full_content = "Hello from DeepSeek!"
+        reasoning_content = "Thinking in progress..."
 
         # Mock response object
         mock_response = MagicMock()
         mock_response.model_dump_json.return_value = '{"mock": "true"}'
         mock_response.choices[0].message.content = full_content
+        mock_response.choices[0].message.reasoning_content = reasoning_content
 
         # Config with think prefix preserved
         config_with_think = DeepSeekLLMConfig.model_validate(
@@ -35,7 +37,7 @@ class TestDeepSeekLLM(unittest.TestCase):
         llm_with_think.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         output_with_think = llm_with_think.generate([{"role": "user", "content": "Hello"}])
-        self.assertEqual(output_with_think, full_content)
+        self.assertEqual(output_with_think, f"<think>{reasoning_content}</think>{full_content}")
 
         # Config with think tag removed
         config_without_think = config_with_think.model_copy(update={"remove_think_prefix": True})
@@ -43,7 +45,7 @@ class TestDeepSeekLLM(unittest.TestCase):
         llm_without_think.client.chat.completions.create = MagicMock(return_value=mock_response)
 
         output_without_think = llm_without_think.generate([{"role": "user", "content": "Hello"}])
-        self.assertEqual(output_without_think, "Hello from DeepSeek!")
+        self.assertEqual(output_without_think, full_content)
 
     def test_deepseek_llm_generate_stream(self):
         """Test DeepSeekLLM generate_stream with reasoning_content and content chunks."""
@@ -84,5 +86,5 @@ class TestDeepSeekLLM(unittest.TestCase):
 
         self.assertIn("Analyzing...", full_output)
         self.assertIn("Hello, DeepSeek!", full_output)
-        self.assertTrue(full_output.startswith("Analyzing..."))
+        self.assertTrue(full_output.startswith("<think>"))
         self.assertTrue(full_output.endswith("DeepSeek!"))

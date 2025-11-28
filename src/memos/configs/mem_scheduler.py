@@ -12,10 +12,13 @@ from memos.mem_scheduler.schemas.general_schemas import (
     BASE_DIR,
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
+    DEFAULT_CONSUME_BATCH,
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_CONTEXT_WINDOW_SIZE,
     DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
     DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
+    DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+    DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
     DEFAULT_THREAD_POOL_MAX_WORKERS,
     DEFAULT_TOP_K,
     DEFAULT_USE_REDIS_QUEUE,
@@ -42,6 +45,11 @@ class BaseSchedulerConfig(BaseConfig):
         default=DEFAULT_CONSUME_INTERVAL_SECONDS,
         gt=0,
         description=f"Interval for consuming messages from queue in seconds (default: {DEFAULT_CONSUME_INTERVAL_SECONDS})",
+    )
+    consume_batch: int = Field(
+        default=DEFAULT_CONSUME_BATCH,
+        gt=0,
+        description=f"Number of messages to consume in each batch (default: {DEFAULT_CONSUME_BATCH})",
     )
     auth_config_path: str | None = Field(
         default=None,
@@ -89,6 +97,17 @@ class GeneralSchedulerConfig(BaseSchedulerConfig):
     activation_mem_monitor_capacity: int = Field(
         default=DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT,
         description="Capacity of the activation memory monitor",
+    )
+
+    # Memory enhancement concurrency & retries configuration
+    enhance_batch_size: int | None = Field(
+        default=DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+        description="Batch size for concurrent memory enhancement; None or <=1 disables batching",
+    )
+    enhance_retries: int = Field(
+        default=DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
+        ge=0,
+        description="Number of retry attempts per enhancement batch",
     )
 
     # Database configuration for ORM persistence
@@ -158,6 +177,13 @@ class RabbitMQConfig(
         description="Port number for RabbitMQ instance access",
         ge=1,  # Port must be >= 1
         le=65535,  # Port must be <= 65535
+    )
+    exchange_name: str = Field(
+        default="memos-fanout",
+        description="Exchange name for RabbitMQ (e.g., memos-fanout, memos-memory-change)",
+    )
+    exchange_type: str = Field(
+        default="fanout", description="Exchange type for RabbitMQ (fanout or direct)"
     )
 
 

@@ -1,3 +1,5 @@
+import hashlib
+
 from collections.abc import Callable
 
 from memos.log import get_logger
@@ -6,10 +8,10 @@ from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.schemas.general_schemas import (
     ACTIVATION_MEMORY_TYPE,
     ADD_LABEL,
-    LONG_TERM_MEMORY_TYPE,
+    MEM_ARCHIVE_LABEL,
+    MEM_UPDATE_LABEL,
     NOT_INITIALIZED,
     PARAMETER_MEMORY_TYPE,
-    QUERY_LABEL,
     TEXT_MEMORY_TYPE,
     USER_INPUT_TYPE,
     WORKING_MEMORY_TYPE,
@@ -47,7 +49,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         mem_cube: GeneralMemCube,
     ) -> ScheduleLogForWebItem:
         text_mem_base: TreeTextMemory = mem_cube.text_mem
-        current_memory_sizes = text_mem_base.get_current_memory_size()
+        current_memory_sizes = text_mem_base.get_current_memory_size(user_name=mem_cube_id)
         current_memory_sizes = {
             "long_term_memory_size": current_memory_sizes.get("LongTermMemory", 0),
             "user_memory_size": current_memory_sizes.get("UserMemory", 0),
@@ -98,6 +100,41 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         )
         return log_message
 
+    @log_exceptions(logger=logger)
+    def create_event_log(
+        self,
+        label: str,
+        from_memory_type: str,
+        to_memory_type: str,
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        memcube_log_content: list[dict],
+        metadata: list[dict],
+        memory_len: int,
+        memcube_name: str | None = None,
+    ) -> ScheduleLogForWebItem:
+        item = self.create_autofilled_log_item(
+            log_content="",
+            label=label,
+            from_memory_type=from_memory_type,
+            to_memory_type=to_memory_type,
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+        )
+        item.memcube_log_content = memcube_log_content
+        item.metadata = metadata
+        item.memory_len = memory_len
+        item.memcube_name = memcube_name or self._map_memcube_name(mem_cube_id)
+        return item
+
+    def _map_memcube_name(self, mem_cube_id: str) -> str:
+        x = mem_cube_id or ""
+        if "public" in x.lower():
+            return "PublicMemCube"
+        return "UserMemCube"
+
     # TODO: Log output count is incorrect
     @log_exceptions(logger=logger)
     def log_working_memory_replacement(
@@ -110,50 +147,55 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
         """Log changes when working memory is replaced."""
-        memory_type_map = {
-            transform_name_to_key(name=m.memory): m.metadata.memory_type
-            for m in original_memory + new_memory
-        }
-
         original_text_memories = [m.memory for m in original_memory]
         new_text_memories = [m.memory for m in new_memory]
-
-        # Convert to sets for efficient difference operations
         original_set = set(original_text_memories)
         new_set = set(new_text_memories)
-
-        # Identify changes
-        added_memories = list(new_set - original_set)  # Present in new but not original
-
-        # recording messages
-        log_messages = []
-        for memory in added_memories:
-            normalized_mem = transform_name_to_key(name=memory)
-            if normalized_mem not in memory_type_map:
-                logger.error(f"Memory text not found in type mapping: {memory[:50]}...")
-            # Get the memory type from the map, default to LONG_TERM_MEMORY_TYPE if not found
-            mem_type = memory_type_map.get(normalized_mem, LONG_TERM_MEMORY_TYPE)
-
-            if mem_type == WORKING_MEMORY_TYPE:
-                logger.warning(f"Memory already in working memory: {memory[:50]}...")
+        added_texts = list(new_set - original_set)
+        memcube_content = []
+        meta = []
+        by_text = {m.memory: m for m in new_memory}
+        for t in added_texts:
+            itm = by_text.get(t)
+            if not itm:
                 continue
-
-            log_message = self.create_autofilled_log_item(
-                log_content=memory,
-                label=QUERY_LABEL,
-                from_memory_type=mem_type,
+            key_name = getattr(itm.metadata, "key", None) or itm.memory
+            k = transform_name_to_key(name=key_name)
+            memcube_content.append(
+                {
+                    "content": f"[{itm.metadata.memory_type}→{WORKING_MEMORY_TYPE}] {k}: {itm.memory}",
+                    "ref_id": itm.id,
+                }
+            )
+            meta.append(
+                {
+                    "ref_id": itm.id,
+                    "id": itm.id,
+                    "key": itm.metadata.key,
+                    "memory": itm.memory,
+                    "memory_type": itm.metadata.memory_type,
+                    "status": itm.metadata.status,
+                    "confidence": itm.metadata.confidence,
+                    "tags": itm.metadata.tags,
+                    "updated_at": getattr(itm.metadata, "updated_at", None)
+                    or getattr(itm.metadata, "update_at", None),
+                }
+            )
+        # Only create log if there are actual memory changes
+        if memcube_content:
+            ev = self.create_event_log(
+                label="scheduleMemory",
+                from_memory_type=TEXT_MEMORY_TYPE,
                 to_memory_type=WORKING_MEMORY_TYPE,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
+                memcube_log_content=memcube_content,
+                metadata=meta,
+                memory_len=len(memcube_content),
+                memcube_name=self._map_memcube_name(mem_cube_id),
             )
-            log_messages.append(log_message)
-
-        logger.info(
-            f"{len(added_memories)} {LONG_TERM_MEMORY_TYPE} memorie(s) "
-            f"transformed to {WORKING_MEMORY_TYPE} memories."
-        )
-        log_func_callback(log_messages)
+            log_func_callback([ev])
 
     @log_exceptions(logger=logger)
     def log_activation_memory_update(
@@ -170,42 +212,46 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         original_set = set(original_text_memories)
         new_set = set(new_text_memories)
 
-        # Identify changes
-        added_memories = list(new_set - original_set)  # Present in new but not original
-
-        # recording messages
-        log_messages = []
+        added_memories = list(new_set - original_set)
+        memcube_content = []
+        meta = []
         for mem in added_memories:
-            log_message_a = self.create_autofilled_log_item(
-                log_content=mem,
-                label=label,
-                from_memory_type=TEXT_MEMORY_TYPE,
-                to_memory_type=ACTIVATION_MEMORY_TYPE,
-                user_id=user_id,
-                mem_cube_id=mem_cube_id,
-                mem_cube=mem_cube,
+            key = transform_name_to_key(mem)
+            ref_id = f"actparam-{hashlib.md5(mem.encode()).hexdigest()}"
+            memcube_content.append(
+                {
+                    "content": f"[{ACTIVATION_MEMORY_TYPE}→{PARAMETER_MEMORY_TYPE}] {key}: {mem}",
+                    "ref_id": ref_id,
+                }
             )
-            logger.info(
-                f"{len(added_memories)} {TEXT_MEMORY_TYPE} memorie(s) "
-                f"transformed to {ACTIVATION_MEMORY_TYPE} memories."
+            meta.append(
+                {
+                    "ref_id": ref_id,
+                    "id": ref_id,
+                    "key": key,
+                    "memory": mem,
+                    "memory_type": ACTIVATION_MEMORY_TYPE,
+                    "status": None,
+                    "confidence": None,
+                    "tags": None,
+                    "updated_at": None,
+                }
             )
-
-            log_message_b = self.create_autofilled_log_item(
-                log_content=mem,
-                label=label,
+        # Only create log if there are actual memory changes
+        if memcube_content:
+            ev = self.create_event_log(
+                label="scheduleMemory",
                 from_memory_type=ACTIVATION_MEMORY_TYPE,
                 to_memory_type=PARAMETER_MEMORY_TYPE,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
+                memcube_log_content=memcube_content,
+                metadata=meta,
+                memory_len=len(added_memories),
+                memcube_name=self._map_memcube_name(mem_cube_id),
             )
-
-            log_messages.extend([log_message_a, log_message_b])
-        logger.info(
-            f"{len(added_memories)} {ACTIVATION_MEMORY_TYPE} memorie(s) "
-            f"transformed to {PARAMETER_MEMORY_TYPE} memories."
-        )
-        log_func_callback(log_messages)
+            log_func_callback([ev])
 
     @log_exceptions(logger=logger)
     def log_adding_memory(
@@ -217,7 +263,7 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         mem_cube: GeneralMemCube,
         log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
     ):
-        """Log changes when working memory is replaced."""
+        """Deprecated: legacy text log. Use create_event_log with structured fields instead."""
         log_message = self.create_autofilled_log_item(
             log_content=memory,
             label=ADD_LABEL,
@@ -232,6 +278,50 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             f"{USER_INPUT_TYPE} memory for user {user_id} "
             f"converted to {memory_type} memory in mem_cube {mem_cube_id}: {memory}"
         )
+
+    @log_exceptions(logger=logger)
+    def log_updating_memory(
+        self,
+        memory: str,
+        memory_type: str,
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
+    ):
+        """Deprecated: legacy text log. Use create_event_log with structured fields instead."""
+        log_message = self.create_autofilled_log_item(
+            log_content=memory,
+            label=MEM_UPDATE_LABEL,
+            from_memory_type=memory_type,
+            to_memory_type=memory_type,
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+        )
+        log_func_callback([log_message])
+
+    @log_exceptions(logger=logger)
+    def log_archiving_memory(
+        self,
+        memory: str,
+        memory_type: str,
+        user_id: str,
+        mem_cube_id: str,
+        mem_cube: GeneralMemCube,
+        log_func_callback: Callable[[list[ScheduleLogForWebItem]], None],
+    ):
+        """Deprecated: legacy text log. Use create_event_log with structured fields instead."""
+        log_message = self.create_autofilled_log_item(
+            log_content=memory,
+            label=MEM_ARCHIVE_LABEL,
+            from_memory_type=memory_type,
+            to_memory_type=memory_type,
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            mem_cube=mem_cube,
+        )
+        log_func_callback([log_message])
 
     @log_exceptions(logger=logger)
     def validate_schedule_message(self, message: ScheduleMessageItem, label: str):

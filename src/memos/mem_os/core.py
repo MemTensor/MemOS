@@ -283,12 +283,11 @@ class MOSCore:
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
                         label=QUERY_LABEL,
                         content=query,
                         timestamp=datetime.utcnow(),
                     )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
+                    self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
 
                 memories = mem_cube.text_mem.search(
                     query,
@@ -344,12 +343,11 @@ class MOSCore:
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
                     label=ANSWER_LABEL,
                     content=response,
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.submit_messages(messages=[message_item])
+                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
 
         return response
 
@@ -689,6 +687,7 @@ class MOSCore:
         mem_cube_id: str | None = None,
         user_id: str | None = None,
         session_id: str | None = None,
+        task_id: str | None = None,  # New: Add task_id parameter
         **kwargs,
     ) -> None:
         """
@@ -768,27 +767,30 @@ class MOSCore:
                     )
                     # submit messages for scheduler
                     if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                        mem_cube = self.mem_cubes[mem_cube_id]
                         if sync_mode == "async":
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=mem_cube,
                                 label=MEM_READ_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
+                                task_id=task_id,
                             )
-                            self.mem_scheduler.submit_messages(messages=[message_item])
+                            self.mem_scheduler.memos_message_queue.submit_messages(
+                                messages=[message_item]
+                            )
                         else:
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=mem_cube,
                                 label=ADD_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
+                                task_id=task_id,
                             )
-                            self.mem_scheduler.submit_messages(messages=[message_item])
+                            self.mem_scheduler.memos_message_queue.submit_messages(
+                                messages=[message_item]
+                            )
 
         def process_preference_memory():
             if (
@@ -797,12 +799,15 @@ class MOSCore:
                 and self.mem_cubes[mem_cube_id].pref_mem
             ):
                 messages_list = [messages]
-                mem_cube = self.mem_cubes[mem_cube_id]
                 if sync_mode == "sync":
                     pref_memories = self.mem_cubes[mem_cube_id].pref_mem.get_memory(
                         messages_list,
                         type="chat",
-                        info={"user_id": target_user_id, "session_id": self.session_id},
+                        info={
+                            "user_id": target_user_id,
+                            "session_id": self.session_id,
+                            "mem_cube_id": mem_cube_id,
+                        },
                     )
                     pref_ids = self.mem_cubes[mem_cube_id].pref_mem.add(pref_memories)
                     logger.info(
@@ -816,12 +821,11 @@ class MOSCore:
                         user_id=target_user_id,
                         session_id=target_session_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
                         label=PREF_ADD_LABEL,
                         content=json.dumps(messages_list),
                         timestamp=datetime.utcnow(),
                     )
-                    self.mem_scheduler.submit_messages(messages=[message_item])
+                    self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
 
         # Execute both memory processing functions in parallel
         with ContextThreadPoolExecutor(max_workers=2) as executor:
@@ -867,27 +871,28 @@ class MOSCore:
 
                 # submit messages for scheduler
                 if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                    mem_cube = self.mem_cubes[mem_cube_id]
                     if sync_mode == "async":
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
                             mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
                             label=MEM_READ_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
-                        self.mem_scheduler.submit_messages(messages=[message_item])
+                        self.mem_scheduler.memos_message_queue.submit_messages(
+                            messages=[message_item]
+                        )
                     else:
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
                             mem_cube_id=mem_cube_id,
-                            mem_cube=mem_cube,
                             label=ADD_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
-                        self.mem_scheduler.submit_messages(messages=[message_item])
+                        self.mem_scheduler.memos_message_queue.submit_messages(
+                            messages=[message_item]
+                        )
 
         # user doc input
         if (
@@ -909,16 +914,14 @@ class MOSCore:
 
             # submit messages for scheduler
             if self.enable_mem_scheduler and self.mem_scheduler is not None:
-                mem_cube = self.mem_cubes[mem_cube_id]
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
                     label=ADD_LABEL,
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.submit_messages(messages=[message_item])
+                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
 
         logger.info(f"Add memory to {mem_cube_id} successfully")
 

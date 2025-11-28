@@ -22,6 +22,7 @@ class TaskGoalParser:
     def __init__(self, llm=BaseLLM):
         self.llm = llm
         self.tokenizer = FastTokenizer()
+        self.retries = 1
 
     def parse(
         self,
@@ -103,18 +104,24 @@ class TaskGoalParser:
         """
         Parse LLM JSON output safely.
         """
-        try:
-            context = kwargs.get("context", "")
-            response = response.replace("```", "").replace("json", "").strip()
-            response_json = eval(response)
-            return ParsedTaskGoal(
-                memories=response_json.get("memories", []),
-                keys=response_json.get("keys", []),
-                tags=response_json.get("tags", []),
-                rephrased_query=response_json.get("rephrased_instruction", None),
-                internet_search=response_json.get("internet_search", False),
-                goal_type=response_json.get("goal_type", "default"),
-                context=context,
-            )
-        except Exception as e:
-            raise ValueError(f"Failed to parse LLM output: {e}\nRaw response:\n{response}") from e
+        # Ensure at least one attempt
+        attempts = max(1, getattr(self, "retries", 1))
+
+        for attempt_times in range(attempts):
+            try:
+                context = kwargs.get("context", "")
+                response = response.replace("```", "").replace("json", "").strip()
+                response_json = eval(response)
+                return ParsedTaskGoal(
+                    memories=response_json.get("memories", []),
+                    keys=response_json.get("keys", []),
+                    tags=response_json.get("tags", []),
+                    rephrased_query=response_json.get("rephrased_instruction", None),
+                    internet_search=response_json.get("internet_search", False),
+                    goal_type=response_json.get("goal_type", "default"),
+                    context=context,
+                )
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to parse LLM output: {e}\nRaw response:\n{response} retried: {attempt_times + 1}/{attempts + 1}"
+                ) from e

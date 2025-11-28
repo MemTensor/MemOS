@@ -11,7 +11,8 @@ Notes:
 Requirements:
 1. Keep only the preferences explicitly mentioned by the user. Do not infer or assume. If the user mentions reasons for their preferences, include those reasons as well.
 2. Output should be a list of entries concise natural language summaries and the corresponding context summary, context summary must contain complete information of the conversation fragment that the preference is mentioned.
-3. If multiple preferences are mentioned within the same topic or domain, you MUST combine them into a single entry, keep each entry information complete.
+3. If multiple preferences are mentioned within the same topic or domain, you MUST combine them into a single entry, keep each entry information complete. Different topics of preferences should be divided into multiple entries.
+4. If no explicit preference can be reasonably extracted, return [].
 
 Conversation:
 {qa_pair}
@@ -23,6 +24,7 @@ Find ALL explicit preferences. If no explicit preferences found, return []. Outp
     "explicit_preference": "A short natural language summary of the preferences",
     "context_summary": "The corresponding context summary, which is a summary of the corresponding conversation, do not lack any scenario information",
     "reasoning": "reasoning process to find the explicit preferences"
+    "topic": "preference topic, which can only belong to one topic or domain, such as: sports, hotel, education, etc.",
   },
 ]
 ```
@@ -42,7 +44,8 @@ NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 要求：
 1. 只保留用户明确提到的偏好，不要推断或假设。如果用户提到了偏好的原因，也要包含这些原因。
 2. 输出应该是一个条目列表，包含简洁的自然语言摘要和相应的上下文摘要，上下文摘要必须包含提到偏好的对话片段的完整信息。
-3. 如果在同一主题或领域内提到了多个偏好，你必须将它们合并为一个条目，保持每个条目信息完整。
+3. 如果在同一主题或领域内提到了多个偏好，你必须将它们合并为一个条目，保持每个条目信息完整。不同话题的偏好要分为多个条目。
+4. 如果没有可以合理提取的显式偏好，返回[]。
 
 对话：
 {qa_pair}
@@ -51,9 +54,10 @@ NAIVE_EXPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 ```json
 [
   {
-    "explicit_preference": "偏好的简短自然语言摘要",
+    "explicit_preference": "偏好的简短自然语言摘要，需要描述为“用户偏好于/不喜欢/想要/不想要/偏好什么”",
     "context_summary": "对应的上下文摘要，即对应对话的摘要，不要遗漏任何场景信息",
-    "reasoning": "寻找显式偏好的推理过程"
+    "reasoning": "寻找显式偏好的推理过程",
+    "topic": "偏好所属的主题或领域，例如：体育、酒店、教育等, topic只能属于一个主题或领域",
   },
 ]
 ```
@@ -79,18 +83,22 @@ Requirements:
 2. Inferred implicit preferences must not conflict with explicit preferences.
 3. For implicit_preference: only output the preference statement itself; do not include any extra explanation, reasoning, or confidence information. Put all reasoning and explanation in the reasoning field.
 4. In the reasoning field, explicitly explain the underlying logic and hidden motivations you identified.
-5. If no implicit preference can be reasonably inferred, leave the implicit_preference field empty (do not output anything else).
+5. Different topics of preferences should be divided into multiple entries.
+6. If no implicit preference can be reasonably inferred, return [].
 
 Conversation:
 {qa_pair}
 
 Output format:
-```json
-{
-  "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string",
-  "context_summary": "The corresponding context summary, which is a summary of the corresponding conversation, do not lack any scenario information",
-  "reasoning": "Explain the underlying logic, hidden motivations, and behavioral patterns that led to this inference"
-}
+[
+  ```json
+  {
+    "implicit_preference": "A concise natural language statement of the implicit preferences reasonably inferred from the conversation, or an empty string",
+    "context_summary": "The corresponding context summary, which is a summary of the corresponding conversation, do not lack any scenario information",
+    "reasoning": "Explain the underlying logic, hidden motivations, and behavioral patterns that led to this inference",
+    "topic": "preference topic, which can only belong to one topic or domain, such as: sports, hotel, education, etc.",
+  }
+]
 ```
 Don't output anything except the JSON.
 """
@@ -115,20 +123,92 @@ NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 2. 推断的隐式偏好不得与显式偏好冲突。
 3. 对于 implicit_preference：仅输出偏好陈述本身；不要包含任何额外的解释、推理或置信度信息。将所有推理和解释放在 reasoning 字段中。
 4. 在 reasoning 字段中，明确解释你识别出的底层逻辑和隐藏动机。
-5. 如果无法合理推断出隐式偏好，则将 implicit_preference 字段留空（不要输出其他任何内容）。
+5. 如果在同一主题或领域内提到了多个偏好，你必须将它们合并为一个条目，保持每个条目信息完整。不同话题的偏好要分为多个条目。
+6. 如果没有可以合理推断的隐式偏好，返回[]。
 
 对话：
 {qa_pair}
 
 输出格式：
 ```json
-{
-  "implicit_preference": "从对话中合理推断出的隐式偏好的简洁自然语言陈述，或空字符串",
-  "context_summary": "对应的上下文摘要，即对应对话的摘要，不要遗漏任何场景信息",
-  "reasoning": "解释推断出该偏好的底层逻辑、隐藏动机和行为模式"
-}
+[
+  {
+    "implicit_preference": "从对话中合理推断出的隐式偏好的简洁自然语言陈述，或空字符串",
+    "context_summary": "对应的上下文摘要，即对应对话的摘要，不要遗漏任何场景信息",
+    "reasoning": "解释推断出该偏好的底层逻辑、隐藏动机和行为模式",
+    "topic": "偏好所属的主题或领域，例如：体育、酒店、教育等, topic只能属于一个主题或领域",
+  }
+]
 ```
 除JSON外不要输出任何其他内容。
+"""
+
+
+NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT = """
+You are a content comparison expert. Your task is to determine whether each new preference information already exists in the retrieved text memories.
+
+**Task:** For each new preference, check if its content/topic/intent is already present in any of the retrieved text memories.
+
+**Input Structure:**
+- New preferences: Array of objects, each with "id" and "memory" fields
+- Retrieved memories: Array of objects, each with "id" and "memory" fields
+
+**Judgment Criteria:**
+- If the core content, topic, or intent of a new preference is **already covered** in any retrieved memory, mark as "exists" (true).
+- Consider both semantic similarity and topic overlap - even if wording differs, if the meaning is the same, it counts as existing.
+- If the new preference introduces **new information, different topic, or unique content** not found in retrieved memories, mark as "exists" (false).
+- Focus on the substantive content rather than minor phrasing differences.
+
+**Output Format (JSON):**
+```json
+{
+  "new_preference_id": "ID of the new preference being evaluated",
+  "exists": true/false,
+  "reasoning": "Brief explanation of your judgment, citing which retrieved memory contains similar content (if exists=true) or why it's new content (if exists=false)",
+  "matched_memory_id": "If exists=true, indicate which retrieved memory id matches; otherwise null"
+}
+```
+**New Preferences (array):**
+{new_preference}
+
+**Retrieved Text Memories (array):**
+{retrieved_memories}
+
+Output only the JSON response, no additional text.
+"""
+
+
+NAIVE_JUDGE_DUP_WITH_TEXT_MEM_PROMPT_ZH = """
+你是一个内容比较专家。你的任务是判断每个新的偏好信息是否已经存在于召回的文本记忆中。
+
+**任务：** 对每个新偏好，检查其内容/主题/意图是否已经在任何召回的文本记忆中存在。
+
+**输入结构：**
+- 新偏好：对象数组，每个对象包含"id"和"memory"字段
+- 召回记忆：对象数组，每个对象包含"id"和"memory"字段
+
+**判断标准：**
+- 如果新偏好的核心内容、主题或意图**已经被覆盖**在任何召回的记忆中，标记为"exists"（true）。
+- 考虑语义相似性和主题重叠 - 即使措辞不同，如果含义相同，也算作已存在。
+- 如果新偏好引入了**新信息、不同主题或独特内容**，且在召回记忆中未找到，标记为"exists"（false）。
+- 关注实质性内容，而非细微的表达差异。
+
+**输出格式（JSON）：**
+```json
+{
+  "new_preference_id": "正在评估的新偏好ID",
+  "exists": true/false,
+  "reasoning": "简要说明你的判断理由，引用包含相似内容的召回记忆（如果exists=true）或说明为什么是新内容（如果exists=false）",
+  "matched_memory_id": "如果exists=true，指出匹配的召回记忆id；否则为null"
+}
+```
+**新偏好（数组）：**
+{new_preference}
+
+**召回的文本记忆（数组）：**
+{retrieved_memories}
+
+只输出JSON响应，不要输出其他任何文本。
 """
 
 

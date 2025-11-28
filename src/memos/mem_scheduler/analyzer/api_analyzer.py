@@ -7,14 +7,16 @@ for search and add operations with reusable instance variables.
 
 import http.client
 import json
-import time
 
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
 
+from memos.api.product_models import APIADDRequest, APISearchRequest
+from memos.api.routers.server_router import add_memories, search_memories
 from memos.log import get_logger
+from memos.types import MessageDict, SearchMode, UserContext
 
 
 logger = get_logger(__name__)
@@ -84,7 +86,7 @@ class APIAnalyzerForScheduler:
             self._connection = None
 
     def search(
-        self, user_id: str, mem_cube_id: str, query: str, top: int = 50, use_requests: bool = True
+        self, user_id: str, mem_cube_id: str, query: str, top_k: int = 50, use_requests: bool = True
     ) -> dict[str, Any]:
         """
         Search for memories using the product/search API endpoint.
@@ -93,13 +95,13 @@ class APIAnalyzerForScheduler:
             user_id: User identifier
             mem_cube_id: Memory cube identifier
             query: Search query string
-            top: Number of top results to return
+            top_k: Number of top_k results to return
             use_requests: Whether to use requests library (True) or http.client (False)
 
         Returns:
             Dictionary containing the API response
         """
-        payload = {"user_id": user_id, "mem_cube_id": mem_cube_id, "query": query, "top": top}
+        payload = {"user_id": user_id, "mem_cube_id": mem_cube_id, "query": query, "top_k": top_k}
 
         try:
             if use_requests:
@@ -326,7 +328,7 @@ class APIAnalyzerForScheduler:
             user_id="test_user_id",
             mem_cube_id="test_mem_cube_id",
             query="What are some good places to celebrate New Year's Eve in Shanghai?",
-            top=50,
+            top_k=50,
         )
         print("Search result:", search_result)
 
@@ -337,7 +339,7 @@ class APIAnalyzerForScheduler:
                 user_id="test_user_id",
                 mem_cube_id="test_mem_cube_id",
                 query="What are some good places to celebrate New Year's Eve in Shanghai?",
-                top=50,
+                top_k=50,
             )
             print("Search result:", search_result)
         except Exception as e:
@@ -353,28 +355,20 @@ class DirectSearchMemoriesAnalyzer:
     def __init__(self):
         """Initialize the analyzer"""
         # Import necessary modules
-        try:
-            from memos.api.product_models import APIADDRequest, APISearchRequest
-            from memos.api.routers.server_router import add_memories, search_memories
-            from memos.types import MessageDict, UserContext
+        self.APISearchRequest = APISearchRequest
+        self.APIADDRequest = APIADDRequest
+        self.search_memories = search_memories
+        self.add_memories = add_memories
+        self.UserContext = UserContext
+        self.MessageDict = MessageDict
 
-            self.APISearchRequest = APISearchRequest
-            self.APIADDRequest = APIADDRequest
-            self.search_memories = search_memories
-            self.add_memories = add_memories
-            self.UserContext = UserContext
-            self.MessageDict = MessageDict
+        # Initialize conversation history for continuous conversation support
+        self.conversation_history = []
+        self.current_session_id = None
+        self.current_user_id = None
+        self.current_mem_cube_id = None
 
-            # Initialize conversation history for continuous conversation support
-            self.conversation_history = []
-            self.current_session_id = None
-            self.current_user_id = None
-            self.current_mem_cube_id = None
-
-            logger.info("DirectSearchMemoriesAnalyzer initialized successfully")
-        except ImportError as e:
-            logger.error(f"Failed to import modules: {e}")
-            raise
+        logger.info("DirectSearchMemoriesAnalyzer initialized successfully")
 
     def start_conversation(self, user_id="test_user", mem_cube_id="test_cube", session_id=None):
         """
@@ -487,7 +481,7 @@ class DirectSearchMemoriesAnalyzer:
 
         return result
 
-    def test_continuous_conversation(self):
+    def test_continuous_conversation(self, mode=SearchMode.MIXTURE):
         """Test continuous conversation functionality"""
         print("=" * 80)
         print("Testing Continuous Conversation Functionality")
@@ -542,15 +536,15 @@ class DirectSearchMemoriesAnalyzer:
 
             # Search for trip-related information
             self.search_in_conversation(
-                query="New Year's Eve Shanghai recommendations", mode="mixture", top_k=5
+                query="New Year's Eve Shanghai recommendations", mode=mode, top_k=5
             )
 
             # Search for food-related information
-            self.search_in_conversation(query="budget food Shanghai", mode="mixture", top_k=3)
+            self.search_in_conversation(query="budget food Shanghai", mode=mode, top_k=3)
 
             # Search without conversation history
             self.search_in_conversation(
-                query="Shanghai travel", mode="mixture", top_k=3, include_history=False
+                query="Shanghai travel", mode=mode, top_k=3, include_history=False
             )
 
             print("\n✅ Continuous conversation test completed successfully!")
@@ -645,7 +639,7 @@ class DirectSearchMemoriesAnalyzer:
             operation=None,
         )
 
-    def run_all_tests(self):
+    def run_all_tests(self, mode=SearchMode.MIXTURE):
         """Run all available tests"""
         print("🚀 Starting comprehensive test suite")
         print("=" * 80)
@@ -653,8 +647,7 @@ class DirectSearchMemoriesAnalyzer:
         # Test continuous conversation functionality
         print("\n💬 Testing CONTINUOUS CONVERSATION functions:")
         try:
-            self.test_continuous_conversation()
-            time.sleep(5)
+            self.test_continuous_conversation(mode=mode)
             print("✅ Continuous conversation test completed successfully")
         except Exception as e:
             print(f"❌ Continuous conversation test failed: {e}")
@@ -682,7 +675,7 @@ if __name__ == "__main__":
         print("Using direct test mode")
         try:
             direct_analyzer = DirectSearchMemoriesAnalyzer()
-            direct_analyzer.run_all_tests()
+            direct_analyzer.run_all_tests(mode=SearchMode.FINE)
         except Exception as e:
             print(f"Direct test mode failed: {e}")
             import traceback
@@ -712,6 +705,6 @@ if __name__ == "__main__":
             user_id="test_user_id",
             mem_cube_id="test_mem_cube_id",
             query="What are some good places to celebrate New Year's Eve in Shanghai?",
-            top=50,
+            top_k=10,
         )
         print("Search result:", search_result)

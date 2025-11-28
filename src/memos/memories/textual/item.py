@@ -83,6 +83,10 @@ class TextualMemoryMetadata(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="The timestamp of the last modification to the memory. Useful for tracking memory freshness or change history. Format: ISO 8601.",
     )
+    info: dict | None = Field(
+        default=None,
+        description="Arbitrary key-value pairs for additional metadata.",
+    )
 
     model_config = ConfigDict(extra="allow")
 
@@ -198,6 +202,8 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     embedding: list[float] | None = Field(default=None, description="Vector of the dialog.")
     preference: str | None = Field(default=None, description="Preference.")
     created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
+    mem_cube_id: str | None = Field(default=None, description="ID of the MemCube.")
+    score: float | None = Field(default=None, description="Score of the retrieval result.")
 
 
 class TextualMemoryItem(BaseModel):
@@ -266,3 +272,17 @@ class TextualMemoryItem(BaseModel):
     def __str__(self) -> str:
         """Pretty string representation of the memory item."""
         return f"<ID: {self.id} | Memory: {self.memory} | Metadata: {self.metadata!s}>"
+
+
+def list_all_fields() -> list[str]:
+    """List all possible fields of the TextualMemoryItem model."""
+    top = list(TextualMemoryItem.model_fields.keys())
+    meta_models = [
+        TextualMemoryMetadata,
+        TreeNodeTextualMemoryMetadata,
+        SearchedTreeNodeTextualMemoryMetadata,
+        PreferenceTextualMemoryMetadata,
+    ]
+    meta_all = sorted(set().union(*[set(m.model_fields.keys()) for m in meta_models]))
+
+    return top + meta_all
