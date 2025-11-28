@@ -544,6 +544,7 @@ class GeneralScheduler(BaseScheduler):
             text_mem: Text memory instance
             custom_tags: Optional list of custom tags for memory processing
         """
+        kb_log_content: list[dict] = []
         try:
             # Get the mem_reader from the parent MOSCore
             if not hasattr(self, "mem_reader") or self.mem_reader is None:
@@ -706,10 +707,43 @@ class GeneralScheduler(BaseScheduler):
             logger.info("Remove and Refresh Memories")
             logger.debug(f"Finished add {user_id} memory: {mem_ids}")
 
-        except Exception:
+        except Exception as exc:
             logger.error(
                 f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
             )
+            with contextlib.suppress(Exception):
+                is_cloud_env = (
+                    os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
+                )
+                if is_cloud_env:
+                    if not kb_log_content:
+                        trigger_source = info.get("trigger_source", "Messages") if info else "Messages"
+                        kb_log_content = [
+                            {
+                                "log_source": "KNOWLEDGE_BASE_LOG",
+                                "trigger_source": trigger_source,
+                                "operation": "ADD",
+                                "memory_id": mem_id,
+                                "content": None,
+                                "original_content": None,
+                                "source_doc_id": None,
+                            }
+                            for mem_id in mem_ids
+                        ]
+                    event = self.create_event_log(
+                        label="knowledgeBaseUpdate",
+                        log_content=f"Knowledge Base Memory Update failed: {exc!s}",
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=self.current_mem_cube,
+                        memcube_log_content=kb_log_content,
+                        metadata=None,
+                        memory_len=len(kb_log_content),
+                        memcube_name=self._map_memcube_name(mem_cube_id),
+                    )
+                    event.task_id = task_id
+                    event.status = "failed"
+                    self._submit_web_logs([event])
 
     def _mem_reorganize_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {MEM_ORGANIZE_LABEL} handler.")
