@@ -114,10 +114,7 @@ class NaiveExtractor(BaseExtractor):
                 "embedding": self.embedder.embed([pref["context_summary"]])[0],
             }
 
-            inner_keys = set(PreferenceTextualMemoryMetadata.model_fields.keys())
-            inner_info = {k: v for k, v in info.items() if k in inner_keys}
-            user_info = {k: v for k, v in info.items() if k not in inner_keys}
-            extract_info = {**basic_info, **pref, **vector_info, **inner_info, "info": user_info}
+            extract_info = {**basic_info, **pref, **vector_info, **info}
 
             metadata = PreferenceTextualMemoryMetadata(
                 type=msg_type, preference_type="explicit_preference", **extract_info
@@ -144,16 +141,7 @@ class NaiveExtractor(BaseExtractor):
             "embedding": self.embedder.embed([implicit_pref["context_summary"]])[0],
         }
 
-        inner_keys = set(PreferenceTextualMemoryMetadata.model_fields.keys())
-        inner_info = {k: v for k, v in info.items() if k in inner_keys}
-        user_info = {k: v for k, v in info.items() if k not in inner_keys}
-        extract_info = {
-            **basic_info,
-            **implicit_pref,
-            **vector_info,
-            **inner_info,
-            "info": user_info,
-        }
+        extract_info = {**basic_info, **implicit_pref, **vector_info, **info}
 
         metadata = PreferenceTextualMemoryMetadata(
             type=msg_type, preference_type="implicit_preference", **extract_info
