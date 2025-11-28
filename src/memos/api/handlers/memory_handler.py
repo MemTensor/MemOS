@@ -187,15 +187,44 @@ def handle_get_memories(
 
 
 def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
+    # Validate that only one of memory_ids, file_ids, or filter is provided
+    provided_params = [
+        delete_mem_req.memory_ids is not None,
+        delete_mem_req.file_ids is not None,
+        delete_mem_req.filter is not None,
+    ]
+    if sum(provided_params) != 1:
+        return DeleteMemoryResponse(
+            message="Exactly one of memory_ids, file_ids, or filter must be provided",
+            data={"status": "failure"},
+        )
+
     try:
-        naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids)
-        if naive_mem_cube.pref_mem is not None:
-            naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
+        if delete_mem_req.memory_ids is not None:
+            naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids)
+            if naive_mem_cube.pref_mem is not None:
+                naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
+        elif delete_mem_req.file_ids is not None:
+            # TODO: Implement deletion by file_ids
+            # Need to find memory_ids associated with file_ids and delete them
+            logger.warning("Deletion by file_ids not implemented yet")
+            return DeleteMemoryResponse(
+                message="Deletion by file_ids not implemented yet",
+                data={"status": "failure"},
+            )
+        elif delete_mem_req.filter is not None:
+            # TODO: Implement deletion by filter
+            # Need to find memories matching filter and delete them
+            logger.warning("Deletion by filter not implemented yet")
+            return DeleteMemoryResponse(
+                message="Deletion by filter not implemented yet",
+                data={"status": "failure"},
+            )
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(
             message="Failed to delete memories",
-            data="failure",
+            data={"status": "failure"},
         )
     return DeleteMemoryResponse(
         message="Memories deleted successfully",
