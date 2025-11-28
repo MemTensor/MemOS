@@ -5,10 +5,14 @@ from typing import Any
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.memories.textual.item import SourceMessage, TextualMemoryItem
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.types.openai_chat_completion_types import ChatCompletionUserMessageParam
 
-from .base import BaseMessageParser, _extract_text_from_content
+from .base import BaseMessageParser, _derive_key, _extract_text_from_content
 
 
 logger = get_logger(__name__)
@@ -123,45 +127,6 @@ class UserParser(BaseMessageParser):
         If source has original_part, use it directly.
         Otherwise, reconstruct from source fields.
         """
-        # Priority 1: Use original_part if available
-        if hasattr(source, "original_part") and source.original_part:
-            original = source.original_part
-            # If it's a content part, wrap it in a message
-            if isinstance(original, dict) and "type" in original:
-                return {
-                    "role": source.role or "user",
-                    "content": [original],
-                    "chat_time": source.chat_time,
-                    "message_id": source.message_id,
-                }
-            # If it's already a full message, return it
-            if isinstance(original, dict) and "role" in original:
-                return original
-
-        # Priority 2: Rebuild from source fields
-        if source.type == "file":
-            return {
-                "role": source.role or "user",
-                "content": [
-                    {
-                        "type": "file",
-                        "file": {
-                            "filename": source.doc_path or "",
-                            "file_data": source.content or "",
-                        },
-                    }
-                ],
-                "chat_time": source.chat_time,
-                "message_id": source.message_id,
-            }
-
-        # Simple text message
-        return {
-            "role": source.role or "user",
-            "content": source.content or "",
-            "chat_time": source.chat_time,
-            "message_id": source.message_id,
-        }
 
     def parse_fast(
         self,
@@ -169,7 +134,57 @@ class UserParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        return super().parse_fast(message, info, **kwargs)
+        if not isinstance(message, dict):
+            logger.warning(f"[BaseParser] Expected dict, got {type(message)}")
+            return []
+
+        role = message.get("role", "")
+        content = message.get("content", "")
+        chat_time = message.get("chat_time", None)
+        parts = []
+        if role and str(role).lower() != "mix":
+            parts.append(f"{role}: ")
+        if chat_time:
+            parts.append(f"[{chat_time}]: ")
+        prefix = "".join(parts)
+        line = f"{prefix}{content}\n"
+        if not line:
+            return []
+        memory_type = "UserMemory" if role == "user" else "LongTermMemory"
+
+        # Create source(s) using parser's create_source method
+        sources = self.create_source(message, info)
+        if isinstance(sources, SourceMessage):
+            sources = [sources]
+        elif not sources:
+            return []
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # Create memory item (equivalent to _make_memory_item)
+        memory_item = TextualMemoryItem(
+            memory=line,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=user_id,
+                session_id=session_id,
+                memory_type=memory_type,
+                status="activated",
+                tags=["mode:fast"],
+                key=_derive_key(line),
+                embedding=self.embedder.embed([line])[0],
+                usage=[],
+                sources=sources,
+                background="",
+                confidence=0.99,
+                type="fact",
+                info=info_,
+            ),
+        )
+
+        return [memory_item]
 
     def parse_fine(
         self,
@@ -177,4 +192,9 @@ class UserParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
+        logger.info(
+            "ChatCompletionUserMessageParam is inherently a "
+            "text-only modality. No special multimodal handling"
+            " is required in fine mode."
+        )
         return []

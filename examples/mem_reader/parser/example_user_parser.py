@@ -125,15 +125,10 @@ def main():
     # Rebuild examples
     print("🔄 Rebuilding messages from sources:\n")
     rebuilt_simple = parser.rebuild_from_source(source)
-    print(
-        f"  Simple message: role={rebuilt_simple['role']}, content={rebuilt_simple['content'][:40]}..."
-    )
-
-    if isinstance(sources, list) and len(sources) > 0:
-        rebuilt_multimodal = parser.rebuild_from_source(sources[0])
-        print(f"  Multimodal message (first part): role={rebuilt_multimodal['role']}")
-    print()
-
+    if rebuilt_simple:
+        print(
+            f"  Simple message: role={rebuilt_simple['role']}, content={rebuilt_simple['content'][:40]}..."
+        )
     print("✅ UserParser example completed!")
 
 
