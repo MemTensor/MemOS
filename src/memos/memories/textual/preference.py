@@ -76,7 +76,9 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.extractor.extract(messages, type, info)
 
-    def search(self, query: str, top_k: int, info=None, search_filter=None, **kwargs) -> list[TextualMemoryItem]:
+    def search(
+        self, query: str, top_k: int, info=None, search_filter=None, **kwargs
+    ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
             query (str): The query to search for.

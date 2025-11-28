@@ -210,7 +210,14 @@ class TreeTextMemory(BaseTextMemory):
                 manual_close_internet=manual_close_internet,
             )
         return searcher.search(
-            query, top_k, info, mode, memory_type, search_filter, search_priority, user_name=user_name
+            query,
+            top_k,
+            info,
+            mode,
+            memory_type,
+            search_filter,
+            search_priority,
+            user_name=user_name,
         )
 
     def get_relevant_subgraph(

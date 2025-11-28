@@ -77,7 +77,12 @@ class Searcher:
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
         parsed_goal, query_embedding, context, query = self._parse_task(
-            query, info, mode, search_filter=search_filter, search_priority=search_priority, user_name=user_name
+            query,
+            info,
+            mode,
+            search_filter=search_filter,
+            search_priority=search_priority,
+            user_name=user_name,
         )
         results = self._retrieve_paths(
             query,

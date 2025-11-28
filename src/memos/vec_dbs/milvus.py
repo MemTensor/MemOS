@@ -269,13 +269,13 @@ class MilvusVecDB(BaseVecDB):
 
     def _dict_to_expr(self, filter_dict: dict[str, Any]) -> str:
         """Convert a dictionary filter to a Milvus expression string.
-        
+
         Supports complex query syntax with logical operators, comparison operators,
         arithmetic operators, array operators, and string pattern matching.
-        
+
         Args:
             filter_dict: Dictionary containing filter conditions
-            
+
         Returns:
             Milvus expression string
         """
@@ -300,7 +300,7 @@ class MilvusVecDB(BaseVecDB):
         else:
             # Simple value comparison
             return f"{condition}"
-    
+
     def _handle_logical_and(self, conditions: list) -> str:
         """Handle AND logical operator."""
         if not conditions:
@@ -310,7 +310,7 @@ class MilvusVecDB(BaseVecDB):
         if not expressions:
             return ""
         return f"({' and '.join(expressions)})"
-    
+
     def _handle_logical_or(self, conditions: list) -> str:
         """Handle OR logical operator."""
         if not conditions:
@@ -320,14 +320,14 @@ class MilvusVecDB(BaseVecDB):
         if not expressions:
             return ""
         return f"({' or '.join(expressions)})"
-    
+
     def _handle_logical_not(self, condition: Any) -> str:
         """Handle NOT logical operator."""
         expr = self._build_expression(condition)
         if not expr:
             return ""
         return f"(not {expr})"
-    
+
     def _handle_field_conditions(self, condition_dict: dict[str, Any]) -> str:
         """Handle field-specific conditions."""
         conditions = []
@@ -339,11 +339,11 @@ class MilvusVecDB(BaseVecDB):
             field_expr = self._build_field_expression(field, value)
             if field_expr:
                 conditions.append(field_expr)
-        
+
         if not conditions:
             return ""
         return " and ".join(conditions)
-    
+
     def _build_field_expression(self, field: str, value: Any) -> str:
         """Build expression for a single field."""
         # Handle comparison operators
@@ -351,7 +351,7 @@ class MilvusVecDB(BaseVecDB):
             if len(value) == 1:
                 op, operand = next(iter(value.items()))
                 op_lower = op.lower()
-                
+
                 if op_lower == "in":
                     return self._handle_in_operator(field, operand)
                 elif op_lower == "contains":
@@ -370,26 +370,36 @@ class MilvusVecDB(BaseVecDB):
                 sub_conditions = []
                 for op, operand in value.items():
                     op_lower = op.lower()
-                    if op_lower in ["gte", "lte", "gt", "lt", "ne", "in", "contains", "icontains", "like"]:
+                    if op_lower in [
+                        "gte",
+                        "lte",
+                        "gt",
+                        "lt",
+                        "ne",
+                        "in",
+                        "contains",
+                        "icontains",
+                        "like",
+                    ]:
                         sub_expr = self._build_field_expression(field, {op: operand})
                         if sub_expr:
                             sub_conditions.append(sub_expr)
-                
+
                 if sub_conditions:
                     return f"({' and '.join(sub_conditions)})"
                 return ""
         else:
             # Simple equality
             return f"payload['{field}'] == {self._format_value(value)}"
-    
+
     def _handle_in_operator(self, field: str, values: list) -> str:
         """Handle IN operator for arrays."""
         if not isinstance(values, list) or not values:
             return ""
-        
+
         formatted_values = [self._format_value(v) for v in values]
         return f"payload['{field}'] in [{', '.join(formatted_values)}]"
-    
+
     def _handle_contains_operator(self, field: str, value: Any, case_sensitive: bool = True) -> str:
         """Handle CONTAINS/ICONTAINS operator."""
         formatted_value = self._format_value(value)
@@ -398,25 +408,19 @@ class MilvusVecDB(BaseVecDB):
         else:
             # For case-insensitive contains, we need to use LIKE with lower case
             return f"(not json_contains(payload['{field}'], {formatted_value}))"
-    
+
     def _handle_like_operator(self, field: str, pattern: str) -> str:
         """Handle LIKE operator for string pattern matching."""
         # Convert SQL-like pattern to Milvus-like pattern
         return f"payload['{field}'] like '{pattern}'"
-    
+
     def _handle_comparison_operator(self, field: str, operator: str, value: Any) -> str:
         """Handle comparison operators (gte, lte, gt, lt, ne)."""
-        milvus_op = {
-            "gte": ">=",
-            "lte": "<=",
-            "gt": ">",
-            "lt": "<",
-            "ne": "!="
-        }.get(operator, "==")
-        
+        milvus_op = {"gte": ">=", "lte": "<=", "gt": ">", "lt": "<", "ne": "!="}.get(operator, "==")
+
         formatted_value = self._format_value(value)
         return f"payload['{field}'] {milvus_op} {formatted_value}"
-    
+
     def _format_value(self, value: Any) -> str:
         """Format value for Milvus expression."""
         if isinstance(value, str):
@@ -431,7 +435,7 @@ class MilvusVecDB(BaseVecDB):
         elif value is None:
             return "null"
         else:
-            return f"'{str(value)}'"
+            return f"'{value!s}'"
 
     def _get_metric_type(self) -> str:
         """Get the metric type for search."""

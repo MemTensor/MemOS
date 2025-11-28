@@ -65,7 +65,10 @@ class GraphMemoryRetriever:
         if memory_scope == "WorkingMemory":
             # For working memory, retrieve all entries (no session-oriented filtering)
             working_memories = self.graph_store.get_all_memory_items(
-                scope="WorkingMemory", include_embedding=False, user_name=user_name, filter=search_filter
+                scope="WorkingMemory",
+                include_embedding=False,
+                user_name=user_name,
+                filter=search_filter,
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories[:top_k]]
 
@@ -306,7 +309,8 @@ class GraphMemoryRetriever:
             path_a_hits = []
             with ContextThreadPoolExecutor() as executor:
                 futures = [
-                    executor.submit(search_single, vec, None, search_filter) for vec in query_embedding[:max_num]
+                    executor.submit(search_single, vec, None, search_filter)
+                    for vec in query_embedding[:max_num]
                 ]
                 for f in concurrent.futures.as_completed(futures):
                     path_a_hits.extend(f.result() or [])

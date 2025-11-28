@@ -17,7 +17,11 @@ class BaseRetriever(ABC):
 
     @abstractmethod
     def retrieve(
-        self, query: str, top_k: int, info: dict[str, Any] | None = None, search_filter: dict[str, Any] | None = None
+        self,
+        query: str,
+        top_k: int,
+        info: dict[str, Any] | None = None,
+        search_filter: dict[str, Any] | None = None,
     ) -> list[TextualMemoryItem]:
         """Retrieve memories from the retriever."""
 
@@ -76,7 +80,11 @@ class NaiveRetriever(BaseRetriever):
         return prefs_mem
 
     def retrieve(
-        self, query: str, top_k: int, info: dict[str, Any] | None = None, search_filter: dict[str, Any] | None = None
+        self,
+        query: str,
+        top_k: int,
+        info: dict[str, Any] | None = None,
+        search_filter: dict[str, Any] | None = None,
     ) -> list[TextualMemoryItem]:
         """Retrieve memories from the naive retriever."""
         # TODO: un-support rewrite query and session filter now
