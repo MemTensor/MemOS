@@ -421,7 +421,7 @@ class MilvusVecDB(BaseVecDB):
         """Format value for Milvus expression."""
         if isinstance(value, str):
             return f"'{value}'"
-        elif isinstance(value, (int, float)):
+        elif isinstance(value, int | float):
             return str(value)
         elif isinstance(value, bool):
             return str(value).lower()
