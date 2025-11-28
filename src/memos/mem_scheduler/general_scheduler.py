@@ -504,6 +504,8 @@ class GeneralScheduler(BaseScheduler):
                     text_mem=text_mem,
                     user_name=user_name,
                     custom_tags=info.get("custom_tags", None),
+                    task_id=message.task_id,
+                    info=info,
                 )
 
                 logger.info(
@@ -529,6 +531,8 @@ class GeneralScheduler(BaseScheduler):
         text_mem: TreeTextMemory,
         user_name: str,
         custom_tags: list[str] | None = None,
+        task_id: str | None = None,
+        info: dict | None = None,
     ) -> None:
         """
         Process memories using mem_reader for enhanced memory processing.
@@ -602,6 +606,78 @@ class GeneralScheduler(BaseScheduler):
                     logger.info(
                         f"Added {len(enhanced_mem_ids)} enhanced memories: {enhanced_mem_ids}"
                     )
+
+                    # LOGGING BLOCK START
+                    # This block is replicated from _add_message_consumer to ensure consistent logging
+                    is_cloud_env = (
+                        os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+                        == "memos-memory-change"
+                    )
+                    if is_cloud_env:
+                        # New: Knowledge Base Logging (Cloud Service)
+                        kb_log_content = []
+                        for item in flattened_memories:
+                            kb_log_content.append(
+                                {
+                                    "log_source": "KNOWLEDGE_BASE_LOG",
+                                    "trigger_source": info.get("trigger_source", "Messages") if info else "Messages",
+                                    "operation": "ADD",
+                                    "memory_id": item.id,
+                                    "content": item.memory,
+                                    "original_content": None,
+                                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                                }
+                            )
+                        if kb_log_content:
+                            event = self.create_event_log(
+                                label="knowledgeBaseUpdate",
+                                log_content=f"Knowledge Base Memory Update: {len(kb_log_content)} changes.",
+                                user_id=user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=self.current_mem_cube,
+                                memcube_log_content=kb_log_content,
+                                metadata=None,
+                                memory_len=len(kb_log_content),
+                                memcube_name=self._map_memcube_name(mem_cube_id),
+                            )
+                            event.task_id = task_id
+                            self._submit_web_logs([event])
+                    else:
+                        # Existing: Playground/Default Logging
+                        add_content_legacy: list[dict] = []
+                        add_meta_legacy: list[dict] = []
+                        for item_id, item in zip(enhanced_mem_ids, flattened_memories):
+                            key = getattr(item.metadata, "key", None) or transform_name_to_key(name=item.memory)
+                            add_content_legacy.append({"content": f"{key}: {item.memory}", "ref_id": item_id})
+                            add_meta_legacy.append(
+                                {
+                                    "ref_id": item_id,
+                                    "id": item_id,
+                                    "key": item.metadata.key,
+                                    "memory": item.memory,
+                                    "memory_type": item.metadata.memory_type,
+                                    "status": item.metadata.status,
+                                    "confidence": item.metadata.confidence,
+                                    "tags": item.metadata.tags,
+                                    "updated_at": getattr(item.metadata, "updated_at", None) or getattr(item.metadata, "update_at", None),
+                                }
+                            )
+                        if add_content_legacy:
+                            event = self.create_event_log(
+                                label="addMemory",
+                                from_memory_type=USER_INPUT_TYPE,
+                                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                                user_id=user_id,
+                                mem_cube_id=mem_cube_id,
+                                mem_cube=self.current_mem_cube,
+                                memcube_log_content=add_content_legacy,
+                                metadata=add_meta_legacy,
+                                memory_len=len(add_content_legacy),
+                                memcube_name=self._map_memcube_name(mem_cube_id),
+                            )
+                            event.task_id = task_id
+                            self._submit_web_logs([event])
+                    # LOGGING BLOCK END
                 else:
                     logger.info("No enhanced memories generated by mem_reader")
             else:
