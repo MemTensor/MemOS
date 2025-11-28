@@ -162,6 +162,7 @@ class TreeTextMemory(BaseTextMemory):
         mode: str = "fast",
         memory_type: str = "All",
         manual_close_internet: bool = True,
+        search_priority: dict | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
@@ -209,7 +210,7 @@ class TreeTextMemory(BaseTextMemory):
                 manual_close_internet=manual_close_internet,
             )
         return searcher.search(
-            query, top_k, info, mode, memory_type, search_filter, user_name=user_name
+            query, top_k, info, mode, memory_type, search_filter, search_priority, user_name=user_name
         )
 
     def get_relevant_subgraph(

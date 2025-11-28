@@ -17,7 +17,7 @@ class BaseRetriever(ABC):
 
     @abstractmethod
     def retrieve(
-        self, query: str, top_k: int, info: dict[str, Any] | None = None
+        self, query: str, top_k: int, info: dict[str, Any] | None = None, search_filter: dict[str, Any] | None = None
     ) -> list[TextualMemoryItem]:
         """Retrieve memories from the retriever."""
 
@@ -76,7 +76,7 @@ class NaiveRetriever(BaseRetriever):
         return prefs_mem
 
     def retrieve(
-        self, query: str, top_k: int, info: dict[str, Any] | None = None
+        self, query: str, top_k: int, info: dict[str, Any] | None = None, search_filter: dict[str, Any] | None = None
     ) -> list[TextualMemoryItem]:
         """Retrieve memories from the naive retriever."""
         # TODO: un-support rewrite query and session filter now
@@ -84,6 +84,7 @@ class NaiveRetriever(BaseRetriever):
             info = info.copy()  # Create a copy to avoid modifying the original
             info.pop("chat_history", None)
             info.pop("session_id", None)
+        search_filter = {"and": [info, search_filter]}
         query_embeddings = self.embedder.embed([query])  # Pass as list to get list of embeddings
         query_embedding = query_embeddings[0]  # Get the first (and only) embedding
 
@@ -96,7 +97,7 @@ class NaiveRetriever(BaseRetriever):
                 query,
                 "explicit_preference",
                 top_k * 2,
-                info,
+                search_filter,
             )
             future_implicit = executor.submit(
                 self.vector_db.search,
@@ -104,7 +105,7 @@ class NaiveRetriever(BaseRetriever):
                 query,
                 "implicit_preference",
                 top_k * 2,
-                info,
+                search_filter,
             )
 
             # Wait for all results
