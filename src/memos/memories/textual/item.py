@@ -203,6 +203,7 @@ class PreferenceTextualMemoryMetadata(TextualMemoryMetadata):
     preference: str | None = Field(default=None, description="Preference.")
     created_at: str | None = Field(default=None, description="Timestamp of the dialog.")
     mem_cube_id: str | None = Field(default=None, description="ID of the MemCube.")
+    score: float | None = Field(default=None, description="Score of the retrieval result.")
 
 
 class TextualMemoryItem(BaseModel):

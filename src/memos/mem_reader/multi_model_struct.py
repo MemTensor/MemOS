@@ -29,7 +29,8 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         """
         from memos.configs.mem_reader import SimpleStructMemReaderConfig
 
-        simple_config = SimpleStructMemReaderConfig(**config.model_dump())
+        config_dict = config.model_dump(exclude_none=True)
+        simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
         # Initialize MultiModelParser for routing to different parsers
@@ -47,7 +48,7 @@ class MultiModelStructMemReader(SimpleStructMemReader):
 
     @timed
     def _process_multi_model_data(
-        self, scene_data_info: MessagesType, info, **kwargs
+        self, scene_data_info: MessagesType, info, mode: str = "fine", **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Process multi-model data using MultiModelParser.
@@ -55,9 +56,10 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         Args:
             scene_data_info: MessagesType input
             info: Dictionary containing user_id and session_id
+            mode: mem-reader mode, fast for quick process while fine for
+            better understanding via calling llm
             **kwargs: Additional parameters (mode, etc.)
         """
-        mode = kwargs.get("mode", "fine")
         # Pop custom_tags from info (same as simple_struct.py)
         # must pop here, avoid add to info, only used in sync fine mode
         custom_tags = info.pop("custom_tags", None) if isinstance(info, dict) else None

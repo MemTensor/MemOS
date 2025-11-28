@@ -258,6 +258,7 @@ class MemoryCreateRequest(BaseRequest):
     source: str | None = Field(None, description="Source of the memory")
     user_profile: bool = Field(False, description="User profile memory")
     session_id: str | None = Field(None, description="Session id")
+    task_id: str | None = Field(None, description="Task ID for monitoring async tasks")
 
 
 class SearchRequest(BaseRequest):

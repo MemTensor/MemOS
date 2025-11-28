@@ -1,6 +1,7 @@
 import concurrent.futures
 import contextlib
 import json
+import os
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -19,7 +20,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
     PREF_ADD_LABEL,
     QUERY_LABEL,
     USER_INPUT_TYPE,
-    WORKING_MEMORY_TYPE,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
@@ -189,6 +189,7 @@ class GeneralScheduler(BaseScheduler):
                             memory_len=1,
                             memcube_name=self._map_memcube_name(msg.mem_cube_id),
                         )
+                        event.task_id = msg.task_id
                         self._submit_web_logs([event])
                 except Exception:
                     logger.exception("Failed to record addMessage log for query")
@@ -233,6 +234,7 @@ class GeneralScheduler(BaseScheduler):
                             memory_len=1,
                             memcube_name=self._map_memcube_name(msg.mem_cube_id),
                         )
+                        event.task_id = msg.task_id
                         self._submit_web_logs([event])
                 except Exception:
                     logger.exception("Failed to record addMessage log for answer")
@@ -250,6 +252,7 @@ class GeneralScheduler(BaseScheduler):
                     if not batch:
                         continue
 
+                    # Process each message in the batch
                     for msg in batch:
                         try:
                             userinput_memory_ids = json.loads(msg.content)
@@ -257,102 +260,211 @@ class GeneralScheduler(BaseScheduler):
                             logger.error(f"Error: {e}. Content: {msg.content}", exc_info=True)
                             userinput_memory_ids = []
 
-                        mem_items: list[TextualMemoryItem] = []
+                        # Prepare data for both logging paths, fetching original content for updates
+                        prepared_add_items = []
+                        prepared_update_items_with_original = []
+
                         for memory_id in userinput_memory_ids:
                             try:
+                                # This mem_item represents the NEW content that was just added/processed
                                 mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
                                     memory_id=memory_id
                                 )
-                                mem_items.append(mem_item)
+                                # Check if a memory with the same key already exists (determining if it's an update)
+                                key = getattr(
+                                    mem_item.metadata, "key", None
+                                ) or transform_name_to_key(name=mem_item.memory)
+                                exists = False
+                                original_content = None
+                                original_item_id = None
+
+                                # Only check graph_store if a key exists and the text_mem has a graph_store
+                                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
+                                    candidates = (
+                                        self.current_mem_cube.text_mem.graph_store.get_by_metadata(
+                                            [
+                                                {"field": "key", "op": "=", "value": key},
+                                                {
+                                                    "field": "memory_type",
+                                                    "op": "=",
+                                                    "value": mem_item.metadata.memory_type,
+                                                },
+                                            ]
+                                        )
+                                    )
+                                    if candidates:
+                                        exists = True
+                                        original_item_id = candidates[0]
+                                        # Crucial step: Fetch the original content for updates
+                                        # This `get` is for the *existing* memory that will be updated
+                                        original_mem_item = self.current_mem_cube.text_mem.get(
+                                            memory_id=original_item_id
+                                        )
+                                        original_content = original_mem_item.memory
+
+                                if exists:
+                                    prepared_update_items_with_original.append(
+                                        {
+                                            "new_item": mem_item,
+                                            "original_content": original_content,
+                                            "original_item_id": original_item_id,
+                                        }
+                                    )
+                                else:
+                                    prepared_add_items.append(mem_item)
+
                             except Exception:
                                 logger.warning(
-                                    f"This MemoryItem {memory_id} has already been deleted."
+                                    f"This MemoryItem {memory_id} has already been deleted or an error occurred during preparation."
                                 )
                                 continue
-                        add_content: list[dict] = []
-                        add_meta: list[dict] = []
-                        update_content: list[dict] = []
-                        update_meta: list[dict] = []
-                        for mem_item in mem_items:
-                            if mem_item.metadata.memory_type == WORKING_MEMORY_TYPE:
-                                continue
-                            key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
-                                name=mem_item.memory
-                            )
-                            exists = False
-                            try:
-                                text_mem = self.current_mem_cube.text_mem
-                                if key and hasattr(text_mem, "graph_store"):
-                                    candidates = text_mem.graph_store.get_by_metadata(
-                                        [
-                                            {"field": "memory", "op": "=", "value": key},
-                                            {
-                                                "field": "memory_type",
-                                                "op": "=",
-                                                "value": mem_item.metadata.memory_type,
-                                            },
-                                        ]
-                                    )
-                                    exists = bool(candidates)
-                            except Exception:
-                                exists = False
 
-                            payload = {
-                                "content": f"{key}: {mem_item.memory}",
-                                "ref_id": mem_item.id,
-                            }
-                            meta_dict = {
-                                "ref_id": mem_item.id,
-                                "id": mem_item.id,
-                                "key": mem_item.metadata.key,
-                                "memory": mem_item.memory,
-                                "memory_type": mem_item.metadata.memory_type,
-                                "status": mem_item.metadata.status,
-                                "confidence": mem_item.metadata.confidence,
-                                "tags": mem_item.metadata.tags,
-                                "updated_at": getattr(mem_item.metadata, "updated_at", None)
-                                or getattr(mem_item.metadata, "update_at", None),
-                            }
-                            if exists:
-                                update_content.append(payload)
-                                update_meta.append(meta_dict)
-                            else:
-                                add_content.append(payload)
-                                add_meta.append(meta_dict)
+                        # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
+                        is_cloud_env = (
+                            os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+                            == "memos-memory-change"
+                        )
 
-                        events = []
-                        if add_content:
-                            events.append(
-                                self.create_event_log(
+                        if is_cloud_env:
+                            # New: Knowledge Base Logging (Cloud Service)
+                            kb_log_content = []
+                            for item in prepared_add_items:
+                                kb_log_content.append(
+                                    {
+                                        "log_source": "KNOWLEDGE_BASE_LOG",
+                                        "trigger_source": msg.info.get("trigger_source", "Messages")
+                                        if msg.info
+                                        else "Messages",  # Assuming msg.info is available and contains trigger_source
+                                        "operation": "ADD",
+                                        "memory_id": item.id,
+                                        "content": item.memory,
+                                        "original_content": None,
+                                        "source_doc_id": getattr(
+                                            item.metadata, "source_doc_id", None
+                                        ),
+                                    }
+                                )
+                            for item_data in prepared_update_items_with_original:
+                                new_item = item_data["new_item"]
+                                kb_log_content.append(
+                                    {
+                                        "log_source": "KNOWLEDGE_BASE_LOG",
+                                        "trigger_source": msg.info.get("trigger_source", "Messages")
+                                        if msg.info
+                                        else "Messages",
+                                        "operation": "UPDATE",
+                                        "memory_id": new_item.id,
+                                        "content": new_item.memory,
+                                        "original_content": item_data[
+                                            "original_content"
+                                        ],  # Now correctly fetched
+                                        "source_doc_id": getattr(
+                                            new_item.metadata, "source_doc_id", None
+                                        ),
+                                    }
+                                )
+
+                            if kb_log_content:
+                                event = self.create_event_log(
+                                    label="knowledgeBaseUpdate",
+                                    log_content=f"Knowledge Base Memory Update: {len(kb_log_content)} changes.",
+                                    user_id=msg.user_id,
+                                    mem_cube_id=msg.mem_cube_id,
+                                    mem_cube=self.current_mem_cube,
+                                    memcube_log_content=kb_log_content,
+                                    metadata=None,  # Per design doc for KB logs
+                                    memory_len=len(kb_log_content),
+                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                                )
+                                event.task_id = msg.task_id
+                                self._submit_web_logs([event])
+                        else:
+                            # Existing: Playground/Default Logging
+                            # Reconstruct add_content/add_meta/update_content/update_meta from prepared_items
+                            # This ensures existing logging path continues to work with pre-existing data structures
+                            add_content_legacy: list[dict] = []
+                            add_meta_legacy: list[dict] = []
+                            update_content_legacy: list[dict] = []
+                            update_meta_legacy: list[dict] = []
+
+                            for item in prepared_add_items:
+                                key = getattr(item.metadata, "key", None) or transform_name_to_key(
+                                    name=item.memory
+                                )
+                                add_content_legacy.append(
+                                    {"content": f"{key}: {item.memory}", "ref_id": item.id}
+                                )
+                                add_meta_legacy.append(
+                                    {
+                                        "ref_id": item.id,
+                                        "id": item.id,
+                                        "key": item.metadata.key,
+                                        "memory": item.memory,
+                                        "memory_type": item.metadata.memory_type,
+                                        "status": item.metadata.status,
+                                        "confidence": item.metadata.confidence,
+                                        "tags": item.metadata.tags,
+                                        "updated_at": getattr(item.metadata, "updated_at", None)
+                                        or getattr(item.metadata, "update_at", None),
+                                    }
+                                )
+
+                            for item_data in prepared_update_items_with_original:
+                                item = item_data["new_item"]
+                                key = getattr(item.metadata, "key", None) or transform_name_to_key(
+                                    name=item.memory
+                                )
+                                update_content_legacy.append(
+                                    {"content": f"{key}: {item.memory}", "ref_id": item.id}
+                                )
+                                update_meta_legacy.append(
+                                    {
+                                        "ref_id": item.id,
+                                        "id": item.id,
+                                        "key": item.metadata.key,
+                                        "memory": item.memory,
+                                        "memory_type": item.metadata.memory_type,
+                                        "status": item.metadata.status,
+                                        "confidence": item.metadata.confidence,
+                                        "tags": item.metadata.tags,
+                                        "updated_at": getattr(item.metadata, "updated_at", None)
+                                        or getattr(item.metadata, "update_at", None),
+                                    }
+                                )
+
+                            events = []
+                            if add_content_legacy:
+                                event = self.create_event_log(
                                     label="addMemory",
                                     from_memory_type=USER_INPUT_TYPE,
                                     to_memory_type=LONG_TERM_MEMORY_TYPE,
                                     user_id=msg.user_id,
                                     mem_cube_id=msg.mem_cube_id,
                                     mem_cube=self.current_mem_cube,
-                                    memcube_log_content=add_content,
-                                    metadata=add_meta,
-                                    memory_len=len(add_content),
+                                    memcube_log_content=add_content_legacy,
+                                    metadata=add_meta_legacy,
+                                    memory_len=len(add_content_legacy),
                                     memcube_name=self._map_memcube_name(msg.mem_cube_id),
                                 )
-                            )
-                        if update_content:
-                            events.append(
-                                self.create_event_log(
+                                event.task_id = msg.task_id
+                                events.append(event)
+                            if update_content_legacy:
+                                event = self.create_event_log(
                                     label="updateMemory",
                                     from_memory_type=LONG_TERM_MEMORY_TYPE,
                                     to_memory_type=LONG_TERM_MEMORY_TYPE,
                                     user_id=msg.user_id,
                                     mem_cube_id=msg.mem_cube_id,
                                     mem_cube=self.current_mem_cube,
-                                    memcube_log_content=update_content,
-                                    metadata=update_meta,
-                                    memory_len=len(update_content),
+                                    memcube_log_content=update_content_legacy,
+                                    metadata=update_meta_legacy,
+                                    memory_len=len(update_content_legacy),
                                     memcube_name=self._map_memcube_name(msg.mem_cube_id),
                                 )
-                            )
-                        if events:
-                            self._submit_web_logs(events)
+                                event.task_id = msg.task_id
+                                events.append(event)
+                            if events:
+                                self._submit_web_logs(events)
 
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
@@ -524,7 +636,7 @@ class GeneralScheduler(BaseScheduler):
             )
 
     def _mem_reorganize_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {MEM_ORGANIZE_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
             try:
@@ -540,7 +652,7 @@ class GeneralScheduler(BaseScheduler):
                     return
 
                 logger.info(
-                    f"Processing mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
+                    f"Processing mem_reorganize for user_id={user_id}, mem_cube_id={mem_cube_id}, mem_ids={mem_ids}"
                 )
 
                 # Get the text memory from the mem_cube
@@ -683,11 +795,11 @@ class GeneralScheduler(BaseScheduler):
                         self._submit_web_logs([event])
 
                 logger.info(
-                    f"Successfully processed mem_read for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                    f"Successfully processed mem_reorganize for user_id={user_id}, mem_cube_id={mem_cube_id}"
                 )
 
             except Exception as e:
-                logger.error(f"Error processing mem_read message: {e}", exc_info=True)
+                logger.error(f"Error processing mem_reorganize message: {e}", exc_info=True)
 
         with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
             futures = [executor.submit(process_message, msg) for msg in messages]
@@ -746,7 +858,8 @@ class GeneralScheduler(BaseScheduler):
 
         except Exception:
             logger.error(
-                f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
+                f"Error in _process_memories_with_reorganize: {traceback.format_exc()}",
+                exc_info=True,
             )
 
     def _pref_add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
@@ -797,6 +910,50 @@ class GeneralScheduler(BaseScheduler):
                 logger.info(
                     f"Successfully processed and add preferences for user_id={user_id}, mem_cube_id={mem_cube_id}, pref_ids={pref_ids}"
                 )
+
+                # Create and submit log for web display
+                # Only send logs if RabbitMQ is configured with direct exchange (cloud service scenario)
+                should_send_log = (
+                    self.rabbitmq_config is not None
+                    and hasattr(self.rabbitmq_config, "exchange_type")
+                    and self.rabbitmq_config.exchange_type == "direct"
+                )
+                if pref_ids and should_send_log:
+                    pref_content = []
+                    pref_meta = []
+                    for i, pref_mem_item in enumerate(pref_memories):
+                        if i < len(pref_ids):
+                            pref_content.append(
+                                {
+                                    "content": pref_mem_item.memory,
+                                    "ref_id": pref_ids[i],
+                                }
+                            )
+                            pref_meta.append(
+                                {
+                                    "ref_id": pref_ids[i],
+                                    "id": pref_ids[i],
+                                    "memory": pref_mem_item.memory,
+                                    "memory_type": getattr(
+                                        pref_mem_item.metadata, "memory_type", "preference"
+                                    ),
+                                }
+                            )
+
+                    event = self.create_event_log(
+                        label="addMemory",
+                        from_memory_type=USER_INPUT_TYPE,
+                        to_memory_type=LONG_TERM_MEMORY_TYPE,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        mem_cube=mem_cube,
+                        memcube_log_content=pref_content,
+                        metadata=pref_meta,
+                        memory_len=len(pref_content),
+                        memcube_name=self._map_memcube_name(mem_cube_id),
+                    )
+                    event.task_id = message.task_id
+                    self._submit_web_logs([event])
 
             except Exception as e:
                 logger.error(f"Error processing pref_add message: {e}", exc_info=True)
