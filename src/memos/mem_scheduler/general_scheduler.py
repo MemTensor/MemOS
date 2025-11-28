@@ -611,8 +611,7 @@ class GeneralScheduler(BaseScheduler):
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging
                     is_cloud_env = (
-                        os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-                        == "memos-memory-change"
+                        os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
                     )
                     if is_cloud_env:
                         # New: Knowledge Base Logging (Cloud Service)
@@ -621,7 +620,9 @@ class GeneralScheduler(BaseScheduler):
                             kb_log_content.append(
                                 {
                                     "log_source": "KNOWLEDGE_BASE_LOG",
-                                    "trigger_source": info.get("trigger_source", "Messages") if info else "Messages",
+                                    "trigger_source": info.get("trigger_source", "Messages")
+                                    if info
+                                    else "Messages",
                                     "operation": "ADD",
                                     "memory_id": item.id,
                                     "content": item.memory,
@@ -647,9 +648,15 @@ class GeneralScheduler(BaseScheduler):
                         # Existing: Playground/Default Logging
                         add_content_legacy: list[dict] = []
                         add_meta_legacy: list[dict] = []
-                        for item_id, item in zip(enhanced_mem_ids, flattened_memories):
-                            key = getattr(item.metadata, "key", None) or transform_name_to_key(name=item.memory)
-                            add_content_legacy.append({"content": f"{key}: {item.memory}", "ref_id": item_id})
+                        for item_id, item in zip(
+                            enhanced_mem_ids, flattened_memories, strict=False
+                        ):
+                            key = getattr(item.metadata, "key", None) or transform_name_to_key(
+                                name=item.memory
+                            )
+                            add_content_legacy.append(
+                                {"content": f"{key}: {item.memory}", "ref_id": item_id}
+                            )
                             add_meta_legacy.append(
                                 {
                                     "ref_id": item_id,
@@ -660,7 +667,8 @@ class GeneralScheduler(BaseScheduler):
                                     "status": item.metadata.status,
                                     "confidence": item.metadata.confidence,
                                     "tags": item.metadata.tags,
-                                    "updated_at": getattr(item.metadata, "updated_at", None) or getattr(item.metadata, "update_at", None),
+                                    "updated_at": getattr(item.metadata, "updated_at", None)
+                                    or getattr(item.metadata, "update_at", None),
                                 }
                             )
                         if add_content_legacy:
@@ -717,7 +725,9 @@ class GeneralScheduler(BaseScheduler):
                 )
                 if is_cloud_env:
                     if not kb_log_content:
-                        trigger_source = info.get("trigger_source", "Messages") if info else "Messages"
+                        trigger_source = (
+                            info.get("trigger_source", "Messages") if info else "Messages"
+                        )
                         kb_log_content = [
                             {
                                 "log_source": "KNOWLEDGE_BASE_LOG",
