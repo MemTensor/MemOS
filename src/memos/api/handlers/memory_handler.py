@@ -180,8 +180,8 @@ def handle_get_memories(
     return GetMemoryResponse(
         message="Memories retrieved successfully",
         data={
-            "text_mem": memories,
-            "pref_mem": preferences,
+            "text_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": memories}],
+            "pref_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": preferences}],
         },
     )
 
