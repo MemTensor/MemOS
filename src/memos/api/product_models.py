@@ -625,29 +625,30 @@ class APIFeedbackRequest(BaseRequest):
     """Request model for processing feedback info."""
 
     user_id: str = Field(..., description="User ID")
-    mem_cube_id: str | None = Field(..., description="Cube ID to use for chat")
     session_id: str | None = Field(
         "default_session", description="Session ID for soft-filtering memories"
     )
-    agent_id: str = Field(None, description="Agent ID")
-    app_id: str = Field(None, description="App ID")
+    task_id: str | None = Field(None, description="Task ID for monitering async tasks")
     history: list[MessageDict] | None = Field(..., description="Chat history")
     retrieved_memory_ids: list[str] | None = Field(
         None, description="Retrieved memory ids at last turn"
     )
     feedback_content: str | None = Field(..., description="Feedback content to process")
     feedback_time: str | None = Field(None, description="Feedback time")
-    allow_public: bool = Field(
-        False, description="Whether to allow writing to the public memory repository"
-    )
-    allow_knowledgebase_write: bool = Field(
-        False, description="Whether to allow writing into the user memory repository"
-    )
-    allow_knowledgebase_ids: bool = Field(
-        False, description="Write to the specified memory repository ID"
+    # ==== Multi-cube writing ====
+    writable_cube_ids: list[str] | None = Field(
+        None, description="List of cube IDs user can write for multi-cube add"
     )
     sync_mode: Literal["sync", "async"] = Field("async", description="feedback mode: sync or async")
     corrected_answer: bool = Field(False, description="Whether need return corrected answer")
+    # ==== Backward compatibility ====
+    mem_cube_id: str | None = Field(
+        None,
+        description=(
+            "(Deprecated) Single cube ID to search in. "
+            "Prefer `readable_cube_ids` for multi-cube search."
+        ),
+    )
 
 
 class APIChatCompleteRequest(BaseRequest):

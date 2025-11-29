@@ -200,18 +200,17 @@ FEEDBACK_JUDGEMENT_PROMPT_ZH = """您是一个回答质量分析专家。请严�
 
 输出："""
 
-
-UPDATE_FORMER_MEMORIES = """Please analyze the newly acquired factual information and determine how this information should be updated to the memory database: add, update, or keep unchanged, and provide final operation recommendations.
-
+UPDATE_FORMER_MEMORIES = """Operation recommendations:
+Please analyze the newly acquired factual information and determine how this information should be updated to the memory database: add, update, or keep unchanged, and provide final operation recommendations.
 You must strictly return the response in the following JSON format:
 
 {{
-    "operation":
+    "operations":
         [
             {{
                 "id": "<memory ID>",
                 "text": "<memory content>",
-                "event": "<operation type, must be one of 'ADD', 'UPDATE', 'NONE'>",
+                "operation": "<operation type, must be one of 'ADD', 'UPDATE', 'NONE'>",
                 "old_memory": "<original memory content, required only when operation is 'UPDATE'>"
             }},
             ...
@@ -221,9 +220,8 @@ You must strictly return the response in the following JSON format:
 *Requirements*:
 1. If the new fact does not provide additional information to the existing memory item, the existing memory can override the new fact, and the operation is set to "NONE."
 2. If the new fact is similar to existing memory but the information is more accurate, complete, or requires correction, set operation to "UPDATE"
-3. If the new fact contradicts existing memory in key information (such as time, location, status, etc.), update the original memory based on the new fact and set operation to "UPDATE"
+3. If the new fact contradicts existing memory in key information (such as time, location, status, etc.), update the original memory based on the new fact and set operation to "UPDATE", only modifying the relevant error segments in the existing memory paragraphs while keeping other text completely unchanged.
 4. If there is no existing memory that requires updating, the new fact is added as entirely new information, and the operation is set to "ADD." Therefore, in the same operation list, ADD and UPDATE will not coexist.
-
 
 *ID Management Rules*:
 - Update operation: Keep the original ID unchanged
@@ -235,124 +233,10 @@ You must strictly return the response in the following JSON format:
 3. "text" field requirements:
  - Use concise, complete declarative sentences, avoiding redundant information
  - "text" should record the final adopted memory: if judged as "ADD", output text as "new fact"; if judged as "UPDATE", output text as "adjusted new fact"; if judged as "NONE", output text as "existing memory"
+ - When updating, ensure that only the related error segments are modified, and other text remains completely unchanged.
 4. Both text and old_memory content should be in English
 5. Return only the JSON format response, without any other content
 
-
-Example1:
-Current Memories:
-{{
-    "memory": [
-        {{
-            "id": "0911",
-            "text": "The user is a senior full-stack developer working at Company B"
-        }},
-        {{
-            "id": "123",
-            "text": "The user works as a software engineer at Company A, primarily responsible for front-end development"
-        }},
-        {{
-            "id": "648",
-            "text": "The user is responsible for front-end development of software at Company A"
-        }},
-        {{
-            "id": "7210",
-            "text": "The user is responsible for front-end development of software at Company A"
-        }},
-        {{
-            "id": "908",
-            "text": "The user enjoys fishing with friends on weekends"
-        }}
-    ]
-}}
-
-The background of the new fact being put forward:
-user: Do you remember where I work？
-assistant: Company A.
-user feedback: I work at Company B, and I am a senior full-stack developer.
-
-Newly facts:
-"The user works as a senior full-stack developer at Company B"
-
-Operation recommendations:
-{{
-    "operation":
-        [
-            {{
-                "id": "0911",
-                "text": "The user is a senior full-stack developer working at Company B",
-                "event": "NONE"
-            }},
-            {{
-                "id": "123",
-                "text": "The user works as a senior full-stack developer at Company B",
-                "event": "UPDATE",
-                "old_memory": "The user works as a software engineer at Company A, primarily responsible for front-end development"
-            }},
-            {{
-                "id": "648",
-                "text": "The user works as a senior full-stack developer at Company B",
-                "event": "UPDATE",
-                "old_memory": "The user is responsible for front-end development of software at Company A"
-            }},
-            {{
-                "id": "7210",
-                "text": "The user works as a senior full-stack developer at Company B",
-                "event": "UPDATE",
-                "old_memory": "The user is responsible for front-end development of software at Company A"
-            }},
-            {{
-                "id": "908",
-                "text": "The user enjoys fishing with friends on weekends",
-                "event": "NONE"
-            }}
-        ]
-}}
-
-Example2:
-Current Memories:
-{{
-    "memory": [
-        {{
-            "id": "123",
-            "text": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-        }},
-        {{
-            "id": "908",
-            "text": "The user likes to go fishing with friends on weekends"
-        }}
-    ]
-}}
-
-The background of the new fact being put forward:
-user: Guess where I live？
-assistant: Hehuan Community.
-user feedback: Wrong, update my address: Mingyue Community, Chaoyang District, Beijing
-
-Newly facts:
-"The user's residential address is Mingyue Community, Chaoyang District, Beijing"
-
-Operation recommendations:
-{{
-    "operation":
-        [
-            {{
-                "id": "123",
-                "text": "The user works as a software engineer at Company A, primarily responsible for front-end development",
-                "event": "NONE"
-            }},
-            {{
-                "id": "908",
-                "text": "The user enjoys fishing with friends on weekends",
-                "event": "NONE"
-            }},
-            {{
-                "id": "4567",
-                "text": "The user's residential address is Mingyue Community, Chaoyang District, Beijing",
-                "event": "ADD"
-            }}
-        ]
-}}
 
 **Current Memories**
 {current_memories}
@@ -366,7 +250,6 @@ Operation recommendations:
 Operation recommendations:
 """
 
-
 UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这些信息应该如何更新到记忆库中：新增、更新、或保持不变，并给出最终的操作建议。
 
 你必须严格按照以下JSON格式返回响应：
@@ -377,7 +260,7 @@ UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这�
             {{
                 "id": "<记忆ID>",
                 "text": "<记忆内容>",
-                "event": "<操作类型，必须是 "ADD", "UPDATE", "NONE" 之一>",
+                "operation": "<操作类型，必须是 "ADD", "UPDATE", "NONE" 之一>",
                 "old_memory": "<原记忆内容，仅当操作为"UPDATE"时需要提供>"
             }},
             ...
@@ -385,10 +268,10 @@ UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这�
 }}
 
 要求：
-1. 如果新事实对现有记忆item没有额外补充，现有记忆的信息可以覆盖新事实，设置操作为"NONE"
-2. 如果新事实与现有记忆item相似但信息更准确、完整或需要修正，设置操作为"UPDATE"
-3. 如果新事实与现有记忆在关键信息上矛盾（如时间、地点、状态等），以新事实为准更新原有记忆，设置操作为"UPDATE"
-4. 如果现有记忆中没有需要更新的，则新事实作为全新信息添加，设置操作为"ADD"。因此可知同一个 operation 列表中，ADD和UPDATE不会同时存在。
+1. 若新事实未对现有记忆条目提供额外信息，现有记忆可覆盖新事实，操作设为"NONE"
+2. 若新事实与现有记忆相似但信息更准确、完整或需修正，操作设为"UPDATE"
+3. 若新事实在关键信息（如时间、地点、状态等）上与现有记忆矛盾，则根据新事实更新原记忆，操作设为"UPDATE"，仅修改现有记忆段落中的相关错误片段，其余文本完全保持不变
+4. 若无需要更新的现有记忆，则将新事实作为全新信息添加，操作设为"ADD"。因此在同一操作列表中，ADD与UPDATE不会同时存在
 
 ID管理规则：
 - 更新操作：保持原有ID不变
@@ -400,296 +283,18 @@ ID管理规则：
 3. text字段要求：
   - 使用简洁、完整的陈述句，避免冗余信息
   - text要记录最终采用的记忆，如果判为"ADD"，则text输出为"新事实"；如果判为"UPDATE"，则text输出为"调整后的新事实"；如果判为"NONE"，则text输出为"现有记忆"
+  - 更新时确保仅修改相关错误片段，其余文本完全保持不变
 4. text和old_memory内容使用中文
 5. 只返回JSON格式的响应，不要包含其他任何内容
 
-示例1：
-现有记忆记录：
-{{
-    "memory": [
-        {{
-            "id": "0911",
-            "text": "用户是高级全栈开发工程师，在B公司工作"
-        }},
-        {{
-            "id": "123",
-            "text": "用户在公司A担任软件工程师，主要负责前端开发"
-        }},
-        {{
-            "id": "648",
-            "text": "用户在公司A负责软件的前端开发工作"
-        }},
-        {{
-            "id": "7210",
-            "text": "用户在公司A负责软件的前端开发工作"
-        }},
-        {{
-            "id": "908",
-            "text": "用户周末喜欢和朋友一起钓鱼"
-        }}
-    ]
-}}
 
-提出新事实的背景：
-user: 你还记得我现在在哪里工作吗？
-assistant: A公司
-user feedback: 实际上，我在公司B工作，是一名高级全栈开发人员。
-
-
-新获取的事实：
-"用户现在在公司B担任高级全栈开发工程师"
-
-操作建议：
-{{
-    "operation":
-        [
-            {{
-                "id": "0911",
-                "text": "用户是高级全栈开发工程师，在B公司工作",
-                "event": "NONE"
-            }},
-            {{
-                "id": "123",
-                "text": "用户现在在公司B担任高级全栈开发工程师",
-                "event": "UPDATE",
-                "old_memory": "用户在公司A担任软件工程师，主要负责前端开发"
-            }},
-            {{
-                "id": "648",
-                "text": "用户现在在公司B担任高级全栈开发工程师",
-                "event": "UPDATE",
-                "old_memory": "用户在公司A负责软件的前端开发工作"
-            }},
-            {{
-                "id": "7210",
-                "text": "用户现在在公司B担任高级全栈开发工程师",
-                "event": "UPDATE",
-                "old_memory": "用户在公司A负责软件的前端开发工作"
-            }},
-            {{
-                "id": "908",
-                "text": "用户周末喜欢和朋友一起钓鱼",
-                "event": "NONE"
-            }}
-        ]
-}}
-
-示例2：
-现有记忆记录：
-{{
-    "memory": [
-        {{
-            "id": "123",
-            "text": "用户在公司A担任软件工程师，主要负责前端开发"
-        }},
-        {{
-            "id": "908",
-            "text": "用户周末喜欢和朋友一起钓鱼"
-        }}
-    ]
-}}
-
-提出新事实的背景：
-user: 猜猜我住在哪里？
-assistant: 合欢社区
-user feedback: 错了，请更新我的地址：北京市朝阳区明月社区
-
-新获取的事实：
-"用户的居住地址是北京市朝阳区明月小区"
-
-操作建议：
-{{
-    "operation":
-        [
-            {{
-                "id": "123",
-                "text": "用户在公司A担任软件工程师，主要负责前端开发",
-                "event": "NONE"
-            }},
-            {{
-                "id": "908",
-                "text": "用户周末喜欢和朋友一起钓鱼",
-                "event": "NONE"
-            }},
-            {{
-            "id": "4567",
-            "text": "用户的居住地址是北京市朝阳区明月小区",
-            "event": "ADD"
-            }}
-        ]
-}}
-
-**现有记忆记录：**
+**当前记忆：**
 {current_memories}
 
-**提出新事实的背景：**
+**新事实提出的背景：**
 {chat_history}
 
-**新获取的事实：**
-{new_facts}
-
-操作建议：
-"""
-
-
-GROUP_UPDATE_FORMER_MEMORIES = """Please analyze the newly acquired factual information and determine how this information should be updated to the memory database: add, update, or keep unchanged, and provide final operation recommendations.
-
-You must strictly return the response in the following JSON format:
-
-{{
-    "operation": [
-        {{
-            "id": "<memory ID>",
-            "text": "<memory content>",
-            "event": "<operation type, must be one of 'ADD', 'UPDATE', 'NONE'>",
-            "old_memory": "<original memory content, required only when operation is 'UPDATE'>"
-        }},
-        ...
-    ]
-}}
-
-*Requirements*:
-1. If the new fact provides no additional supplement to existing memory, set operation to "NONE"
-2. If the new fact is similar to existing memory but the information is more accurate, complete, or requires correction, set operation to "UPDATE"
-3. If the new fact contradicts existing memory in key information (such as time, location, status, etc.), update the original memory based on the new fact and set operation to "UPDATE"
-4. If there is completely new information to add, set operation to "ADD"
-
-*ID Management Rules*:
-- Update operation: Keep the original ID unchanged
-- Add operation: Generate a new unique ID in the format of a 4-digit string (e.g., "0001", "0002", etc.)
-
-*Important Requirements*:
-- Return only the JSON format response, without any other content
-- For update operations, you must provide the old_memory field to show the original content
-- text field requirements: Use concise, complete declarative sentences that are consistent with the newly acquired factual information, avoiding redundant information
-- text and old_memory content should be in English
-
-Example:
-Current Memories:
-{{
-    "memory": [
-        {{
-            "id": "123",
-            "text": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-        }},
-        {{
-            "id": "908",
-            "text": "The user likes to go fishing with friends on weekends"
-        }}
-    ]
-}}
-
-Newly facts:
-["The user is currently working as a senior full-stack development engineer at Company B", "The user's residential address is Mingyue Community, Chaoyang District, Beijing", "The user goes fishing on weekends"]
-
-Operation recommendations:
-{{
-    "operation": [
-        {{
-            "id": "123",
-            "text": "The user is currently working as a senior full-stack development engineer at Company B",
-            "event": "UPDATE",
-            "old_memory": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-        }},
-        {{
-            "id": "4567",
-            "text": "The user's residential address is Mingyue Community, Chaoyang District, Beijing",
-            "event": "ADD"
-        }},
-        {{
-            "id": "908",
-            "text": "The user likes to go fishing with friends on weekends",
-            "event": "NONE"
-        }}
-    ]
-}}
-
-Current Memories
-{current_memories}
-
-Newly facts:
-{new_facts}
-
-Operation recommendations:
-"""
-
-
-GROUP_UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这些信息应该如何更新到记忆库中：新增、更新、或保持不变，并给出最终的操作建议。
-
-你必须严格按照以下JSON格式返回响应：
-
-{{
-    "operation": [
-        {{
-            "id": "<记忆ID>",
-            "text": "<记忆内容>",
-            "event": "<操作类型，必须是 "ADD", "UPDATE", "NONE" 之一>",
-            "old_memory": "<原记忆内容，仅当操作为"UPDATE"时需要提供>"
-        }},
-        ...
-    ]
-}}
-
-要求：
-1. 如果新事实对现有记忆没有额外补充，设置操作为"NONE"
-2. 如果新事实与现有记忆相似但信息更准确、完整或需要修正，设置操作为"UPDATE"
-3. 如果新事实与现有记忆在关键信息上矛盾（如时间、地点、状态等），以新事实为准更新原有记忆，设置操作为"UPDATE"
-4. 如果有全新信息添加，设置操作为"ADD"
-
-ID管理规则：
-- 更新操作：保持原有ID不变
-- 新增操作：生成新的唯一ID，格式为4位数字字符串（如："0001", "0002"等）
-
-重要要求：
-- 只返回JSON格式的响应，不要包含其他任何内容
-- 对于更新操作，必须提供old_memory字段显示原内容
-- text字段要求：使用简洁、完整的陈述句，和新获取的事实信息一致，避免冗余信息
-- text和old_memory内容使用中文
-
-示例：
-现有记忆记录：
-{{
-    "memory": [
-        {{
-            "id": "123",
-            "text": "用户在公司A担任软件工程师，主要负责前端开发"
-        }},
-        {{
-            "id": "908",
-            "text": "用户周末喜欢和朋友一起钓鱼"
-        }}
-    ]
-}}
-
-新获取的事实：
-["用户现在在公司B担任高级全栈开发工程师", "用户的居住地址是北京市朝阳区明月小区", "用户在周末会去钓鱼"]
-
-操作建议：
-{{
-    "operation": [
-        {{
-            "id": "123",
-            "text": "用户在公司B担任高级全栈开发工程师",
-            "event": "UPDATE",
-            "old_memory": "用户在公司A担任软件工程师，主要负责前端开发"
-        }},
-        {{
-            "id": "4567",
-            "text": "用户的居住地址是北京市朝阳区明月小区",
-            "event": "ADD"
-        }},
-        {{
-            "id": "908",
-            "text": "用户周末喜欢和朋友一起钓鱼",
-            "event": "NONE"
-        }}
-    ]
-}}
-
-现有记忆记录：
-{current_memories}
-
-新获取的事实：
+**新事实：**
 {new_facts}
 
 操作建议：

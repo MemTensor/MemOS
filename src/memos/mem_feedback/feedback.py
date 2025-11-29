@@ -114,7 +114,7 @@ class MemFeedback(BaseMemFeedback):
             return []
 
     def _feedback_memory(
-        self, user_name: str, feedback_memories: list[TextualMemoryItem], **kwargs
+        self, user_id: str, user_name: str, feedback_memories: list[TextualMemoryItem], **kwargs
     ) -> dict:
         sync_mode = kwargs.get("sync_mode")
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
@@ -190,10 +190,11 @@ class MemFeedback(BaseMemFeedback):
                     chat_history=fact_history,
                 )
 
-                operations = self._get_llm_response(prompt).get("operation", [])
+                operations = self._get_llm_response(prompt).get("operations", [])
                 operations = self._id_dehallucination(operations, current_memories)
             else:
-                operations = [{"event": "ADD"}]
+                operations = [{"operation": "ADD"}]
+
             # TODO based on the operation, change memory_item memory info
             logger.info(f"[Feedback memory operations]: {operations!s}")
 
@@ -206,7 +207,7 @@ class MemFeedback(BaseMemFeedback):
             with ContextThreadPoolExecutor(max_workers=10) as executor:
                 future_to_op = {}
                 for op in operations:
-                    event_type = op.get("event", "").lower()
+                    event_type = op.get("operation", "").lower()
 
                     if event_type == "add":
                         future = executor.submit(
@@ -290,7 +291,7 @@ class MemFeedback(BaseMemFeedback):
     def _get_llm_response(self, prompt: str, dsl: bool = True) -> dict:
         messages = [{"role": "user", "content": prompt}]
         try:
-            response_text = self.llm.generate(messages, temperature=0.3)
+            response_text = self.llm.generate(messages, temperature=0.3, timeout=60)
             if dsl:
                 response_text = response_text.replace("```", "").replace("json", "")
                 response_json = json.loads(response_text)
@@ -306,7 +307,7 @@ class MemFeedback(BaseMemFeedback):
         right_lower_map = {x.lower(): x for x in right_ids}
 
         def correct_item(data):
-            if data.get("event", "").lower() != "update":
+            if data.get("operation", "").lower() != "update":
                 return data
 
             original_id = data["id"]
@@ -348,6 +349,7 @@ class MemFeedback(BaseMemFeedback):
 
     def process_feedback_core(
         self,
+        user_id: str,
         user_name: str,
         chat_history: list[MessageDict],
         feedback_content: str,
@@ -370,11 +372,10 @@ class MemFeedback(BaseMemFeedback):
         try:
             feedback_time = kwargs.get("feedback_time") or datetime.now().isoformat()
             session_id = kwargs.get("session_id")
-            allow_knowledgebase_write = bool(kwargs.get("allow_knowledgebase_write"))
-            if feedback_content.strip() == "" or not allow_knowledgebase_write:
+            if feedback_content.strip() == "":
                 return {"record": {"add": [], "update": []}}
 
-            info = {"user_id": user_name, "session_id": session_id}
+            info = {"user_id": user_id, "user_name": user_name, "session_id": session_id}
             logger.info(
                 f"[Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
             )
@@ -435,6 +436,7 @@ class MemFeedback(BaseMemFeedback):
                                 embedding=embedding,
                                 usage=[],
                                 sources=[{"type": "chat"}],
+                                user_name=user_name,
                                 background="",
                                 confidence=0.99,
                                 type="fine",
@@ -443,6 +445,7 @@ class MemFeedback(BaseMemFeedback):
                     )
 
                 mem_record = self._feedback_memory(
+                    user_id,
                     user_name,
                     feedback_memories,
                     chat_history=chat_history,
@@ -460,6 +463,7 @@ class MemFeedback(BaseMemFeedback):
 
     def process_feedback(
         self,
+        user_id: str,
         user_name: str,
         chat_history: list[MessageDict],
         feedback_content: str,
@@ -469,7 +473,7 @@ class MemFeedback(BaseMemFeedback):
         Process feedback with different modes.
 
         Args:
-            user_name: User identifier
+            user_name: cube_ids
             chat_history: List of chat messages
             feedback_content: Feedback content from user
             **kwargs: Additional arguments including sync_mode
@@ -477,82 +481,45 @@ class MemFeedback(BaseMemFeedback):
         Returns:
             Dict with answer and/or memory operation records
         """
-        sync_mode = kwargs.get("sync_mode")
-        corrected_answer = kwargs.get("corrected_answer")
+        corrected_answer = kwargs.get("corrected_answer", False)
 
-        if sync_mode == "sync":
-            with ContextThreadPoolExecutor(max_workers=2) as ex:
-                answer_future = ex.submit(
-                    self._generate_answer,
-                    chat_history,
-                    feedback_content,
-                    corrected_answer=corrected_answer,
-                )
-                core_future = ex.submit(
-                    self.process_feedback_core,
-                    user_name,
-                    chat_history,
-                    feedback_content,
-                    **kwargs,
-                )
-                done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
-                for fut in pending:
-                    fut.cancel()
-                try:
-                    answer = answer_future.result()
-                    record = core_future.result()
-                    logger.info(
-                        f"[MemFeedback sync] Completed concurrently for user {user_name} with full results."
-                    )
-                    return {"answer": answer, "record": record["record"]}
-                except concurrent.futures.TimeoutError:
-                    logger.error(
-                        f"[MemFeedback sync] Timeout in sync mode for {user_name}", exc_info=True
-                    )
-                    return {"answer": "", "record": {"add": [], "update": []}}
-                except Exception as e:
-                    logger.error(
-                        f"[MemFeedback sync] Error in concurrent tasks for {user_name}: {e}",
-                        exc_info=True,
-                    )
-                    return {"answer": "", "record": {"add": [], "update": []}}
-        else:
-            answer = self._generate_answer(
-                chat_history, feedback_content, corrected_answer=corrected_answer
+        with ContextThreadPoolExecutor(max_workers=2) as ex:
+            answer_future = ex.submit(
+                self._generate_answer,
+                chat_history,
+                feedback_content,
+                corrected_answer=corrected_answer,
             )
-
-            ex = ContextThreadPoolExecutor(max_workers=1)
-            future = ex.submit(
+            core_future = ex.submit(
                 self.process_feedback_core,
+                user_id,
                 user_name,
                 chat_history,
                 feedback_content,
                 **kwargs,
             )
-            ex.shutdown(wait=False)
+            done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
+            for fut in pending:
+                fut.cancel()
+            try:
+                answer = answer_future.result()
+                record = core_future.result()
+                logger.info(
+                    f"[MemFeedback process] Completed concurrently for user {user_name} with full results."
+                )
 
-            def log_completion(f):
-                try:
-                    result = f.result(timeout=600)
-                    logger.info(f"[MemFeedback async] Completed for {user_name}: {result}")
-                except concurrent.futures.TimeoutError:
-                    logger.error(
-                        f"[MemFeedback async] Background task timeout for {user_name}",
-                        exc_info=True,
-                    )
-                    f.cancel()
-                except Exception as e:
-                    logger.error(
-                        f"[MemFeedback async] Background Feedback Error for {user_name}: {e}",
-                        exc_info=True,
-                    )
-
-            future.add_done_callback(log_completion)
-
-            logger.info(
-                f"[MemFeedback async] Returned answer, background task started for {user_name}."
-            )
-            return {"answer": answer, "record": {"add": [], "update": []}}
+                return {"answer": answer, "record": record["record"]}
+            except concurrent.futures.TimeoutError:
+                logger.error(
+                    f"[MemFeedback process] Timeout in sync mode for {user_name}", exc_info=True
+                )
+                return {"answer": "", "record": {"add": [], "update": []}}
+            except Exception as e:
+                logger.error(
+                    f"[MemFeedback process] Error in concurrent tasks for {user_name}: {e}",
+                    exc_info=True,
+                )
+                return {"answer": "", "record": {"add": [], "update": []}}
 
     #  Helper for DB operations with retry
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))

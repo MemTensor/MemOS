@@ -293,6 +293,15 @@ def init_server() -> dict[str, Any]:
     )
     logger.debug("Searcher created")
 
+    # Initialize feedback server
+    feedback_server = SimpleMemFeedback(
+        llm=llm,
+        embedder=embedder,
+        graph_store=graph_db,
+        memory_manager=memory_manager,
+        mem_reader=mem_reader,
+    )
+
     # Initialize Scheduler
     scheduler_config_dict = APIConfig.get_scheduler_config()
     scheduler_config = SchedulerConfigFactory(
@@ -306,7 +315,9 @@ def init_server() -> dict[str, Any]:
         mem_reader=mem_reader,
         redis_client=redis_client,
     )
-    mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube, searcher=searcher)
+    mem_scheduler.init_mem_cube(
+        mem_cube=naive_mem_cube, searcher=searcher, feedback_server=feedback_server
+    )
     logger.debug("Scheduler initialized")
 
     # Initialize SchedulerAPIModule
@@ -326,15 +337,6 @@ def init_server() -> dict[str, Any]:
 
         online_bot = get_online_bot_function() if dingding_enabled else None
         logger.info("DingDing bot is enabled")
-
-    # Initialize feedback server
-    feedback_server = SimpleMemFeedback(
-        llm=llm,
-        embedder=embedder,
-        graph_store=graph_db,
-        memory_manager=memory_manager,
-        mem_reader=mem_reader,
-    )
 
     deepsearch_agent = DeepSearchMemAgent(
         llm=llm,
