@@ -594,6 +594,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Args:
             messages: Single log message or list of log messages
         """
+        messages_list = [messages] if isinstance(messages, ScheduleLogForWebItem) else messages
+        for message in messages_list:
+            logger.info(
+                f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
+            )
         if self.rabbitmq_config is None:
             return
 

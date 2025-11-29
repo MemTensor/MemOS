@@ -188,6 +188,7 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
 @router.post("/add", summary="add a new memory", response_model=SimpleResponse)
 def create_memory(memory_req: MemoryCreateRequest):
     """Create a new memory for a specific user."""
+    logger.info("DIAGNOSTIC: /product/add endpoint called. This confirms the new code is deployed.")
     # Initialize status_tracker outside try block to avoid NameError in except blocks
     status_tracker = None
 

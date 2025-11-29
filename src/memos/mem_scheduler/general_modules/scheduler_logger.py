@@ -113,9 +113,10 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         metadata: list[dict],
         memory_len: int,
         memcube_name: str | None = None,
+        log_content: str | None = None,
     ) -> ScheduleLogForWebItem:
         item = self.create_autofilled_log_item(
-            log_content="",
+            log_content=log_content or "",
             label=label,
             from_memory_type=from_memory_type,
             to_memory_type=to_memory_type,

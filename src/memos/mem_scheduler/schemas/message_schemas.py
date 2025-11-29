@@ -84,6 +84,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
             "user_name": self.user_name,
+            "task_id": self.task_id if self.task_id is not None else "",
         }
 
     @classmethod
@@ -97,6 +98,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
             user_name=data.get("user_name"),
+            task_id=data.get("task_id"),
         )
 
 

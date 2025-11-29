@@ -788,6 +788,9 @@ class MOSCore:
                                 timestamp=datetime.utcnow(),
                                 task_id=task_id,
                             )
+                            logger.info(
+                                f"[DIAGNOSTIC] core.add: Submitting message to scheduler: {message_item.model_dump_json(indent=2)}"
+                            )
                             self.mem_scheduler.memos_message_queue.submit_messages(
                                 messages=[message_item]
                             )

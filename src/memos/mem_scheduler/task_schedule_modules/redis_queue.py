@@ -35,7 +35,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
     def __init__(
         self,
         stream_key_prefix: str = os.getenv(
-            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX", "scheduler:messages:stream"
+            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX",
+            "scheduler:messages:stream:v2",
         ),
         consumer_group: str = "scheduler_group",
         consumer_name: str | None = "scheduler_consumer",
@@ -77,6 +78,11 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         # Task tracking for mem_scheduler_wait compatibility
         self._unfinished_tasks = 0
+
+        logger.info(
+            f"[REDIS_QUEUE] Initialized with stream_prefix='{self.stream_key_prefix}', "
+            f"consumer_group='{self.consumer_group}', consumer_name='{self.consumer_name}'"
+        )
 
         # Auto-initialize Redis connection
         if self.auto_initialize_redis():
