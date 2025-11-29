@@ -75,7 +75,7 @@ class MultiModelStructMemReader(SimpleStructMemReader):
             fast_memory_items = self._concat_multi_model_memories(all_memory_items)
 
         else:
-            # Parse as single message
+            # Parse as single string
             fast_memory_items = self.multi_model_parser.parse(
                 scene_data_info, info, mode="fast", **kwargs
             )

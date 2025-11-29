@@ -5,7 +5,11 @@ from typing import Any
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.memories.textual.item import SourceMessage, TextualMemoryItem
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.types.openai_chat_completion_types import ChatCompletionToolMessageParam
 
 from .base import BaseMessageParser, _extract_text_from_content
@@ -64,7 +68,13 @@ class ToolParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        return super().parse_fast(message, info, **kwargs)
+        memory = ""
+        source = self.create_source(message, info)
+        return [
+            TextualMemoryItem(
+                memory=memory, metadata=TreeNodeTextualMemoryMetadata(sources=[source])
+            )
+        ]
 
     def parse_fine(
         self,

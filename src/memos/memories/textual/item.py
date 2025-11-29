@@ -99,9 +99,14 @@ class TextualMemoryMetadata(BaseModel):
 class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     """Extended metadata for structured memory, layered retrieval, and lifecycle tracking."""
 
-    memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"] = Field(
-        default="WorkingMemory", description="Memory lifecycle type."
-    )
+    memory_type: Literal[
+        "WorkingMemory",
+        "LongTermMemory",
+        "UserMemory",
+        "OuterMemory",
+        "ToolSchema",
+        "ToolTrajectory",
+    ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )
