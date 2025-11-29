@@ -69,6 +69,7 @@ class Searcher:
         mode="fast",
         memory_type="All",
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
@@ -76,7 +77,12 @@ class Searcher:
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
         parsed_goal, query_embedding, context, query = self._parse_task(
-            query, info, mode, search_filter=search_filter, user_name=user_name
+            query,
+            info,
+            mode,
+            search_filter=search_filter,
+            search_priority=search_priority,
+            user_name=user_name,
         )
         results = self._retrieve_paths(
             query,
@@ -87,6 +93,7 @@ class Searcher:
             mode,
             memory_type,
             search_filter,
+            search_priority,
             user_name,
         )
         return results
@@ -112,6 +119,7 @@ class Searcher:
         mode="fast",
         memory_type="All",
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """
@@ -128,6 +136,7 @@ class Searcher:
             memory_type (str): Type restriction for search.
             ['All', 'WorkingMemory', 'LongTermMemory', 'UserMemory']
             search_filter (dict, optional): Optional metadata filters for search results.
+            search_priority (dict, optional): Optional metadata priority for search results.
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
@@ -147,6 +156,7 @@ class Searcher:
             mode=mode,
             memory_type=memory_type,
             search_filter=search_filter,
+            search_priority=search_priority,
             user_name=user_name,
         )
 
@@ -174,6 +184,7 @@ class Searcher:
         mode,
         top_k=5,
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
     ):
         """Parse user query, do embedding search and create context"""
@@ -192,7 +203,8 @@ class Searcher:
                     query_embedding,
                     top_k=top_k,
                     status="activated",
-                    search_filter=search_filter,
+                    search_filter=search_priority,
+                    filter=search_filter,
                     user_name=user_name,
                 )
             ]
@@ -244,6 +256,7 @@ class Searcher:
         mode,
         memory_type,
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
     ):
         """Run A/B/C retrieval paths in parallel"""
@@ -264,6 +277,7 @@ class Searcher:
                     top_k,
                     memory_type,
                     search_filter,
+                    search_priority,
                     user_name,
                     id_filter,
                 )
@@ -277,6 +291,7 @@ class Searcher:
                     top_k,
                     memory_type,
                     search_filter,
+                    search_priority,
                     user_name,
                     id_filter,
                     mode=mode,
@@ -313,6 +328,7 @@ class Searcher:
         top_k,
         memory_type,
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
     ):
@@ -326,6 +342,7 @@ class Searcher:
             top_k=top_k,
             memory_scope="WorkingMemory",
             search_filter=search_filter,
+            search_priority=search_priority,
             user_name=user_name,
             id_filter=id_filter,
             use_fast_graph=self.use_fast_graph,
@@ -349,6 +366,7 @@ class Searcher:
         top_k,
         memory_type,
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
         mode: str = "fast",
@@ -378,6 +396,7 @@ class Searcher:
                         top_k=top_k * 2,
                         memory_scope="LongTermMemory",
                         search_filter=search_filter,
+                        search_priority=search_priority,
                         user_name=user_name,
                         id_filter=id_filter,
                         use_fast_graph=self.use_fast_graph,
@@ -393,6 +412,7 @@ class Searcher:
                         top_k=top_k * 2,
                         memory_scope="UserMemory",
                         search_filter=search_filter,
+                        search_priority=search_priority,
                         user_name=user_name,
                         id_filter=id_filter,
                         use_fast_graph=self.use_fast_graph,

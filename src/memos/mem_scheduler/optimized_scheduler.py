@@ -138,7 +138,8 @@ class OptimizedScheduler(GeneralScheduler):
         target_session_id = search_req.session_id
         if not target_session_id:
             target_session_id = "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter
 
         # Rerank Memories - reranker expects TextualMemoryItem objects
 
@@ -155,6 +156,7 @@ class OptimizedScheduler(GeneralScheduler):
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
             search_filter=search_filter,
+            search_priority=search_priority,
             info=info,
         )
 
@@ -178,7 +180,7 @@ class OptimizedScheduler(GeneralScheduler):
                 query=search_req.query,  # Use search_req.query instead of undefined query
                 graph_results=history_memories,  # Pass TextualMemoryItem objects directly
                 top_k=search_req.top_k,  # Use search_req.top_k instead of undefined top_k
-                search_filter=search_filter,
+                search_priority=search_priority,
             )
             logger.info(f"Reranked {len(sorted_history_memories)} history memories.")
             processed_hist_mem = self.searcher.post_retrieve(
@@ -234,6 +236,7 @@ class OptimizedScheduler(GeneralScheduler):
                             mode=SearchMode.FAST,
                             memory_type="All",
                             search_filter=search_filter,
+                            search_priority=search_priority,
                             info=info,
                         )
                     else:
