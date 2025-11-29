@@ -29,6 +29,7 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
@@ -326,6 +327,15 @@ def init_server() -> dict[str, Any]:
         online_bot = get_online_bot_function() if dingding_enabled else None
         logger.info("DingDing bot is enabled")
 
+    # Initialize feedback server
+    feedback_server = SimpleMemFeedback(
+        llm=llm,
+        embedder=embedder,
+        graph_store=graph_db,
+        memory_manager=memory_manager,
+        mem_reader=mem_reader,
+    )
+
     deepsearch_agent = DeepSearchMemAgent(
         llm=llm,
         memory_retriever=tree_mem,
@@ -353,6 +363,7 @@ def init_server() -> dict[str, Any]:
         "text_mem": text_mem,
         "pref_mem": pref_mem,
         "online_bot": online_bot,
+        "feedback_server": feedback_server,
         "redis_client": redis_client,
         "deepsearch_agent": deepsearch_agent,
     }
