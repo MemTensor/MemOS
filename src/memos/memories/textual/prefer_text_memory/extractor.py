@@ -90,7 +90,8 @@ class NaiveExtractor(BaseExtractor):
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
-            result["preference"] = result.pop("implicit_preference")
+            for d in result:
+                d["preference"] = d.pop("implicit_preference")
             return result
         except Exception as e:
             logger.error(f"Error extracting implicit preferences: {e}, return None")
@@ -137,20 +138,24 @@ class NaiveExtractor(BaseExtractor):
         if not implicit_pref:
             return None
 
-        vector_info = {
-            "embedding": self.embedder.embed([implicit_pref["context_summary"]])[0],
-        }
+        memories = []
+        for pref in implicit_pref:
+            vector_info = {
+                "embedding": self.embedder.embed([pref["context_summary"]])[0],
+            }
 
-        extract_info = {**basic_info, **implicit_pref, **vector_info, **info}
+            extract_info = {**basic_info, **pref, **vector_info, **info}
 
-        metadata = PreferenceTextualMemoryMetadata(
-            type=msg_type, preference_type="implicit_preference", **extract_info
-        )
-        memory = TextualMemoryItem(
-            id=extract_info["dialog_id"], memory=implicit_pref["context_summary"], metadata=metadata
-        )
+            metadata = PreferenceTextualMemoryMetadata(
+                type=msg_type, preference_type="implicit_preference", **extract_info
+            )
+            memory = TextualMemoryItem(
+                id=str(uuid.uuid4()), memory=pref["context_summary"], metadata=metadata
+            )
 
-        return memory
+            memories.append(memory)
+
+        return memories
 
     def extract(
         self,
