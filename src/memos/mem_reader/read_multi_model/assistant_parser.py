@@ -1,5 +1,7 @@
 """Parser for assistant messages."""
 
+import json
+
 from typing import Any
 
 from memos.embedders.base import BaseEmbedder
@@ -43,6 +45,12 @@ class AssistantParser(BaseMessageParser):
         """
         Create SourceMessage(s) from assistant message.
 
+        Handles:
+        - content: str | list of content parts (text/refusal) | None
+        - refusal: str | None (top-level refusal message)
+        - tool_calls: list of tool calls (when content is None)
+        - audio: Audio | None (audio response data)
+
         For multimodal messages (content is a list), creates one SourceMessage per part.
         For simple messages (content is str), creates a single SourceMessage.
         """
@@ -50,7 +58,10 @@ class AssistantParser(BaseMessageParser):
             return []
 
         role = message.get("role", "assistant")
-        raw_content = message.get("content", "")
+        raw_content = message.get("content")
+        refusal = message.get("refusal")
+        tool_calls = message.get("tool_calls")
+        audio = message.get("audio")
         chat_time = message.get("chat_time")
         message_id = message.get("message_id")
 
@@ -58,6 +69,7 @@ class AssistantParser(BaseMessageParser):
 
         if isinstance(raw_content, list):
             # Multimodal: create one SourceMessage per part
+            # Note: Assistant messages only support "text" and "refusal" part types
             for part in raw_content:
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
@@ -74,7 +86,7 @@ class AssistantParser(BaseMessageParser):
                     elif part_type == "refusal":
                         sources.append(
                             SourceMessage(
-                                type="chat",
+                                type="refusal",
                                 role=role,
                                 chat_time=chat_time,
                                 message_id=message_id,
@@ -82,11 +94,21 @@ class AssistantParser(BaseMessageParser):
                             )
                         )
                     else:
+                        # Unknown part type - log warning but still create SourceMessage
                         logger.warning(
-                            f"[AssistantParser] raw_content type "
-                            f"`text` or `refusal`, got {part_type} instead"
+                            f"[AssistantParser] Unknown part type `{part_type}`. "
+                            f"Expected `text` or `refusal`. Creating SourceMessage with placeholder content."
                         )
-        else:
+                        sources.append(
+                            SourceMessage(
+                                type="chat",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=f"[{part_type}]",
+                            )
+                        )
+        elif raw_content is not None:
             # Simple message: single SourceMessage
             content = _extract_text_from_content(raw_content)
             if content:
@@ -99,6 +121,48 @@ class AssistantParser(BaseMessageParser):
                         content=content,
                     )
                 )
+
+        # Handle top-level refusal field
+        if refusal:
+            sources.append(
+                SourceMessage(
+                    type="refusal",
+                    role=role,
+                    chat_time=chat_time,
+                    message_id=message_id,
+                    content=refusal,
+                )
+            )
+
+        # Handle tool_calls (when content is None or empty)
+        if tool_calls:
+            tool_calls_str = (
+                json.dumps(tool_calls, ensure_ascii=False)
+                if isinstance(tool_calls, list | dict)
+                else str(tool_calls)
+            )
+            sources.append(
+                SourceMessage(
+                    type="tool_calls",
+                    role=role,
+                    chat_time=chat_time,
+                    message_id=message_id,
+                    content=f"[tool_calls]: {tool_calls_str}",
+                )
+            )
+
+        # Handle audio (optional)
+        if audio:
+            audio_id = audio.get("id", "") if isinstance(audio, dict) else str(audio)
+            sources.append(
+                SourceMessage(
+                    type="audio",
+                    role=role,
+                    chat_time=chat_time,
+                    message_id=message_id,
+                    content=f"[audio]: {audio_id}",
+                )
+            )
 
         return (
             sources
@@ -123,18 +187,52 @@ class AssistantParser(BaseMessageParser):
             return []
 
         role = message.get("role", "")
-        raw_content = message.get("content", "")
+        raw_content = message.get("content")
+        refusal = message.get("refusal")
+        tool_calls = message.get("tool_calls")
+        audio = message.get("audio")
         chat_time = message.get("chat_time", None)
-        content = _extract_text_from_content(raw_content)
+
         if role != "assistant":
             logger.warning(f"[AssistantParser] Expected role is `assistant`, got {role}")
             return []
+
+        # Build content string from various sources
+        content_parts = []
+
+        # Extract content (can be str, list, or None)
+        if raw_content is not None:
+            extracted_content = _extract_text_from_content(raw_content)
+            if extracted_content:
+                content_parts.append(extracted_content)
+
+        # Add top-level refusal if present
+        if refusal:
+            content_parts.append(f"[refusal]: {refusal}")
+
+        # Add tool_calls if present (when content is None or empty)
+        if tool_calls:
+            tool_calls_str = (
+                json.dumps(tool_calls, ensure_ascii=False)
+                if isinstance(tool_calls, list | dict)
+                else str(tool_calls)
+            )
+            content_parts.append(f"[tool_calls]: {tool_calls_str}")
+
+        # Add audio if present
+        if audio:
+            audio_id = audio.get("id", "") if isinstance(audio, dict) else str(audio)
+            content_parts.append(f"[audio]: {audio_id}")
+
+        # Combine all content parts
+        content = " ".join(content_parts) if content_parts else ""
+
         parts = [f"{role}: "]
         if chat_time:
             parts.append(f"[{chat_time}]: ")
         prefix = "".join(parts)
         line = f"{prefix}{content}\n"
-        if not line:
+        if not line.strip():
             return []
         memory_type = "LongTermMemory"
 

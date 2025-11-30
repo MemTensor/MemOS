@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from print_utils import pretty_print_dict
 
 from memos.mem_reader.read_multi_model.user_parser import UserParser
 
@@ -43,17 +44,9 @@ def main():
     }
 
     print("📝 Example 1: Simple text user message\n")
-    print(f"Message: {simple_user_message['content']}")
+    pretty_print_dict(simple_user_message)
 
     info = {"user_id": "user1", "session_id": "session1"}
-    source = parser.create_source(simple_user_message, info)
-
-    print("  ✅ Created SourceMessage:")
-    print(f"     - Type: {source.type}")
-    print(f"     - Role: {source.role}")
-    print(f"     - Content: {source.content[:60]}...")
-    print()
-
     # Parse in fast mode
     memory_items = parser.parse_fast(simple_user_message, info)
     print(f"  📊 Fast mode generated {len(memory_items)} memory item(s)")
@@ -81,10 +74,14 @@ def main():
     }
 
     print("📝 Example 2: Multimodal user message (text + file)\n")
+    pretty_print_dict(multimodal_user_message)
     print(f"Message contains {len(multimodal_user_message['content'])} parts")
 
-    sources = parser.create_source(multimodal_user_message, info)
-    if isinstance(sources, list):
+    # Parse in fast mode
+    memory_items = parser.parse_fast(multimodal_user_message, info)
+    print(f"  📊 Fast mode generated {len(memory_items)} memory item(s)")
+    for memory_item in memory_items:
+        sources = memory_item.metadata.sources
         print(f"  ✅ Created {len(sources)} SourceMessage(s):")
         for i, src in enumerate(sources, 1):
             print(f"     [{i}] Type: {src.type}, Role: {src.role}")
@@ -92,12 +89,6 @@ def main():
                 print(f"         Content: {src.content[:50]}...")
             elif src.type == "file":
                 print(f"         Doc Path: {src.doc_path}")
-    else:
-        print(f"  ✅ Created SourceMessage: Type={sources.type}")
-
-    # Parse in fast mode
-    memory_items = parser.parse_fast(multimodal_user_message, info)
-    print(f"  📊 Fast mode generated {len(memory_items)} memory item(s)")
     print()
 
     # 6. Example with image_url (future support)
@@ -113,22 +104,30 @@ def main():
         "chat_time": "2025-01-15T10:10:00",
         "message_id": "msg_003",
     }
-
     print("📝 Example 3: User message with image\n")
-    sources = parser.create_source(image_user_message, info)
-    if isinstance(sources, list):
+    print(f"Message contains {len(image_user_message['content'])} parts")
+    pretty_print_dict(image_user_message)
+
+    # Parse in fast mode
+    memory_items = parser.parse_fast(image_user_message, info)
+    print(f"  📊 Fast mode generated {len(memory_items)} memory item(s)")
+    for memory_item in memory_items:
+        sources = memory_item.metadata.sources
         print(f"  ✅ Created {len(sources)} SourceMessage(s):")
         for i, src in enumerate(sources, 1):
             print(f"     [{i}] Type: {src.type}, Role: {src.role}")
-    print()
+            if src.type == "text":
+                print(f"         Content: {src.content[:50]}...")
+            elif src.type == "file":
+                print(f"         Doc Path: {src.doc_path}")
+            elif src.type == "image":
+                print(f"         Image Path: {src.image_path}")
 
     # Rebuild examples
     print("🔄 Rebuilding messages from sources:\n")
-    rebuilt_simple = parser.rebuild_from_source(source)
+    rebuilt_simple = parser.rebuild_from_source(sources[1])
     if rebuilt_simple:
-        print(
-            f"  Simple message: role={rebuilt_simple['role']}, content={rebuilt_simple['content'][:40]}..."
-        )
+        pretty_print_dict(rebuilt_simple)
     print("✅ UserParser example completed!")
 
 
