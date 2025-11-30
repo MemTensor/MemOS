@@ -15,6 +15,7 @@ from memos.api.product_models import (
     MemoryResponse,
 )
 from memos.log import get_logger
+from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_os.utils.format_utils import (
     convert_graph_to_tree_forworkmem,
     ensure_unique_tree_ids,
@@ -162,11 +163,13 @@ def handle_get_subgraph(
         raise
 
 
-def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> GetMemoryResponse:
+def handle_get_memories(
+    get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
     # TODO: Implement get memory with filter
     memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
     preferences: list[TextualMemoryItem] = []
-    if get_mem_req.include_preference:
+    if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
             filter_params["user_id"] = get_mem_req.user_id
@@ -177,21 +180,51 @@ def handle_get_memories(get_mem_req: GetMemoryRequest, naive_mem_cube: Any) -> G
     return GetMemoryResponse(
         message="Memories retrieved successfully",
         data={
-            "text_mem": memories,
-            "pref_mem": preferences,
+            "text_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": memories}],
+            "pref_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": preferences}],
         },
     )
 
 
-def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: Any):
+def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
+    # Validate that only one of memory_ids, file_ids, or filter is provided
+    provided_params = [
+        delete_mem_req.memory_ids is not None,
+        delete_mem_req.file_ids is not None,
+        delete_mem_req.filter is not None,
+    ]
+    if sum(provided_params) != 1:
+        return DeleteMemoryResponse(
+            message="Exactly one of memory_ids, file_ids, or filter must be provided",
+            data={"status": "failure"},
+        )
+
     try:
-        naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids)
-        naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
+        if delete_mem_req.memory_ids is not None:
+            naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids)
+            if naive_mem_cube.pref_mem is not None:
+                naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
+        elif delete_mem_req.file_ids is not None:
+            # TODO: Implement deletion by file_ids
+            # Need to find memory_ids associated with file_ids and delete them
+            logger.warning("Deletion by file_ids not implemented yet")
+            return DeleteMemoryResponse(
+                message="Deletion by file_ids not implemented yet",
+                data={"status": "failure"},
+            )
+        elif delete_mem_req.filter is not None:
+            # TODO: Implement deletion by filter
+            # Need to find memories matching filter and delete them
+            logger.warning("Deletion by filter not implemented yet")
+            return DeleteMemoryResponse(
+                message="Deletion by filter not implemented yet",
+                data={"status": "failure"},
+            )
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(
             message="Failed to delete memories",
-            data="failure",
+            data={"status": "failure"},
         )
     return DeleteMemoryResponse(
         message="Memories deleted successfully",

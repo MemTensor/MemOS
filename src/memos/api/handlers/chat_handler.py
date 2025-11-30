@@ -894,7 +894,7 @@ class ChatHandler(BaseHandler):
                 content=query,
                 timestamp=datetime.utcnow(),
             )
-            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+            self.mem_scheduler.submit_messages(messages=[message_item])
             self.logger.info(f"Sent message to scheduler with label: {label}")
         except Exception as e:
             self.logger.error(f"Failed to send message to scheduler: {e}", exc_info=True)
