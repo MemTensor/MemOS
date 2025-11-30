@@ -1,4 +1,4 @@
-"""Multi-model message parsers for different message types.
+"""Multimodal message parsers for different message types.
 
 This package provides parsers for different message types in both fast and fine modes:
 - String messages
