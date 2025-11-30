@@ -121,12 +121,7 @@ class UserParser(BaseMessageParser):
         self,
         source: SourceMessage,
     ) -> ChatCompletionUserMessageParam:
-        """
-        Rebuild user message from SourceMessage.
-
-        If source has original_part, use it directly.
-        Otherwise, reconstruct from source fields.
-        """
+        """We only need rebuild from specific multimodal source"""
 
     def parse_fast(
         self,
