@@ -10,7 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from print_utils import pretty_print_dict
 
-from memos.mem_reader.read_multi_model.user_parser import UserParser
+from memos.mem_reader.read_multi_modal.user_parser import UserParser
 
 
 # Handle imports for both script and module usage

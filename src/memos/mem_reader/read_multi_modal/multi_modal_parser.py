@@ -1,4 +1,4 @@
-"""Unified multi-model parser for different message types.
+"""Unified multimodal parser for different message types.
 
 This module provides a unified interface to parse different message types
 in both fast and fine modes.
@@ -26,7 +26,7 @@ from .utils import extract_role
 logger = get_logger(__name__)
 
 
-class MultiModelParser:
+class MultiModalParser:
     """Unified parser for different message types."""
 
     def __init__(
@@ -36,7 +36,7 @@ class MultiModelParser:
         parser: Any | None = None,
     ):
         """
-        Initialize MultiModelParser.
+        Initialize MultiModalParser.
 
         Args:
             embedder: Embedder for generating embeddings
@@ -88,7 +88,7 @@ class MultiModelParser:
 
         # Handle dict messages
         if not isinstance(message, dict):
-            logger.warning(f"[MultiModelParser] Unknown message type: {type(message)}")
+            logger.warning(f"[MultiModalParser] Unknown message type: {type(message)}")
             return None
 
         # Check if it's a RawMessageList item (text or file)
@@ -105,7 +105,7 @@ class MultiModelParser:
             if parser:
                 return parser
 
-        logger.warning(f"[MultiModelParser] Could not determine parser for message: {message}")
+        logger.warning(f"[MultiModalParser] Could not determine parser for message: {message}")
         return None
 
     def parse(
@@ -134,14 +134,14 @@ class MultiModelParser:
         # Get appropriate parser
         parser = self._get_parser(message)
         if not parser:
-            logger.warning(f"[MultiModelParser] No parser found for message: {message}")
+            logger.warning(f"[MultiModalParser] No parser found for message: {message}")
             return []
 
         # Parse using the appropriate parser
         try:
             return parser.parse(message, info, mode=mode, **kwargs)
         except Exception as e:
-            logger.error(f"[MultiModelParser] Error parsing message: {e}")
+            logger.error(f"[MultiModalParser] Error parsing message: {e}")
             return []
 
     def parse_batch(
@@ -192,7 +192,7 @@ class MultiModelParser:
             List of TextualMemoryItem objects from fine mode parsing
         """
         if not self.llm:
-            logger.warning("[MultiModelParser] LLM not available for process_transfer")
+            logger.warning("[MultiModalParser] LLM not available for process_transfer")
             return []
 
         # Extract info from context_items if available
@@ -219,14 +219,14 @@ class MultiModelParser:
             parser = self.role_parsers.get(source.role)
 
         if not parser:
-            logger.warning(f"[MultiModelParser] Could not determine parser for source: {source}")
+            logger.warning(f"[MultiModalParser] Could not determine parser for source: {source}")
             return []
 
         # Rebuild message from source using parser's method
         try:
             message = parser.rebuild_from_source(source)
         except Exception as e:
-            logger.error(f"[MultiModelParser] Error rebuilding message from source: {e}")
+            logger.error(f"[MultiModalParser] Error rebuilding message from source: {e}")
             return []
 
         # Parse in fine mode (pass custom_tags to parse_fine)
@@ -238,5 +238,5 @@ class MultiModelParser:
                 message, info, context_items=context_items, custom_tags=custom_tags, **kwargs
             )
         except Exception as e:
-            logger.error(f"[MultiModelParser] Error parsing in fine mode: {e}")
+            logger.error(f"[MultiModalParser] Error parsing in fine mode: {e}")
             return []

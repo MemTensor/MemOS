@@ -1,7 +1,7 @@
 """Shared configuration utilities for parser examples.
 
 This module provides configuration functions that match the configuration
-logic in examples/mem_reader/multimodel_struct_reader.py.
+logic in examples/mem_reader/multimodal_struct_reader.py.
 """
 
 import os
@@ -18,8 +18,8 @@ def get_reader_config() -> dict[str, Any]:
     """
     Get reader configuration from environment variables.
 
-    Returns a dictionary that can be used to create MultiModelStructMemReaderConfig.
-    Matches the configuration logic in examples/mem_reader/multimodel_struct_reader.py.
+    Returns a dictionary that can be used to create MultiModalStructMemReaderConfig.
+    Matches the configuration logic in examples/mem_reader/multimodal_struct_reader.py.
 
     Returns:
         Configuration dictionary with llm, embedder, and chunker configs

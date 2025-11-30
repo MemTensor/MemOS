@@ -10,7 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from memos.configs.parser import ParserConfigFactory
-from memos.mem_reader.read_multi_model.file_content_parser import FileContentParser
+from memos.mem_reader.read_multi_modal.file_content_parser import FileContentParser
 from memos.parsers.factory import ParserFactory
 
 

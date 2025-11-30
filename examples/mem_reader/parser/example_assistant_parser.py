@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from memos.mem_reader.read_multi_model.assistant_parser import AssistantParser
+from memos.mem_reader.read_multi_modal.assistant_parser import AssistantParser
 
 
 # Handle imports for both script and module usage
