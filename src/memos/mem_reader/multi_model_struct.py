@@ -41,10 +41,132 @@ class MultiModelStructMemReader(SimpleStructMemReader):
         )
 
     def _concat_multi_model_memories(
-        self, all_memory_items: list[TextualMemoryItem]
+        self, all_memory_items: list[TextualMemoryItem], max_tokens=None, overlap=200
     ) -> list[TextualMemoryItem]:
-        # TODO: concat multi_model_memories
-        return all_memory_items
+        """
+        Aggregates memory items using sliding window logic similar to
+        `_iter_chat_windows` in simple_struct:
+        1. Groups items into windows based on token count (max_tokens)
+        2. Each window has overlap tokens for context continuity
+        3. Aggregates items within each window into a single memory item
+        4. Determines memory_type based on roles in each window
+        """
+        if not all_memory_items:
+            return []
+
+        # If only one item, return as-is (no need to aggregate)
+        if len(all_memory_items) == 1:
+            return all_memory_items
+
+        max_tokens = max_tokens or self.chat_window_max_tokens
+        windows = []
+        buf_items = []
+        cur_text = ""
+
+        # Extract info from first item (all items should have same user_id, session_id)
+        first_item = all_memory_items[0]
+        info = {
+            "user_id": first_item.metadata.user_id,
+            "session_id": first_item.metadata.session_id,
+            **(first_item.metadata.info or {}),
+        }
+
+        for _idx, item in enumerate(all_memory_items):
+            item_text = item.memory or ""
+            # Ensure line ends with newline (same format as simple_struct)
+            line = item_text if item_text.endswith("\n") else f"{item_text}\n"
+
+            # Check if adding this item would exceed max_tokens (same logic as _iter_chat_windows)
+            if self._count_tokens(cur_text + line) > max_tokens and cur_text:
+                # Yield current window
+                window = self._build_window_from_items(buf_items, info)
+                if window:
+                    windows.append(window)
+
+                # Keep overlap: remove items until remaining tokens <= overlap
+                # (same logic as _iter_chat_windows)
+                while (
+                    buf_items
+                    and self._count_tokens("".join([it.memory or "" for it in buf_items])) > overlap
+                ):
+                    buf_items.pop(0)
+                # Recalculate cur_text from remaining items
+                cur_text = "".join([it.memory or "" for it in buf_items])
+
+            # Add item to current window
+            buf_items.append(item)
+            # Recalculate cur_text from all items in buffer (same as _iter_chat_windows)
+            cur_text = "".join([it.memory or "" for it in buf_items])
+
+        # Yield final window if any items remain
+        if buf_items:
+            window = self._build_window_from_items(buf_items, info)
+            if window:
+                windows.append(window)
+
+        return windows
+
+    def _build_window_from_items(
+        self, items: list[TextualMemoryItem], info: dict[str, Any]
+    ) -> TextualMemoryItem | None:
+        """
+        Build a single memory item from a window of items (similar to _build_fast_node).
+
+        Args:
+            items: List of TextualMemoryItem objects in the window
+            info: Dictionary containing user_id and session_id
+
+        Returns:
+            Aggregated TextualMemoryItem or None if no valid content
+        """
+        if not items:
+            return None
+
+        # Collect all memory texts and sources
+        memory_texts = []
+        all_sources = []
+        roles = set()
+
+        for item in items:
+            if item.memory:
+                memory_texts.append(item.memory)
+
+            # Collect sources and extract roles
+            item_sources = item.metadata.sources or []
+            if not isinstance(item_sources, list):
+                item_sources = [item_sources]
+
+            for source in item_sources:
+                # Add source to all_sources
+                all_sources.append(source)
+
+                # Extract role from source
+                if hasattr(source, "role") and source.role:
+                    roles.add(source.role)
+                elif isinstance(source, dict) and source.get("role"):
+                    roles.add(source.get("role"))
+
+        # Determine memory_type based on roles (same logic as simple_struct)
+        # UserMemory if only user role, else LongTermMemory
+        memory_type = "UserMemory" if roles == {"user"} else "LongTermMemory"
+
+        # Merge all memory texts (preserve the format from parser)
+        merged_text = "".join(memory_texts) if memory_texts else ""
+
+        if not merged_text.strip():
+            # If no text content, return None
+            return None
+
+        # Create aggregated memory item (similar to _build_fast_node in simple_struct)
+        aggregated_item = self._make_memory_item(
+            value=merged_text,
+            info=info,
+            memory_type=memory_type,
+            tags=["mode:fast"],
+            sources=all_sources,
+        )
+
+        return aggregated_item
 
     @timed
     def _process_multi_model_data(
@@ -86,7 +208,7 @@ class MultiModelStructMemReader(SimpleStructMemReader):
             # TODO: parallel call llm and get fine multi model items
             # Part A: call llm
             fine_memory_items = []
-            fine_memory_items_string_parser = []
+            fine_memory_items_string_parser = fast_memory_items
             fine_memory_items.extend(fine_memory_items_string_parser)
             # Part B: get fine multi model items
 
