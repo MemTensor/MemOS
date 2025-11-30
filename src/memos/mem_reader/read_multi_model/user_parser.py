@@ -135,22 +135,25 @@ class UserParser(BaseMessageParser):
         **kwargs,
     ) -> list[TextualMemoryItem]:
         if not isinstance(message, dict):
-            logger.warning(f"[BaseParser] Expected dict, got {type(message)}")
+            logger.warning(f"[UserParser] Expected dict, got {type(message)}")
             return []
 
         role = message.get("role", "")
+        # TODO: if file/url/audio etc in content, how to transfer them into a
+        #  readable string?
         content = message.get("content", "")
         chat_time = message.get("chat_time", None)
-        parts = []
-        if role and str(role).lower() != "mix":
-            parts.append(f"{role}: ")
+        if role != "user":
+            logger.warning(f"[UserParser] Expected role is `user`, got {role}")
+            return []
+        parts = [f"{role}: "]
         if chat_time:
             parts.append(f"[{chat_time}]: ")
         prefix = "".join(parts)
         line = f"{prefix}{content}\n"
         if not line:
             return []
-        memory_type = "UserMemory" if role == "user" else "LongTermMemory"
+        memory_type = "UserMemory"
 
         # Create source(s) using parser's create_source method
         sources = self.create_source(message, info)
