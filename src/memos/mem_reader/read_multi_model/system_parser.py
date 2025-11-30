@@ -107,9 +107,10 @@ class SystemParser(BaseMessageParser):
         raw_content = message.get("content", "")
         chat_time = message.get("chat_time", None)
         content = _extract_text_from_content(raw_content)
-        parts = []
-        if role and str(role).lower() != "mix":
-            parts.append(f"{role}: ")
+        if role != "system":
+            logger.warning(f"[SystemParser] Expected role is `system`, got {role}")
+            return []
+        parts = [f"{role}: "]
         if chat_time:
             parts.append(f"[{chat_time}]: ")
         prefix = "".join(parts)
