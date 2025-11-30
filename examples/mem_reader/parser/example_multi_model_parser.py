@@ -2,6 +2,27 @@
 
 This example verifies that different input types correctly return
 the corresponding parser instances.
+
+MessagesType Definition (from src/memos/types/general_types.py):
+    MessagesType = str | MessageList | RawMessageList
+
+    Where:
+    - str: Simple string messages
+    - MessageList: list[ChatCompletionMessageParam]
+        ChatCompletionMessageParam = (
+            ChatCompletionSystemMessageParam |
+            ChatCompletionUserMessageParam |
+            ChatCompletionAssistantMessageParam |
+            ChatCompletionToolMessageParam
+        )
+    - RawMessageList: list[RawMessageDict]
+        RawMessageDict = ChatCompletionContentPartTextParam | File
+
+    Note: User/Assistant messages can have multimodal content (list of parts):
+        - {"type": "text", "text": "..."}
+        - {"type": "file", "file": {...}}
+        - {"type": "image_url", "image_url": {...}}
+        - {"type": "input_audio", "input_audio": {...}}
 """
 
 import sys
@@ -68,6 +89,32 @@ def parser_selection():
             },
             "expected_parser_type": "FileContentParser",
         },
+        # RawMessageList: image_url type -> None (type_parsers uses "image" key, not "image_url")
+        {
+            "name": "Image content part (RawMessageList - image_url type)",
+            "message": {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/image.jpg",
+                    "detail": "auto",
+                },
+            },
+            "expected_parser_type": None,  # type_parsers has "image" key, but message has "image_url" type
+            "should_return_none": True,
+        },
+        # RawMessageList: input_audio type -> None (type_parsers uses "audio" key, not "input_audio")
+        {
+            "name": "Audio content part (RawMessageList - input_audio type)",
+            "message": {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": "base64_encoded_audio_data",
+                    "format": "mp3",
+                },
+            },
+            "expected_parser_type": None,  # type_parsers has "audio" key, but message has "input_audio" type
+            "should_return_none": True,
+        },
         # MessageList: system role -> SystemParser
         {
             "name": "System message",
@@ -88,7 +135,7 @@ def parser_selection():
         },
         # MessageList: user role with multimodal content -> UserParser
         {
-            "name": "User message (multimodal)",
+            "name": "User message (multimodal with text and file)",
             "message": {
                 "role": "user",
                 "content": [
@@ -98,12 +145,61 @@ def parser_selection():
             },
             "expected_parser_type": "UserParser",
         },
+        # MessageList: user role with image_url content -> UserParser
+        {
+            "name": "User message (with image_url)",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.jpg"},
+                    },
+                ],
+            },
+            "expected_parser_type": "UserParser",
+        },
+        # MessageList: user role with input_audio content -> UserParser
+        {
+            "name": "User message (with input_audio)",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Listen to this audio"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "base64_data", "format": "wav"},
+                    },
+                ],
+            },
+            "expected_parser_type": "UserParser",
+        },
         # MessageList: assistant role -> AssistantParser
         {
-            "name": "Assistant message",
+            "name": "Assistant message (simple)",
             "message": {
                 "role": "assistant",
                 "content": "I'm doing well, thank you!",
+            },
+            "expected_parser_type": "AssistantParser",
+        },
+        # MessageList: assistant role with tool_calls -> AssistantParser
+        {
+            "name": "Assistant message (with tool_calls)",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "Beijing"}',
+                        },
+                    }
+                ],
             },
             "expected_parser_type": "AssistantParser",
         },
@@ -124,11 +220,28 @@ def parser_selection():
 
     for i, test_case in enumerate(test_cases, 1):
         message = test_case["message"]
-        expected_type = test_case["expected_parser_type"]
+        expected_type = test_case.get("expected_parser_type")
         test_name = test_case["name"]
+        should_return_none = test_case.get("should_return_none", False)
 
         # Get parser using internal method
         selected_parser = parser._get_parser(message)
+
+        # Handle cases where None is expected
+        if should_return_none or expected_type is None:
+            if selected_parser is None:
+                print(f"✅ Test {i}: {test_name}")
+                print("   Expected: None (parser not implemented yet or not found)")
+                print("   Got: None")
+                if expected_type:
+                    print(f"   Note: {expected_type} is not yet implemented")
+            else:
+                print(f"⚠️  Test {i}: {test_name}")
+                print("   Expected: None")
+                print(f"   Got: {type(selected_parser).__name__}")
+                print("   Note: Parser found but may not be fully implemented")
+            print()
+            continue
 
         # Check if parser was found
         if selected_parser is None:
@@ -181,10 +294,18 @@ def parser_selection():
             "should_return_none": True,
         },
         {
-            "name": "List of messages (not handled by _get_parser)",
+            "name": "List of messages (MessageList - not handled by _get_parser)",
             "message": [
                 {"role": "user", "content": "Message 1"},
                 {"role": "assistant", "content": "Message 2"},
+            ],
+            "should_return_none": True,  # Lists are handled in parse(), not _get_parser()
+        },
+        {
+            "name": "List of RawMessageList items (not handled by _get_parser)",
+            "message": [
+                {"type": "text", "text": "Text content 1"},
+                {"type": "file", "file": {"filename": "doc.pdf", "file_data": ""}},
             ],
             "should_return_none": True,  # Lists are handled in parse(), not _get_parser()
         },
