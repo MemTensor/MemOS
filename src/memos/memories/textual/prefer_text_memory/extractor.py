@@ -9,7 +9,11 @@ from typing import Any
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_reader.simple_struct import detect_lang
-from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
+from memos.memories.textual.item import (
+    PreferenceTextualMemoryMetadata,
+    TextualMemoryItem,
+    list_all_fields,
+)
 from memos.memories.textual.prefer_text_memory.spliter import Splitter
 from memos.memories.textual.prefer_text_memory.utils import convert_messages_to_string
 from memos.templates.prefer_complete_prompt import (
@@ -90,7 +94,8 @@ class NaiveExtractor(BaseExtractor):
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
-            result["preference"] = result.pop("implicit_preference")
+            for d in result:
+                d["preference"] = d.pop("implicit_preference")
             return result
         except Exception as e:
             logger.error(f"Error extracting implicit preferences: {e}, return None")
@@ -113,7 +118,8 @@ class NaiveExtractor(BaseExtractor):
             vector_info = {
                 "embedding": self.embedder.embed([pref["context_summary"]])[0],
             }
-            extract_info = {**basic_info, **pref, **vector_info, **info}
+            user_info = {k: v for k, v in info.items() if k not in list_all_fields()}
+            extract_info = {**basic_info, **pref, **vector_info, **info, "info": user_info}
 
             metadata = PreferenceTextualMemoryMetadata(
                 type=msg_type, preference_type="explicit_preference", **extract_info
@@ -136,20 +142,24 @@ class NaiveExtractor(BaseExtractor):
         if not implicit_pref:
             return None
 
-        vector_info = {
-            "embedding": self.embedder.embed([implicit_pref["context_summary"]])[0],
-        }
+        memories = []
+        for pref in implicit_pref:
+            vector_info = {
+                "embedding": self.embedder.embed([pref["context_summary"]])[0],
+            }
+            user_info = {k: v for k, v in info.items() if k not in list_all_fields()}
+            extract_info = {**basic_info, **pref, **vector_info, **info, "info": user_info}
 
-        extract_info = {**basic_info, **implicit_pref, **vector_info, **info}
+            metadata = PreferenceTextualMemoryMetadata(
+                type=msg_type, preference_type="implicit_preference", **extract_info
+            )
+            memory = TextualMemoryItem(
+                id=str(uuid.uuid4()), memory=pref["context_summary"], metadata=metadata
+            )
 
-        metadata = PreferenceTextualMemoryMetadata(
-            type=msg_type, preference_type="implicit_preference", **extract_info
-        )
-        memory = TextualMemoryItem(
-            id=extract_info["dialog_id"], memory=implicit_pref["context_summary"], metadata=metadata
-        )
+            memories.append(memory)
 
-        return memory
+        return memories
 
     def extract(
         self,

@@ -584,6 +584,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     user_id=message.user_id,
                     task_type=message.label,
                     mem_cube_id=message.mem_cube_id,
+                    business_task_id=message.task_id,  # Pass business task_id if provided
                 )
         self.memos_message_queue.submit_messages(messages=messages)
 
