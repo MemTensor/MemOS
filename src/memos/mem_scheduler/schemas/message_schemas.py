@@ -33,7 +33,6 @@ DEFAULT_MEMORY_CAPACITIES = {
 
 class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
-    task_id: str | None = Field(default=None, description="Parent task ID, if applicable")
     redis_message_id: str = Field(default="", description="the message get from redis stream")
     user_id: str = Field(..., description="user id")
     mem_cube_id: str = Field(..., description="memcube id")
@@ -48,6 +47,10 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         description="user name / display name (optional)",
     )
     info: dict | None = Field(default=None, description="user custom info")
+    task_id: str | None = Field(
+        default=None,
+        description="Optional business-level task ID. Multiple items can share the same task_id.",
+    )
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(

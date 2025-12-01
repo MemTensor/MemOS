@@ -426,7 +426,7 @@ class APIConfig:
     def get_reader_config() -> dict[str, Any]:
         """Get reader configuration."""
         return {
-            "backend": os.getenv("MEM_READER_BACKEND", "simple_struct"),
+            "backend": os.getenv("MEM_READER_BACKEND", "multimodal_struct"),
             "config": {
                 "chunk_type": os.getenv("MEM_READER_CHAT_CHUNK_TYPE", "default"),
                 "chunk_length": int(os.getenv("MEM_READER_CHAT_CHUNK_TOKEN_SIZE", 1600)),

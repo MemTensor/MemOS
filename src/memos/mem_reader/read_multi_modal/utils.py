@@ -67,7 +67,7 @@ def _is_message_list(obj):
     return True
 
 
-def coerce_scene_data(scene_data, scene_type: str) -> list[MessagesType]:
+def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[MessagesType]:
     """
     Normalize ANY allowed SceneDataInput into: list[MessagesType].
     Supports:
@@ -91,6 +91,11 @@ def coerce_scene_data(scene_data, scene_type: str) -> list[MessagesType]:
         complete_scene_data = []
         for items in normalized:
             if not items:
+                continue
+
+            # Keep string as-is (MessagesType supports str)
+            if isinstance(items, str):
+                complete_scene_data.append(items)
                 continue
 
             # ONLY add chat_time if it's a MessageList

@@ -1,6 +1,11 @@
 import argparse
 import json
+import os
 import time
+
+from typing import Any
+
+from dotenv import load_dotenv
 
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.mem_reader.simple_struct import SimpleStructMemReader
@@ -9,6 +14,10 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
+
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 def print_textual_memory_item(
@@ -98,6 +107,104 @@ def print_textual_memory_item_json(item: TextualMemoryItem, indent: int = 2):
     print(json.dumps(data, indent=indent, ensure_ascii=False))
 
 
+def get_reader_config() -> dict[str, Any]:
+    """
+    Get reader configuration from environment variables.
+
+    Returns a dictionary that can be used to create SimpleStructMemReaderConfig.
+    Similar to APIConfig.get_reader_config() in server_router_api.py.
+
+    Returns:
+        Configuration dictionary for SimpleStructMemReaderConfig
+    """
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    openai_base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    ollama_api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+
+    # Get LLM backend and config
+    llm_backend = os.getenv("MEM_READER_LLM_BACKEND", "openai")
+    if llm_backend == "ollama":
+        llm_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": os.getenv("MEM_READER_LLM_MODEL", "qwen3:0.6b"),
+                "api_base": ollama_api_base,
+                "temperature": float(os.getenv("MEM_READER_LLM_TEMPERATURE", "0.0")),
+                "remove_think_prefix": os.getenv(
+                    "MEM_READER_LLM_REMOVE_THINK_PREFIX", "true"
+                ).lower()
+                == "true",
+                "max_tokens": int(os.getenv("MEM_READER_LLM_MAX_TOKENS", "8192")),
+            },
+        }
+    else:  # openai
+        llm_config = {
+            "backend": "openai",
+            "config": {
+                "model_name_or_path": os.getenv("MEM_READER_LLM_MODEL", "gpt-4o-mini"),
+                "api_key": openai_api_key or os.getenv("MEMRADER_API_KEY", "EMPTY"),
+                "api_base": openai_base_url,
+                "temperature": float(os.getenv("MEM_READER_LLM_TEMPERATURE", "0.5")),
+                "remove_think_prefix": os.getenv(
+                    "MEM_READER_LLM_REMOVE_THINK_PREFIX", "true"
+                ).lower()
+                == "true",
+                "max_tokens": int(os.getenv("MEM_READER_LLM_MAX_TOKENS", "8192")),
+            },
+        }
+
+    # Get embedder backend and config
+    embedder_backend = os.getenv(
+        "MEM_READER_EMBEDDER_BACKEND", os.getenv("MOS_EMBEDDER_BACKEND", "ollama")
+    )
+    if embedder_backend == "universal_api":
+        embedder_config = {
+            "backend": "universal_api",
+            "config": {
+                "provider": os.getenv(
+                    "MEM_READER_EMBEDDER_PROVIDER", os.getenv("MOS_EMBEDDER_PROVIDER", "openai")
+                ),
+                "api_key": os.getenv(
+                    "MEM_READER_EMBEDDER_API_KEY",
+                    os.getenv("MOS_EMBEDDER_API_KEY", openai_api_key or "sk-xxxx"),
+                ),
+                "model_name_or_path": os.getenv(
+                    "MEM_READER_EMBEDDER_MODEL",
+                    os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                ),
+                "base_url": os.getenv(
+                    "MEM_READER_EMBEDDER_API_BASE",
+                    os.getenv("MOS_EMBEDDER_API_BASE", openai_base_url),
+                ),
+            },
+        }
+    else:  # ollama
+        embedder_config = {
+            "backend": "ollama",
+            "config": {
+                "model_name_or_path": os.getenv(
+                    "MEM_READER_EMBEDDER_MODEL",
+                    os.getenv("MOS_EMBEDDER_MODEL", "nomic-embed-text:latest"),
+                ),
+                "api_base": ollama_api_base,
+            },
+        }
+
+    return {
+        "llm": llm_config,
+        "embedder": embedder_config,
+        "chunker": {
+            "backend": "sentence",
+            "config": {
+                "tokenizer_or_token_counter": "gpt2",
+                "chunk_size": 512,
+                "chunk_overlap": 128,
+                "min_sentences_per_chunk": 1,
+            },
+        },
+    }
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Test Mem-Reader with structured output")
@@ -115,10 +222,18 @@ def main():
     )
     args = parser.parse_args()
 
-    # 1. Create Configuration
-    reader_config = SimpleStructMemReaderConfig.from_json_file(
-        "examples/data/config/simple_struct_reader_config.json"
-    )
+    # 1. Create Configuration from environment variables or JSON file
+    # Try to get config from environment variables first
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if openai_api_key:
+        # Use environment variables (similar to server_router_api.py)
+        config_dict = get_reader_config()
+        reader_config = SimpleStructMemReaderConfig.model_validate(config_dict)
+    else:
+        # Fall back to JSON file
+        reader_config = SimpleStructMemReaderConfig.from_json_file(
+            "examples/data/config/simple_struct_reader_config.json"
+        )
     reader = SimpleStructMemReader(reader_config)
 
     # 2. Define scene data

@@ -35,14 +35,17 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from memos.api.product_models import APIADDRequest, APISearchRequest
+    from memos.mem_cube.navie import NaiveMemCube
+    from memos.mem_reader.simple_struct import SimpleStructMemReader
+    from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
 
 
 @dataclass
 class SingleCubeView(MemCubeView):
     cube_id: str
-    naive_mem_cube: Any
-    mem_reader: Any
-    mem_scheduler: Any
+    naive_mem_cube: NaiveMemCube
+    mem_reader: SimpleStructMemReader
+    mem_scheduler: OptimizedScheduler
     logger: Any
     searcher: Any
     deepsearch_agent: Any | None = None
@@ -155,7 +158,7 @@ class SingleCubeView(MemCubeView):
         Args:
             search_req: Search request
             user_context: User context
-            search_mode: Search mode (FAST, FINE, or MIXTURE)
+            search_mode: Search mode (fast, fine, or mixture)
 
         Returns:
             List of formatted memory items
@@ -227,13 +230,15 @@ class SingleCubeView(MemCubeView):
         Returns:
             List of enhanced search results
         """
+        logger.info(f"Fine strategy: {FINE_STRATEGY}")
         if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
             return self._deep_search(search_req=search_req, user_context=user_context)
         elif FINE_STRATEGY == FineStrategy.AGENTIC_SEARCH:
             return self._agentic_search(search_req=search_req, user_context=user_context)
 
         target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter
 
         info = {
             "user_id": search_req.user_id,
@@ -250,6 +255,7 @@ class SingleCubeView(MemCubeView):
             manual_close_internet=not search_req.internet_search,
             moscube=search_req.moscube,
             search_filter=search_filter,
+            search_priority=search_priority,
             info=info,
         )
 
@@ -285,6 +291,7 @@ class SingleCubeView(MemCubeView):
                     top_k=retrieval_size,
                     mode=SearchMode.FAST,
                     memory_type="All",
+                    search_priority=search_priority,
                     search_filter=search_filter,
                     info=info,
                 )
@@ -320,7 +327,8 @@ class SingleCubeView(MemCubeView):
         """
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
-
+        print(f"search_req.filter for preference memory: {search_req.filter}")
+        print(f"type of pref_mem: {type(self.naive_mem_cube.pref_mem)}")
         try:
             results = self.naive_mem_cube.pref_mem.search(
                 query=search_req.query,
@@ -330,6 +338,7 @@ class SingleCubeView(MemCubeView):
                     "session_id": search_req.session_id,
                     "chat_history": search_req.chat_history,
                 },
+                search_filter=search_req.filter,
             )
             return [format_memory_item(data) for data in results]
         except Exception as e:
@@ -352,7 +361,9 @@ class SingleCubeView(MemCubeView):
             List of search results
         """
         target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter or None
+        plugin = bool(search_req.source is not None and search_req.source == "plugin")
 
         search_results = self.naive_mem_cube.text_mem.search(
             query=search_req.query,
@@ -361,11 +372,13 @@ class SingleCubeView(MemCubeView):
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
             search_filter=search_filter,
+            search_priority=search_priority,
             info={
                 "user_id": search_req.user_id,
                 "session_id": target_session_id,
                 "chat_history": search_req.chat_history,
             },
+            plugin=plugin,
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]
@@ -437,7 +450,7 @@ class SingleCubeView(MemCubeView):
                     user_name=self.cube_id,
                     info=add_req.info,
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_read])
+                self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
                     f"[SingleCubeView] cube={self.cube_id} Submitted async MEM_READ: {json.dumps(mem_ids)}"
                 )
@@ -458,7 +471,7 @@ class SingleCubeView(MemCubeView):
                 timestamp=datetime.utcnow(),
                 user_name=self.cube_id,
             )
-            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_add])
+            self.mem_scheduler.submit_messages(messages=[message_item_add])
 
     def _process_pref_mem(
         self,
@@ -489,15 +502,17 @@ class SingleCubeView(MemCubeView):
                 messages_list = [add_req.messages]
                 message_item_pref = ScheduleMessageItem(
                     user_id=add_req.user_id,
-                    task_id=add_req.task_id,
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
                     label=PREF_ADD_LABEL,
                     content=json.dumps(messages_list),
                     timestamp=datetime.utcnow(),
+                    info=add_req.info,
+                    user_name=self.cube_id,
+                    task_id=add_req.task_id,
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item_pref])
+                self.mem_scheduler.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
             except Exception as e:
                 self.logger.error(
