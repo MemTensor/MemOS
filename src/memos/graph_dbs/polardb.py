@@ -1450,7 +1450,7 @@ class PolarDBGraphDB(BaseGraphDB):
     def get_context_chain(self, id: str, type: str = "FOLLOWS") -> list[str]:
         """Get the ordered context chain starting from a node."""
         raise NotImplementedError
-        
+
     @timed
     def search_by_fulltext(
         self,
@@ -1528,7 +1528,6 @@ class PolarDBGraphDB(BaseGraphDB):
                     where_clauses.append(
                         f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
                     )
-
 
         # Build filter conditions using common method
         filter_conditions = self._build_filter_conditions_sql(filter)

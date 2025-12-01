@@ -10,6 +10,7 @@ from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
+    FastTokenizer,
     parse_structured_output,
 )
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
@@ -33,6 +34,7 @@ class AdvancedSearcher(Searcher):
         search_strategy: dict | None = None,
         manual_close_internet: bool = True,
         process_llm: Any | None = None,
+        tokenizer: FastTokenizer | None = None,
     ):
         super().__init__(
             dispatcher_llm=dispatcher_llm,
@@ -43,6 +45,7 @@ class AdvancedSearcher(Searcher):
             internet_retriever=internet_retriever,
             search_strategy=search_strategy,
             manual_close_internet=manual_close_internet,
+            tokenizer=tokenizer,
         )
 
         self.stage_retrieve_top = 3

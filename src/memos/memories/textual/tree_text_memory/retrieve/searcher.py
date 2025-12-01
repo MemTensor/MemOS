@@ -8,7 +8,10 @@ from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
+    FastTokenizer,
+    cosine_similarity_matrix,
     detect_lang,
+    find_best_unrelated_subgroup,
     parse_json_result,
 )
 from memos.reranker.base import BaseReranker
@@ -43,6 +46,7 @@ class Searcher:
         internet_retriever: None = None,
         search_strategy: dict | None = None,
         manual_close_internet: bool = True,
+        tokenizer: FastTokenizer | None = None,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -58,6 +62,7 @@ class Searcher:
         self.vec_cot = search_strategy.get("cot", False) if search_strategy else False
         self.use_fast_graph = search_strategy.get("fast_graph", False) if search_strategy else False
         self.manual_close_internet = manual_close_internet
+        self.tokenizer = tokenizer
         self._usage_executor = ContextThreadPoolExecutor(max_workers=4, thread_name_prefix="usage")
 
     @timed
@@ -104,9 +109,10 @@ class Searcher:
         top_k: int,
         user_name: str | None = None,
         info=None,
+        plugin=False,
     ):
         deduped = self._deduplicate_results(retrieved_results)
-        final_results = self._sort_and_trim(deduped, top_k)
+        final_results = self._sort_and_trim(deduped, top_k, plugin)
         self._update_usage_history(final_results, info, user_name)
         return final_results
 
@@ -121,6 +127,7 @@ class Searcher:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
+        **kwargs,
     ) -> list[TextualMemoryItem]:
         """
         Search for memories based on a query.
@@ -149,22 +156,29 @@ class Searcher:
         else:
             logger.debug(f"[SEARCH] Received info dict: {info}")
 
-        retrieved_results = self.retrieve(
-            query=query,
-            top_k=top_k,
-            info=info,
-            mode=mode,
-            memory_type=memory_type,
-            search_filter=search_filter,
-            search_priority=search_priority,
-            user_name=user_name,
-        )
+        if kwargs.get("plugin"):
+            logger.info(f"[SEARCH] Retrieve from plugin: {query}")
+            retrieved_results = self._retrieve_simple(
+                query=query, top_k=top_k, search_filter=search_filter, user_name=user_name
+            )
+        else:
+            retrieved_results = self.retrieve(
+                query=query,
+                top_k=top_k,
+                info=info,
+                mode=mode,
+                memory_type=memory_type,
+                search_filter=search_filter,
+                search_priority=search_priority,
+                user_name=user_name,
+            )
 
         final_results = self.post_retrieve(
             retrieved_results=retrieved_results,
             top_k=top_k,
             user_name=user_name,
             info=None,
+            plugin=kwargs.get("plugin", False),
         )
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
@@ -485,6 +499,49 @@ class Searcher:
         )
 
     @timed
+    def _retrieve_simple(
+        self,
+        query: str,
+        top_k: int,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        **kwargs,
+    ):
+        """Retrieve from by keywords and embedding"""
+        query_words = []
+        if self.tokenizer:
+            query_words = self.tokenizer.tokenize_mixed(query)
+        else:
+            query_words = query.strip().split()
+        query_words = list(set(query_words))[: top_k * 3]
+        query_words = [query, *query_words]
+        logger.info(f"[SIMPLESEARCH] Query words: {query_words}")
+        query_embeddings = self.embedder.embed(query_words)
+
+        items = self.graph_retriever.retrieve_from_mixed(
+            top_k=top_k * 2,
+            memory_scope=None,
+            query_embedding=query_embeddings,
+            search_filter=search_filter,
+            user_name=user_name,
+        )
+        logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
+        documents = [getattr(item, "memory", "") for item in items]
+        documents_embeddings = self.embedder.embed(documents)
+        similarity_matrix = cosine_similarity_matrix(documents_embeddings)
+        selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
+        selected_items = [items[i] for i in selected_indices]
+        logger.info(
+            f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
+        )
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embeddings[0],
+            graph_results=selected_items,
+            top_k=top_k,
+        )
+
+    @timed
     def _deduplicate_results(self, results):
         """Deduplicate results by memory text"""
         deduped = {}
@@ -494,12 +551,14 @@ class Searcher:
         return list(deduped.values())
 
     @timed
-    def _sort_and_trim(self, results, top_k):
+    def _sort_and_trim(self, results, top_k, plugin=False):
         """Sort results by score and trim to top_k"""
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
         final_items = []
         for item, score in sorted_results:
+            if plugin and round(score, 2) == 0.00:
+                continue
             meta_data = item.metadata.model_dump()
             meta_data["relativity"] = score
             final_items.append(
