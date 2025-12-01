@@ -30,7 +30,9 @@ class AddHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies("naive_mem_cube", "mem_reader", "mem_scheduler")
+        self._validate_dependencies(
+            "naive_mem_cube", "mem_reader", "mem_scheduler", "feedback_server"
+        )
 
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
         """
@@ -59,6 +61,10 @@ class AddHandler(BaseHandler):
         if add_req.is_feedback:
             chat_history = add_req.chat_history
             messages = add_req.messages
+            if chat_history is None:
+                chat_history = []
+            if messages is None:
+                messages = []
             concatenate_chat = chat_history + messages
 
             last_user_index = max(i for i, d in enumerate(concatenate_chat) if d["role"] == "user")
@@ -117,6 +123,7 @@ class AddHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
+                feedback_server=self.feedback_server,
                 searcher=None,
             )
         else:
@@ -127,6 +134,7 @@ class AddHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
+                    feedback_server=self.feedback_server,
                     searcher=None,
                 )
                 for cube_id in cube_ids
