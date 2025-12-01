@@ -1172,14 +1172,16 @@ class MOSCore:
         Returns:
             bool: True if successful, False otherwise.
         """
-        # Validate current user has access to this cube
-        self._validate_cube_access(cube_id, target_user_id)
 
         # Validate target user exists
         if not self.user_manager.validate_user(target_user_id):
             raise ValueError(f"Target user '{target_user_id}' does not exist or is inactive.")
 
-        return self.user_manager.add_user_to_cube(target_user_id, cube_id)
+        # Validate current user has access to this cube
+        if not self.user_manager.validate_user_cube_access(target_user_id, cube_id):
+            return self.user_manager.add_user_to_cube(target_user_id, cube_id)
+        else:
+            return True
 
     def get_query_rewrite(self, query: str, user_id: str | None = None):
         """
