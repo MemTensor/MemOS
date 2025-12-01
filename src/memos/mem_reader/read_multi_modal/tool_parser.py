@@ -100,15 +100,30 @@ class ToolParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        """Parse tool message in fast mode."""
+        """
+        Parse tool message in fast mode.
+
+        Handles both standard tool messages and custom tool formats:
+        - Standard tool message: role="tool", content, tool_call_id
+        - Custom formats: tool_description, tool_input, tool_output
+
+        Args:
+            message: Tool message to parse
+            info: Dictionary containing user_id and session_id
+            **kwargs: Additional parameters
+
+        Returns:
+            List of TextualMemoryItem objects
+        """
         from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
 
         from .base import _derive_key
 
         if not isinstance(message, dict):
+            logger.warning(f"[ToolParser] Expected dict, got {type(message)}")
             return []
 
-        # Handle custom tool formats
+        # Handle custom tool formats (tool_description, tool_input, tool_output)
         msg_type = message.get("type", "")
         if msg_type in ("tool_description", "tool_input", "tool_output"):
             # Create source
@@ -143,8 +158,61 @@ class ToolParser(BaseMessageParser):
             )
             return [memory_item]
 
-        # Handle standard tool message
-        return super().parse_fast(message, info, **kwargs)
+        # Handle standard tool message (role="tool")
+        role = message.get("role", "").strip().lower()
+        if role != "tool":
+            logger.warning(f"[ToolParser] Expected role='tool', got role='{role}'")
+            return []
+
+        # Extract content from tool message
+        content = _extract_text_from_content(message.get("content", ""))
+        if not content:
+            return []
+
+        # Build formatted line similar to assistant_parser
+        tool_call_id = message.get("tool_call_id", "")
+        chat_time = message.get("chat_time")
+
+        parts = [f"{role}: "]
+        if chat_time:
+            parts.append(f"[{chat_time}]: ")
+        if tool_call_id:
+            parts.append(f"[tool_call_id: {tool_call_id}]: ")
+        prefix = "".join(parts)
+        line = f"{prefix}{content}\n"
+
+        # Create source
+        source = self.create_source(message, info)
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # Tool messages are typically LongTermMemory (they're system/assistant tool results)
+        memory_type = "LongTermMemory"
+
+        # Create memory item
+        memory_item = TextualMemoryItem(
+            memory=line,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=user_id,
+                session_id=session_id,
+                memory_type=memory_type,
+                status="activated",
+                tags=["mode:fast"],
+                key=_derive_key(line),
+                embedding=self.embedder.embed([line])[0],
+                usage=[],
+                sources=[source],
+                background="",
+                confidence=0.99,
+                type="fact",
+                info=info_,
+            ),
+        )
+
+        return [memory_item]
 
     def parse_fine(
         self,
