@@ -1,4 +1,4 @@
-"""Multi-model message parsers for different message types.
+"""Multimodal message parsers for different message types.
 
 This package provides parsers for different message types in both fast and fine modes:
 - String messages
@@ -16,7 +16,7 @@ Each parser supports both "fast" mode (quick processing without LLM) and
 from .assistant_parser import AssistantParser
 from .base import BaseMessageParser
 from .file_content_parser import FileContentParser
-from .multi_model_parser import MultiModelParser
+from .multi_modal_parser import MultiModalParser
 from .string_parser import StringParser
 from .system_parser import SystemParser
 from .text_content_parser import TextContentParser
@@ -29,7 +29,7 @@ __all__ = [
     "AssistantParser",
     "BaseMessageParser",
     "FileContentParser",
-    "MultiModelParser",
+    "MultiModalParser",
     "StringParser",
     "SystemParser",
     "TextContentParser",
