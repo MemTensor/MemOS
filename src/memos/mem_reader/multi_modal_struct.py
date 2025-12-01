@@ -302,7 +302,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         fine_memory_items = []
         # Part A: call llm
-        fine_memory_items_string_parser = []
+        fine_memory_items_string_parser = self._process_string_fine([raw_node], info, custom_tags)
         fine_memory_items.extend(fine_memory_items_string_parser)
         # Part B: get fine multimodal items
         for source in sources:
