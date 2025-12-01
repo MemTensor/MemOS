@@ -639,7 +639,9 @@ class APIFeedbackRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube add"
     )
-    sync_mode: Literal["sync", "async"] = Field("async", description="feedback mode: sync or async")
+    async_mode: Literal["sync", "async"] = Field(
+        "async", description="feedback mode: sync or async"
+    )
     corrected_answer: bool = Field(False, description="Whether need return corrected answer")
     # ==== Backward compatibility ====
     mem_cube_id: str | None = Field(

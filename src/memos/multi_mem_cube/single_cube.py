@@ -135,7 +135,7 @@ class SingleCubeView(MemCubeView):
 
     def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any]:
         target_session_id = feedback_req.session_id or "default_session"
-        if feedback_req.sync_mode == "async":
+        if feedback_req.async_mode == "async":
             try:
                 feedback_req_str = json.dumps(feedback_req.model_dump())
                 message_item_feedback = ScheduleMessageItem(
@@ -167,8 +167,9 @@ class SingleCubeView(MemCubeView):
                 retrieved_memory_ids=feedback_req.retrieved_memory_ids,
                 feedback_content=feedback_req.feedback_content,
                 feedback_time=feedback_req.feedback_time,
-                sync_mode=feedback_req.sync_mode,
+                async_mode=feedback_req.async_mode,
                 corrected_answer=feedback_req.corrected_answer,
+                task_id=feedback_req.task_id,
             )
             self.logger.info(f"Feedback memories result: {feedback_result}")
         return feedback_result

@@ -524,27 +524,19 @@ class PolarDBGraphDB(BaseGraphDB):
         properties = current_node["metadata"].copy()
         original_id = properties.get("id", id)  # Preserve original ID
         original_memory = current_node.get("memory", "")  # Preserve original memory
-        updated_at = fields.pop("updated_at", datetime.utcnow().isoformat())
-
-        record_info = f"User：{user_name} | Time：{updated_at} | Operation：Update | Overwrite： {original_memory}"
-        covered_history = current_node.get("covered_history", [])
-        covered_history.insert(0, record_info)
-        logger.info(f"New GraphDB Update: {record_info}")
 
         # If fields include memory, use it; otherwise keep original memory
-        new_memory = fields.pop("memory") if "memory" in fields else original_memory
+        if "memory" in fields:
+            original_memory = fields.pop("memory")
 
         properties.update(fields)
-        properties["id"] = original_id
-        properties["memory"] = new_memory
-        properties["covered_history"] = covered_history
-        properties["updated_at"] = updated_at
+        properties["id"] = original_id  # Ensure ID is not overwritten
+        properties["memory"] = original_memory  # Ensure memory is not overwritten
 
         # Handle embedding field
         embedding_vector = None
         if "embedding" in fields:
             embedding_vector = fields.pop("embedding")
-            assert properties["embedding"] == embedding_vector, "Embedding vector mismatch"
             if not isinstance(embedding_vector, list):
                 embedding_vector = None
 

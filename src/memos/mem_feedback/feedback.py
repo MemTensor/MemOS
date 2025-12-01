@@ -3,6 +3,7 @@ import difflib
 import json
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -16,7 +17,14 @@ from memos.mem_feedback.base import BaseMemFeedback
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.simple_struct import detect_lang
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
-from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.organize.manager import (
+    MemoryManager,
+    extract_working_binding_ids,
+)
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.mem_feedback_prompts import (
     FEEDBACK_ANSWER_PROMPT,
     FEEDBACK_ANSWER_PROMPT_ZH,
@@ -64,6 +72,7 @@ class MemFeedback(BaseMemFeedback):
             },
             is_reorganize=self.is_reorganize,
         )
+        self.searcher: Searcher = self.memory_manager.searcher
 
     def _pure_add(self, user_name: str, feedback_content: str, feedback_time: str, info: dict):
         """
@@ -113,10 +122,119 @@ class MemFeedback(BaseMemFeedback):
             )
             return []
 
+    def _single_add_operation(
+        self,
+        old_memory_item: TextualMemoryItem | None,
+        new_memory_item: TextualMemoryItem,
+        user_id: str,
+        user_name: str,
+        async_mode: str,
+    ) -> dict:
+        """
+        Individual addition operations
+        """
+        if old_memory_item:
+            to_add_memory = old_memory_item.model_copy(deep=True)
+            to_add_memory.metadata.key = new_memory_item.metadata.key
+            to_add_memory.metadata.tags = new_memory_item.metadata.tags
+            to_add_memory.memory = new_memory_item.memory
+            to_add_memory.metadata.embedding = new_memory_item.metadata.embedding
+
+            to_add_memory.metadata.user_id = new_memory_item.metadata.user_id
+            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
+                datetime.now().isoformat()
+            )
+            to_add_memory.metadata.background = new_memory_item.metadata.background
+        else:
+            to_add_memory = new_memory_item.model_copy(deep=True)
+            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
+                datetime.now().isoformat()
+            )
+            to_add_memory.metadata.background = new_memory_item.metadata.background
+
+        to_add_memory.id = ""
+        added_ids = self._retry_db_operation(
+            lambda: self.memory_manager.add([to_add_memory], user_name=user_name, mode=async_mode)
+        )
+
+        logger.info(f"[Memory Feedback ADD] {added_ids[0]}")
+        return {"id": added_ids[0], "text": to_add_memory.memory}
+
+    def _single_update_operation(
+        self,
+        old_memory_item: TextualMemoryItem,
+        new_memory_item: TextualMemoryItem,
+        user_id: str,
+        user_name: str,
+        async_mode: str,
+    ) -> dict:
+        """
+        Individual update operations
+        """
+        memory_type = old_memory_item.metadata.memory_type
+        if memory_type == "WorkingMemory":
+            fields = {
+                "memory": new_memory_item.memory,
+                "key": new_memory_item.metadata.key,
+                "tags": new_memory_item.metadata.tags,
+                "embedding": new_memory_item.metadata.embedding,
+                "background": new_memory_item.metadata.background,
+                "covered_history": old_memory_item.id,
+            }
+            self.graph_store.update_node(old_memory_item.id, fields=fields, user_name=user_name)
+            item_id = old_memory_item.id
+        else:
+            done = self._single_add_operation(
+                old_memory_item, new_memory_item, user_id, user_name, async_mode
+            )
+            item_id = done.get("id")
+            self.graph_store.update_node(
+                item_id, {"covered_history": old_memory_item.id}, user_name=user_name
+            )
+            self.graph_store.update_node(
+                old_memory_item.id, {"status": "archived"}, user_name=user_name
+            )
+
+        logger.info(
+            f"[Memory Feedback UPDATE] New Add:{item_id} | Set archived:{old_memory_item.id} | memory_type: {memory_type}"
+        )
+
+        return {
+            "id": item_id,
+            "text": new_memory_item.memory,
+            "archived_id": old_memory_item.id,
+            "origin_memory": old_memory_item.memory,
+        }
+
+    def _del_working_binding(self, user_name, mem_items: list[TextualMemoryItem]) -> set[str]:
+        """Delete working memory bindings"""
+        bindings_to_delete = extract_working_binding_ids(mem_items)
+
+        logger.info(
+            f"[Memory Feedback UPDATE] Extracted {len(bindings_to_delete)} working_binding ids to cleanup: {list(bindings_to_delete)}"
+        )
+
+        delete_ids = []
+        if bindings_to_delete:
+            delete_ids = list({bindings_to_delete})
+
+        for mid in delete_ids:
+            try:
+                print("del", mid)
+                self.graph_store.delete_node(mid, user_name=user_name)
+
+                logger.info(
+                    f"[Feedback Core:_del_working_binding] Delete raw/working mem_ids: {delete_ids} for user_name: {user_name}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Feedback Core:_del_working_binding] TreeTextMemory.delete_hard: failed to delete {mid}: {e}"
+                )
+
     def _feedback_memory(
         self, user_id: str, user_name: str, feedback_memories: list[TextualMemoryItem], **kwargs
     ) -> dict:
-        sync_mode = kwargs.get("sync_mode")
+        async_mode = kwargs.get("async_mode")
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
         chat_history = kwargs.get("chat_history", [])
         feedback_content = kwargs.get("feedback_content", "")
@@ -124,7 +242,9 @@ class MemFeedback(BaseMemFeedback):
         chat_history_lis = [f"""{msg["role"]}: {msg["content"]}""" for msg in chat_history[-4:]]
         fact_history = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
 
-        retrieved_memories = [self.graph_store.get_node(_id) for _id in retrieved_memory_ids]
+        retrieved_memories = [
+            self.graph_store.get_node(_id, user_name=user_name) for _id in retrieved_memory_ids
+        ]
         filterd_ids = [
             item["id"] for item in retrieved_memories if "mode:fast" in item["metadata"]["tags"]
         ]
@@ -134,58 +254,29 @@ class MemFeedback(BaseMemFeedback):
             )
 
         current_memories = [
-            {"id": item["id"], "text": item["memory"]}
+            TextualMemoryItem(**item)
             for item in retrieved_memories
             if "mode:fast" not in item["metadata"]["tags"]
         ]
 
-        def _single_add_operation(
-            memory_item: TextualMemoryItem, user_name: str, sync_mode: str
-        ) -> dict:
-            """
-            Individual addition operations
-            """
-            added_ids = self._retry_db_operation(
-                lambda: self.memory_manager.add([memory_item], user_name=user_name, mode=sync_mode)
-            )
-            logger.info(f"[Memory Feedback ADD] {added_ids[0]}")
-
-            return {"id": added_ids[0], "text": memory_item.memory}
-
-        def _single_update_operation(
-            op: dict, memory_item: TextualMemoryItem, user_name: str, sync_mode: str
-        ) -> dict:
-            """
-            Individual update operations
-            """
-            update_id = op.get("id")
-            updated_ids = self._retry_db_operation(
-                lambda: self.memory_manager.update(
-                    [update_id], [memory_item], user_name=user_name, mode=sync_mode
-                )
-            )
-            log_update_info = op.get("old_memory", "") + " >> " + op.get("text", "")
-            logger.info(f"[Memory Feedback UPDATE] {updated_ids[0]}, info: {log_update_info}")
-
-            return {
-                "id": update_id,
-                "origin_memory": op.get("old_memory", ""),
-                "text": op.get("text", ""),
-            }
-
         def _add_or_update(
-            memory_item: TextualMemoryItem, current_memories: list, fact_history: str
+            memory_item: TextualMemoryItem,
+            current_memories: list[TextualMemoryItem],
+            fact_history: str,
         ):
             if current_memories == []:
-                current_memories = self._vec_query(
-                    memory_item.metadata.embedding, user_name=user_name
+                current_memories = self._retrieve(
+                    memory_item.memory, info={"user_id": user_id}, user_name=user_name
                 )
 
             if current_memories:
                 lang = detect_lang("".join(memory_item.memory))
                 template = FEEDBACK_PROMPT_DICT["compare"][lang]
+                current_memories_str = "\n".join(
+                    [f"{item.id}: {item.memory}" for item in current_memories]
+                )
                 prompt = template.format(
-                    current_memories=str(current_memories),
+                    current_memories=current_memories_str,
                     new_facts=memory_item.memory,
                     chat_history=fact_history,
                 )
@@ -195,7 +286,7 @@ class MemFeedback(BaseMemFeedback):
             else:
                 operations = [{"operation": "ADD"}]
 
-            # TODO based on the operation, change memory_item memory info
+            # TODO based on the operation, change memory_item memory info ; change source info
             logger.info(f"[Feedback memory operations]: {operations!s}")
 
             if not operations:
@@ -203,7 +294,7 @@ class MemFeedback(BaseMemFeedback):
 
             add_results = []
             update_results = []
-
+            id_to_item = {item.id: item for item in current_memories}
             with ContextThreadPoolExecutor(max_workers=10) as executor:
                 future_to_op = {}
                 for op in operations:
@@ -211,12 +302,22 @@ class MemFeedback(BaseMemFeedback):
 
                     if event_type == "add":
                         future = executor.submit(
-                            _single_add_operation, memory_item, user_name, sync_mode
+                            self._single_add_operation,
+                            None,
+                            memory_item,
+                            user_id,
+                            user_name,
+                            async_mode,
                         )
                         future_to_op[future] = ("add", op)
                     elif event_type == "update":
                         future = executor.submit(
-                            _single_update_operation, op, memory_item, user_name, sync_mode
+                            self._single_update_operation,
+                            id_to_item[op["id"]],
+                            memory_item,
+                            user_id,
+                            user_name,
+                            async_mode,
                         )
                         future_to_op[future] = ("update", op)
 
@@ -224,15 +325,18 @@ class MemFeedback(BaseMemFeedback):
                     result_type, original_op = future_to_op[future]
                     try:
                         result = future.result()
-                        if result_type == "add":
+                        if result_type == "add" and result:
                             add_results.append(result)
-                        elif result_type == "update":
+                        elif result_type == "update" and result:
                             update_results.append(result)
                     except Exception as e:
                         logger.error(
                             f"[Feedback Core: _add_or_update] Operation failed for {original_op}: {e}",
                             exc_info=True,
                         )
+            if update_results:
+                updated_ids = [item["archived_id"] for item in update_results]
+                self._del_working_binding(updated_ids, user_name)
 
             return {"record": {"add": add_results, "update": update_results}}
 
@@ -262,11 +366,38 @@ class MemFeedback(BaseMemFeedback):
             }
         }
 
+    def _retrieve(self, query: str, info=None, user_name=None):
+        """Retrieve memory items"""
+        retrieved_mems = self.searcher.search(query, info=info, user_name=user_name)
+        return retrieved_mems
+
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
-        retrieved_ids = self.graph_store.search_by_embedding(
-            new_memories_embedding, user_name=user_name, top_k=10, threshold=0.7
+        """Vector retrieval query"""
+        retrieved_ids = []
+        retrieved_ids.extend(
+            self.graph_store.search_by_embedding(
+                new_memories_embedding,
+                scope="UserMemory",
+                user_name=user_name,
+                top_k=10,
+                threshold=0.2,
+            )
         )
-        current_memories = [self.graph_store.get_node(item["id"]) for item in retrieved_ids]
+        retrieved_ids.extend(
+            self.graph_store.search_by_embedding(
+                new_memories_embedding,
+                scope="LongTermMemory",
+                user_name=user_name,
+                top_k=10,
+                threshold=0.2,
+            )
+        )
+        current_memories = [
+            self.graph_store.get_node(item["id"], user_name=user_name) for item in retrieved_ids
+        ]
+
+        for item in current_memories:
+            print(item["id"], item["metadata"]["memory_type"], item["metadata"]["status"])
         if not retrieved_ids:
             logger.info(
                 f"[Feedback Core: _vec_query] No similar memories found for embedding query for user {user_name}."
@@ -280,10 +411,7 @@ class MemFeedback(BaseMemFeedback):
                 f"[Feedback Core: _vec_query] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
             )
         return [
-            {
-                "id": item["id"],
-                "text": item["memory"],
-            }
+            TextualMemoryItem(**item)
             for item in current_memories
             if "mode:fast" not in item["metadata"]["tags"]
         ]
@@ -303,7 +431,7 @@ class MemFeedback(BaseMemFeedback):
         return response_json
 
     def _id_dehallucination(self, operations, current_memories):
-        right_ids = [item["id"] for item in current_memories]
+        right_ids = [item.id for item in current_memories]
         right_lower_map = {x.lower(): x for x in right_ids}
 
         def correct_item(data):
@@ -437,7 +565,10 @@ class MemFeedback(BaseMemFeedback):
                                 usage=[],
                                 sources=[{"type": "chat"}],
                                 user_name=user_name,
-                                background="",
+                                background="[Feedback update background]: "
+                                + str(chat_history)
+                                + "\nUser feedback: "
+                                + str(feedback_content),
                                 confidence=0.99,
                                 type="fine",
                             ),
@@ -476,7 +607,7 @@ class MemFeedback(BaseMemFeedback):
             user_name: cube_ids
             chat_history: List of chat messages
             feedback_content: Feedback content from user
-            **kwargs: Additional arguments including sync_mode
+            **kwargs: Additional arguments including async_mode
 
         Returns:
             Dict with answer and/or memory operation records
@@ -504,8 +635,10 @@ class MemFeedback(BaseMemFeedback):
             try:
                 answer = answer_future.result()
                 record = core_future.result()
+                task_id = kwargs.get("task_id", "default")
+
                 logger.info(
-                    f"[MemFeedback process] Completed concurrently for user {user_name} with full results."
+                    f"[MemFeedback process] Feedback Completed : user {user_name} | task_id {task_id} | record {record}."
                 )
 
                 return {"answer": answer, "record": record["record"]}

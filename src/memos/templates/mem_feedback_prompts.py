@@ -238,6 +238,94 @@ You must strictly return the response in the following JSON format:
 5. Return only the JSON format response, without any other content
 
 
+
+Example1:
+Current Memories:
+"0911": "The user is a senior full-stack developer working at Company B"
+"123": "The user works as a software engineer at Company A. And he has a good relationship with his wife."
+"648": "The user is responsible for front-end development of software at Company A"
+"7210": "The user is responsible for front-end development of software at Company A"
+"908": "The user enjoys fishing with friends on weekends"
+
+The background of the new fact being put forward:
+user: Do you remember where I work？
+assistant: Company A.
+user feedback: I work at Company B, and I am a senior full-stack developer.
+
+Newly facts:
+The user works as a senior full-stack developer at Company B
+
+Operation recommendations:
+{{
+    "operations":
+        [
+            {{
+                "id": "0911",
+                "text": "The user is a senior full-stack developer working at Company B",
+                "operation": "NONE"
+            }},
+            {{
+                "id": "123",
+                "text": "The user works as a senior full-stack developer at Company B. And he has a good relationship with his wife.",
+                "operation": "UPDATE",
+                "old_memory": "The user works as a software engineer at Company A. And he has a good relationship with his wife."
+            }},
+            {{
+                "id": "648",
+                "text": "The user works as a senior full-stack developer at Company B",
+                "operation": "UPDATE",
+                "old_memory": "The user is responsible for front-end development of software at Company A"
+            }},
+            {{
+                "id": "7210",
+                "text": "The user works as a senior full-stack developer at Company B",
+                "operation": "UPDATE",
+                "old_memory": "The user is responsible for front-end development of software at Company A"
+            }},
+            {{
+                "id": "908",
+                "text": "The user enjoys fishing with friends on weekends",
+                "operation": "NONE"
+            }}
+        ]
+}}
+
+Example2:
+Current Memories:
+"123": "The user works as a software engineer in Company A, mainly responsible for front-end development"
+"908": "The user likes to go fishing with friends on weekends"
+
+The background of the new fact being put forward:
+user: Guess where I live？
+assistant: Hehuan Community.
+user feedback: Wrong, update my address: Mingyue Community, Chaoyang District, Beijing
+
+Newly facts:
+"The user's residential address is Mingyue Community, Chaoyang District, Beijing"
+
+Operation recommendations:
+{{
+    "operations":
+        [
+            {{
+                "id": "123",
+                "text": "The user works as a software engineer at Company A, primarily responsible for front-end development",
+                "operation": "NONE"
+            }},
+            {{
+                "id": "908",
+                "text": "The user enjoys fishing with friends on weekends",
+                "operation": "NONE"
+            }},
+            {{
+                "id": "4567",
+                "text": "The user's residential address is Mingyue Community, Chaoyang District, Beijing",
+                "operation": "ADD"
+            }}
+        ]
+}}
+
+
 **Current Memories**
 {current_memories}
 
@@ -255,7 +343,7 @@ UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这�
 你必须严格按照以下JSON格式返回响应：
 
 {{
-    "operation":
+    "operations":
         [
             {{
                 "id": "<记忆ID>",
@@ -287,6 +375,95 @@ ID管理规则：
 4. text和old_memory内容使用中文
 5. 只返回JSON格式的响应，不要包含其他任何内容
 
+
+示例1：
+当前记忆：
+"0911": "用户是高级全栈开发工程师，在B公司工作"
+"123": "用户在公司A担任软件工程师。而且用户和同事们的关系很好，他们共同协作大项目。"
+"648": "用户在公司A负责软件的前端开发工作"
+"7210": "用户在公司A负责软件的前端开发工作"
+"908": "用户周末喜欢和朋友一起钓鱼"
+
+
+提出新事实的背景：
+user: 你还记得我现在在哪里工作吗？
+assistant: A公司
+user feedback: 实际上，我在公司B工作，是一名高级全栈开发人员。
+
+
+新获取的事实：
+"用户现在在公司B担任高级全栈开发工程师"
+
+操作建议：
+{{
+    "operations":
+        [
+            {{
+                "id": "0911",
+                "text": "用户是高级全栈开发工程师，在B公司工作",
+                "operation": "NONE"
+            }},
+            {{
+                "id": "123",
+                "text": "用户现在在公司B担任高级全栈开发工程师。而且用户和同事们的关系很好，他们共同协作大项目。",
+                "operation": "UPDATE",
+                "old_memory": "用户在公司A担任软件工程师，主要负责前端开发。而且用户和同事们的关系很好，他们共同协作大项目。"
+            }},
+            {{
+                "id": "648",
+                "text": "用户现在在公司B担任高级全栈开发工程师",
+                "operation": "UPDATE",
+                "old_memory": "用户在公司A负责软件的前端开发工作"
+            }},
+            {{
+                "id": "7210",
+                "text": "用户现在在公司B担任高级全栈开发工程师",
+                "operation": "UPDATE",
+                "old_memory": "用户在公司A负责软件的前端开发工作"
+            }},
+            {{
+                "id": "908",
+                "text": "用户周末喜欢和朋友一起钓鱼",
+                "operation": "NONE"
+            }}
+        ]
+}}
+
+示例2：
+当前记忆：
+"123": "用户在公司A担任软件工程师，主要负责前端开发"
+"908": "用户周末喜欢和朋友一起钓鱼"
+
+
+提出新事实的背景：
+user: 猜猜我住在哪里？
+assistant: 合欢社区
+user feedback: 错了，请更新我的地址：北京市朝阳区明月社区
+
+新获取的事实：
+"用户的居住地址是北京市朝阳区明月小区"
+
+操作建议：
+{{
+    "operations":
+        [
+            {{
+                "id": "123",
+                "text": "用户在公司A担任软件工程师，主要负责前端开发",
+                "operation": "NONE"
+            }},
+            {{
+                "id": "908",
+                "text": "用户周末喜欢和朋友一起钓鱼",
+                "operation": "NONE"
+            }},
+            {{
+                "id": "4567",
+                "text": "用户的居住地址是北京市朝阳区明月小区",
+                "operation": "ADD"
+            }}
+        ]
+}}
 
 **当前记忆：**
 {current_memories}

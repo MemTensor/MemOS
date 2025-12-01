@@ -12,7 +12,7 @@ import json
 import requests
 
 
-BASE_URL = "http://0.0.0.0:8001/product"
+BASE_URL = "http://0.0.0.0:8002/product"
 HEADERS = {"Content-Type": "application/json"}
 
 index = "24"
@@ -119,6 +119,23 @@ def chat_stream(query: str, session_id: str, history: list | None = None):
                     print(payload)
 
 
+def feedback_memory(feedback_content: str, history: list | None = None):
+    url = f"{BASE_URL}/feedback"
+    data = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "history": history,
+        "feedback_content": feedback_content,
+        "async_mode": "sync",
+        "corrected_answer": "false",
+    }
+
+    print("[*] Feedbacking memory ...")
+    resp = requests.post(url, headers=HEADERS, data=json.dumps(data), timeout=30)
+    print(resp.status_code, resp.text)
+    return resp.json()
+
+
 if __name__ == "__main__":
     print("===== STEP 1: Register User =====")
     register_user()
@@ -140,5 +157,14 @@ if __name__ == "__main__":
         ],
     )
 
-    print("\n===== STEP 4: Stream Chat =====")
+    print("\n===== STEP 5: Stream Chat =====")
     chat_stream("我刚和你说什么了呢", SESSION_ID2, history=[])
+
+    print("\n===== STEP 6: Feedback Memory =====")
+    feedback_memory(
+        feedback_content="错啦，我今天没有吃拉面",
+        history=[
+            {"role": "user", "content": "我刚和你说什么了呢"},
+            {"role": "assistant", "content": "你今天吃了好吃的拉面"},
+        ],
+    )

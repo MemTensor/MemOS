@@ -300,6 +300,7 @@ def init_server() -> dict[str, Any]:
         graph_store=graph_db,
         memory_manager=memory_manager,
         mem_reader=mem_reader,
+        searcher=searcher,
     )
 
     # Initialize Scheduler

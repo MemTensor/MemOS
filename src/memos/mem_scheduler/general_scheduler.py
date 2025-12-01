@@ -380,6 +380,7 @@ class GeneralScheduler(BaseScheduler):
                 retrieved_memory_ids=feedback_data["retrieved_memory_ids"],
                 feedback_content=feedback_data["feedback_content"],
                 feedback_time=feedback_data["feedback_time"],
+                task_id=feedback_data["task_id"],
             )
 
             logger.info(
