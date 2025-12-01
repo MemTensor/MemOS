@@ -3567,23 +3567,40 @@ class PolarDBGraphDB(BaseGraphDB):
                                             condition_parts.append(f"n.{key} = {op_value}")
                             elif op == "contains":
                                 # Handle contains operator (for array fields)
+                                # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
+                                # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                                if not isinstance(op_value, list):
+                                    raise ValueError(
+                                        f"contains operator only supports array format. "
+                                        f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                    )
                                 # Check if key starts with "info." prefix
                                 if key.startswith("info."):
                                     info_field = key[5:]  # Remove "info." prefix
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_cypher_string(op_value)
-                                        condition_parts.append(
-                                            f"'{escaped_value}' IN n.info.{info_field}"
-                                        )
-                                    else:
-                                        condition_parts.append(f"{op_value} IN n.info.{info_field}")
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_cypher_string(item)
+                                            and_conditions.append(
+                                                f"'{escaped_value}' IN n.info.{info_field}"
+                                            )
+                                        else:
+                                            and_conditions.append(f"{item} IN n.info.{info_field}")
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                                 else:
                                     # Direct property access
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_cypher_string(op_value)
-                                        condition_parts.append(f"'{escaped_value}' IN n.{key}")
-                                    else:
-                                        condition_parts.append(f"{op_value} IN n.{key}")
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_cypher_string(item)
+                                            and_conditions.append(f"'{escaped_value}' IN n.{key}")
+                                        else:
+                                            and_conditions.append(f"{item} IN n.{key}")
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                             elif op == "like":
                                 # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                                 # Check if key starts with "info." prefix
@@ -3792,29 +3809,46 @@ class PolarDBGraphDB(BaseGraphDB):
                                             )
                             elif op == "contains":
                                 # Handle contains operator (for array fields) - use @> operator
+                                # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
+                                # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                                if not isinstance(op_value, list):
+                                    raise ValueError(
+                                        f"contains operator only supports array format. "
+                                        f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                    )
                                 # Check if key starts with "info." prefix
                                 if key.startswith("info."):
                                     info_field = key[5:]  # Remove "info." prefix
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_sql_string(op_value)
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> '\"{escaped_value}\"'::agtype"
-                                        )
-                                    else:
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> {op_value}::agtype"
-                                        )
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_sql_string(item)
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> '\"{escaped_value}\"'::agtype"
+                                            )
+                                        else:
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> {item}::agtype"
+                                            )
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                                 else:
                                     # Direct property access
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_sql_string(op_value)
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '\"{escaped_value}\"'::agtype"
-                                        )
-                                    else:
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> {op_value}::agtype"
-                                        )
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_sql_string(item)
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '\"{escaped_value}\"'::agtype"
+                                            )
+                                        else:
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> {item}::agtype"
+                                            )
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                             elif op == "like":
                                 # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                                 # Check if key starts with "info." prefix
@@ -3930,8 +3964,6 @@ class PolarDBGraphDB(BaseGraphDB):
             "memory_type",
             "node_type",
             "info",
-            "app_id",
-            "agent_id",
         }
 
         def process_condition(condition):

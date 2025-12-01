@@ -15,6 +15,7 @@ from memos.types import MessagesType
 from .assistant_parser import AssistantParser
 from .base import BaseMessageParser
 from .file_content_parser import FileContentParser
+from .image_parser import ImageParser
 from .string_parser import StringParser
 from .system_parser import SystemParser
 from .text_content_parser import TextContentParser
@@ -55,7 +56,7 @@ class MultiModalParser:
         self.tool_parser = ToolParser(embedder, llm)
         self.text_content_parser = TextContentParser(embedder, llm)
         self.file_content_parser = FileContentParser(embedder, llm, parser)
-        self.image_parser = None  # future
+        self.image_parser = ImageParser(embedder, llm)
         self.audio_parser = None  # future
 
         self.role_parsers = {
@@ -69,7 +70,12 @@ class MultiModalParser:
             "text": self.text_content_parser,
             "file": self.file_content_parser,
             "image": self.image_parser,
+            "image_url": self.image_parser,  # Support both "image" and "image_url"
             "audio": self.audio_parser,
+            # Custom tool formats
+            "tool_description": self.tool_parser,
+            "tool_input": self.tool_parser,
+            "tool_output": self.tool_parser,
         }
 
     def _get_parser(self, message: Any) -> BaseMessageParser | None:
