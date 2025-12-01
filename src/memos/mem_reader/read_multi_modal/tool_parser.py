@@ -56,7 +56,18 @@ class ToolParser(BaseMessageParser):
             for part in raw_content:
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
-                    if part_type == "file":
+                    if part_type == "text":
+                        sources.append(
+                            SourceMessage(
+                                type="text",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=part.get("text", ""),
+                                tool_call_id=tool_call_id,
+                            )
+                        )
+                    elif part_type == "file":
                         file_info = part.get("file", {})
                         sources.append(
                             SourceMessage(
@@ -64,45 +75,59 @@ class ToolParser(BaseMessageParser):
                                 role=role,
                                 chat_time=chat_time,
                                 message_id=message_id,
-                                doc_path=file_info.get("filename") or file_info.get("file_id", ""),
                                 content=file_info.get("file_data", ""),
+                                filename=file_info.get("filename", ""),
+                                file_id=file_info.get("file_id", ""),
+                                tool_call_id=tool_call_id,
+                                original_part=part,
+                            )
+                        )
+                    elif part_type == "image_url":
+                        file_info = part.get("image_url", {})
+                        sources.append(
+                            SourceMessage(
+                                type="image_url",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=file_info.get("url", ""),
+                                detail=file_info.get("detail", "auto"),
+                                tool_call_id=tool_call_id,
+                                original_part=part,
+                            )
+                        )
+                    elif part_type == "input_audio":
+                        file_info = part.get("input_audio", {})
+                        sources.append(
+                            SourceMessage(
+                                type="input_audio",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=file_info.get("data", ""),
+                                format=file_info.get("format", "wav"),
                                 tool_call_id=tool_call_id,
                                 original_part=part,
                             )
                         )
                     else:
-                        # image_url, input_audio, etc.
-                        sources.append(
-                            SourceMessage(
-                                type=part_type,
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=f"[{part_type}]",
-                                tool_call_id=tool_call_id,
-                                original_part=part,
-                            )
-                        )
+                        logger.warning(f"[ToolParser] Unsupported part type: {part_type}")
+                        continue
         else:
             # Simple string content message: single SourceMessage
-            content = raw_content
-            if content:
+            if raw_content:
                 sources.append(
                     SourceMessage(
                         type="chat",
                         role=role,
                         chat_time=chat_time,
                         message_id=message_id,
-                        content=content,
+                        content=raw_content,
                         tool_call_id=tool_call_id,
                     )
                 )
 
-        return (
-            sources
-            if len(sources) > 1
-            else (sources[0] if sources else SourceMessage(type="chat", role=role))
-        )
+        return sources
 
     def rebuild_from_source(
         self,
@@ -117,6 +142,7 @@ class ToolParser(BaseMessageParser):
             if isinstance(original, dict) and "type" in original:
                 return {
                     "role": source.role or "user",
+                    "tool_call_id": source.tool_call_id or "",
                     "content": [original],
                     "chat_time": source.chat_time,
                     "message_id": source.message_id,
@@ -126,15 +152,58 @@ class ToolParser(BaseMessageParser):
                 return original
 
         # Priority 2: Rebuild from source fields
-        if source.type == "file":
+        if source.type == "text":
             return {
-                "role": source.role or "user",
+                "role": source.role or "tool",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": source.content or "",
+                    }
+                ],
+                "chat_time": source.chat_time,
+                "message_id": source.message_id,
+            }
+        elif source.type == "file":
+            return {
+                "role": source.role or "tool",
                 "content": [
                     {
                         "type": "file",
                         "file": {
-                            "filename": source.doc_path or "",
+                            "file_id": source.file_id or "",
+                            "filename": source.filename or "",
                             "file_data": source.content or "",
+                        },
+                    }
+                ],
+                "chat_time": source.chat_time,
+                "message_id": source.message_id,
+            }
+        elif source.type == "image_url":
+            return {
+                "role": source.role or "tool",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": source.content or "",
+                            "detail": source.detail or "auto",
+                        },
+                    }
+                ],
+                "chat_time": source.chat_time,
+                "message_id": source.message_id,
+            }
+        elif source.type == "input_audio":
+            return {
+                "role": source.role or "tool",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": source.content or "",
+                            "format": source.format or "wav",
                         },
                     }
                 ],
@@ -146,7 +215,7 @@ class ToolParser(BaseMessageParser):
         return {
             "role": "tool",
             "content": source.content or "",
-            "tool_call_id": source.message_id or "",  # tool_call_id might be in message_id
+            "tool_call_id": source.message_id or "",
             "chat_time": source.chat_time,
             "message_id": source.message_id,
         }
@@ -157,11 +226,30 @@ class ToolParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        memory = json.dumps(message)
-        source = self.create_source(message, info)
+        role = message.get("role", "")
+        content = message.get("content", "")
+        chat_time = message.get("chat_time", None)
+
+        if role != "user":
+            logger.warning(f"[ToolParser] Expected role is `user`, got {role}")
+            return []
+        parts = [f"{role}: "]
+        if chat_time:
+            parts.append(f"[{chat_time}]: ")
+        prefix = "".join(parts)
+        content = json.dumps(content) if isinstance(content, list) else content
+        line = f"{prefix}{content}\n"
+        if not line:
+            return []
+        memory_type = (
+            "LongTermMemory"  # only choce long term memory for tool messages as a placeholder
+        )
+
+        sources = self.create_source(message, info)
         return [
             TextualMemoryItem(
-                memory=memory, metadata=TreeNodeTextualMemoryMetadata(sources=[source])
+                memory=line,
+                metadata=TreeNodeTextualMemoryMetadata(memory_type=memory_type, sources=sources),
             )
         ]
 
@@ -171,4 +259,25 @@ class ToolParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
+        content = message.get("content", "")
+        if isinstance(content, list):
+            part_type = content[0].get("type", "")
+            if part_type == "text":
+                # text will fine parse in full chat content, no need to parse specially
+                return []
+            elif part_type == "file":
+                # TODO: use OCR to extract text from file and generate mem by llm
+                content = content[0].get("file", {}).get("file_data", "")
+            elif part_type == "image_url":
+                # TODO: use multi-modal llm to generate mem by image url
+                content = content[0].get("image_url", {}).get("url", "")
+            elif part_type == "input_audio":
+                # TODO: unsupport audio for now
+                return []
+            else:
+                logger.warning(f"[ToolParser] Unsupported part type: {part_type}")
+                return []
+        else:
+            # simple string content message, fine parse in full chat content, no need to parse specially
+            return []
         return []

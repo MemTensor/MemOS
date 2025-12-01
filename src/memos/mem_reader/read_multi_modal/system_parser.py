@@ -41,6 +41,12 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
     ) -> SourceMessage:
         """Create SourceMessage from system message."""
+        content_wo_tool_schema = re.sub(
+            r"<tool_schema>(.*?)</tool_schema>",
+            r"<tool_schema>omitted</tool_schema>",
+            message,
+            flags=re.DOTALL,
+        )
         tool_schema_match = re.search(r"<tool_schema>(.*?)</tool_schema>", message, re.DOTALL)
         tool_schema_content = tool_schema_match.group(1) if tool_schema_match else ""
 
@@ -49,7 +55,8 @@ class SystemParser(BaseMessageParser):
             role="system",
             chat_time=message.get("chat_time", None),
             message_id=message.get("message_id", None),
-            content=tool_schema_content,
+            content=content_wo_tool_schema,
+            tool_schema=tool_schema_content,
         )
 
     def rebuild_from_source(
@@ -57,9 +64,10 @@ class SystemParser(BaseMessageParser):
         source: SourceMessage,
     ) -> ChatCompletionSystemMessageParam:
         """Rebuild system message from SourceMessage."""
+        # only rebuild tool schema content, content will be used in full chat content by llm
         return {
             "role": "system",
-            "content": source.content or "",
+            "content": source.tool_schema or "",
             "chat_time": source.chat_time,
             "message_id": source.message_id,
         }
@@ -74,7 +82,7 @@ class SystemParser(BaseMessageParser):
         if isinstance(content, dict):
             content = content["text"]
 
-        # Extract tool_schema content and remaining content
+        # Replace tool_schema content with "omitted" in remaining content
         content_wo_tool_schema = re.sub(
             r"<tool_schema>(.*?)</tool_schema>",
             r"<tool_schema>omitted</tool_schema>",
@@ -87,7 +95,7 @@ class SystemParser(BaseMessageParser):
             TextualMemoryItem(
                 memory=content_wo_tool_schema,
                 metadata=TreeNodeTextualMemoryMetadata(
-                    memory_type="LongTermMemory",
+                    memory_type="LongTermMemory",  # only choce long term memory for system messages as a placeholder
                     status="activated",
                     tags=["mode:fast"],
                     sources=[source],
@@ -106,8 +114,12 @@ class SystemParser(BaseMessageParser):
             content = content["text"]
         try:
             tool_schema = json.loads(content)
-            assert isinstance(tool_schema, list), "Tool schema must be a list"
+            assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
         except json.JSONDecodeError:
+            logger.warning(f"[SystemParser] Failed to parse tool schema: {content}")
+            return []
+        except AssertionError:
+            logger.warning(f"[SystemParser] Tool schema must be a list[dict]: {content}")
             return []
 
         return [
@@ -115,7 +127,7 @@ class SystemParser(BaseMessageParser):
                 id=str(uuid.uuid4()),
                 memory=json.dumps(tool_schema),
                 metadata=TreeNodeTextualMemoryMetadata(
-                    memory_type="tool_schema",
+                    memory_type="ToolSchemaMemory",
                 ),
             )
         ]

@@ -24,7 +24,7 @@ class SourceMessage(BaseModel):
         - type: Source kind (e.g., "chat", "doc", "web", "file", "system", ...).
             If not provided, upstream logic may infer it:
             presence of `role` ⇒ "chat"; otherwise ⇒ "doc".
-        - role: Conversation role ("user" | "assistant" | "system") when the
+        - role: Conversation role ("user" | "assistant" | "system" | "tool") when the
             source is a chat turn.
         - content: Minimal reproducible snippet from the source. If omitted,
             upstream may fall back to `doc_path` / `url` / `message_id`.
@@ -35,7 +35,7 @@ class SourceMessage(BaseModel):
     """
 
     type: str | None = "chat"
-    role: Literal["user", "assistant", "system"] | None = None
+    role: Literal["user", "assistant", "system", "tool"] | None = None
     chat_time: str | None = None
     message_id: str | None = None
     content: str | None = None
@@ -104,8 +104,8 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         "LongTermMemory",
         "UserMemory",
         "OuterMemory",
-        "ToolSchema",
-        "ToolTrajectory",
+        "ToolSchemaMemory",
+        "ToolTrajectoryMemory",
     ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."

@@ -1,4 +1,5 @@
 import concurrent.futures
+import json
 import traceback
 
 from typing import Any
@@ -7,8 +8,9 @@ from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser
-from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.mem_reader.simple_struct import SimpleStructMemReader, detect_lang
 from memos.memories.textual.item import TextualMemoryItem
+from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
 from memos.utils import timed
 
@@ -222,6 +224,61 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return fine_memory_items
 
+    def _get_llm_tool_trajectory_response(self, mem_str: str) -> dict:
+        """
+        Generete tool trajectory experience item by llm.
+        """
+        try:
+            lang = detect_lang(mem_str)
+            template = TOOL_TRAJECTORY_PROMPT_ZH if lang == "zh" else TOOL_TRAJECTORY_PROMPT_EN
+            prompt = template.replace("{messages}", mem_str)
+            rsp = self.llm.generate([{"role": "user", "content": prompt}])
+            rsp = rsp.replace("```json", "").replace("```", "")
+            return json.loads(rsp)
+        except Exception as e:
+            logger.error(f"[MultiModalFine] Error calling LLM for tool trajectory: {e}")
+            return []
+
+    def _process_tool_trajectory_fine(
+        self,
+        fast_memory_items: list[TextualMemoryItem],
+        info: dict[str, Any],
+    ) -> list[TextualMemoryItem]:
+        """
+        Process tool trajectory memory items through LLM to generate fine mode memories.
+        """
+        if not fast_memory_items:
+            return []
+
+        fine_memory_items = []
+
+        for fast_item in fast_memory_items:
+            # Extract memory text (string content)
+            mem_str = fast_item.memory or ""
+            if not mem_str.strip() or "tool:" not in mem_str:
+                continue
+            try:
+                resp = self._get_llm_tool_trajectory_response(mem_str)
+            except Exception as e:
+                logger.error(f"[MultiModalFine] Error calling LLM for tool trajectory: {e}")
+                continue
+            for m in resp:
+                try:
+                    # Normalize memory_type (same as simple_struct)
+                    memory_type = "ToolTrajectoryMemory"
+
+                    node = self._make_memory_item(
+                        value=m.get("trajectory", ""),
+                        info=info,
+                        memory_type=memory_type,
+                        tool_used_status=m.get("tool_used_status", []),
+                    )
+                    fine_memory_items.append(node)
+                except Exception as e:
+                    logger.error(f"[MultiModalFine] parse error for tool trajectory: {e}")
+
+        return fine_memory_items
+
     @timed
     def _process_multi_modal_data(
         self, scene_data_info: MessagesType, info, mode: str = "fine", **kwargs
@@ -266,6 +323,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
             fine_memory_items.extend(fine_memory_items_string_parser)
 
+            fine_memory_items_tool_trajectory_parser = self._process_tool_trajectory_fine(
+                fast_memory_items, info
+            )
+            fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
+
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
                 sources = fast_item.metadata.sources
@@ -304,6 +366,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Part A: call llm
         fine_memory_items_string_parser = self._process_string_fine([raw_node], info, custom_tags)
         fine_memory_items.extend(fine_memory_items_string_parser)
+
+        fine_memory_items_tool_trajectory_parser = self._process_tool_trajectory_fine(
+            [raw_node], info
+        )
+        fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
+
         # Part B: get fine multimodal items
         for source in sources:
             items = self.multi_modal_parser.process_transfer(
