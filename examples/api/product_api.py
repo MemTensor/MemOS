@@ -12,7 +12,7 @@ import json
 import requests
 
 
-BASE_URL = "http://0.0.0.0:8002/product"
+BASE_URL = "http://0.0.0.0:8001/product"
 HEADERS = {"Content-Type": "application/json"}
 
 index = "24"
