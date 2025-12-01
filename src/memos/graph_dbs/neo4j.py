@@ -1441,17 +1441,24 @@ class Neo4jGraphDB(BaseGraphDB):
                                     f"{node_alias}.{key} {cypher_op} ${param_name}"
                                 )
                         elif op == "contains":
-                            # Handle contains operator (for array fields like tags, sources)
-                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
-                            param_counter[0] += 1
-                            params[param_name] = op_value
-
-                            # For array fields, check if element is in array
-                            if key in ("tags", "sources"):
-                                condition_parts.append(f"${param_name} IN {node_alias}.{key}")
-                            else:
-                                # For non-array fields, contains might not be applicable, but we'll treat it as IN for consistency
-                                condition_parts.append(f"${param_name} IN {node_alias}.{key}")
+                            # Handle contains operator (for array fields)
+                            # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
+                            # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                            if not isinstance(op_value, list):
+                                raise ValueError(
+                                    f"contains operator only supports array format. "
+                                    f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                )
+                            # Handle array of values: generate AND conditions for each value (all must be present)
+                            and_conditions = []
+                            for item in op_value:
+                                param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                                param_counter[0] += 1
+                                params[param_name] = item
+                                # For array fields, check if element is in array
+                                and_conditions.append(f"${param_name} IN {node_alias}.{key}")
+                            if and_conditions:
+                                condition_parts.append(f"({' AND '.join(and_conditions)})")
                         elif op == "like":
                             # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                             # Neo4j uses CONTAINS for string matching

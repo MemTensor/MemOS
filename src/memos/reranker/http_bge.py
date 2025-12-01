@@ -125,7 +125,7 @@ class HTTPBGEReranker(BaseReranker):
         query: str,
         graph_results: list[TextualMemoryItem],
         top_k: int,
-        search_filter: dict | None = None,
+        search_priority: dict | None = None,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
         """
@@ -140,7 +140,7 @@ class HTTPBGEReranker(BaseReranker):
             `.memory` str field; non-strings are ignored.
         top_k : int
             Return at most this many items.
-        search_filter : dict | None
+        search_priority : dict | None, optional
             Currently unused. Present to keep signature compatible.
 
         Returns
@@ -194,7 +194,7 @@ class HTTPBGEReranker(BaseReranker):
                         raw_score = float(r.get("relevance_score", r.get("score", 0.0)))
                         item = graph_results[idx]
                         # generic boost
-                        score = self._apply_boost_generic(item, raw_score, search_filter)
+                        score = self._apply_boost_generic(item, raw_score, search_priority)
                         scored_items.append((item, score))
 
                 scored_items.sort(key=lambda x: x[1], reverse=True)
@@ -213,7 +213,7 @@ class HTTPBGEReranker(BaseReranker):
 
                 scored_items = []
                 for item, raw_score in zip(graph_results, score_list, strict=False):
-                    score = self._apply_boost_generic(item, raw_score, search_filter)
+                    score = self._apply_boost_generic(item, raw_score, search_priority)
                     scored_items.append((item, score))
 
                 scored_items.sort(key=lambda x: x[1], reverse=True)
