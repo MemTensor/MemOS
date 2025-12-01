@@ -87,7 +87,7 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        print(f"search_filter for preference memory: {search_filter}")
+        logger.info(f"search_filter for preference memory: {search_filter}")
         return self.retriever.retrieve(query, top_k, info, search_filter)
 
     def load(self, dir: str) -> None:
