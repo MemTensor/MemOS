@@ -359,6 +359,115 @@ RAW_INPUT_CASES = [
             [{"type": "file", "file": {"file_id": "file_uploaded_123", "filename": "document.pdf"}}]
         ],
     ),
+    # File parameter test cases - covering all combinations
+    TestCase(
+        name="file_only_file_id",
+        description="File with only file_id parameter",
+        scene_data=[[{"type": "file", "file": {"file_id": "file_only_id_123"}}]],
+    ),
+    TestCase(
+        name="file_only_filename",
+        description="File with only filename parameter",
+        scene_data=[[{"type": "file", "file": {"filename": "document_only.pdf"}}]],
+    ),
+    TestCase(
+        name="file_only_file_data_base64",
+        description="File with only file_data (base64 encoded)",
+        scene_data=[
+            [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQKJdPr6eEKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovUGFnZXMgMiAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDwKL1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDEKPD4KZW5kb2JqCjMgMCBvYmoKPDwKL1R5cGUgL1BhZ2UKL1BhcmVudCAyIDAgUgovTWVkaWFCb3ggWzAgMCA2MTIgNzkyXQovUmVzb3VyY2VzIDw8Ci9Gb250IDw8Ci9GMSA0IDAgUgo+Pgo+PgovQ29udGVudHMgNSAwIFIKPj4KZW5kb2JqCjQgMCBvYmoKPDwKL1R5cGUgL0ZvbnQKL1N1YnR5cGUgL1R5cGUxCi9CYXNlRm9udCAvSGVsdmV0aWNhCj4+CmVuZG9iag=="
+                    },
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="file_only_file_data_url",
+        description="File with only file_data (URL)",
+        scene_data=[
+            [
+                {
+                    "type": "file",
+                    "file": {"file_data": "https://example.com/documents/report.pdf"},
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="file_only_file_data_text",
+        description="File with only file_data (plain text content)",
+        scene_data=[
+            [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "This is a plain text file content. It contains multiple lines.\nLine 2 of the file.\nLine 3 of the file."
+                    },
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="file_file_data_and_file_id",
+        description="File with file_data and file_id",
+        scene_data=[
+            [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "https://example.com/documents/data.pdf",
+                        "file_id": "file_with_data_123",
+                    },
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="file_file_data_and_filename",
+        description="File with file_data and filename",
+        scene_data=[
+            [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "This is file content with filename.",
+                        "filename": "content_with_name.txt",
+                    },
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="file_file_id_and_filename",
+        description="File with file_id and filename (existing case)",
+        scene_data=[
+            [{"type": "file", "file": {"file_id": "file_uploaded_123", "filename": "document.pdf"}}]
+        ],
+    ),
+    TestCase(
+        name="file_all_parameters",
+        description="File with all parameters (file_data, file_id, filename)",
+        scene_data=[
+            [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": "https://example.com/documents/complete.pdf",
+                        "file_id": "file_complete_123",
+                        "filename": "complete_document.pdf",
+                    },
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="file_no_parameters",
+        description="File with no parameters (should return [File: unknown])",
+        scene_data=[[{"type": "file", "file": {}}]],
+    ),
 ]
 
 # Assistant message test cases
@@ -593,8 +702,8 @@ def run_test_case(
                 print(f"\n  [Item {item_idx + 1}]")
                 if format == "json":
                     print_textual_memory_item_json(item, indent=4)
-                else:
-                    print_textual_memory_item(item, prefix="    ", max_length=300)
+            else:
+                print_textual_memory_item(item, prefix="    ", max_length=300)
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -722,7 +831,7 @@ Examples:
     parser.add_argument(
         "--example",
         type=str,
-        default="raw_file_item",
+        default="all",
         help="Test case name, category name, or 'all' to run all cases (default: all)",
     )
     parser.add_argument(
