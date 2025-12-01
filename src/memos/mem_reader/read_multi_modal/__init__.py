@@ -16,6 +16,7 @@ Each parser supports both "fast" mode (quick processing without LLM) and
 from .assistant_parser import AssistantParser
 from .base import BaseMessageParser
 from .file_content_parser import FileContentParser
+from .image_parser import ImageParser
 from .multi_modal_parser import MultiModalParser
 from .string_parser import StringParser
 from .system_parser import SystemParser
@@ -29,6 +30,7 @@ __all__ = [
     "AssistantParser",
     "BaseMessageParser",
     "FileContentParser",
+    "ImageParser",
     "MultiModalParser",
     "StringParser",
     "SystemParser",

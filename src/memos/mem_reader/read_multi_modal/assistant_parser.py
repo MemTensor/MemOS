@@ -227,6 +227,10 @@ class AssistantParser(BaseMessageParser):
         # Combine all content parts
         content = " ".join(content_parts) if content_parts else ""
 
+        # If content is empty but we have tool_calls, audio, or refusal, still create memory
+        if not content and not tool_calls and not audio and not refusal:
+            return []
+
         parts = [f"{role}: "]
         if chat_time:
             parts.append(f"[{chat_time}]: ")
