@@ -7,8 +7,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from memos.configs.mem_reader import MultiModelStructMemReaderConfig
-from memos.mem_reader.multi_model_struct import MultiModelStructMemReader
+from memos.configs.mem_reader import MultiModalStructMemReaderConfig
+from memos.mem_reader.multi_modal_struct import MultiModalStructMemReader
 from memos.memories.textual.item import (
     SourceMessage,
     TextualMemoryItem,
@@ -111,11 +111,11 @@ def get_reader_config() -> dict[str, Any]:
     """
     Get reader configuration from environment variables.
 
-    Returns a dictionary that can be used to create MultiModelStructMemReaderConfig.
+    Returns a dictionary that can be used to create MultiModalStructMemReaderConfig.
     Similar to APIConfig.get_reader_config() in server_router_api.py.
 
     Returns:
-        Configuration dictionary for MultiModelStructMemReaderConfig
+        Configuration dictionary for MultiModalStructMemReaderConfig
     """
     openai_api_key = os.getenv("OPENAI_API_KEY")
     openai_base_url = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
@@ -228,13 +228,13 @@ def main():
     if openai_api_key:
         # Use environment variables (similar to server_router_api.py)
         config_dict = get_reader_config()
-        reader_config = MultiModelStructMemReaderConfig.model_validate(config_dict)
+        reader_config = MultiModalStructMemReaderConfig.model_validate(config_dict)
     else:
         # Fall back to JSON file
-        reader_config = MultiModelStructMemReaderConfig.from_json_file(
+        reader_config = MultiModalStructMemReaderConfig.from_json_file(
             "examples/data/config/simple_struct_reader_config.json"
         )
-    reader = MultiModelStructMemReader(reader_config)
+    reader = MultiModalStructMemReader(reader_config)
 
     # 2. Define scene data
     scene_data = [
