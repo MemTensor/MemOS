@@ -171,6 +171,57 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return aggregated_item
 
+    def _process_string_fine(
+        self,
+        fast_memory_items: list[TextualMemoryItem],
+        info: dict[str, Any],
+        custom_tags: list[str] | None = None,
+    ) -> list[TextualMemoryItem]:
+        """
+        Process fast mode memory items through LLM to generate fine mode memories.
+        """
+        if not fast_memory_items:
+            return []
+
+        fine_memory_items = []
+
+        for fast_item in fast_memory_items:
+            # Extract memory text (string content)
+            mem_str = fast_item.memory or ""
+            if not mem_str.strip():
+                continue
+            sources = fast_item.metadata.sources or []
+            if not isinstance(sources, list):
+                sources = [sources]
+            try:
+                resp = self._get_llm_response(mem_str, custom_tags)
+            except Exception as e:
+                logger.error(f"[MultiModalFine] Error calling LLM: {e}")
+                continue
+            for m in resp.get("memory list", []):
+                try:
+                    # Normalize memory_type (same as simple_struct)
+                    memory_type = (
+                        m.get("memory_type", "LongTermMemory")
+                        .replace("长期记忆", "LongTermMemory")
+                        .replace("用户记忆", "UserMemory")
+                    )
+                    # Create fine mode memory item (same as simple_struct)
+                    node = self._make_memory_item(
+                        value=m.get("value", ""),
+                        info=info,
+                        memory_type=memory_type,
+                        tags=m.get("tags", []),
+                        key=m.get("key", ""),
+                        sources=sources,  # Preserve sources from fast item
+                        background=resp.get("summary", ""),
+                    )
+                    fine_memory_items.append(node)
+                except Exception as e:
+                    logger.error(f"[MultiModalFine] parse error: {e}")
+
+        return fine_memory_items
+
     @timed
     def _process_multi_modal_data(
         self, scene_data_info: MessagesType, info, mode: str = "fine", **kwargs
@@ -208,13 +259,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if mode == "fast":
             return fast_memory_items
         else:
-            # TODO: parallel call llm and get fine multimodal items
             # Part A: call llm
             fine_memory_items = []
-            fine_memory_items_string_parser = fast_memory_items
+            fine_memory_items_string_parser = self._process_string_fine(
+                fast_memory_items, info, custom_tags
+            )
             fine_memory_items.extend(fine_memory_items_string_parser)
-            # Part B: get fine multimodal items
 
+            # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
                 sources = fast_item.metadata.sources
                 for source in sources:
@@ -222,7 +274,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         source, context_items=[fast_item], custom_tags=custom_tags
                     )
                     fine_memory_items.extend(items)
-            logger.warning("Not Implemented Now!")
             return fine_memory_items
 
     @timed
@@ -251,7 +302,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         fine_memory_items = []
         # Part A: call llm
-        fine_memory_items_string_parser = []
+        fine_memory_items_string_parser = self._process_string_fine([raw_node], info, custom_tags)
         fine_memory_items.extend(fine_memory_items_string_parser)
         # Part B: get fine multimodal items
         for source in sources:
