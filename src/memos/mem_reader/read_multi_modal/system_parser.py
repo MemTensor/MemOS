@@ -86,7 +86,12 @@ class SystemParser(BaseMessageParser):
         return [
             TextualMemoryItem(
                 memory=content_wo_tool_schema,
-                metadata=TreeNodeTextualMemoryMetadata(sources=[source]),
+                metadata=TreeNodeTextualMemoryMetadata(
+                    memory_type="LongTermMemory",
+                    status="activated",
+                    tags=["mode:fast"],
+                    sources=[source],
+                ),
             )
         ]
 
