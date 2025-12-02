@@ -7,7 +7,7 @@ from memos.multi_mem_cube.views import MemCubeView
 
 
 if TYPE_CHECKING:
-    from memos.api.product_models import APIADDRequest, APISearchRequest
+    from memos.api.product_models import APIADDRequest, APIFeedbackRequest, APISearchRequest
     from memos.multi_mem_cube.single_cube import SingleCubeView
 
 
@@ -61,3 +61,13 @@ class CompositeCubeView(MemCubeView):
                     merged_results["pref_note"] = note
 
         return merged_results
+
+    def feedback_memories(self, feedback_req: APIFeedbackRequest) -> list[dict[str, Any]]:
+        all_results: list[dict[str, Any]] = []
+
+        for view in self.cube_views:
+            self.logger.info(f"[CompositeCubeView] fan-out add to cube={view.cube_id}")
+            results = view.feedback_memories(feedback_req)
+            all_results.extend(results)
+
+        return all_results

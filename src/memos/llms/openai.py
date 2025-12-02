@@ -39,6 +39,7 @@ class OpenAILLM(BaseLLM):
             top_p=kwargs.get("top_p", self.config.top_p),
             extra_body=kwargs.get("extra_body", self.config.extra_body),
             tools=kwargs.get("tools", NOT_GIVEN),
+            timeout=kwargs.get("timeout", 30),
         )
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)

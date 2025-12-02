@@ -1530,6 +1530,7 @@ class Neo4jGraphDB(BaseGraphDB):
 
     def delete_node_by_prams(
         self,
+        writable_cube_ids: list[str],
         memory_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
@@ -1538,6 +1539,7 @@ class Neo4jGraphDB(BaseGraphDB):
         Delete nodes by memory_ids, file_ids, or filter.
 
         Args:
+            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
             memory_ids (list[str], optional): List of memory node IDs to delete.
             file_ids (list[str], optional): List of file node IDs to delete.
             filter (dict, optional): Filter dictionary to query matching nodes for deletion.
@@ -1545,49 +1547,82 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             int: Number of nodes deleted.
         """
-        # Collect all node IDs to delete
-        ids_to_delete = set()
+        logger.info(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
+        print(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
 
-        # Add memory_ids if provided
+        # Validate writable_cube_ids
+        if not writable_cube_ids or len(writable_cube_ids) == 0:
+            raise ValueError("writable_cube_ids is required and cannot be empty")
+
+        # Build WHERE conditions separately for memory_ids and file_ids
+        where_clauses = []
+        params = {}
+
+        # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        user_name_conditions = []
+        for idx, cube_id in enumerate(writable_cube_ids):
+            param_name = f"cube_id_{idx}"
+            user_name_conditions.append(f"n.user_name = ${param_name}")
+            params[param_name] = cube_id
+
+        # Handle memory_ids: query n.id
         if memory_ids and len(memory_ids) > 0:
-            ids_to_delete.update(memory_ids)
+            where_clauses.append("n.id IN $memory_ids")
+            params["memory_ids"] = memory_ids
 
-        # Add file_ids if provided (treating them as node IDs)
+        # Handle file_ids: query n.file_ids field
+        # All file_ids must be present in the array field (AND relationship)
         if file_ids and len(file_ids) > 0:
-            ids_to_delete.update(file_ids)
+            file_id_and_conditions = []
+            for idx, file_id in enumerate(file_ids):
+                param_name = f"file_id_{idx}"
+                params[param_name] = file_id
+                # Check if this file_id is in the file_ids array field
+                file_id_and_conditions.append(f"${param_name} IN n.file_ids")
+            if file_id_and_conditions:
+                # Use AND to require all file_ids to be present
+                where_clauses.append(f"({' AND '.join(file_id_and_conditions)})")
 
         # Query nodes by filter if provided
+        filter_ids = []
         if filter:
             # Use get_by_metadata with empty filters list and filter
             filter_ids = self.get_by_metadata(
                 filters=[],
                 user_name=None,
                 filter=filter,
-                knowledgebase_ids=None,
-                user_name_flag=False,
+                knowledgebase_ids=writable_cube_ids,
             )
-            ids_to_delete.update(filter_ids)
 
-        # If no IDs to delete, return 0
-        if not ids_to_delete:
-            logger.warning("[delete_node_by_prams] No nodes to delete")
+        # If filter returned IDs, add condition for them
+        if filter_ids:
+            where_clauses.append("n.id IN $filter_ids")
+            params["filter_ids"] = filter_ids
+
+        # If no conditions (except user_name), return 0
+        if not where_clauses:
+            logger.warning(
+                "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
+            )
             return 0
 
-        # Convert to list for easier handling
-        ids_list = list(ids_to_delete)
-        logger.info(f"[delete_node_by_prams] Deleting {len(ids_list)} nodes: {ids_list}")
+        # Build WHERE clause
+        # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
+        data_conditions = " OR ".join([f"({clause})" for clause in where_clauses])
 
-        # Build WHERE condition for collected IDs (query n.id)
-        ids_where = "n.id IN $ids_to_delete"
-        params = {"ids_to_delete": ids_list}
+        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
+        user_name_where = " OR ".join(user_name_conditions)
+        ids_where = f"({user_name_where}) AND ({data_conditions})"
 
-        # Calculate total count for logging
-        total_count = len(ids_list)
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
         print(
-            f"[delete_node_by_prams] Deleting {total_count} nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
 
         # First count matching nodes to get accurate count
@@ -1599,6 +1634,7 @@ class Neo4jGraphDB(BaseGraphDB):
         delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
         print(f"[delete_node_by_prams] delete_query: {delete_query}")
+        print(f"[delete_node_by_prams] params: {params}")
 
         deleted_count = 0
         try:
@@ -1606,9 +1642,9 @@ class Neo4jGraphDB(BaseGraphDB):
                 # Count nodes before deletion
                 count_result = session.run(count_query, **params)
                 count_record = count_result.single()
-                expected_count = total_count
+                expected_count = 0
                 if count_record:
-                    expected_count = count_record["node_count"] or total_count
+                    expected_count = count_record["node_count"] or 0
 
                 # Delete nodes
                 session.run(delete_query, **params)

@@ -164,6 +164,38 @@ CHAT_MESSAGE_CASES = [
             ]
         ],
     ),
+    TestCase(
+        name="chat_with_list_content",
+        description="",
+        scene_data=[
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "我是测试base64",
+                        },
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_data": "Hello World",
+                                "filename": "2102b64c-25a2-481c-a940-4325496baf39.txt",
+                                "file_id": "90ee1bcf-5295-4b75-91a4-23fe1f7ab30a",
+                            },
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://play-groud-test-1.oss-cn-shanghai.aliyuncs.com/algorithmImages/2025/12/01/ce545319ba6d4d21a0aebcb75337acc3.jpeg"
+                            },
+                        },
+                    ],
+                    "message_id": "1995458892790317057",
+                }
+            ]
+        ],
+    ),
 ]
 
 # Tool-related test cases

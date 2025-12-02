@@ -13,6 +13,7 @@ MEM_UPDATE_LABEL = "mem_update"
 MEM_ARCHIVE_LABEL = "mem_archive"
 API_MIX_SEARCH_LABEL = "api_mix_search"
 PREF_ADD_LABEL = "pref_add"
+MEM_FEEDBACK_LABEL = "mem_feedback"
 
 TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
 TreeTextMemory_FINE_SEARCH_METHOD = "tree_text_memory_fine_search"
