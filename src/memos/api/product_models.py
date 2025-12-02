@@ -642,7 +642,6 @@ class APIFeedbackRequest(BaseRequest):
     )
     feedback_content: str | None = Field(..., description="Feedback content to process")
     feedback_time: str | None = Field(None, description="Feedback time")
-    # ==== Multi-cube writing ====
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube add"
     )
@@ -650,7 +649,7 @@ class APIFeedbackRequest(BaseRequest):
         "async", description="feedback mode: sync or async"
     )
     corrected_answer: bool = Field(False, description="Whether need return corrected answer")
-    # ==== Backward compatibility ====
+    # ==== mem_cube_id is NOT enabled====
     mem_cube_id: str | None = Field(
         None,
         description=(

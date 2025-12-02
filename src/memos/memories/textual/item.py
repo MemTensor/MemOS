@@ -90,6 +90,11 @@ class TextualMemoryMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    covered_history: str | None = Field(
+        default=None,
+        description="Record the memory id covered by the update",
+    )
+
     def __str__(self) -> str:
         """Pretty string representation of the metadata."""
         meta = self.model_dump(exclude_none=True)
