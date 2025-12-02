@@ -149,12 +149,13 @@ class OptimizedScheduler(GeneralScheduler):
             "chat_history": search_req.chat_history,
         }
 
-        fast_retrieved_memories = self.searcher.retrieve(
+        raw_retrieved_memories = self.searcher.retrieve(
             query=search_req.query,
             user_name=user_context.mem_cube_id,
             top_k=search_req.top_k,
-            mode=SearchMode.FAST,
+            mode=SearchMode.FINE,
             manual_close_internet=not search_req.internet_search,
+            moscube=search_req.moscube,
             search_filter=search_filter,
             search_priority=search_priority,
             info=info,
@@ -167,90 +168,24 @@ class OptimizedScheduler(GeneralScheduler):
             turns=self.history_memory_turns,
         )
         logger.info(f"Found {len(history_memories)} history memories.")
-        if not history_memories:
-            memories = self.searcher.post_retrieve(
-                retrieved_results=fast_retrieved_memories,
-                top_k=search_req.top_k,
-                user_name=user_context.mem_cube_id,
-                info=info,
-            )
-        else:
-            # if history memories can directly answer
-            sorted_history_memories = self.reranker.rerank(
-                query=search_req.query,  # Use search_req.query instead of undefined query
-                graph_results=history_memories,  # Pass TextualMemoryItem objects directly
-                top_k=search_req.top_k,  # Use search_req.top_k instead of undefined top_k
-                search_priority=search_priority,
-            )
-            logger.info(f"Reranked {len(sorted_history_memories)} history memories.")
-            processed_hist_mem = self.searcher.post_retrieve(
-                retrieved_results=sorted_history_memories,
-                top_k=search_req.top_k,
-                user_name=user_context.mem_cube_id,
-                info=info,
-            )
 
-            can_answer = self.retriever.evaluate_memory_answer_ability(
-                query=search_req.query, memory_texts=[one.memory for one in processed_hist_mem]
-            )
-
-            if can_answer:
-                logger.info("History memories can answer the query.")
-                sorted_results = fast_retrieved_memories + sorted_history_memories
-                combined_results = self.searcher.post_retrieve(
-                    retrieved_results=sorted_results,
-                    top_k=search_req.top_k,
-                    user_name=user_context.mem_cube_id,
-                    info=info,
-                )
-                memories = combined_results[: search_req.top_k]
-            else:
-                logger.info("History memories cannot answer the query, enhancing memories.")
-                sorted_results = fast_retrieved_memories + sorted_history_memories
-                combined_results = self.searcher.post_retrieve(
-                    retrieved_results=sorted_results,
-                    top_k=search_req.top_k,
-                    user_name=user_context.mem_cube_id,
-                    info=info,
-                )
-                enhanced_memories, _ = self.retriever.enhance_memories_with_query(
-                    query_history=[search_req.query],
-                    memories=combined_results,
-                )
-
-                if len(enhanced_memories) < search_req.top_k:
-                    logger.info(
-                        f"Enhanced memories ({len(enhanced_memories)}) are less than top_k ({search_req.top_k}). Recalling for more."
-                    )
-                    missing_info_hint, trigger = self.retriever.recall_for_missing_memories(
-                        query=search_req.query,
-                        memories=combined_results,
-                    )
-                    retrieval_size = search_req.top_k - len(enhanced_memories)
-                    if trigger:
-                        logger.info(f"Triggering additional search with hint: {missing_info_hint}")
-                        additional_memories = self.searcher.search(
-                            query=missing_info_hint,
-                            user_name=user_context.mem_cube_id,
-                            top_k=retrieval_size,
-                            mode=SearchMode.FAST,
-                            memory_type="All",
-                            search_filter=search_filter,
-                            search_priority=search_priority,
-                            info=info,
-                        )
-                    else:
-                        logger.info("Not triggering additional search, using combined results.")
-                        additional_memories = combined_results[:retrieval_size]
-                    logger.info(
-                        f"Added {len(additional_memories)} more memories. Total enhanced memories: {len(enhanced_memories)}"
-                    )
-                    enhanced_memories += additional_memories
-
-                memories = enhanced_memories[: search_req.top_k]
+        # if history memories can directly answer
+        sorted_history_memories = self.reranker.rerank(
+            query=search_req.query,  # Use search_req.query instead of undefined query
+            graph_results=history_memories,  # Pass TextualMemoryItem objects directly
+            top_k=search_req.top_k,  # Use search_req.top_k instead of undefined top_k
+            search_filter=search_filter,
+        )
+        logger.info(f"Reranked {len(sorted_history_memories)} history memories.")
+        merged_memories = self.searcher.post_retrieve(
+            retrieved_results=raw_retrieved_memories + sorted_history_memories,
+            top_k=search_req.top_k,
+            user_name=user_context.mem_cube_id,
+            info=info,
+        )
+        memories = merged_memories[: search_req.top_k]
 
         formatted_memories = [format_textual_memory_item(item) for item in memories]
-        logger.info("Submitted memory history async task.")
         self.submit_memory_history_async_task(
             search_req=search_req,
             user_context=user_context,
@@ -259,7 +194,6 @@ class OptimizedScheduler(GeneralScheduler):
                 "formatted_memories": formatted_memories,
             },
         )
-
         return formatted_memories
 
     def update_search_memories_to_redis(

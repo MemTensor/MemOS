@@ -21,10 +21,12 @@ from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
 from memos.api.handlers.base_handler import HandlerDependencies
 from memos.api.handlers.chat_handler import ChatHandler
+from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
     APIADDRequest,
     APIChatCompleteRequest,
+    APIFeedbackRequest,
     APISearchRequest,
     ChatRequest,
     DeleteMemoryRequest,
@@ -66,7 +68,7 @@ chat_handler = ChatHandler(
     add_handler,
     online_bot=components.get("online_bot"),
 )
-
+feedback_handler = FeedbackHandler(dependencies)
 # Extract commonly used components for function-based handlers
 # (These can be accessed from the components dict without unpacking all of them)
 mem_scheduler: BaseScheduler = components["mem_scheduler"]
@@ -265,3 +267,18 @@ def delete_memories(memory_req: DeleteMemoryRequest):
     return handlers.memory_handler.handle_delete_memories(
         delete_mem_req=memory_req, naive_mem_cube=naive_mem_cube
     )
+
+
+# =============================================================================
+# Feedback API Endpoints
+# =============================================================================
+
+
+@router.post("/feedback", summary="Feedback memories", response_model=MemoryResponse)
+def feedback_memories(feedback_req: APIFeedbackRequest):
+    """
+    Feedback memories for a specific user.
+
+    This endpoint uses the class-based FeedbackHandler for better code organization.
+    """
+    return feedback_handler.handle_feedback_memories(feedback_req)

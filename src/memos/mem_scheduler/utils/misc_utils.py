@@ -215,7 +215,7 @@ def log_exceptions(logger=logger):
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                logger.error(f"Error in {func.__name__}: {e}", exc_info=True)
+                logger.error(f"Error in {func.__name__}: {e}", stack_info=True)
 
         return wrapper
 

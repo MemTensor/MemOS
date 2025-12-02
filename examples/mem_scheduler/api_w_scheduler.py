@@ -17,7 +17,6 @@ print(f"Queue type: {type(mem_scheduler.memos_message_queue).__name__}")
 print(f"Queue maxsize: {getattr(mem_scheduler.memos_message_queue, 'maxsize', 'N/A')}")
 print("=====================================\n")
 
-mem_scheduler.memos_message_queue.debug_mode_on()
 queue = mem_scheduler.memos_message_queue
 queue.clear()
 

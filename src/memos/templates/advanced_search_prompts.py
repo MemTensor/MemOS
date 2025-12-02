@@ -1,54 +1,4 @@
-MEMORY_SUMMARY_PROMPT = """
-# Memory Summary and Context Assembly
-
-## Role
-You are a precise context assembler. Given a user query and a set of retrieved memories (each indexed), your task is to synthesize a factual, concise, and coherent context using only the information explicitly present in the memories.
-
-## Instructions
-
-### Core Principles
-- Use ONLY facts from the provided memories. Do not invent, infer, guess, or hallucinate.
-- Resolve all pronouns (e.g., "he", "it", "they") and vague terms (e.g., "this", "that", "some people") to explicit entities using memory content.
-- Merge overlapping or redundant facts. Preserve temporal, spatial, and relational details.
-- Each fact must be atomic, unambiguous, and verifiable.
-- Preserve all key details: who, what, when, where, why — if present in memory.
-- Created a summarized facts for answering query at the first item, and separate logically coherent separate memories.
-- Begin the <memories> with a single, aggregated summary that directly answers the query using the most relevant facts.
-- The total number of facts in <memories> must not exceed {top_k}.
-- If additional context is relevant, try to weave it together logically—or chronologically—based on how the pieces connect.
-- **Must preserve the full timeline of all memories**: if multiple events or states are mentioned with temporal markers (e.g., dates, sequences, phases), their chronological order must be retained in both <context> and <memories>.
-
-### Processing Logic
-- Aggregate logically connected memories (e.g., events involving the same person, cause-effect chains, repeated entities).
-- Exclude any memory that does not directly support answering the query.
-- Prioritize specificity: e.g., "Travis Tang moved to Singapore in 2021" > "He relocated abroad."
-
-## Input
-- Query: {query}
-- Current context:
-{context}
-- Current Memories:
-{memories}
-
-## Output Format (STRICT TAG-BASED)
-Respond ONLY with the following XML-style tags. Do NOT include any other text, explanations, or formatting.
-
-<context>
-A single, compact, fluent paragraph synthesizing the above facts into a coherent narrative directly relevant to the query. Use resolved entities and logical flow. No bullet points. No markdown. No commentary.
-</context>
-<memories>
-- Aggregated summary
-- Fact 1
-- Fact 2
-</memories>
-
-Answer:
-"""
-
-# Stage 1: determine answerability; if not answerable, produce concrete retrieval phrases for missing info
 STAGE1_EXPAND_RETRIEVE_PROMPT = """
-# Stage 1 — Answerability and Missing Retrieval Phrases
-
 ## Goal
 Determine whether the current memories can answer the query using concrete, specific facts. If not, generate 3–8 precise retrieval phrases that capture the missing information.
 
@@ -76,9 +26,6 @@ Respond ONLY with the following structure. Do not add any other text, explanatio
 <can_answer>
 true or false
 </can_answer>
-<context>
-summary of current memories
-</context>
 <reason>
 Brief, one-sentence explanation for why the query is or isn't answerable with current memories.
 </reason>
@@ -94,26 +41,23 @@ Answer:
 
 # Stage 2: if Stage 1 phrases still fail, rewrite the retrieval query and phrases to maximize recall
 STAGE2_EXPAND_RETRIEVE_PROMPT = """
-# Stage 2 — Rewrite Retrieval Query and Phrases to Improve Recall
-
 ## Goal
-If Stage 1's retrieval phrases failed to yield an answer, rewrite the original query and expand the phrase list to maximize recall of relevant memories. Use canonicalization, synonym expansion, and constraint enrichment.
+Rewrite the original query and generate an improved list of retrieval phrases to maximize recall of relevant memories. Use reference resolution, canonicalization, synonym expansion, and constraint enrichment.
 
 ## Rewrite Strategy
-- Canonicalize entities: use full names, official titles, or known aliases.
-- Normalize time formats: e.g., "last year" → "2024", "in 2021" → "2021".
-- Add discriminative tokens: entity + attribute + time + location where applicable.
-- Split complex queries into focused sub-queries targeting distinct facets.
-- Never include pronouns, vague terms, or subjective language.
+- **Resolve ambiguous references**: Replace pronouns (e.g., “she”, “they”, “it”) and vague terms (e.g., “the book”, “that event”) with explicit entity names or descriptors using only information from the current memories.
+- **Canonicalize entities**: Use full names (e.g., “Melanie Smith”), known roles (e.g., “Caroline’s mentor”), or unambiguous identifiers when available.
+- **Normalize temporal expressions**: Convert relative time references (e.g., “yesterday”, “last weekend”, “a few months ago”) to absolute dates or date ranges **only if the current memories provide sufficient context**.
+- **Enrich with discriminative context**: Combine entity + action/event + time + location when supported by memory content (e.g., “Melanie pottery class July 2023”).
+- **Decompose complex queries**: Break multi-part or abstract questions into concrete, focused sub-queries targeting distinct factual dimensions.
+- **Never invent, assume, or retain unresolved pronouns, vague nouns, or subjective language**.
 
 ## Input
 - Query: {query}
 - Previous retrieval phrases:
 {previous_retrieval_phrases}
-- Context: {context}
 - Current Memories:
 {memories}
-
 
 ## Output (STRICT TAG-BASED FORMAT)
 Respond ONLY with the following structure. Do not add any other text, explanation, or formatting.
@@ -122,13 +66,10 @@ Respond ONLY with the following structure. Do not add any other text, explanatio
 true or false
 </can_answer>
 <reason>
-Brief explanation (1–2 sentences) of how this rewrite improves recall over Stage 1 phrases.
+Brief explanation (1–2 sentences) of how this rewrite improves recall—e.g., by resolving pronouns, normalizing time, or adding concrete attributes—over Stage 1 phrases.
 </reason>
-<context>
-summary of current memories
-</context>
 <retrieval_phrases>
-- new phrase 1 (Rewritten version of the original query. More precise, canonical, and retrieval-optimized.)
+- new phrase 1 (Rewritten, canonical, fully grounded in memory content)
 - new phrase 2
 ...
 </retrieval_phrases>
@@ -139,22 +80,19 @@ Answer:
 
 # Stage 3: generate grounded hypotheses to guide retrieval when still not answerable
 STAGE3_EXPAND_RETRIEVE_PROMPT = """
-# Stage 3 — Hypothesis Generation for Retrieval
-
 ## Goal
-When the query remains unanswerable, generate grounded, plausible hypotheses based ONLY on provided context and memories. Each hypothesis must imply a concrete retrieval target and validation criteria.
+As the query remains unanswerable, generate grounded, plausible hypotheses based ONLY on the provided memories. Each hypothesis must imply a concrete retrieval target and define clear validation criteria.
 
 ## Rules
-- Base hypotheses strictly on facts from the memories. No new entities or assumptions.
-- Frame each hypothesis as a testable statement: "If [X] is true, then the query is answered."
-- For each hypothesis, define 1–3 specific evidence requirements that would confirm it.
-- Do NOT guess. Do NOT invent. Only extrapolate from existing facts.
+- Base hypotheses strictly on facts from the memories. Do NOT introduce new entities, events, or assumptions.
+- Frame each hypothesis as a testable conditional statement: "If [X] is true, then the query can be answered."
+- For each hypothesis, specify 1–3 concrete evidence requirements that would confirm it (e.g., a specific date, name, or event description).
+- Do NOT guess, invent, or speculate beyond logical extrapolation from existing memory content.
 
 ## Input
 - Query: {query}
 - Previous retrieval phrases:
 {previous_retrieval_phrases}
-- Context: {context}
 - Memories:
 {memories}
 
@@ -164,24 +102,20 @@ Respond ONLY with the following structure. Do not add any other text, explanatio
 <can_answer>
 true or false
 </can_answer>
-<context>
-summary of current memories
-</context>
 <reason>
-- statement: <tentative, grounded hypothesis>
-  retrieval_query: <searchable query derived from the hypothesis>
+- statement: <tentative, grounded hypothesis derived from memory>
+  retrieval_query: <concise, searchable query to test the hypothesis>
   validation_criteria:
-  - <evidence requirement 1>
-  - <evidence requirement 2>
-- statement: <another hypothesis>
+  - <specific evidence that would confirm the hypothesis>
+  - <another required piece of evidence (if applicable)>
+- statement: <another distinct hypothesis>
   retrieval_query: <searchable query>
   validation_criteria:
-  - <evidence requirement>
+  - <required evidence>
 </reason>
-
 <retrieval_phrases>
-- hypothesis retrieval query 1 (searchable query derived from the hypothesis)
-- hypothesis retrieval query 2:
+- <retrieval_query from hypothesis 1>
+- <retrieval_query from hypothesis 2>
 ...
 </retrieval_phrases>
 
@@ -229,32 +163,35 @@ Answer:
 """
 
 MEMORY_RECREATE_ENHANCEMENT_PROMPT = """
-You are a knowledgeable and precise AI assistant.
+You are a precise and detail-oriented AI assistant specialized in temporal memory reconstruction, reference resolution, and relevance-aware memory fusion.
 
 # GOAL
-Transform raw memories into clean, query-relevant facts — preserving timestamps and resolving ambiguities without inference.
+Transform the original memories into a clean, unambiguous, and consolidated set of factual statements that:
+1. **Resolve all vague or relative references** (e.g., “yesterday” → actual date, “she” → full name, “last weekend” → specific dates, "home" → actual address) **using only information present in the provided memories**.
+2. **Fuse memory entries that are related by time, topic, participants, or explicit context**—prioritizing the merging of entries that clearly belong together.
+3. **Preserve every explicit fact from every original memory entry**—no deletion, no loss of detail. Redundant phrasing may be streamlined, but all distinct information must appear in the output.
+4. **Return at most {top_k} fused and disambiguated memory segments in <answer>, ordered by relevance to the user query** (most relevant first).
 
-# RULES & THINKING STEPS
-1. Keep ONLY what’s relevant to the user’s query. Delete irrelevant memories entirely.
-2. Preserve ALL explicit timestamps (e.g., “on October 6”, “daily”, “after injury”).
-3. Resolve all ambiguities using only memory content:
-   - Pronouns → full name: “she” → “Melanie”
-   - Vague nouns → specific detail: “home” → “her childhood home in Guangzhou”
-   - “the user” → identity from context (e.g., “Melanie” if travel/running memories)
-4. Never invent, assume, or extrapolate.
-5. Each output line must be a standalone, clear, factual statement.
-6. Output format: one line per fact, starting with "- ", no extra text.
+# RULES
+- **You MUST retain all information from all original memory entries.** Even if an entry seems minor, repetitive, or less relevant, its content must be represented in the output.
+- **Do not add, assume, or invent any information** not grounded in the original memories.
+- **Disambiguate pronouns, time expressions, and vague terms ONLY when the necessary context exists within the memories** (e.g., if “yesterday” appears in a message dated July 3, resolve it to July 2).
+- **If you cannot resolve a vague reference (e.g., “she”, “back home”, “recently”, “a few days ago”) due to insufficient context, DO NOT guess or omit it—include the original phrasing verbatim in the output.**
+- **Prioritize merging memory entries that are semantically or contextually related** (e.g., same event, same conversation thread, shared participants, or consecutive timestamps). Grouping should reflect natural coherence, not just proximity.
+- **The total number of bullets in <answer> must not exceed {top_k}.** To meet this limit, fuse related entries as much as possible while ensuring **no factual detail is omitted**.
+- **Never sacrifice factual completeness for brevity or conciseness.** If needed, create broader but fully informative fused segments rather than dropping information.
+- **Each bullet in <answer> must be a self-contained, fluent sentence or clause** that includes all resolved details from the original entries it represents. If part of the entry cannot be resolved, preserve that part exactly as written.
+- **Sort the final list by how directly and specifically it addresses the user’s query**—not by chronology or source.
 
 # OUTPUT FORMAT (STRICT)
-Return ONLY the following block, with **one enhanced memory per line**.
-Each line MUST start with "- " (dash + space).
+Return ONLY the following structure:
 
-Wrap the final output inside:
 <answer>
-- enhanced memory 1
-- enhanced memory 2
-...
+- [Fully resolved, fused memory segment most relevant to the query — containing all facts from the original entries it covers; unresolved parts kept verbatim]
+- [Next most relevant resolved and fused segment — again, with no factual loss]
+- [...]
 </answer>
+
 
 ## User Query
 {query}
@@ -265,9 +202,7 @@ Wrap the final output inside:
 Final Output:
 """
 
-
 PROMPT_MAPPING = {
-    "memory_summary": MEMORY_SUMMARY_PROMPT,
     "memory_judgement": MEMORY_JUDGMENT_PROMPT,
     "stage1_expand_retrieve": STAGE1_EXPAND_RETRIEVE_PROMPT,
     "stage2_expand_retrieve": STAGE2_EXPAND_RETRIEVE_PROMPT,

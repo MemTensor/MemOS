@@ -38,8 +38,8 @@ class SchedulerLocalQueue(RedisSchedulerModule):
             f"SchedulerLocalQueue initialized with max_internal_message_queue_size={maxsize}"
         )
 
-    def get_stream_key(self, user_id: str, mem_cube_id: str) -> str:
-        stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}"
+    def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
+        stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}:{task_label}"
         return stream_key
 
     def put(
@@ -61,7 +61,11 @@ class SchedulerLocalQueue(RedisSchedulerModule):
             queue.Full: If the queue is full and block=False or timeout expires.
             Exception: Any underlying error during queue.put() operation.
         """
-        stream_key = self.get_stream_key(user_id=message.user_id, mem_cube_id=message.mem_cube_id)
+        stream_key = self.get_stream_key(
+            user_id=message.user_id, mem_cube_id=message.mem_cube_id, task_label=message.task_label
+        )
+
+        message.stream_key = stream_key
 
         # Create the queue if it doesn't exist yet
         if stream_key not in self.queue_streams:

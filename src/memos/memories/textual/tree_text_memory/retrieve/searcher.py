@@ -507,7 +507,10 @@ class Searcher:
         user_name: str | None = None,
         **kwargs,
     ):
-        """Retrieve from by keywords and embedding"""
+        """
+        Retrieve from by keywords and embedding, this func is hotfix for sources=plugin mode
+        will merge with fulltext retrieval in the future
+        """
         query_words = []
         if self.tokenizer:
             query_words = self.tokenizer.tokenize_mixed(query)

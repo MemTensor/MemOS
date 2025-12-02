@@ -1,3 +1,5 @@
+import os
+
 from pathlib import Path
 
 
@@ -13,6 +15,7 @@ MEM_UPDATE_LABEL = "mem_update"
 MEM_ARCHIVE_LABEL = "mem_archive"
 API_MIX_SEARCH_LABEL = "api_mix_search"
 PREF_ADD_LABEL = "pref_add"
+MEM_FEEDBACK_LABEL = "mem_feedback"
 
 TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
 TreeTextMemory_FINE_SEARCH_METHOD = "tree_text_memory_fine_search"
@@ -24,7 +27,7 @@ DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT = 20
 DEFAULT_ACT_MEM_DUMP_PATH = f"{BASE_DIR}/outputs/mem_scheduler/mem_cube_scheduler_test.kv_cache"
 DEFAULT_THREAD_POOL_MAX_WORKERS = 50
 DEFAULT_CONSUME_INTERVAL_SECONDS = 0.01
-DEFAULT_CONSUME_BATCH = 1
+DEFAULT_CONSUME_BATCH = 3
 DEFAULT_DISPATCHER_MONITOR_CHECK_INTERVAL = 300
 DEFAULT_DISPATCHER_MONITOR_MAX_FAILURES = 2
 DEFAULT_STUCK_THREAD_TOLERANCE = 10
@@ -61,3 +64,9 @@ MONITOR_ACTIVATION_MEMORY_TYPE = "MonitorActivationMemoryType"
 DEFAULT_MAX_QUERY_KEY_WORDS = 1000
 DEFAULT_WEIGHT_VECTOR_FOR_RANKING = [0.9, 0.05, 0.05]
 DEFAULT_MAX_WEB_LOG_QUEUE_SIZE = 50
+
+# task queue
+DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v1.3"
+exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME", None)
+if exchange_name is not None:
+    DEFAULT_STREAM_KEY_PREFIX += f":{exchange_name}"

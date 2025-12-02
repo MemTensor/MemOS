@@ -1,4 +1,5 @@
 import json
+import os
 import ssl
 import threading
 import time
@@ -69,6 +70,16 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         Establish connection to RabbitMQ using pika.
         """
         try:
+            # Skip remote initialization in CI/pytest unless explicitly enabled
+            enable_env = os.getenv("MEMOS_ENABLE_RABBITMQ", "").lower() == "true"
+            in_ci = os.getenv("CI", "").lower() == "true"
+            in_pytest = os.getenv("PYTEST_CURRENT_TEST") is not None
+            if (in_ci or in_pytest) and not enable_env:
+                logger.info(
+                    "Skipping RabbitMQ initialization in CI/test environment. Set MEMOS_ENABLE_RABBITMQ=true to enable."
+                )
+                return
+
             from pika.adapters.select_connection import SelectConnection
 
             if config is None:
@@ -270,15 +281,36 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         """
         import pika
 
+        exchange_name = self.rabbitmq_exchange_name
+        routing_key = self.rabbit_queue_name
+
+        if message.get("label") == "knowledgeBaseUpdate":
+            kb_specific_exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+
+            if kb_specific_exchange_name:
+                exchange_name = kb_specific_exchange_name
+
+            routing_key = ""  # User specified empty routing key for KB updates
+
+            logger.info(
+                f"[DIAGNOSTIC] Publishing KB Update message. "
+                f"ENV_EXCHANGE_NAME_USED: {kb_specific_exchange_name is not None}. "
+                f"Current configured Exchange: {exchange_name}, Routing Key: '{routing_key}'."
+            )
+            logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")
+
         with self._rabbitmq_lock:
             if not self.is_rabbitmq_connected():
                 logger.error("Cannot publish - no active connection")
                 return False
 
+            logger.info(
+                f"[DIAGNOSTIC] rabbitmq_service.rabbitmq_publish_message: Attempting to publish message. Exchange: {exchange_name}, Routing Key: {routing_key}, Message Content: {json.dumps(message, indent=2)}"
+            )
             try:
                 self.rabbitmq_channel.basic_publish(
-                    exchange=self.rabbitmq_exchange_name,
-                    routing_key=self.rabbit_queue_name,
+                    exchange=exchange_name,
+                    routing_key=routing_key,
                     body=json.dumps(message),
                     properties=pika.BasicProperties(
                         delivery_mode=2,  # Persistent
