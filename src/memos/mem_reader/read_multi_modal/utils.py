@@ -43,6 +43,58 @@ FILE_EXT_RE = re.compile(
     re.I,
 )
 
+# Default configuration for parser and text splitter
+DEFAULT_PARSER_CONFIG = {
+    "backend": "markitdown",
+    "config": {},
+}
+
+DEFAULT_CHUNK_SIZE = int(os.getenv("FILE_PARSER_CHUNK_SIZE", "1000"))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("FILE_PARSER_CHUNK_OVERLAP", "200"))
+
+# Initialize parser instance
+file_parser = None
+try:
+    parser_config = ParserConfigFactory.model_validate(DEFAULT_PARSER_CONFIG)
+    file_parser = ParserFactory.from_config(parser_config)
+    logger.debug("[FileContentParser] Initialized parser instance")
+except Exception as e:
+    logger.error(f"[FileContentParser] Failed to create parser: {e}")
+    file_parser = None
+
+# Initialize text splitter instance
+text_splitter = None
+try:
+    try:
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+    except ImportError:
+        try:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+        except ImportError:
+            logger.error(
+                "langchain not available. Install with: pip install langchain or pip install langchain-text-splitters"
+            )
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=DEFAULT_CHUNK_SIZE,
+        chunk_overlap=DEFAULT_CHUNK_OVERLAP,
+        length_function=len,
+        separators=["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " ", ""],
+    )
+    logger.debug(
+        f"[FileContentParser] Initialized text splitter with chunk_size={DEFAULT_CHUNK_SIZE}, "
+        f"chunk_overlap={DEFAULT_CHUNK_OVERLAP}"
+    )
+except ImportError as e:
+    logger.warning(
+        f"[FileContentParser] langchain not available, text splitting will be disabled: {e}. "
+        "Install with: pip install langchain or pip install langchain-text-splitters"
+    )
+    text_splitter = None
+except Exception as e:
+    logger.error(f"[FileContentParser] Failed to initialize text splitter: {e}")
+    text_splitter = None
+
 
 def extract_role(message: dict[str, Any]) -> str:
     """Extract role from message."""

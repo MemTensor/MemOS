@@ -13,10 +13,10 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
-from memos.parsers.factory import ParserFactory
 from memos.types.openai_chat_completion_types import File
 
 from .base import BaseMessageParser, _derive_key
+from .utils import file_parser, text_splitter
 
 
 logger = get_logger(__name__)
@@ -108,6 +108,32 @@ class FileContentParser(BaseMessageParser):
             else:
                 self.direct_markdown_hostnames = []
 
+    def _split_text(self, text: str) -> list[str]:
+        """
+        Split text into chunks using langchain text splitter from utils.
+
+        Args:
+            text: Text to split
+
+        Returns:
+            List of text chunks
+        """
+        if not text or not text.strip():
+            return []
+
+        if not text_splitter:
+            # If text splitter is not available, return text as single chunk
+            return [text] if text.strip() else []
+
+        try:
+            chunks = text_splitter.split_text(text)
+            logger.debug(f"[FileContentParser] Split text into {len(chunks)} chunks")
+            return chunks
+        except Exception as e:
+            logger.error(f"[FileContentParser] Error splitting text: {e}")
+            # Fallback to single chunk
+            return [text] if text.strip() else []
+
     def create_source(
         self,
         message: File,
@@ -152,21 +178,9 @@ class FileContentParser(BaseMessageParser):
         Returns:
             Parsed text content
         """
-        if not self.parser:
-            # Try to create a default parser
-            try:
-                from memos.configs.parser import ParserConfigFactory
-
-                parser_config = ParserConfigFactory.model_validate(
-                    {
-                        "backend": "markitdown",
-                        "config": {},
-                    }
-                )
-                self.parser = ParserFactory.from_config(parser_config)
-            except Exception as e:
-                logger.warning(f"[FileContentParser] Failed to create parser: {e}")
-                return ""
+        if not file_parser:
+            logger.warning("[FileContentParser] Parser not available")
+            return ""
 
         file_path = file_info.get("path") or file_info.get("file_id", "")
         filename = file_info.get("filename", "unknown")
@@ -177,7 +191,7 @@ class FileContentParser(BaseMessageParser):
 
         try:
             if os.path.exists(file_path):
-                parsed_text = self.parser.parse(file_path)
+                parsed_text = file_parser.parse(file_path)
                 return parsed_text
             else:
                 logger.warning(f"[FileContentParser] File not found: {file_path}")
@@ -264,6 +278,9 @@ class FileContentParser(BaseMessageParser):
         # Combine content parts
         content = " ".join(content_parts)
 
+        # Split content into chunks
+        content_chunks = self._split_text(content)
+
         # Create source
         source = self.create_source(message, info)
 
@@ -276,27 +293,59 @@ class FileContentParser(BaseMessageParser):
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
 
-        # Create memory item
-        memory_item = TextualMemoryItem(
-            memory=content,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                status="activated",
-                tags=["mode:fast", "multimodal:file"],
-                key=_derive_key(content),
-                embedding=self.embedder.embed([content])[0],
-                usage=[],
-                sources=[source],
-                background="",
-                confidence=0.99,
-                type="fact",
-                info=info_,
-            ),
-        )
+        # Create memory items for each chunk
+        memory_items = []
+        for chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
 
-        return [memory_item]
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=[
+                        "mode:fast",
+                        "multimodal:file",
+                        f"chunk:{chunk_idx + 1}/{len(content_chunks)}",
+                    ],
+                    key=_derive_key(chunk_text),
+                    embedding=self.embedder.embed([chunk_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        # If no chunks were created, create a placeholder
+        if not memory_items:
+            memory_item = TextualMemoryItem(
+                memory=content,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=["mode:fast", "multimodal:file"],
+                    key=_derive_key(content),
+                    embedding=self.embedder.embed([content])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        return memory_items
 
     def parse_fine(
         self,
@@ -326,22 +375,9 @@ class FileContentParser(BaseMessageParser):
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
-
-        # Initialize parser if not already set
-        if not self.parser:
-            try:
-                from memos.configs.parser import ParserConfigFactory
-
-                parser_config = ParserConfigFactory.model_validate(
-                    {
-                        "backend": "markitdown",
-                        "config": {},
-                    }
-                )
-                self.parser = ParserFactory.from_config(parser_config)
-            except Exception as e:
-                logger.warning(f"[FileContentParser] Failed to create parser: {e}")
-                return []
+        if not file_parser:
+            logger.warning("[FileContentParser] Parser not available")
+            return []
 
         parsed_text = ""
         temp_file_path = None
@@ -356,7 +392,12 @@ class FileContentParser(BaseMessageParser):
                         parsed_text, temp_file_path = self._handle_url(url_str, filename)
                         if temp_file_path:
                             try:
-                                parsed_text = self.parser.parse(temp_file_path)
+                                # Use parser from utils (singleton)
+                                parser = self.parser or file_parser
+                                if parser:
+                                    parsed_text = parser.parse(temp_file_path)
+                                else:
+                                    parsed_text = "[File parsing error: Parser not available]"
                             except Exception as e:
                                 logger.error(
                                     f"[FileContentParser] Error parsing downloaded file: {e}"
@@ -411,24 +452,59 @@ class FileContentParser(BaseMessageParser):
         # For file content parts, default to LongTermMemory
         memory_type = "LongTermMemory"
 
-        # Create memory item with parsed content
-        memory_item = TextualMemoryItem(
-            memory=parsed_text,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                status="activated",
-                tags=["mode:fine", "multimodal:file"],
-                key=_derive_key(parsed_text),
-                embedding=self.embedder.embed([parsed_text])[0],
-                usage=[],
-                sources=[source],
-                background="",
-                confidence=0.99,
-                type="fact",
-                info=info_,
-            ),
-        )
+        # Split parsed text into chunks
+        content_chunks = self._split_text(parsed_text)
 
-        return [memory_item]
+        # Create memory items for each chunk
+        memory_items = []
+        for chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
+
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=[
+                        "mode:fine",
+                        "multimodal:file",
+                        f"chunk:{chunk_idx + 1}/{len(content_chunks)}",
+                    ],
+                    key=_derive_key(chunk_text),
+                    embedding=self.embedder.embed([chunk_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        # If no chunks were created, create a placeholder
+        if not memory_items:
+            memory_item = TextualMemoryItem(
+                memory=parsed_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=["mode:fine", "multimodal:file"],
+                    key=_derive_key(parsed_text),
+                    embedding=self.embedder.embed([parsed_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        return memory_items
