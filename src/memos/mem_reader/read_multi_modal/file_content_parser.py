@@ -1,6 +1,9 @@
 """Parser for file content parts (RawMessageList)."""
 
+import os
+
 from typing import Any
+from urllib.parse import urlparse
 
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
@@ -237,4 +240,164 @@ class FileContentParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        return []
+        """
+        Parse file content part in fine mode.
+        Fine mode downloads and parses file content, especially for URLs.
+        Handles various file parameter scenarios:
+        - file_data: URL (http://, https://, or @http://), base64 encoded data, or plain text content
+        - file_id: ID of an uploaded file
+        - filename: name of the file
+        """
+        if not isinstance(message, dict):
+            logger.warning(f"[FileContentParser] Expected dict, got {type(message)}")
+            return []
+
+        # Extract file information
+        file_info = message.get("file", {})
+        if not isinstance(file_info, dict):
+            logger.warning(f"[FileContentParser] Expected file dict, got {type(file_info)}")
+            return []
+
+        # Extract file parameters (all are optional)
+        file_data = file_info.get("file_data", "")
+        file_id = file_info.get("file_id", "")
+        filename = file_info.get("filename", "")
+
+        # Initialize parser if not already set
+        if not self.parser:
+            try:
+                from memos.configs.parser import ParserConfigFactory
+
+                parser_config = ParserConfigFactory.model_validate(
+                    {
+                        "backend": "markitdown",
+                        "config": {},
+                    }
+                )
+                self.parser = ParserFactory.from_config(parser_config)
+            except Exception as e:
+                logger.warning(f"[FileContentParser] Failed to create parser: {e}")
+                return []
+
+        parsed_text = ""
+        temp_file_path = None
+
+        try:
+            # Priority 1: If file_data is provided, process it
+            if file_data:
+                if isinstance(file_data, str):
+                    # Check if it's a URL (supports @http://, http://, https://)
+                    url_str = file_data
+                    if url_str.startswith("@"):
+                        url_str = url_str[1:]  # Remove @ prefix if present
+
+                    if url_str.startswith(("http://", "https://")):
+                        # Download and parse URL
+                        try:
+                            import requests
+
+                            # Parse URL to check hostname
+                            parsed_url = urlparse(url_str)
+                            hostname = parsed_url.hostname or ""
+
+                            logger.info(f"[FileContentParser] Downloading file from URL: {url_str}")
+                            response = requests.get(url_str, timeout=30)
+                            response.raise_for_status()
+
+                            # Determine filename from URL or use provided filename
+                            if not filename:
+                                filename = os.path.basename(parsed_url.path) or "downloaded_file"
+
+                            # Route based on hostname
+                            if hostname == "139.196.232.20":
+                                # Special handling for 139.196.232.20: directly use response text as markdown
+                                logger.info(
+                                    f"[FileContentParser] Using direct markdown content for {hostname}"
+                                )
+                                parsed_text = response.text
+                            else:
+                                logger.warning("[FileContentParser] Outer url not implemented now.")
+                        except requests.RequestException as e:
+                            logger.error(
+                                f"[FileContentParser] Failed to download URL {url_str}: {e}"
+                            )
+                            parsed_text = f"[File URL download failed: {url_str}]"
+                        except Exception as e:
+                            logger.error(f"[FileContentParser] Error parsing downloaded file: {e}")
+                            parsed_text = f"[File parsing error: {e!s}]"
+
+                    # Check if it's a local file path
+                    elif os.path.exists(file_data):
+                        logger.info("[FileContentParser] local file not implemented now.")
+                    # Check if it's base64 encoded data
+                    elif file_data.startswith("data:") or (
+                        len(file_data) > 100
+                        and all(
+                            c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+                            for c in file_data[:100]
+                        )
+                    ):
+                        logger.info("[FileContentParser] base64 not implemented now.")
+                    # Otherwise treat as plain text
+                    else:
+                        parsed_text = file_data
+
+            # Priority 2: If file_id is provided but no file_data, try to use file_id as path
+            elif file_id:
+                logger.warning(f"[FileContentParser] File data not provided for file_id: {file_id}")
+                parsed_text = f"[File ID: {file_id}]: File data not provided"
+
+            # If no content could be parsed, create a placeholder
+            if not parsed_text:
+                if filename:
+                    parsed_text = f"[File: {filename}]: File data not provided"
+                else:
+                    parsed_text = "[File: unknown]: File data not provided"
+
+        except Exception as e:
+            logger.error(f"[FileContentParser] Error in parse_fine: {e}")
+            parsed_text = f"[File parsing error: {e!s}]"
+
+        finally:
+            # Clean up temporary file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    logger.debug(f"[FileContentParser] Cleaned up temporary file: {temp_file_path}")
+                except Exception as e:
+                    logger.warning(
+                        f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
+                    )
+
+        # Create source
+        source = self.create_source(message, info)
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # For file content parts, default to LongTermMemory
+        memory_type = "LongTermMemory"
+
+        # Create memory item with parsed content
+        memory_item = TextualMemoryItem(
+            memory=parsed_text,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=user_id,
+                session_id=session_id,
+                memory_type=memory_type,
+                status="activated",
+                tags=["mode:fine", "multimodal:file"],
+                key=_derive_key(parsed_text),
+                embedding=self.embedder.embed([parsed_text])[0],
+                usage=[],
+                sources=[source],
+                background="",
+                confidence=0.99,
+                type="fact",
+                info=info_,
+            ),
+        )
+
+        return [memory_item]
