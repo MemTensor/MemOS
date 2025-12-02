@@ -1,4 +1,3 @@
-import functools
 import time
 
 from memos.log import get_logger
@@ -23,7 +22,6 @@ def timed(func=None, *, log=True, log_prefix="", log_args=None):
     """
 
     def decorator(fn):
-        @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
             result = fn(*args, **kwargs)
