@@ -4,7 +4,6 @@ import os
 import tempfile
 
 from typing import Any
-from urllib.parse import urlparse
 
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
@@ -25,6 +24,53 @@ logger = get_logger(__name__)
 
 class FileContentParser(BaseMessageParser):
     """Parser for file content parts."""
+
+    def _handle_url(self, url_str: str, filename: str) -> tuple[str, str | None]:
+        """Download and parse file from URL."""
+        try:
+            from urllib.parse import urlparse
+
+            import requests
+
+            parsed_url = urlparse(url_str)
+            hostname = parsed_url.hostname or ""
+
+            response = requests.get(url_str, timeout=30)
+            response.raise_for_status()
+
+            if not filename:
+                filename = os.path.basename(parsed_url.path) or "downloaded_file"
+
+            if hostname in self.direct_markdown_hostnames:
+                return response.text, None
+
+            file_ext = os.path.splitext(filename)[1] or ".tmp"
+            with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=file_ext) as temp_file:
+                temp_file.write(response.content)
+            return "", temp_file.name
+        except Exception as e:
+            logger.error(f"[FileContentParser] URL processing error: {e}")
+            return f"[File URL download failed: {url_str}]", None
+
+    def _is_base64(self, data: str) -> bool:
+        """Quick heuristic to check base64-like string."""
+        return data.startswith("data:") or (
+            len(data) > 100
+            and all(
+                c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+                for c in data[:100]
+            )
+        )
+
+    def _handle_base64(self, data: str) -> str:
+        """Base64 not implemented placeholder."""
+        logger.info("[FileContentParser] Base64 content detected but decoding is not implemented.")
+        return ""
+
+    def _handle_local(self, data: str) -> str:
+        """Base64 not implemented placeholder."""
+        logger.info("[FileContentParser] Local file paths are not supported in fine mode.")
+        return ""
 
     def __init__(
         self,
@@ -128,8 +174,6 @@ class FileContentParser(BaseMessageParser):
             return f"[File: {filename}]"
 
         try:
-            import os
-
             if os.path.exists(file_path):
                 parsed_text = self.parser.parse(file_path)
                 return parsed_text
@@ -304,73 +348,27 @@ class FileContentParser(BaseMessageParser):
             # Priority 1: If file_data is provided, process it
             if file_data:
                 if isinstance(file_data, str):
-                    # Check if it's a URL (supports @http://, http://, https://)
-                    url_str = file_data
-                    if url_str.startswith("@"):
-                        url_str = url_str[1:]  # Remove @ prefix if present
+                    url_str = file_data[1:] if file_data.startswith("@") else file_data
 
                     if url_str.startswith(("http://", "https://")):
-                        # Download and parse URL
-                        try:
-                            import requests
-
-                            # Parse URL to check hostname
-                            parsed_url = urlparse(url_str)
-                            hostname = parsed_url.hostname or ""
-
-                            logger.info(f"[FileContentParser] Downloading file from URL: {url_str}")
-                            response = requests.get(url_str, timeout=30)
-                            response.raise_for_status()
-
-                            # Determine filename from URL or use provided filename
-                            if not filename:
-                                filename = os.path.basename(parsed_url.path) or "downloaded_file"
-
-                            # Route based on hostname
-                            if hostname in self.direct_markdown_hostnames:
-                                # Special handling for configured hostnames: directly use response text as markdown
-                                logger.info(
-                                    f"[FileContentParser] Using direct markdown content for {hostname}"
-                                )
-                                parsed_text = response.text
-                            else:
-                                file_ext = os.path.splitext(filename)[1] or ".tmp"
-
-                                with tempfile.NamedTemporaryFile(
-                                    mode="wb", delete=False, suffix=file_ext
-                                ) as temp_file:
-                                    temp_file.write(response.content)
-                                temp_file_path = temp_file.name
-                                logger.info(
-                                    f"[FileContentParser] Downloaded file to: {temp_file_path}"
-                                )
-                                # Parse the downloaded file
+                        parsed_text, temp_file_path = self._handle_url(url_str, filename)
+                        if temp_file_path:
+                            try:
                                 parsed_text = self.parser.parse(temp_file_path)
-                        except requests.RequestException as e:
-                            logger.error(
-                                f"[FileContentParser] Failed to download URL {url_str}: {e}"
-                            )
-                            parsed_text = f"[File URL download failed: {url_str}]"
-                        except Exception as e:
-                            logger.error(f"[FileContentParser] Error parsing downloaded file: {e}")
-                            parsed_text = f"[File parsing error: {e!s}]"
+                            except Exception as e:
+                                logger.error(
+                                    f"[FileContentParser] Error parsing downloaded file: {e}"
+                                )
+                                parsed_text = f"[File parsing error: {e!s}]"
 
-                    # Check if it's a local file path
                     elif os.path.exists(file_data):
-                        logger.info("[FileContentParser] local file not implemented now.")
-                    # Check if it's base64 encoded data
-                    elif file_data.startswith("data:") or (
-                        len(file_data) > 100
-                        and all(
-                            c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
-                            for c in file_data[:100]
-                        )
-                    ):
-                        logger.info("[FileContentParser] base64 not implemented now.")
-                    # Otherwise treat as plain text
+                        parsed_text = self._handle_local(file_data)
+
+                    elif self._is_base64(file_data):
+                        parsed_text = self._handle_base64(file_data)
+
                     else:
                         parsed_text = file_data
-
             # Priority 2: If file_id is provided but no file_data, try to use file_id as path
             elif file_id:
                 logger.warning(f"[FileContentParser] File data not provided for file_id: {file_id}")
@@ -379,9 +377,9 @@ class FileContentParser(BaseMessageParser):
             # If no content could be parsed, create a placeholder
             if not parsed_text:
                 if filename:
-                    parsed_text = f"[File: {filename}]: File data not provided"
+                    parsed_text = f"[File: {filename}] File data not provided"
                 else:
-                    parsed_text = "[File: unknown]: File data not provided"
+                    parsed_text = "[File: unknown] File data not provided"
 
         except Exception as e:
             logger.error(f"[FileContentParser] Error in parse_fine: {e}")
