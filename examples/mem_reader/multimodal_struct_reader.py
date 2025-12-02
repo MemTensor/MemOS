@@ -759,7 +759,7 @@ def get_reader_config() -> dict[str, Any]:
 
     # Get direct markdown hostnames from environment variable
     direct_markdown_hostnames = None
-    env_hostnames = os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "")
+    env_hostnames = os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "139.196.232.20")
     if env_hostnames:
         direct_markdown_hostnames = [h.strip() for h in env_hostnames.split(",") if h.strip()]
 

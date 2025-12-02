@@ -709,7 +709,9 @@ class APIConfig:
                     "chat_chunker": reader_config,
                     "direct_markdown_hostnames": [
                         h.strip()
-                        for h in os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "").split(",")
+                        for h in os.getenv(
+                            "FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "139.196.232.20"
+                        ).split(",")
                         if h.strip()
                     ],
                 },
