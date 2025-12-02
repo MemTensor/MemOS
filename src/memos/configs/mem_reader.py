@@ -48,6 +48,12 @@ class SimpleStructMemReaderConfig(BaseMemReaderConfig):
 class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
     """MultiModalStruct MemReader configuration class."""
 
+    direct_markdown_hostnames: list[str] | None = Field(
+        default=None,
+        description="List of hostnames that should return markdown directly without parsing. "
+        "If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES environment variable.",
+    )
+
 
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):
     """StrategyStruct MemReader configuration class."""

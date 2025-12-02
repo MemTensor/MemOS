@@ -20,6 +20,19 @@ class SentenceChunkerConfig(BaseChunkerConfig):
     """Configuration for sentence-based text chunker."""
 
 
+class MarkdownChunkerConfig(BaseChunkerConfig):
+    """Configuration for markdown-based text chunker."""
+
+    headers_to_split_on: list[tuple[str, str]] = Field(
+        default=[("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")],
+        description="Headers to split on",
+    )
+    strip_headers: bool = Field(default=True, description="Strip headers from the text")
+    recursive: bool = Field(
+        default=False, description="Whether to use recursive character text splitter"
+    )
+
+
 class ChunkerConfigFactory(BaseConfig):
     """Factory class for creating chunker configurations."""
 
@@ -28,6 +41,7 @@ class ChunkerConfigFactory(BaseConfig):
 
     backend_to_class: ClassVar[dict[str, Any]] = {
         "sentence": SentenceChunkerConfig,
+        "markdown": MarkdownChunkerConfig,
     }
 
     @field_validator("backend")
