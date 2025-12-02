@@ -187,6 +187,9 @@ def handle_get_memories(
 
 
 def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
+    logger.info(
+        f"[Delete memory request] writable_cube_ids: {delete_mem_req.writable_cube_ids}, memory_ids: {delete_mem_req.memory_ids}"
+    )
     # Validate that only one of memory_ids, file_ids, or filter is provided
     provided_params = [
         delete_mem_req.memory_ids is not None,
