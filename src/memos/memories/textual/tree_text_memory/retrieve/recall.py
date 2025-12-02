@@ -115,7 +115,7 @@ class GraphMemoryRetriever:
             graph_results = future_graph.result()
             vector_results = future_vector.result()
             bm25_results = future_bm25.result() if self.use_bm25 else []
-            fulltext_results = future_fulltext.result()
+            fulltext_results = future_fulltext.result() if use_fast_graph else []
 
         # Merge and deduplicate by ID
         combined = {
