@@ -181,6 +181,91 @@ def example_03_assistant_with_tool_calls():
 
 # ===========================================================================
 # 4. MultiModel messages
+def example_03b_tool_message_with_result():
+    """
+    Tool message returning the result of a tool call.
+
+    - `role = tool`, `content` contains the tool execution result.
+    - `tool_call_id` links this message to the original tool call.
+    - This is the standard format for tool execution results in OpenAI-style conversations.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "tool-call-weather-1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "北京"}',
+                        },
+                    }
+                ],
+                "chat_time": "2025-11-24T10:12:00Z",
+                "message_id": "assistant-with-call-1",
+            },
+            {
+                "role": "tool",
+                "content": "北京今天天气晴朗，温度25°C，湿度60%。",
+                "tool_call_id": "tool-call-weather-1",
+                "chat_time": "2025-11-24T10:12:05Z",
+                "message_id": "tool-result-1",
+            },
+        ],
+        "info": {"source_type": "tool_execution"},
+    }
+    call_add_api("03b_tool_message_with_result", payload)
+
+
+def example_03c_tool_description_input_output():
+    """
+    Custom tool message format: tool_description, tool_input, tool_output.
+
+    - This demonstrates the custom tool message format (not OpenAI standard).
+    - `tool_description`: describes the tool/function definition.
+    - `tool_input`: the input parameters for the tool call.
+    - `tool_output`: the result/output from the tool execution.
+    - These are alternative formats for representing tool interactions.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "type": "tool_description",
+                "name": "get_weather",
+                "description": "获取指定地点的当前天气信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string", "description": "城市名称"}},
+                    "required": ["location"],
+                },
+            },
+            {
+                "type": "tool_input",
+                "call_id": "call_123",
+                "name": "get_weather",
+                "argument": {"location": "北京"},
+            },
+            {
+                "type": "tool_output",
+                "call_id": "call_123",
+                "name": "get_weather",
+                "output": {"weather": "晴朗", "temperature": 25, "humidity": 60},
+            },
+        ],
+        "info": {"source_type": "custom_tool_format"},
+    }
+    call_add_api("03c_tool_description_input_output", payload)
+
+
+# ===========================================================================
+# 4. Multimodal messages
 # ===========================================================================
 
 
@@ -414,6 +499,56 @@ def example_09b_pure_file_input_by_file_data():
     call_add_api("09b_pure_file_input_by_file_data", payload)
 
 
+def example_09c_pure_file_input_by_oss_url():
+    """
+    Pure file input item using file_data with OSS URL.
+
+    - Uses `file_data` with OSS URL (object storage service URL).
+    - This format is used when files are stored in cloud storage (e.g., Alibaba Cloud OSS).
+    - The file_data field accepts both base64-encoded content and OSS URLs.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": "oss_url",  # OSS URL instead of base64
+                    "filename": "document.pdf",
+                },
+            }
+        ],
+        "info": {"source_type": "file_ingestion_oss"},
+    }
+    call_add_api("09c_pure_file_input_by_oss_url", payload)
+
+
+def example_09d_pure_image_input():
+    """
+    Pure image input item without dialog context.
+
+    - This demonstrates adding an image as a standalone input item (not part of a conversation).
+    - Uses the same format as pure text/file inputs, but with image_url type.
+    - Useful for batch image ingestion or when images don't have associated dialog.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/standalone_image.jpg",
+                    "detail": "high",
+                },
+            }
+        ],
+        "info": {"source_type": "image_ingestion"},
+    }
+    call_add_api("09d_pure_image_input", payload)
+
+
 def example_10_mixed_text_file_image():
     """
     Mixed multimodal message: text + file + image in a single user message.
@@ -619,6 +754,96 @@ def example_16_feedback_add():
     call_add_api("16_feedback_add", payload)
 
 
+def example_17_family_travel_conversation():
+    """
+    Multi-turn conversation example: family travel planning.
+
+    - Demonstrates a complete conversation with multiple user-assistant exchanges.
+    - Shows how to add a full conversation history in a single request.
+    - Uses async_mode for asynchronous processing.
+    - This example shows a Chinese conversation about summer travel planning for families.
+    """
+    payload = {
+        "user_id": "memos_automated_testing",
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "session_id": "0610",
+        "async_mode": "async",
+        "messages": [
+            {
+                "role": "user",
+                "content": "我想暑假出去玩，你能帮我推荐下吗？",
+            },
+            {
+                "role": "assistant",
+                "content": "好的！是自己出行还是和家人朋友一起呢？",
+            },
+            {
+                "role": "user",
+                "content": "肯定要带孩子啊，我们家出门都是全家一起。",
+            },
+            {
+                "role": "assistant",
+                "content": "明白了，所以你们是父母带孩子一块儿旅行，对吗？",
+            },
+            {
+                "role": "user",
+                "content": "对，带上孩子和老人，一般都是全家行动。",
+            },
+            {
+                "role": "assistant",
+                "content": "收到，那我会帮你推荐适合家庭出游的目的地。",
+            },
+        ],
+        "custom_tags": [],
+        "info": {
+            "source_type": "chat",
+            "conversation_id": "0610",
+        },
+    }
+    call_add_api("17_family_travel_conversation", payload)
+
+
+def example_18_add_with_chat_history():
+    """
+    Add memory with chat_history field.
+
+    - `chat_history` provides additional conversation context separate from `messages`.
+    - This is useful when you want to add specific messages while providing broader context.
+    - The chat_history helps the system understand the conversation flow better.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "session_id": "session_with_history",
+        "messages": [
+            {
+                "role": "user",
+                "content": "我想了解一下这个产品的价格。",
+            },
+            {
+                "role": "assistant",
+                "content": "好的，我来为您查询价格信息。",
+            },
+        ],
+        "chat_history": [
+            {
+                "role": "system",
+                "content": "You are a helpful product assistant.",
+            },
+            {
+                "role": "user",
+                "content": "你好，我想咨询产品信息。",
+            },
+            {
+                "role": "assistant",
+                "content": "您好！我很乐意为您提供产品信息。",
+            },
+        ],
+        "info": {"source_type": "chat_with_history"},
+    }
+    call_add_api("18_add_with_chat_history", payload)
+
+
 # ===========================================================================
 # Entry point
 # ===========================================================================
@@ -628,6 +853,8 @@ if __name__ == "__main__":
     example_01_string_message_minimal()
     example_02_standard_chat_triplet()
     example_03_assistant_with_tool_calls()
+    example_03b_tool_message_with_result()
+    example_03c_tool_description_input_output()
     example_04_extreme_multimodal_single_message()
     example_05_multimodal_text_and_image()
     example_06_multimodal_text_and_file()
@@ -635,6 +862,8 @@ if __name__ == "__main__":
     example_08_pure_text_input_items()
     example_09_pure_file_input_by_file_id()
     example_09b_pure_file_input_by_file_data()
+    example_09c_pure_file_input_by_oss_url()
+    example_09d_pure_image_input()
     example_10_mixed_text_file_image()
     example_11_deprecated_memory_content_and_doc_path()
     example_12_async_default_pipeline()
@@ -642,3 +871,5 @@ if __name__ == "__main__":
     example_14_sync_fine_pipeline()
     example_15_async_with_task_id()
     example_16_feedback_add()
+    example_17_family_travel_conversation()
+    example_18_add_with_chat_history()
