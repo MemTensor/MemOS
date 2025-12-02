@@ -44,7 +44,9 @@ class FileContentParser(BaseMessageParser):
             if hostname in self.direct_markdown_hostnames:
                 return response.text, None
 
-            file_ext = os.path.splitext(filename)[1] or ".tmp"
+            file_ext = os.path.splitext(filename)[1].lower()
+            if file_ext in [".md", ".markdown", ".txt"]:
+                return response.text, None
             with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=file_ext) as temp_file:
                 temp_file.write(response.content)
             return "", temp_file.name
