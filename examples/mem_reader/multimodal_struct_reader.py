@@ -863,7 +863,7 @@ Examples:
     parser.add_argument(
         "--example",
         type=str,
-        default="chat_with_list_content",
+        default="all",
         help="Test case name, category name, or 'all' to run all cases (default: all)",
     )
     parser.add_argument(

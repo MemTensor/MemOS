@@ -91,6 +91,7 @@ class TreeTextMemory(BaseTextMemory):
             )
         else:
             logger.info("No internet retriever configured")
+        self.tokenizer = None
 
     def add(
         self,
@@ -165,6 +166,7 @@ class TreeTextMemory(BaseTextMemory):
         search_priority: dict | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
@@ -197,6 +199,7 @@ class TreeTextMemory(BaseTextMemory):
                 internet_retriever=None,
                 search_strategy=self.search_strategy,
                 manual_close_internet=manual_close_internet,
+                tokenizer=self.tokenizer,
             )
         else:
             searcher = Searcher(
@@ -208,6 +211,7 @@ class TreeTextMemory(BaseTextMemory):
                 internet_retriever=self.internet_retriever,
                 search_strategy=self.search_strategy,
                 manual_close_internet=manual_close_internet,
+                tokenizer=self.tokenizer,
             )
         return searcher.search(
             query,
@@ -218,6 +222,7 @@ class TreeTextMemory(BaseTextMemory):
             search_filter,
             search_priority,
             user_name=user_name,
+            plugin=kwargs.get("plugin", False),
         )
 
     def get_relevant_subgraph(
