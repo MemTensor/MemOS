@@ -111,7 +111,7 @@ class ChatRequest(BaseRequest):
     )
 
     # ==== Extended capabilities ====
-    internet_search: bool = Field(True, description="Whether to use internet search")
+    internet_search: bool = Field(False, description="Whether to use internet search")
     threshold: float = Field(0.5, description="Threshold for filtering references")
 
     # ==== Backward compatibility ====
@@ -667,7 +667,7 @@ class APIChatCompleteRequest(BaseRequest):
     )
 
     # ==== Extended capabilities ====
-    internet_search: bool = Field(True, description="Whether to use internet search")
+    internet_search: bool = Field(False, description="Whether to use internet search")
     threshold: float = Field(0.5, description="Threshold for filtering references")
 
     # ==== Backward compatibility ====
