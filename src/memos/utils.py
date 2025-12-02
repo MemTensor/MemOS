@@ -6,7 +6,7 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
-def timed(func=None, *, log=True, log_prefix="", log_args=None):
+def timed(func=None, *, log=True, log_prefix="", log_args=None, log_extra_args=None):
     """
     Parameters:
     - log: enable timing logs (default True)
@@ -27,19 +27,26 @@ def timed(func=None, *, log=True, log_prefix="", log_args=None):
             result = fn(*args, **kwargs)
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             ctx_str = ""
+            ctx_parts = []
 
             if log is not True:
                 return result
 
             if log_args:
-                ctx_parts = []
                 for key in log_args:
                     val = kwargs.get(key)
                     ctx_parts.append(f"{key}={val}")
                     ctx_str = f" [{', '.join(ctx_parts)}]"
-                logger.info(
-                    f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms, args: {ctx_str}"
-                )
+
+            if log_extra_args:
+                ctx_parts.extend([f"{key}={val}" for key, val in log_extra_args.items()])
+
+            if ctx_parts:
+                ctx_str = f" [{', '.join(ctx_parts)}]"
+
+            logger.info(
+                f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms, args: {ctx_str}"
+            )
 
             return result
 

@@ -119,7 +119,9 @@ class HTTPBGEReranker(BaseReranker):
         self.warn_unknown_filter_keys = bool(warn_unknown_filter_keys)
         self._warned_missing_keys: set[str] = set()
 
-    @timed(log=True, log_prefix="model_timed_rerank")
+    @timed(
+        log=True, log_prefix="model_timed_rerank", log_extra_args={"model_name_or_path": "reranker"}
+    )
     def rerank(
         self,
         query: str,
