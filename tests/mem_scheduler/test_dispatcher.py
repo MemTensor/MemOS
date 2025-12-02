@@ -157,7 +157,10 @@ class TestSchedulerDispatcher(unittest.TestCase):
         """Test dispatching messages in serial mode."""
         # Create a new dispatcher with parallel dispatch disabled
         serial_dispatcher = SchedulerDispatcher(
-            max_workers=2, enable_parallel_dispatch=False, metrics=MagicMock()
+            max_workers=2,
+            memos_message_queue=self.dispatcher.memos_message_queue,
+            enable_parallel_dispatch=False,
+            metrics=MagicMock(),
         )
 
         # Create fresh mock handlers for this test

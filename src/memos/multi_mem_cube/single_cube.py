@@ -57,6 +57,10 @@ class SingleCubeView(MemCubeView):
         This is basically your current handle_add_memories logic,
         but scoped to a single cube_id.
         """
+        sync_mode = add_req.async_mode or self._get_sync_mode()
+        self.logger.info(
+            f"[DIAGNOSTIC] single_cube.add_memories called for cube_id: {self.cube_id}. sync_mode: {sync_mode}. Request: {add_req.model_dump_json(indent=2)}"
+        )
         user_context = UserContext(
             user_id=add_req.user_id,
             mem_cube_id=self.cube_id,
@@ -134,6 +138,7 @@ class SingleCubeView(MemCubeView):
         )
 
         self.logger.info(f"Search memories result: {memories_result}")
+        self.logger.info(f"Search {len(memories_result)} memories.")
         return memories_result
 
     def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any]:
@@ -195,7 +200,7 @@ class SingleCubeView(MemCubeView):
         user_context: UserContext,
         search_mode: str,
     ) -> list[dict[str, Any]]:
-        """G
+        """
         Search text memories based on mode.
 
         Args:
@@ -322,7 +327,7 @@ class SingleCubeView(MemCubeView):
             )
             missing_info_hint, trigger = self.mem_scheduler.retriever.recall_for_missing_memories(
                 query=search_req.query,
-                memories=raw_memories,
+                memories=[mem.memory for mem in enhanced_memories],
             )
             retrieval_size = len(raw_memories) - len(enhanced_memories)
             logger.info(f"Retrieval size: {retrieval_size}")
@@ -370,8 +375,8 @@ class SingleCubeView(MemCubeView):
         """
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
-        print(f"search_req.filter for preference memory: {search_req.filter}")
-        print(f"type of pref_mem: {type(self.naive_mem_cube.pref_mem)}")
+        logger.info(f"search_req.filter for preference memory: {search_req.filter}")
+        logger.info(f"type of pref_mem: {type(self.naive_mem_cube.pref_mem)}")
         try:
             results = self.naive_mem_cube.pref_mem.search(
                 query=search_req.query,
@@ -582,7 +587,7 @@ class SingleCubeView(MemCubeView):
 
             return [
                 {
-                    "memory": memory.memory,
+                    "memory": memory.metadata.preference,
                     "memory_id": memory_id,
                     "memory_type": memory.metadata.preference_type,
                 }

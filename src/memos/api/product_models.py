@@ -111,7 +111,7 @@ class ChatRequest(BaseRequest):
     )
 
     # ==== Extended capabilities ====
-    internet_search: bool = Field(True, description="Whether to use internet search")
+    internet_search: bool = Field(False, description="Whether to use internet search")
     threshold: float = Field(0.5, description="Threshold for filtering references")
 
     # ==== Backward compatibility ====
@@ -699,7 +699,7 @@ class APIChatCompleteRequest(BaseRequest):
     )
 
     # ==== Extended capabilities ====
-    internet_search: bool = Field(True, description="Whether to use internet search")
+    internet_search: bool = Field(False, description="Whether to use internet search")
     threshold: float = Field(0.5, description="Threshold for filtering references")
 
     # ==== Backward compatibility ====
@@ -728,6 +728,7 @@ class GetMemoryRequest(BaseRequest):
 class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
+    writable_cube_ids: list[str] = Field(..., description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")

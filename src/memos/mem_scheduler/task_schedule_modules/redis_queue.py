@@ -7,13 +7,18 @@ the local memos_message_queue functionality in BaseScheduler.
 
 import os
 import re
+import threading
 import time
 
+from collections import deque
 from collections.abc import Callable
 from uuid import uuid4
 
+from memos.context.context import ContextThread
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.general_schemas import DEFAULT_STREAM_KEY_PREFIX
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 
 
@@ -35,7 +40,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
     def __init__(
         self,
         stream_key_prefix: str = os.getenv(
-            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX", "scheduler:messages:stream"
+            "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX",
+            DEFAULT_STREAM_KEY_PREFIX,
         ),
         consumer_group: str = "scheduler_group",
         consumer_name: str | None = "scheduler_consumer",
@@ -78,19 +84,96 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         # Task tracking for mem_scheduler_wait compatibility
         self._unfinished_tasks = 0
 
+        # Broker flush threshold and async refill control
+        self.task_broker_flush_bar = 10
+        self._refill_lock = threading.Lock()
+        self._refill_thread: ContextThread | None = None
+
+        logger.info(
+            f"[REDIS_QUEUE] Initialized with stream_prefix='{self.stream_key_prefix}', "
+            f"consumer_group='{self.consumer_group}', consumer_name='{self.consumer_name}'"
+        )
+
         # Auto-initialize Redis connection
         if self.auto_initialize_redis():
             self._is_connected = True
 
         self.seen_streams = set()
 
-        # Task Broker
-
         # Task Orchestrator
+        self.message_pack_cache = deque()
+        self.orchestrator = SchedulerOrchestrator(queue=self)
 
-    def get_stream_key(self, user_id: str, mem_cube_id: str) -> str:
-        stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}"
+    def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
+        stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}:{task_label}"
         return stream_key
+
+    def task_broker(
+        self,
+        consume_batch_size: int,
+    ) -> list[list[ScheduleMessageItem]]:
+        stream_keys = self.get_stream_keys(stream_key_prefix=self.stream_key_prefix)
+        if not stream_keys:
+            return []
+
+        stream_quotas = self.orchestrator.get_stream_quotas(
+            stream_keys=stream_keys, consume_batch_size=consume_batch_size
+        )
+        cache: list[ScheduleMessageItem] = []
+        for stream_key in stream_keys:
+            messages = self.get(
+                stream_key=stream_key,
+                block=False,
+                batch_size=stream_quotas[stream_key],
+            )
+            cache.extend(messages)
+
+        # pack messages
+        packed: list[list[ScheduleMessageItem]] = []
+        for i in range(0, len(cache), consume_batch_size):
+            packed.append(cache[i : i + consume_batch_size])
+        # return packed list without overwriting existing cache
+        return packed
+
+    def _async_refill_cache(self, batch_size: int) -> None:
+        """Background thread to refill message cache without blocking get_messages."""
+        try:
+            logger.debug(f"Starting async cache refill with batch_size={batch_size}")
+            new_packs = self.task_broker(consume_batch_size=batch_size)
+            logger.debug(f"task_broker returned {len(new_packs)} packs")
+            with self._refill_lock:
+                for pack in new_packs:
+                    if pack:  # Only add non-empty packs
+                        self.message_pack_cache.append(pack)
+                        logger.debug(f"Added pack with {len(pack)} messages to cache")
+            logger.debug(f"Cache refill complete, cache size now: {len(self.message_pack_cache)}")
+        except Exception as e:
+            logger.warning(f"Async cache refill failed: {e}", exc_info=True)
+
+    def get_messages(self, batch_size: int) -> list[ScheduleMessageItem]:
+        if self.message_pack_cache:
+            # Trigger async refill if below threshold (non-blocking)
+            if len(self.message_pack_cache) < self.task_broker_flush_bar and (
+                self._refill_thread is None or not self._refill_thread.is_alive()
+            ):
+                logger.debug(
+                    f"Triggering async cache refill: cache size {len(self.message_pack_cache)} < {self.task_broker_flush_bar}"
+                )
+                self._refill_thread = ContextThread(
+                    target=self._async_refill_cache, args=(batch_size,), name="redis-cache-refill"
+                )
+                self._refill_thread.start()
+            else:
+                logger.debug(f"The size of message_pack_cache is {len(self.message_pack_cache)}")
+        else:
+            new_packs = self.task_broker(consume_batch_size=batch_size)
+            for pack in new_packs:
+                if pack:  # Only add non-empty packs
+                    self.message_pack_cache.append(pack)
+        if len(self.message_pack_cache) == 0:
+            return []
+        else:
+            return self.message_pack_cache.popleft()
 
     def _ensure_consumer_group(self, stream_key) -> None:
         """Ensure the consumer group exists for the stream."""
@@ -135,12 +218,14 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         try:
             stream_key = self.get_stream_key(
-                user_id=message.user_id, mem_cube_id=message.mem_cube_id
+                user_id=message.user_id, mem_cube_id=message.mem_cube_id, task_label=message.label
             )
 
             if stream_key not in self.seen_streams:
                 self.seen_streams.add(stream_key)
                 self._ensure_consumer_group(stream_key=stream_key)
+
+            message.stream_key = stream_key
 
             # Convert message to dictionary for Redis storage
             message_data = message.to_dict()
@@ -158,10 +243,31 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             logger.error(f"Failed to add message to Redis queue: {e}")
             raise
 
-    def ack_message(self, user_id, mem_cube_id, redis_message_id) -> None:
-        stream_key = self.get_stream_key(user_id=user_id, mem_cube_id=mem_cube_id)
+    def ack_message(
+        self, user_id: str, mem_cube_id: str, task_label: str, redis_message_id
+    ) -> None:
+        stream_key = self.get_stream_key(
+            user_id=user_id, mem_cube_id=mem_cube_id, task_label=task_label
+        )
+        # No-op if not connected or message doesn't come from Redis
+        if not self._redis_conn:
+            logger.debug(
+                f"Skip ack: Redis not connected for stream '{stream_key}', msg_id='{redis_message_id}'"
+            )
+            return
+        if not redis_message_id:
+            logger.debug(
+                f"Skip ack: Empty redis_message_id for stream '{stream_key}', user_id='{user_id}', label='{task_label}'"
+            )
+            return
 
-        self.redis.xack(stream_key, self.consumer_group, redis_message_id)
+        try:
+            self._redis_conn.xack(stream_key, self.consumer_group, redis_message_id)
+        except Exception as e:
+            logger.warning(
+                f"xack failed for stream '{stream_key}', msg_id='{redis_message_id}': {e}"
+            )
+            return
 
         # Optionally delete the message from the stream to keep it clean
         if self.auto_delete_acked:
@@ -190,12 +296,14 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 redis_timeout = None  # Non-blocking
 
             # Read messages from the consumer group
+            # 1) Read remaining/new messages first (not yet delivered to any consumer)
+            new_messages: list[tuple[str, list[tuple[str, dict]]]] = []
             try:
-                messages = self._redis_conn.xreadgroup(
+                new_messages = self._redis_conn.xreadgroup(
                     self.consumer_group,
                     self.consumer_name,
                     {stream_key: ">"},
-                    count=batch_size if not batch_size else 1,
+                    count=(batch_size if batch_size is not None else None),
                     block=redis_timeout,
                 )
             except Exception as read_err:
@@ -203,18 +311,69 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 err_msg = str(read_err).lower()
                 if "nogroup" in err_msg or "no such key" in err_msg:
                     logger.warning(
-                        f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry."
+                        f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (new)."
                     )
                     self._ensure_consumer_group(stream_key=stream_key)
-                    messages = self._redis_conn.xreadgroup(
+                    new_messages = self._redis_conn.xreadgroup(
                         self.consumer_group,
                         self.consumer_name,
                         {stream_key: ">"},
-                        count=batch_size if not batch_size else 1,
+                        count=(batch_size if batch_size is not None else None),
                         block=redis_timeout,
                     )
                 else:
                     raise
+
+            # 2) If needed, read pending messages for THIS consumer only
+            pending_messages: list[tuple[str, list[tuple[str, dict]]]] = []
+            need_pending_count = None
+            if batch_size is None:
+                # No batch_size: prefer returning a single new message; if none, fetch one pending
+                if not new_messages:
+                    need_pending_count = 1
+            else:
+                # With batch_size: fill from pending if new insufficient
+                new_count = sum(len(sm) for _s, sm in new_messages) if new_messages else 0
+                need_pending = max(0, batch_size - new_count)
+                need_pending_count = need_pending if need_pending > 0 else 0
+
+            if need_pending_count:
+                try:
+                    pending_messages = self._redis_conn.xreadgroup(
+                        self.consumer_group,
+                        self.consumer_name,
+                        {stream_key: "0"},  # read only this consumer's pending
+                        count=need_pending_count,
+                        block=None,  # do not block when checking pending
+                    )
+                except Exception as read_err:
+                    # Handle missing group/stream by creating and retrying once
+                    err_msg = str(read_err).lower()
+                    if "nogroup" in err_msg or "no such key" in err_msg:
+                        logger.warning(
+                            f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (pending)."
+                        )
+                        self._ensure_consumer_group(stream_key=stream_key)
+                        try:
+                            pending_messages = self._redis_conn.xreadgroup(
+                                self.consumer_group,
+                                self.consumer_name,
+                                {stream_key: "0"},
+                                count=need_pending_count,
+                                block=None,
+                            )
+                        except Exception:
+                            pending_messages = []
+                    else:
+                        pending_messages = []
+
+            # Combine: new first, then pending
+            messages = []
+            if new_messages:
+                messages.extend(new_messages)
+            if pending_messages:
+                messages.extend(pending_messages)
+
             result_messages = []
 
             for _stream, stream_messages in messages:
@@ -246,22 +405,6 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 raise
             logger.error(f"Failed to get message from Redis queue: {e}")
             raise
-
-    def get_nowait(
-        self, user_id: str, mem_cube_id: str, batch_size: int | None = None
-    ) -> list[ScheduleMessageItem]:
-        """
-        Get messages from the Redis queue without blocking (Queue-compatible interface).
-
-        Returns:
-            List of SchedulerMessageItem objects
-
-        Raises:
-            Empty: If no message is available
-        """
-        return self.get(
-            user_id=user_id, mem_cube_id=mem_cube_id, block=False, batch_size=batch_size
-        )
 
     def qsize(self) -> dict:
         """
@@ -320,12 +463,13 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
     def size(self) -> int:
         """
-        Get the current size of the Redis queue (alias for qsize).
+        Get the current size of the Redis queue (total message count from qsize dict).
 
         Returns:
-            Number of messages in the queue
+            Total number of messages across all streams
         """
-        return self.qsize()
+        qsize_result = self.qsize()
+        return qsize_result.get("total_size", 0)
 
     def empty(self) -> bool:
         """
@@ -334,7 +478,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         Returns:
             True if the queue is empty, False otherwise
         """
-        return self.qsize() == 0
+        return self.size() == 0
 
     def full(self) -> bool:
         """
@@ -348,7 +492,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         """
         if self.maxsize <= 0:
             return False
-        return self.qsize() >= self.maxsize
+        return self.size() >= self.maxsize
 
     def join(self) -> None:
         """
@@ -358,18 +502,22 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         which is complex. For now, this is a no-op.
         """
 
-    def clear(self) -> None:
+    def clear(self, stream_key=None) -> None:
         """Clear all messages from the queue."""
         if not self._is_connected or not self._redis_conn:
             return
 
         try:
-            stream_keys = self.get_stream_keys()
-
-            for stream_key in stream_keys:
-                # Delete the entire stream
+            if stream_key is not None:
                 self._redis_conn.delete(stream_key)
                 logger.info(f"Cleared Redis stream: {stream_key}")
+            else:
+                stream_keys = self.get_stream_keys()
+
+                for stream_key in stream_keys:
+                    # Delete the entire stream
+                    self._redis_conn.delete(stream_key)
+                    logger.info(f"Cleared Redis stream: {stream_key}")
 
         except Exception as e:
             logger.error(f"Failed to clear Redis queue: {e}")

@@ -21,6 +21,7 @@ from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLogger
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
+from memos.mem_scheduler.monitors.task_schedule_monitor import TaskScheduleMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_BATCH,
@@ -41,8 +42,6 @@ from memos.mem_scheduler.schemas.message_schemas import (
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
-from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
-from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
 from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.db_utils import get_utc_now
@@ -137,12 +136,18 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.dispatcher = SchedulerDispatcher(
             config=self.config,
             memos_message_queue=self.memos_message_queue,
-            use_redis_queue=self.use_redis_queue,
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
             status_tracker=self.status_tracker,
             metrics=self.metrics,
             submit_web_logs=self._submit_web_logs,
+        )
+        # Task schedule monitor: initialize with underlying queue implementation
+        self.get_status_parallel = self.config.get("get_status_parallel", True)
+        self.task_schedule_monitor = TaskScheduleMonitor(
+            memos_message_queue=self.memos_message_queue.memos_message_queue,
+            dispatcher=self.dispatcher,
+            get_status_parallel=self.get_status_parallel,
         )
 
         # other attributes
@@ -231,11 +236,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             # Clean up any partially initialized resources
             self._cleanup_on_init_failure()
             raise
-
-        # start queue monitor if enabled and a bot is set later
-
-    def debug_mode_on(self):
-        self.memos_message_queue.debug_mode_on()
 
     def _cleanup_on_init_failure(self):
         """Clean up resources if initialization fails."""
@@ -596,6 +596,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Args:
             messages: Single log message or list of log messages
         """
+        messages_list = [messages] if isinstance(messages, ScheduleLogForWebItem) else messages
+        for message in messages_list:
+            logger.info(
+                f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
+            )
         if self.rabbitmq_config is None:
             return
 
@@ -720,7 +725,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             except Exception as e:
                 # Don't log error for "No messages available in Redis queue" as it's expected
                 if "No messages available in Redis queue" not in str(e):
-                    logger.error(f"Unexpected error in message consumer: {e!s}")
+                    logger.error(f"Unexpected error in message consumer: {e!s}", exc_info=True)
                 time.sleep(self._consume_interval)  # Prevent tight error loops
 
     def _monitor_loop(self):
@@ -940,47 +945,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         return result
 
-    @staticmethod
-    def init_task_status():
-        return {
-            "running": 0,
-            "remaining": 0,
-            "completed": 0,
-        }
-
     def get_tasks_status(self):
-        task_status = self.init_task_status()
-        memos_message_queue = self.memos_message_queue.memos_message_queue
-        if isinstance(memos_message_queue, SchedulerRedisQueue):
-            stream_keys = memos_message_queue.get_stream_keys(
-                stream_key_prefix=memos_message_queue.stream_key_prefix
-            )
-            for stream_key in stream_keys:
-                if stream_key not in task_status:
-                    task_status[stream_key] = self.init_task_status()
-                # For Redis queue, prefer XINFO GROUPS to compute pending
-                groups_info = memos_message_queue.redis.xinfo_groups(stream_key)
-                if groups_info:
-                    for group in groups_info:
-                        if group.get("name") == memos_message_queue.consumer_group:
-                            task_status[stream_key]["running"] += int(group.get("pending", 0))
-                            task_status[stream_key]["remaining"] += memos_message_queue.qsize()[
-                                stream_key
-                            ]
-                            task_status["running"] += int(group.get("pending", 0))
-                            task_status["remaining"] += task_status[stream_key]["remaining"]
-                            break
+        """Delegate status collection to TaskScheduleMonitor."""
+        return self.task_schedule_monitor.get_tasks_status()
 
-        elif isinstance(memos_message_queue, SchedulerLocalQueue):
-            running_task_count = self.dispatcher.get_running_task_count()
-            task_status["running"] = running_task_count
-            task_status["remaining"] = sum(memos_message_queue.qsize().values())
-        else:
-            logger.error(
-                f"type of self.memos_message_queue is {memos_message_queue}, which is not supported"
-            )
-            raise NotImplementedError()
-        return task_status
+    def print_tasks_status(self, tasks_status: dict | None = None) -> None:
+        """Delegate pretty printing to TaskScheduleMonitor."""
+        self.task_schedule_monitor.print_tasks_status(tasks_status=tasks_status)
 
     def _gather_queue_stats(self) -> dict:
         """Collect queue/dispatcher stats for reporting."""

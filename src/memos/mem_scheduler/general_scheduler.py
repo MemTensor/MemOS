@@ -369,16 +369,19 @@ class GeneralScheduler(BaseScheduler):
                             if kb_log_content:
                                 event = self.create_event_log(
                                     label="knowledgeBaseUpdate",
+                                    # 1. 移除 log_content 参数
+                                    # 2. 补充 memory_type
                                     from_memory_type=USER_INPUT_TYPE,
                                     to_memory_type=LONG_TERM_MEMORY_TYPE,
                                     user_id=msg.user_id,
                                     mem_cube_id=msg.mem_cube_id,
                                     mem_cube=self.current_mem_cube,
                                     memcube_log_content=kb_log_content,
-                                    metadata=None,  # Per design doc for KB logs
+                                    metadata=None,
                                     memory_len=len(kb_log_content),
                                     memcube_name=self._map_memcube_name(msg.mem_cube_id),
                                 )
+                                # 3. 后置赋值 log_content
                                 event.log_content = (
                                     f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
                                 )
@@ -534,6 +537,9 @@ class GeneralScheduler(BaseScheduler):
             logger.error(f"Error processing feedbackMemory message: {e}", exc_info=True)
 
     def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(
+            f"[DIAGNOSTIC] general_scheduler._mem_read_message_consumer called. Received messages: {[msg.model_dump_json(indent=2) for msg in messages]}"
+        )
         logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
@@ -541,6 +547,12 @@ class GeneralScheduler(BaseScheduler):
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
+                    )
+                    return
+
                 content = message.content
                 user_name = message.user_name
                 info = message.info or {}
@@ -598,6 +610,9 @@ class GeneralScheduler(BaseScheduler):
         task_id: str | None = None,
         info: dict | None = None,
     ) -> None:
+        logger.info(
+            f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader called. mem_ids: {mem_ids}, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}"
+        )
         """
         Process memories using mem_reader for enhanced memory processing.
 
@@ -695,6 +710,9 @@ class GeneralScheduler(BaseScheduler):
                                 }
                             )
                         if kb_log_content:
+                            logger.info(
+                                f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader: Creating event log for KB update. Label: knowledgeBaseUpdate, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}. KB content: {json.dumps(kb_log_content, indent=2)}"
+                            )
                             event = self.create_event_log(
                                 label="knowledgeBaseUpdate",
                                 from_memory_type=USER_INPUT_TYPE,
@@ -833,6 +851,11 @@ class GeneralScheduler(BaseScheduler):
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
+                    )
+                    return
                 content = message.content
                 user_name = message.user_name
 
@@ -1058,6 +1081,11 @@ class GeneralScheduler(BaseScheduler):
         def process_message(message: ScheduleMessageItem):
             try:
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={message.user_id}, mem_cube_id={message.mem_cube_id}, skipping processing"
+                    )
+                    return
 
                 user_id = message.user_id
                 session_id = message.session_id
