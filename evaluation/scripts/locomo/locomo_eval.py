@@ -311,7 +311,7 @@ async def main(frame, version="default", options=None, num_runs=1, max_workers=4
     with open(response_path) as file:
         locomo_responses = json.load(file)
 
-    num_users = 2
+    num_users = 10
     all_grades = {}
 
     total_responses_count = sum(

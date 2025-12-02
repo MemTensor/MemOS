@@ -14,6 +14,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     ANSWER_LABEL,
     DEFAULT_MAX_QUERY_KEY_WORDS,
     LONG_TERM_MEMORY_TYPE,
+    MEM_FEEDBACK_LABEL,
     MEM_ORGANIZE_LABEL,
     MEM_READ_LABEL,
     NOT_APPLICABLE_TYPE,
@@ -56,6 +57,7 @@ class GeneralScheduler(BaseScheduler):
             MEM_READ_LABEL: self._mem_read_message_consumer,
             MEM_ORGANIZE_LABEL: self._mem_reorganize_message_consumer,
             PREF_ADD_LABEL: self._pref_add_message_consumer,
+            MEM_FEEDBACK_LABEL: self._mem_feedback_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
 
@@ -367,16 +369,19 @@ class GeneralScheduler(BaseScheduler):
                             if kb_log_content:
                                 event = self.create_event_log(
                                     label="knowledgeBaseUpdate",
+                                    # 1. 移除 log_content 参数
+                                    # 2. 补充 memory_type
                                     from_memory_type=USER_INPUT_TYPE,
                                     to_memory_type=LONG_TERM_MEMORY_TYPE,
                                     user_id=msg.user_id,
                                     mem_cube_id=msg.mem_cube_id,
                                     mem_cube=self.current_mem_cube,
                                     memcube_log_content=kb_log_content,
-                                    metadata=None,  # Per design doc for KB logs
+                                    metadata=None,
                                     memory_len=len(kb_log_content),
                                     memcube_name=self._map_memcube_name(msg.mem_cube_id),
                                 )
+                                # 3. 后置赋值 log_content
                                 event.log_content = (
                                     f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
                                 )
@@ -473,7 +478,68 @@ class GeneralScheduler(BaseScheduler):
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
 
+    def _mem_feedback_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        try:
+            message = messages[0]
+            mem_cube = self.current_mem_cube
+
+            user_id = message.user_id
+            mem_cube_id = message.mem_cube_id
+            content = message.content
+
+            feedback_data = json.loads(content)
+
+            feedback_result = self.feedback_server.process_feedback(
+                user_id=user_id,
+                user_name=mem_cube_id,
+                session_id=feedback_data["session_id"],
+                chat_history=feedback_data["history"],
+                retrieved_memory_ids=feedback_data["retrieved_memory_ids"],
+                feedback_content=feedback_data["feedback_content"],
+                feedback_time=feedback_data["feedback_time"],
+                task_id=feedback_data["task_id"],
+            )
+
+            logger.info(
+                f"Successfully feedback memories for user_id={user_id}, mem_cube_id={mem_cube_id}"
+            )
+
+            should_send_log = (
+                self.rabbitmq_config is not None
+                and hasattr(self.rabbitmq_config, "exchange_type")
+                and self.rabbitmq_config.exchange_type == "direct"
+            )
+            if feedback_result and should_send_log:
+                feedback_content = []
+                for _i, mem_item in enumerate(feedback_result):
+                    feedback_content.append(
+                        {
+                            "content": mem_item.memory,
+                            "id": mem_item["id"],
+                        }
+                    )
+                event = self.create_event_log(
+                    label="feedbackMemory",
+                    from_memory_type=USER_INPUT_TYPE,
+                    to_memory_type=LONG_TERM_MEMORY_TYPE,
+                    user_id=user_id,
+                    mem_cube_id=mem_cube_id,
+                    mem_cube=mem_cube,
+                    memcube_log_content=feedback_content,
+                    metadata=[],
+                    memory_len=len(feedback_content),
+                    memcube_name=self._map_memcube_name(mem_cube_id),
+                )
+                event.task_id = message.task_id
+                self._submit_web_logs([event])
+
+        except Exception as e:
+            logger.error(f"Error processing feedbackMemory message: {e}", exc_info=True)
+
     def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(
+            f"[DIAGNOSTIC] general_scheduler._mem_read_message_consumer called. Received messages: {[msg.model_dump_json(indent=2) for msg in messages]}"
+        )
         logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
@@ -481,6 +547,12 @@ class GeneralScheduler(BaseScheduler):
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
+                    )
+                    return
+
                 content = message.content
                 user_name = message.user_name
                 info = message.info or {}
@@ -538,6 +610,9 @@ class GeneralScheduler(BaseScheduler):
         task_id: str | None = None,
         info: dict | None = None,
     ) -> None:
+        logger.info(
+            f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader called. mem_ids: {mem_ids}, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}"
+        )
         """
         Process memories using mem_reader for enhanced memory processing.
 
@@ -635,6 +710,9 @@ class GeneralScheduler(BaseScheduler):
                                 }
                             )
                         if kb_log_content:
+                            logger.info(
+                                f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader: Creating event log for KB update. Label: knowledgeBaseUpdate, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}. KB content: {json.dumps(kb_log_content, indent=2)}"
+                            )
                             event = self.create_event_log(
                                 label="knowledgeBaseUpdate",
                                 from_memory_type=USER_INPUT_TYPE,
@@ -773,6 +851,11 @@ class GeneralScheduler(BaseScheduler):
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
+                    )
+                    return
                 content = message.content
                 user_name = message.user_name
 
@@ -998,6 +1081,11 @@ class GeneralScheduler(BaseScheduler):
         def process_message(message: ScheduleMessageItem):
             try:
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={message.user_id}, mem_cube_id={message.mem_cube_id}, skipping processing"
+                    )
+                    return
 
                 user_id = message.user_id
                 session_id = message.session_id

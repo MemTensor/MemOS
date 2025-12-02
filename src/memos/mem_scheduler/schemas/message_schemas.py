@@ -34,6 +34,7 @@ DEFAULT_MEMORY_CAPACITIES = {
 class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
     redis_message_id: str = Field(default="", description="the message get from redis stream")
+    stream_key: str = Field("", description="stream_key for identifying the queue in line")
     user_id: str = Field(..., description="user id")
     mem_cube_id: str = Field(..., description="memcube id")
     session_id: str = Field(default="", description="Session ID for soft-filtering memories")
@@ -84,6 +85,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
             "user_name": self.user_name,
+            "task_id": self.task_id if self.task_id is not None else "",
         }
 
     @classmethod
@@ -97,6 +99,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
             user_name=data.get("user_name"),
+            task_id=data.get("task_id"),
         )
 
 

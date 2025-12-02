@@ -110,7 +110,7 @@ def get_default_config(
                 "act_mem_update_interval": kwargs.get("scheduler_act_mem_update_interval", 300),
                 "context_window_size": kwargs.get("scheduler_context_window_size", 5),
                 "thread_pool_max_workers": kwargs.get("scheduler_thread_pool_max_workers", 10),
-                "consume_interval_seconds": kwargs.get("scheduler_consume_interval_seconds", 3),
+                "consume_interval_seconds": kwargs.get("scheduler_consume_interval_seconds", 0.01),
                 "enable_parallel_dispatch": kwargs.get("scheduler_enable_parallel_dispatch", True),
                 "enable_activation_memory": True,
             },

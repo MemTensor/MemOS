@@ -669,7 +669,6 @@ class PolarDBGraphDB(BaseGraphDB):
         valid_rel_types = {"AGGREGATE_TO", "FOLLOWS", "INFERS", "MERGED_TO", "RELATE_TO", "PARENT"}
 
         for label_name in valid_rel_types:
-            print(f"🪶 Creating elabel: {label_name}")
             conn = self._get_connection()
             logger.info(f"Creating elabel: {label_name}")
             try:
@@ -1596,7 +1595,6 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[search_by_embedding] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}"
         )
-        print(f"[search_by_embedding] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}")
         where_clauses = []
         if scope:
             where_clauses.append(
@@ -1687,13 +1685,12 @@ class PolarDBGraphDB(BaseGraphDB):
                 wrapped_lines = textwrap.wrap(
                     line, width=200, break_long_words=False, break_on_hyphens=False
                 )
-                for wrapped_line in wrapped_lines:
-                    print(wrapped_line)
+                for _wrapped_line in wrapped_lines:
+                    pass
             else:
-                print(line)
+                pass
 
         logger.info(f"[search_by_embedding] query: {query}, params: {params}")
-        print(f"[search_by_embedding] query: {query}, params: {params}")
 
         conn = self._get_connection()
         try:
@@ -1714,8 +1711,6 @@ class PolarDBGraphDB(BaseGraphDB):
                     raise
                 results = cursor.fetchall()
                 output = []
-                print("=== Raw Results ===:", results)
-                print(f"=== Results count: {len(results)} ===")
                 for row in results:
                     """
                     polarId = row[0]  # id
@@ -1763,7 +1758,6 @@ class PolarDBGraphDB(BaseGraphDB):
             list[str]: Node IDs whose metadata match the filter conditions. (AND logic).
         """
         logger.info(f"[get_by_metadata] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}")
-        print(f"[get_by_metadata] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}")
 
         user_name = user_name if user_name else self._get_config_value("user_name")
 
@@ -1851,7 +1845,6 @@ class PolarDBGraphDB(BaseGraphDB):
         ids = []
         conn = self._get_connection()
         logger.info(f"[get_by_metadata] cypher_query: {cypher_query}")
-        print(f"[get_by_metadata] cypher_query: {cypher_query}")
         try:
             with conn.cursor() as cursor:
                 cursor.execute(cypher_query)
@@ -2278,7 +2271,6 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[get_all_memory_items] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}"
         )
-        print(f"[get_all_memory_items] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}")
 
         user_name = user_name if user_name else self._get_config_value("user_name")
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
@@ -2386,7 +2378,6 @@ class PolarDBGraphDB(BaseGraphDB):
             nodes = []
             conn = self._get_connection()
             logger.info(f"[get_all_memory_items] cypher_query: {cypher_query}")
-            print(f"[get_all_memory_items] cypher_query: {cypher_query}")
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(cypher_query)
@@ -2762,7 +2753,6 @@ class PolarDBGraphDB(BaseGraphDB):
     ) -> None:
         """Add a memory node to the graph."""
         logger.info(f"[add_node] id: {id}, memory: {memory}, metadata: {metadata}")
-        print(f"[add_node] metadata: {metadata}, info: {metadata.get('info')}")
 
         # user_name comes from metadata; fallback to config if missing
         metadata["user_name"] = user_name if user_name else self.config.user_name
@@ -2847,9 +2837,6 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.info(
                         f"[add_node] [embedding_vector-true] insert_query: {insert_query}, properties: {json.dumps(properties)}"
                     )
-                    print(
-                        f"[add_node] [embedding_vector-true] insert_query: {insert_query}, properties: {json.dumps(properties)}"
-                    )
                 else:
                     insert_query = f"""
                         INSERT INTO {self.db_name}_graph."Memory"(id, properties)
@@ -2862,10 +2849,6 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.info(
                         f"[add_node] [embedding_vector-false] insert_query: {insert_query}, properties: {json.dumps(properties)}"
                     )
-                    print(
-                        f"[add_node] [embedding_vector-false] insert_query: {insert_query}, properties: {json.dumps(properties)}"
-                    )
-
         finally:
             logger.info(f"In add node polardb: id-{id} memory-{memory} query-{insert_query}")
             self._return_connection(conn)

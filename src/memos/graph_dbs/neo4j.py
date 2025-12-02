@@ -198,7 +198,6 @@ class Neo4jGraphDB(BaseGraphDB):
         self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
         logger.info(f"[add_node] metadata: {metadata},info: {metadata.get('info')}")
-        print(f"[add_node] metadata: {metadata},info: {metadata.get('info')}")
 
         user_name = user_name if user_name else self.config.user_name
         if not self.config.use_multi_db and (self.config.user_name or user_name):

@@ -6,7 +6,7 @@ using dependency injection for better modularity and testability.
 """
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
-from memos.api.product_models import APIADDRequest, MemoryResponse
+from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
     list_all_fields,
 )
@@ -30,7 +30,9 @@ class AddHandler(BaseHandler):
             dependencies: HandlerDependencies instance
         """
         super().__init__(dependencies)
-        self._validate_dependencies("naive_mem_cube", "mem_reader", "mem_scheduler")
+        self._validate_dependencies(
+            "naive_mem_cube", "mem_reader", "mem_scheduler", "feedback_server"
+        )
 
     def handle_add_memories(self, add_req: APIADDRequest) -> MemoryResponse:
         """
@@ -45,7 +47,9 @@ class AddHandler(BaseHandler):
         Returns:
             MemoryResponse with added memory information
         """
-        self.logger.info(f"[AddHandler] Add Req is: {add_req}")
+        self.logger.info(
+            f"[DIAGNOSTIC] server_router -> add_handler.handle_add_memories called (Modified at 2025-11-29 18:46). Full request: {add_req.model_dump_json(indent=2)}"
+        )
 
         if add_req.info:
             exclude_fields = list_all_fields()
@@ -55,6 +59,39 @@ class AddHandler(BaseHandler):
                 self.logger.warning(f"[AddHandler] info fields can not contain {exclude_fields}.")
 
         cube_view = self._build_cube_view(add_req)
+
+        if add_req.is_feedback:
+            chat_history = add_req.chat_history
+            messages = add_req.messages
+            if chat_history is None:
+                chat_history = []
+            if messages is None:
+                messages = []
+            concatenate_chat = chat_history + messages
+
+            last_user_index = max(i for i, d in enumerate(concatenate_chat) if d["role"] == "user")
+            feedback_content = concatenate_chat[last_user_index]["content"]
+            feedback_history = concatenate_chat[:last_user_index]
+
+            feedback_req = APIFeedbackRequest(
+                user_id=add_req.user_id,
+                session_id=add_req.session_id,
+                task_id=add_req.task_id,
+                history=feedback_history,
+                feedback_content=feedback_content,
+                writable_cube_ids=add_req.writable_cube_ids,
+                async_mode=add_req.async_mode,
+            )
+            process_record = cube_view.feedback_memories(feedback_req)
+
+            self.logger.info(
+                f"[FeedbackHandler] Final feedback results count={len(process_record)}"
+            )
+
+            return MemoryResponse(
+                message="Memory feedback successfully",
+                data=[process_record],
+            )
 
         results = cube_view.add_memories(add_req)
 
@@ -88,6 +125,7 @@ class AddHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
+                feedback_server=self.feedback_server,
                 searcher=None,
             )
         else:
@@ -98,6 +136,7 @@ class AddHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
+                    feedback_server=self.feedback_server,
                     searcher=None,
                 )
                 for cube_id in cube_ids
