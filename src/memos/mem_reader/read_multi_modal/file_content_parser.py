@@ -16,7 +16,7 @@ from memos.memories.textual.item import (
 from memos.types.openai_chat_completion_types import File
 
 from .base import BaseMessageParser, _derive_key
-from .utils import file_parser, text_splitter
+from .utils import get_parser, get_text_splitter
 
 
 logger = get_logger(__name__)
@@ -110,7 +110,7 @@ class FileContentParser(BaseMessageParser):
 
     def _split_text(self, text: str) -> list[str]:
         """
-        Split text into chunks using langchain text splitter from utils.
+        Split text into chunks using text splitter from utils.
 
         Args:
             text: Text to split
@@ -121,12 +121,13 @@ class FileContentParser(BaseMessageParser):
         if not text or not text.strip():
             return []
 
-        if not text_splitter:
+        splitter = get_text_splitter()
+        if not splitter:
             # If text splitter is not available, return text as single chunk
             return [text] if text.strip() else []
 
         try:
-            chunks = text_splitter.split_text(text)
+            chunks = splitter.split_text(text)
             logger.debug(f"[FileContentParser] Split text into {len(chunks)} chunks")
             return chunks
         except Exception as e:
@@ -178,7 +179,8 @@ class FileContentParser(BaseMessageParser):
         Returns:
             Parsed text content
         """
-        if not file_parser:
+        parser = self.parser or get_parser()
+        if not parser:
             logger.warning("[FileContentParser] Parser not available")
             return ""
 
@@ -191,7 +193,7 @@ class FileContentParser(BaseMessageParser):
 
         try:
             if os.path.exists(file_path):
-                parsed_text = file_parser.parse(file_path)
+                parsed_text = parser.parse(file_path)
                 return parsed_text
             else:
                 logger.warning(f"[FileContentParser] File not found: {file_path}")
@@ -375,7 +377,10 @@ class FileContentParser(BaseMessageParser):
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
-        if not file_parser:
+
+        # Use parser from utils
+        parser = self.parser or get_parser()
+        if not parser:
             logger.warning("[FileContentParser] Parser not available")
             return []
 
@@ -392,8 +397,7 @@ class FileContentParser(BaseMessageParser):
                         parsed_text, temp_file_path = self._handle_url(url_str, filename)
                         if temp_file_path:
                             try:
-                                # Use parser from utils (singleton)
-                                parser = self.parser or file_parser
+                                # Use parser from utils
                                 if parser:
                                     parsed_text = parser.parse(temp_file_path)
                                 else:
