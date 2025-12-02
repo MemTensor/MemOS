@@ -56,7 +56,7 @@ class Message(BaseModel):
 
 class MemoryCreate(BaseRequest):
     user_id: str = Field(..., description="User ID")
-    messages: list[Message] | None = Field(None, description="List of messages to store.")
+    messages: list | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Content to store as memory")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="ID of the memory cube")
@@ -83,7 +83,7 @@ class ChatRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube chat"
     )
-    history: MessageList | None = Field(None, description="Chat history")
+    history: list | None = Field(None, description="Chat history")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -165,7 +165,7 @@ class ChatCompleteRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
-    history: MessageList | None = Field(None, description="Chat history")
+    history: list | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
     system_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -251,7 +251,7 @@ class MemoryCreateRequest(BaseRequest):
     """Request model for creating memories."""
 
     user_id: str = Field(..., description="User ID")
-    messages: MessagesType | None = Field(None, description="List of messages to store.")
+    messages: str | list | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="Cube ID")
@@ -360,7 +360,7 @@ class APISearchRequest(BaseRequest):
     )
 
     # ==== Context ====
-    chat_history: MessageList | None = Field(
+    chat_history: list | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -490,7 +490,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Input content ====
-    messages: MessagesType | None = Field(
+    messages: str | list | None = Field(
         None,
         description=(
             "List of messages to store. Supports: "
@@ -506,7 +506,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Chat history ====
-    chat_history: MessageList | None = Field(
+    chat_history: list | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -671,7 +671,7 @@ class APIChatCompleteRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube chat"
     )
-    history: MessageList | None = Field(None, description="Chat history")
+    history: list | None = Field(None, description="Chat history")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -739,7 +739,7 @@ class SuggestionRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     mem_cube_id: str = Field(..., description="Cube ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
-    message: MessagesType | None = Field(None, description="List of messages to store.")
+    message: list | None = Field(None, description="List of messages to store.")
 
 
 # ─── MemOS Client Response Models ──────────────────────────────────────────────

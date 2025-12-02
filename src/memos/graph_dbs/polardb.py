@@ -1553,7 +1553,7 @@ class PolarDBGraphDB(BaseGraphDB):
         """
 
         params = [tsquery_string, tsquery_string]
-
+        logger.info(f"[search_by_fulltext] query: {query}, params: {params}")
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
