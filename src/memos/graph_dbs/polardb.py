@@ -1452,6 +1452,130 @@ class PolarDBGraphDB(BaseGraphDB):
         raise NotImplementedError
 
     @timed
+    def search_by_fulltext(
+        self,
+        query_words: list[str],
+        top_k: int = 10,
+        scope: str | None = None,
+        status: str | None = None,
+        threshold: float | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsvector_field: str = "properties_tsvector_zh",
+        tsquery_config: str = "jiebaqry",
+        **kwargs,
+    ) -> list[dict]:
+        """
+        Full-text search functionality using PostgreSQL's full-text search capabilities.
+
+        Args:
+            query_text: query text
+            top_k: maximum number of results to return
+            scope: memory type filter (memory_type)
+            status: status filter, defaults to "activated"
+            threshold: similarity threshold filter
+            search_filter: additional property filter conditions
+            user_name: username filter
+            knowledgebase_ids: knowledgebase ids filter
+            filter: filter conditions with 'and' or 'or' logic for search results.
+            tsvector_field: full-text index field name, defaults to properties_tsvector_zh_1
+            tsquery_config: full-text search configuration, defaults to jiebaqry (Chinese word segmentation)
+            **kwargs: other parameters (e.g. cube_name)
+
+        Returns:
+            list[dict]: result list containing id and score
+        """
+        # Build WHERE clause dynamically, same as search_by_embedding
+        where_clauses = []
+
+        if scope:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+            )
+        if status:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+            )
+        else:
+            where_clauses.append(
+                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+            )
+
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
+            user_name=user_name,
+            knowledgebase_ids=knowledgebase_ids,
+            default_user_name=self.config.user_name,
+        )
+
+        # Add OR condition if we have any user_name conditions
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+
+        # Add search_filter conditions
+        if search_filter:
+            for key, value in search_filter.items():
+                if isinstance(value, str):
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                    )
+                else:
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                    )
+
+        # Build filter conditions using common method
+        filter_conditions = self._build_filter_conditions_sql(filter)
+        where_clauses.extend(filter_conditions)
+        # Add fulltext search condition
+        # Convert query_text to OR query format: "word1 | word2 | word3"
+        tsquery_string = " | ".join(query_words)
+
+        where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
+
+        where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        # Build fulltext search query
+        query = f"""
+            SELECT
+                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                agtype_object_field_text(properties, 'memory') as memory_text,
+                ts_rank({tsvector_field}, to_tsquery('{tsquery_config}', %s)) as rank
+            FROM "{self.db_name}_graph"."Memory"
+            {where_clause}
+            ORDER BY rank DESC
+            LIMIT {top_k};
+        """
+
+        params = [tsquery_string, tsquery_string]
+        logger.info(f"[search_by_fulltext] query: {query}, params: {params}")
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                results = cursor.fetchall()
+                output = []
+                for row in results:
+                    oldid = row[0]  # old_id
+                    rank = row[2]  # rank score
+
+                    id_val = str(oldid)
+                    score_val = float(rank)
+
+                    # Apply threshold filter if specified
+                    if threshold is None or score_val >= threshold:
+                        output.append({"id": id_val, "score": score_val})
+
+                return output[:top_k]
+        finally:
+            self._return_connection(conn)
+
+    @timed
     def search_by_embedding(
         self,
         vector: list[float],
@@ -1619,6 +1743,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list | None = None,
+        user_name_flag: bool = True,
     ) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
@@ -1693,11 +1818,14 @@ class PolarDBGraphDB(BaseGraphDB):
                 raise ValueError(f"Unsupported operator: {op}")
 
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
         user_name_conditions = self._build_user_name_and_kb_ids_conditions_cypher(
             user_name=user_name,
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self._get_config_value("user_name"),
         )
+        print(f"[111get_by_metadata] user_name_conditions: {user_name_conditions}")
 
         # Add user_name WHERE clause
         if user_name_conditions:
@@ -1713,12 +1841,12 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Use cypher query
         cypher_query = f"""
-            SELECT * FROM cypher('{self.db_name}_graph', $$
-            MATCH (n:Memory)
-            WHERE {where_str}
-            RETURN n.id AS id
-            $$) AS (id agtype)
-        """
+               SELECT * FROM cypher('{self.db_name}_graph', $$
+               MATCH (n:Memory)
+               WHERE {where_str}
+               RETURN n.id AS id
+               $$) AS (id agtype)
+           """
 
         ids = []
         conn = self._get_connection()
@@ -3253,6 +3381,7 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
+        print(f"[delete_node_by_prams] effective_user_name: {effective_user_name}")
 
         if effective_user_name:
             escaped_user_name = effective_user_name.replace("'", "''")
@@ -3428,23 +3557,40 @@ class PolarDBGraphDB(BaseGraphDB):
                                             condition_parts.append(f"n.{key} = {op_value}")
                             elif op == "contains":
                                 # Handle contains operator (for array fields)
+                                # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
+                                # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                                if not isinstance(op_value, list):
+                                    raise ValueError(
+                                        f"contains operator only supports array format. "
+                                        f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                    )
                                 # Check if key starts with "info." prefix
                                 if key.startswith("info."):
                                     info_field = key[5:]  # Remove "info." prefix
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_cypher_string(op_value)
-                                        condition_parts.append(
-                                            f"'{escaped_value}' IN n.info.{info_field}"
-                                        )
-                                    else:
-                                        condition_parts.append(f"{op_value} IN n.info.{info_field}")
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_cypher_string(item)
+                                            and_conditions.append(
+                                                f"'{escaped_value}' IN n.info.{info_field}"
+                                            )
+                                        else:
+                                            and_conditions.append(f"{item} IN n.info.{info_field}")
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                                 else:
                                     # Direct property access
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_cypher_string(op_value)
-                                        condition_parts.append(f"'{escaped_value}' IN n.{key}")
-                                    else:
-                                        condition_parts.append(f"{op_value} IN n.{key}")
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_cypher_string(item)
+                                            and_conditions.append(f"'{escaped_value}' IN n.{key}")
+                                        else:
+                                            and_conditions.append(f"{item} IN n.{key}")
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                             elif op == "like":
                                 # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                                 # Check if key starts with "info." prefix
@@ -3505,6 +3651,11 @@ class PolarDBGraphDB(BaseGraphDB):
                                 and_conditions.append(f"({condition_str})")
                     if and_conditions:
                         filter_where_clause = " AND " + " AND ".join(and_conditions)
+                else:
+                    # Handle simple dict without "and" or "or" (e.g., {"id": "xxx"})
+                    condition_str = build_cypher_filter_condition(filter)
+                    if condition_str:
+                        filter_where_clause = " AND " + condition_str
 
         return filter_where_clause
 
@@ -3648,29 +3799,46 @@ class PolarDBGraphDB(BaseGraphDB):
                                             )
                             elif op == "contains":
                                 # Handle contains operator (for array fields) - use @> operator
+                                # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
+                                # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                                if not isinstance(op_value, list):
+                                    raise ValueError(
+                                        f"contains operator only supports array format. "
+                                        f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                    )
                                 # Check if key starts with "info." prefix
                                 if key.startswith("info."):
                                     info_field = key[5:]  # Remove "info." prefix
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_sql_string(op_value)
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype) @> '\"{escaped_value}\"'::agtype"
-                                        )
-                                    else:
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype) @> {op_value}::agtype"
-                                        )
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_sql_string(item)
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> '\"{escaped_value}\"'::agtype"
+                                            )
+                                        else:
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> {item}::agtype"
+                                            )
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                                 else:
                                     # Direct property access
-                                    if isinstance(op_value, str):
-                                        escaped_value = escape_sql_string(op_value)
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '\"{escaped_value}\"'::agtype"
-                                        )
-                                    else:
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> {op_value}::agtype"
-                                        )
+                                    # Handle array of values: generate AND conditions for each value (all must be present)
+                                    and_conditions = []
+                                    for item in op_value:
+                                        if isinstance(item, str):
+                                            escaped_value = escape_sql_string(item)
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '\"{escaped_value}\"'::agtype"
+                                            )
+                                        else:
+                                            and_conditions.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> {item}::agtype"
+                                            )
+                                    if and_conditions:
+                                        condition_parts.append(f"({' AND '.join(and_conditions)})")
                             elif op == "like":
                                 # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                                 # Check if key starts with "info." prefix
@@ -3684,11 +3852,11 @@ class PolarDBGraphDB(BaseGraphDB):
                                             .replace("_", "\\_")
                                         )
                                         condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype)::text LIKE '%{escaped_value}%'"
+                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype])::text LIKE '%{escaped_value}%'"
                                         )
                                     else:
                                         condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype)::text LIKE '%{op_value}%'"
+                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype])::text LIKE '%{op_value}%'"
                                         )
                                 else:
                                     # Direct property access
@@ -3752,6 +3920,11 @@ class PolarDBGraphDB(BaseGraphDB):
                             condition_str = build_filter_condition(condition)
                             if condition_str:
                                 filter_conditions.append(f"({condition_str})")
+                else:
+                    # Handle simple dict without "and" or "or" (e.g., {"id": "xxx"})
+                    condition_str = build_filter_condition(filter)
+                    if condition_str:
+                        filter_conditions.append(condition_str)
 
         return filter_conditions
 
@@ -3781,8 +3954,6 @@ class PolarDBGraphDB(BaseGraphDB):
             "memory_type",
             "node_type",
             "info",
-            "app_id",
-            "agent_id",
         }
 
         def process_condition(condition):
@@ -3823,3 +3994,170 @@ class PolarDBGraphDB(BaseGraphDB):
             return new_condition
 
         return process_condition(filter_dict)
+
+    @timed
+    def delete_node_by_prams(
+        self,
+        writable_cube_ids: list[str],
+        memory_ids: list[str] | None = None,
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> int:
+        """
+        Delete nodes by memory_ids, file_ids, or filter.
+
+        Args:
+            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            memory_ids (list[str], optional): List of memory node IDs to delete.
+            file_ids (list[str], optional): List of file node IDs to delete.
+            filter (dict, optional): Filter dictionary to query matching nodes for deletion.
+
+        Returns:
+            int: Number of nodes deleted.
+        """
+        logger.info(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
+        print(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
+
+        # Validate writable_cube_ids
+        if not writable_cube_ids or len(writable_cube_ids) == 0:
+            raise ValueError("writable_cube_ids is required and cannot be empty")
+
+        # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        user_name_conditions = []
+        for cube_id in writable_cube_ids:
+            # Escape single quotes in cube IDs
+            escaped_cube_id = str(cube_id).replace("'", "\\'")
+            user_name_conditions.append(f"n.user_name = '{escaped_cube_id}'")
+
+        # Build WHERE conditions separately for memory_ids and file_ids
+        where_conditions = []
+
+        # Handle memory_ids: query n.id
+        if memory_ids and len(memory_ids) > 0:
+            memory_id_conditions = []
+            for node_id in memory_ids:
+                # Escape single quotes in node IDs
+                escaped_id = str(node_id).replace("'", "\\'")
+                memory_id_conditions.append(f"'{escaped_id}'")
+            if memory_id_conditions:
+                where_conditions.append(f"n.id IN [{', '.join(memory_id_conditions)}]")
+
+        # Handle file_ids: query n.file_ids field
+        # All file_ids must be present in the array field (AND relationship)
+        if file_ids and len(file_ids) > 0:
+            file_id_and_conditions = []
+            for file_id in file_ids:
+                # Escape single quotes in file IDs
+                escaped_id = str(file_id).replace("'", "\\'")
+                # Check if this file_id is in the file_ids array field
+                file_id_and_conditions.append(f"'{escaped_id}' IN n.file_ids")
+            if file_id_and_conditions:
+                # Use AND to require all file_ids to be present
+                where_conditions.append(f"({' AND '.join(file_id_and_conditions)})")
+
+        # Query nodes by filter if provided
+        filter_ids = set()
+        if filter:
+            # Parse filter to validate and transform field names (e.g., add "info." prefix if needed)
+            parsed_filter = self.parse_filter(filter)
+            if parsed_filter:
+                # Use get_by_metadata with empty filters list and parsed filter
+                filter_ids = set(
+                    self.get_by_metadata(
+                        filters=[],
+                        user_name=None,
+                        filter=parsed_filter,
+                        knowledgebase_ids=writable_cube_ids,
+                    )
+                )
+            else:
+                logger.warning(
+                    "[delete_node_by_prams] Filter parsed to None, skipping filter query"
+                )
+
+        # If filter returned IDs, add condition for them
+        if filter_ids:
+            filter_id_conditions = []
+            for node_id in filter_ids:
+                # Escape single quotes in node IDs
+                escaped_id = str(node_id).replace("'", "\\'")
+                filter_id_conditions.append(f"'{escaped_id}'")
+            if filter_id_conditions:
+                where_conditions.append(f"n.id IN [{', '.join(filter_id_conditions)}]")
+
+        # If no conditions (except user_name), return 0
+        if not where_conditions:
+            logger.warning(
+                "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
+            )
+            return 0
+
+        # Build WHERE clause
+        # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
+        data_conditions = " OR ".join([f"({cond})" for cond in where_conditions])
+
+        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
+        user_name_where = " OR ".join(user_name_conditions)
+        ids_where = f"({user_name_where}) AND ({data_conditions})"
+
+        # Use Cypher DELETE query
+        # First count matching nodes to get accurate count
+        count_query = f"""
+                SELECT * FROM cypher('{self.db_name}_graph', $$
+                MATCH (n:Memory)
+                WHERE {ids_where}
+                RETURN count(n) AS node_count
+                $$) AS (node_count agtype)
+            """
+        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
+        print(f"[delete_node_by_prams] count_query: {count_query}")
+
+        # Then delete nodes
+        delete_query = f"""
+                SELECT * FROM cypher('{self.db_name}_graph', $$
+                MATCH (n:Memory)
+                WHERE {ids_where}
+                DETACH DELETE n
+                $$) AS (result agtype)
+            """
+
+        logger.info(
+            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+        )
+        print(
+            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+        )
+        logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
+        print(f"[delete_node_by_prams] delete_query: {delete_query}")
+
+        conn = self._get_connection()
+        deleted_count = 0
+        try:
+            with conn.cursor() as cursor:
+                # Count nodes before deletion
+                cursor.execute(count_query)
+                count_results = cursor.fetchall()
+                expected_count = 0
+                if count_results and len(count_results) > 0:
+                    count_str = str(count_results[0][0])
+                    count_str = count_str.strip('"').strip("'")
+                    expected_count = int(count_str) if count_str.isdigit() else 0
+
+                # Delete nodes
+                cursor.execute(delete_query)
+                # Use the count from before deletion as the actual deleted count
+                deleted_count = expected_count
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
+            conn.rollback()
+            raise
+        finally:
+            self._return_connection(conn)
+
+        logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
+        return deleted_count

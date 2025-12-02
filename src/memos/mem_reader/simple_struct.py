@@ -16,7 +16,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
-from memos.mem_reader.read_multi_model import coerce_scene_data
+from memos.mem_reader.read_multi_modal import coerce_scene_data
 from memos.memories.textual.item import (
     SourceMessage,
     TextualMemoryItem,

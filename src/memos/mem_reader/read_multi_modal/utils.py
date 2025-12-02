@@ -93,6 +93,11 @@ def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[Messa
             if not items:
                 continue
 
+            # Keep string as-is (MessagesType supports str)
+            if isinstance(items, str):
+                complete_scene_data.append(items)
+                continue
+
             # ONLY add chat_time if it's a MessageList
             if not _is_message_list(items):
                 complete_scene_data.append(items)

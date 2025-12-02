@@ -237,7 +237,8 @@ class SingleCubeView(MemCubeView):
             return self._agentic_search(search_req=search_req, user_context=user_context)
 
         target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter
 
         info = {
             "user_id": search_req.user_id,
@@ -254,6 +255,7 @@ class SingleCubeView(MemCubeView):
             manual_close_internet=not search_req.internet_search,
             moscube=search_req.moscube,
             search_filter=search_filter,
+            search_priority=search_priority,
             info=info,
         )
 
@@ -289,6 +291,7 @@ class SingleCubeView(MemCubeView):
                     top_k=retrieval_size,
                     mode=SearchMode.FAST,
                     memory_type="All",
+                    search_priority=search_priority,
                     search_filter=search_filter,
                     info=info,
                 )
@@ -324,7 +327,8 @@ class SingleCubeView(MemCubeView):
         """
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
-
+        print(f"search_req.filter for preference memory: {search_req.filter}")
+        print(f"type of pref_mem: {type(self.naive_mem_cube.pref_mem)}")
         try:
             results = self.naive_mem_cube.pref_mem.search(
                 query=search_req.query,
@@ -334,6 +338,7 @@ class SingleCubeView(MemCubeView):
                     "session_id": search_req.session_id,
                     "chat_history": search_req.chat_history,
                 },
+                search_filter=search_req.filter,
             )
             return [format_memory_item(data) for data in results]
         except Exception as e:
@@ -356,7 +361,9 @@ class SingleCubeView(MemCubeView):
             List of search results
         """
         target_session_id = search_req.session_id or "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter or None
+        plugin = bool(search_req.source is not None and search_req.source == "plugin")
 
         search_results = self.naive_mem_cube.text_mem.search(
             query=search_req.query,
@@ -365,11 +372,13 @@ class SingleCubeView(MemCubeView):
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
             search_filter=search_filter,
+            search_priority=search_priority,
             info={
                 "user_id": search_req.user_id,
                 "session_id": target_session_id,
                 "chat_history": search_req.chat_history,
             },
+            plugin=plugin,
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]

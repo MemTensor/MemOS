@@ -812,6 +812,7 @@ class Neo4jGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        user_name_flag: bool = True,
     ) -> list[str]:
         """
         TODO:
@@ -876,11 +877,19 @@ class Neo4jGraphDB(BaseGraphDB):
                 raise ValueError(f"Unsupported operator: {op}")
 
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
-        user_name_conditions, user_name_params = self._build_user_name_and_kb_ids_conditions_cypher(
-            user_name=user_name,
-            knowledgebase_ids=knowledgebase_ids,
-            default_user_name=self.config.user_name,
-            node_alias="n",
+        user_name_conditions = []
+        user_name_params = {}
+        if user_name_flag:
+            user_name_conditions, user_name_params = (
+                self._build_user_name_and_kb_ids_conditions_cypher(
+                    user_name=user_name,
+                    knowledgebase_ids=knowledgebase_ids,
+                    default_user_name=self.config.user_name,
+                    node_alias="n",
+                )
+            )
+        print(
+            f"[get_by_metadata] user_name_conditions: {user_name_conditions},user_name_params: {user_name_params}"
         )
 
         # Add user_name WHERE clause
@@ -1425,24 +1434,31 @@ class Neo4jGraphDB(BaseGraphDB):
                             # Use datetime() function for date comparisons
                             if key in ("created_at", "updated_at") or key.endswith("_at"):
                                 condition_parts.append(
-                                    f"{node_alias}.{key} {cypher_op} datetime(${param_name})"
+                                    f"datetime({node_alias}.{key}) {cypher_op} datetime(${param_name})"
                                 )
                             else:
                                 condition_parts.append(
                                     f"{node_alias}.{key} {cypher_op} ${param_name}"
                                 )
                         elif op == "contains":
-                            # Handle contains operator (for array fields like tags, sources)
-                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
-                            param_counter[0] += 1
-                            params[param_name] = op_value
-
-                            # For array fields, check if element is in array
-                            if key in ("tags", "sources"):
-                                condition_parts.append(f"${param_name} IN {node_alias}.{key}")
-                            else:
-                                # For non-array fields, contains might not be applicable, but we'll treat it as IN for consistency
-                                condition_parts.append(f"${param_name} IN {node_alias}.{key}")
+                            # Handle contains operator (for array fields)
+                            # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
+                            # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                            if not isinstance(op_value, list):
+                                raise ValueError(
+                                    f"contains operator only supports array format. "
+                                    f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                )
+                            # Handle array of values: generate AND conditions for each value (all must be present)
+                            and_conditions = []
+                            for item in op_value:
+                                param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                                param_counter[0] += 1
+                                params[param_name] = item
+                                # For array fields, check if element is in array
+                                and_conditions.append(f"${param_name} IN {node_alias}.{key}")
+                            if and_conditions:
+                                condition_parts.append(f"({' AND '.join(and_conditions)})")
                         elif op == "like":
                             # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                             # Neo4j uses CONTAINS for string matching
@@ -1482,6 +1498,12 @@ class Neo4jGraphDB(BaseGraphDB):
                         if condition_str:
                             filter_conditions.append(f"({condition_str})")
                             filter_params.update(params)
+            else:
+                # Handle simple dict without "and" or "or" (e.g., {"id": "xxx"})
+                condition_str, params = build_filter_condition(filter, param_counter)
+                if condition_str:
+                    filter_conditions.append(condition_str)
+                    filter_params.update(params)
 
         return filter_conditions, filter_params
 
@@ -1505,3 +1527,133 @@ class Neo4jGraphDB(BaseGraphDB):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
         return {"id": node.pop("id"), "memory": node.pop("memory", ""), "metadata": node}
+
+    def delete_node_by_prams(
+        self,
+        writable_cube_ids: list[str],
+        memory_ids: list[str] | None = None,
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> int:
+        """
+        Delete nodes by memory_ids, file_ids, or filter.
+
+        Args:
+            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            memory_ids (list[str], optional): List of memory node IDs to delete.
+            file_ids (list[str], optional): List of file node IDs to delete.
+            filter (dict, optional): Filter dictionary to query matching nodes for deletion.
+
+        Returns:
+            int: Number of nodes deleted.
+        """
+        logger.info(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
+        print(
+            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
+        )
+
+        # Validate writable_cube_ids
+        if not writable_cube_ids or len(writable_cube_ids) == 0:
+            raise ValueError("writable_cube_ids is required and cannot be empty")
+
+        # Build WHERE conditions separately for memory_ids and file_ids
+        where_clauses = []
+        params = {}
+
+        # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        user_name_conditions = []
+        for idx, cube_id in enumerate(writable_cube_ids):
+            param_name = f"cube_id_{idx}"
+            user_name_conditions.append(f"n.user_name = ${param_name}")
+            params[param_name] = cube_id
+
+        # Handle memory_ids: query n.id
+        if memory_ids and len(memory_ids) > 0:
+            where_clauses.append("n.id IN $memory_ids")
+            params["memory_ids"] = memory_ids
+
+        # Handle file_ids: query n.file_ids field
+        # All file_ids must be present in the array field (AND relationship)
+        if file_ids and len(file_ids) > 0:
+            file_id_and_conditions = []
+            for idx, file_id in enumerate(file_ids):
+                param_name = f"file_id_{idx}"
+                params[param_name] = file_id
+                # Check if this file_id is in the file_ids array field
+                file_id_and_conditions.append(f"${param_name} IN n.file_ids")
+            if file_id_and_conditions:
+                # Use AND to require all file_ids to be present
+                where_clauses.append(f"({' AND '.join(file_id_and_conditions)})")
+
+        # Query nodes by filter if provided
+        filter_ids = []
+        if filter:
+            # Use get_by_metadata with empty filters list and filter
+            filter_ids = self.get_by_metadata(
+                filters=[],
+                user_name=None,
+                filter=filter,
+                knowledgebase_ids=writable_cube_ids,
+            )
+
+        # If filter returned IDs, add condition for them
+        if filter_ids:
+            where_clauses.append("n.id IN $filter_ids")
+            params["filter_ids"] = filter_ids
+
+        # If no conditions (except user_name), return 0
+        if not where_clauses:
+            logger.warning(
+                "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
+            )
+            return 0
+
+        # Build WHERE clause
+        # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
+        data_conditions = " OR ".join([f"({clause})" for clause in where_clauses])
+
+        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
+        user_name_where = " OR ".join(user_name_conditions)
+        ids_where = f"({user_name_where}) AND ({data_conditions})"
+
+        logger.info(
+            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+        )
+        print(
+            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
+        )
+
+        # First count matching nodes to get accurate count
+        count_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN count(n) AS node_count"
+        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
+        print(f"[delete_node_by_prams] count_query: {count_query}")
+
+        # Then delete nodes
+        delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
+        logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
+        print(f"[delete_node_by_prams] delete_query: {delete_query}")
+        print(f"[delete_node_by_prams] params: {params}")
+
+        deleted_count = 0
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Count nodes before deletion
+                count_result = session.run(count_query, **params)
+                count_record = count_result.single()
+                expected_count = 0
+                if count_record:
+                    expected_count = count_record["node_count"] or 0
+
+                # Delete nodes
+                session.run(delete_query, **params)
+                # Use the count from before deletion as the actual deleted count
+                deleted_count = expected_count
+
+        except Exception as e:
+            logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
+            raise
+
+        logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
+        return deleted_count

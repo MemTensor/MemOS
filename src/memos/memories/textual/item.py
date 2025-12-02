@@ -35,7 +35,7 @@ class SourceMessage(BaseModel):
     """
 
     type: str | None = "chat"
-    role: Literal["user", "assistant", "system"] | None = None
+    role: Literal["user", "assistant", "system", "tool"] | None = None
     chat_time: str | None = None
     message_id: str | None = None
     content: str | None = None

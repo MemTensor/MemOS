@@ -9,6 +9,7 @@ from memos.mem_reader.base import BaseMemReader
 from memos.memories.textual.tree import TreeTextMemory
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.reranker.base import BaseReranker
 
 
@@ -35,6 +36,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         config: TreeTextMemoryConfig,
         internet_retriever: None = None,
         is_reorganize: bool = False,
+        tokenizer: FastTokenizer | None = None,
     ):
         """Initialize memory with the given configuration."""
         self.config: TreeTextMemoryConfig = config
@@ -51,6 +53,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
             if self.search_strategy and self.search_strategy.get("bm25", False)
             else None
         )
+        self.tokenizer = tokenizer
         self.reranker = reranker
         self.memory_manager: MemoryManager = memory_manager
         # Create internet retriever if configured
