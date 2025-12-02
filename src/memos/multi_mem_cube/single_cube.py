@@ -495,6 +495,13 @@ class SingleCubeView(MemCubeView):
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
 
+        if add_req.messages is None or isinstance(add_req.messages, str):
+            return []
+
+        for message in add_req.messages:
+            if message.get("role", None) is None:
+                return []
+
         target_session_id = add_req.session_id or "default_session"
 
         if sync_mode == "async":
