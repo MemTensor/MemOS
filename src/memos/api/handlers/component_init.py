@@ -29,6 +29,7 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_os.product_server import MOSServer
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.orm_modules.base_model import BaseDBManager
@@ -295,6 +296,16 @@ def init_server() -> dict[str, Any]:
     )
     logger.debug("Searcher created")
 
+    # Initialize feedback server
+    feedback_server = SimpleMemFeedback(
+        llm=llm,
+        embedder=embedder,
+        graph_store=graph_db,
+        memory_manager=memory_manager,
+        mem_reader=mem_reader,
+        searcher=searcher,
+    )
+
     # Initialize Scheduler
     scheduler_config_dict = APIConfig.get_scheduler_config()
     scheduler_config = SchedulerConfigFactory(
@@ -308,7 +319,9 @@ def init_server() -> dict[str, Any]:
         mem_reader=mem_reader,
         redis_client=redis_client,
     )
-    mem_scheduler.init_mem_cube(mem_cube=naive_mem_cube, searcher=searcher)
+    mem_scheduler.init_mem_cube(
+        mem_cube=naive_mem_cube, searcher=searcher, feedback_server=feedback_server
+    )
     logger.debug("Scheduler initialized")
 
     # Initialize SchedulerAPIModule
@@ -356,6 +369,7 @@ def init_server() -> dict[str, Any]:
         "text_mem": text_mem,
         "pref_mem": pref_mem,
         "online_bot": online_bot,
+        "feedback_server": feedback_server,
         "redis_client": redis_client,
         "deepsearch_agent": deepsearch_agent,
     }
