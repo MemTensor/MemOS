@@ -76,7 +76,9 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.extractor.extract(messages, type, info)
 
-    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
+    def search(
+        self, query: str, top_k: int, info=None, search_filter=None, **kwargs
+    ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
             query (str): The query to search for.
@@ -85,7 +87,8 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        return self.retriever.retrieve(query, top_k, info)
+        logger.info(f"search_filter for preference memory: {search_filter}")
+        return self.retriever.retrieve(query, top_k, info, search_filter)
 
     def load(self, dir: str) -> None:
         """Load memories from the specified directory.

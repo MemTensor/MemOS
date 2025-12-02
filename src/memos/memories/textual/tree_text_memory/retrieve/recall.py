@@ -38,6 +38,7 @@ class GraphMemoryRetriever:
         memory_scope: str,
         query_embedding: list[list[float]] | None = None,
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
         id_filter: dict | None = None,
         use_fast_graph: bool = False,
@@ -62,9 +63,12 @@ class GraphMemoryRetriever:
             raise ValueError(f"Unsupported memory scope: {memory_scope}")
 
         if memory_scope == "WorkingMemory":
-            # For working memory, retrieve all entries (no filtering)
+            # For working memory, retrieve all entries (no session-oriented filtering)
             working_memories = self.graph_store.get_all_memory_items(
-                scope="WorkingMemory", include_embedding=False, user_name=user_name
+                scope="WorkingMemory",
+                include_embedding=False,
+                user_name=user_name,
+                filter=search_filter,
             )
             return [TextualMemoryItem.from_dict(record) for record in working_memories[:top_k]]
 
@@ -84,6 +88,7 @@ class GraphMemoryRetriever:
                 memory_scope,
                 top_k,
                 search_filter=search_filter,
+                search_priority=search_priority,
                 user_name=user_name,
             )
             if self.use_bm25:
@@ -96,13 +101,27 @@ class GraphMemoryRetriever:
                     user_name=user_name,
                     search_filter=id_filter,
                 )
+            if use_fast_graph:
+                future_fulltext = executor.submit(
+                    self._fulltext_recall,
+                    query_words=parsed_goal.keys or [],
+                    memory_scope=memory_scope,
+                    top_k=top_k,
+                    search_filter=search_filter,
+                    search_priority=search_priority,
+                    user_name=user_name,
+                )
 
             graph_results = future_graph.result()
             vector_results = future_vector.result()
             bm25_results = future_bm25.result() if self.use_bm25 else []
+            fulltext_results = future_fulltext.result() if use_fast_graph else []
 
         # Merge and deduplicate by ID
-        combined = {item.id: item for item in graph_results + vector_results + bm25_results}
+        combined = {
+            item.id: item
+            for item in graph_results + vector_results + bm25_results + fulltext_results
+        }
 
         return list(combined.values())
 
@@ -141,6 +160,25 @@ class GraphMemoryRetriever:
         # Merge and deduplicate by ID
         combined = {item.id: item for item in graph_results}
 
+        return list(combined.values())
+
+    def retrieve_from_mixed(
+        self,
+        top_k: int,
+        memory_scope: str | None = None,
+        query_embedding: list[list[float]] | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+    ) -> list[TextualMemoryItem]:
+        """Retrieve from mixed and memory"""
+        vector_results = self._vector_recall(
+            query_embedding or [],
+            memory_scope,
+            top_k,
+            search_filter=search_filter,
+            user_name=user_name,
+        )  # Merge and deduplicate by ID
+        combined = {item.id: item for item in vector_results}
         return list(combined.values())
 
     def _graph_recall(
@@ -274,6 +312,7 @@ class GraphMemoryRetriever:
         status: str = "activated",
         cube_name: str | None = None,
         search_filter: dict | None = None,
+        search_priority: dict | None = None,
         user_name: str | None = None,
     ) -> list[TextualMemoryItem]:
         """
@@ -283,7 +322,7 @@ class GraphMemoryRetriever:
         if not query_embedding:
             return []
 
-        def search_single(vec, filt=None):
+        def search_single(vec, search_priority=None, search_filter=None):
             return (
                 self.graph_store.search_by_embedding(
                     vector=vec,
@@ -291,31 +330,33 @@ class GraphMemoryRetriever:
                     status=status,
                     scope=memory_scope,
                     cube_name=cube_name,
-                    search_filter=filt,
+                    search_filter=search_priority,
+                    filter=search_filter,
                     user_name=user_name,
                 )
                 or []
             )
 
         def search_path_a():
-            """Path A: search without filter"""
+            """Path A: search without priority"""
             path_a_hits = []
             with ContextThreadPoolExecutor() as executor:
                 futures = [
-                    executor.submit(search_single, vec, None) for vec in query_embedding[:max_num]
+                    executor.submit(search_single, vec, None, search_filter)
+                    for vec in query_embedding[:max_num]
                 ]
                 for f in concurrent.futures.as_completed(futures):
                     path_a_hits.extend(f.result() or [])
             return path_a_hits
 
         def search_path_b():
-            """Path B: search with filter"""
-            if not search_filter:
+            """Path B: search with priority"""
+            if not search_priority:
                 return []
             path_b_hits = []
             with ContextThreadPoolExecutor() as executor:
                 futures = [
-                    executor.submit(search_single, vec, search_filter)
+                    executor.submit(search_single, vec, search_priority, search_filter)
                     for vec in query_embedding[:max_num]
                 ]
                 for f in concurrent.futures.as_completed(futures):
@@ -377,3 +418,55 @@ class GraphMemoryRetriever:
         )
 
         return [TextualMemoryItem.from_dict(n) for n in bm25_results]
+
+    def _fulltext_recall(
+        self,
+        query_words: list[str],
+        memory_scope: str,
+        top_k: int = 20,
+        max_num: int = 5,
+        status: str = "activated",
+        cube_name: str | None = None,
+        search_filter: dict | None = None,
+        search_priority: dict | None = None,
+        user_name: str | None = None,
+    ):
+        """Perform fulltext-based retrieval.
+        Args:
+            query_words: list of query words
+            memory_scope: memory scope
+            top_k: top k results
+            max_num: max number of query words
+            status: status
+            cube_name: cube name
+            search_filter: search filter
+            search_priority: search priority
+            user_name: user name
+        Returns:
+            list of TextualMemoryItem
+        """
+        if not query_words:
+            return []
+        logger.info(f"[FULLTEXT] query_words: {query_words}")
+        all_hits = self.graph_store.search_by_fulltext(
+            query_words=query_words,
+            top_k=top_k,
+            status=status,
+            scope=memory_scope,
+            cube_name=cube_name,
+            search_filter=search_priority,
+            filter=search_filter,
+            user_name=user_name,
+        )
+        if not all_hits:
+            return []
+
+        # merge and deduplicate
+        unique_ids = {r["id"] for r in all_hits if r.get("id")}
+        node_dicts = (
+            self.graph_store.get_nodes(
+                list(unique_ids), include_embedding=False, cube_name=cube_name, user_name=user_name
+            )
+            or []
+        )
+        return [TextualMemoryItem.from_dict(n) for n in node_dicts]

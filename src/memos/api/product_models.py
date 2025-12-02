@@ -388,6 +388,12 @@ class APISearchRequest(BaseRequest):
         description="(Internal) Operation definitions for multi-cube read permissions.",
     )
 
+    # ==== Source for  plugin ====
+    source: str | None = Field(
+        None,
+        description="Source of the search query [plugin will router diff search]",
+    )
+
     @model_validator(mode="after")
     def _convert_deprecated_fields(self) -> "APISearchRequest":
         """
@@ -469,7 +475,7 @@ class APIADDRequest(BaseRequest):
         ),
     )
 
-    info: dict[str, str] | None = Field(
+    info: dict[str, Any] | None = Field(
         None,
         description=(
             "Additional metadata for the add request. "
