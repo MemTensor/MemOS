@@ -707,6 +707,11 @@ class APIConfig:
                         },
                     },
                     "chat_chunker": reader_config,
+                    "direct_markdown_hostnames": [
+                        h.strip()
+                        for h in os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "").split(",")
+                        if h.strip()
+                    ],
                 },
             },
             "enable_textual_memory": True,

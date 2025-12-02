@@ -1,6 +1,7 @@
 """Parser for file content parts (RawMessageList)."""
 
 import os
+import tempfile
 
 from typing import Any
 from urllib.parse import urlparse
@@ -30,6 +31,7 @@ class FileContentParser(BaseMessageParser):
         embedder: BaseEmbedder,
         llm: BaseLLM | None = None,
         parser: Any | None = None,
+        direct_markdown_hostnames: list[str] | None = None,
     ):
         """
         Initialize FileContentParser.
@@ -38,9 +40,25 @@ class FileContentParser(BaseMessageParser):
             embedder: Embedder for generating embeddings
             llm: Optional LLM for fine mode processing
             parser: Optional parser for parsing file contents
+            direct_markdown_hostnames: List of hostnames that should return markdown directly
+                without parsing. If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES
+                environment variable (comma-separated).
         """
         super().__init__(embedder, llm)
         self.parser = parser
+
+        # Get inner markdown hostnames from config or environment
+        if direct_markdown_hostnames is not None:
+            self.direct_markdown_hostnames = direct_markdown_hostnames
+        else:
+            env_hostnames = os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "")
+            if env_hostnames:
+                # Support comma-separated list
+                self.direct_markdown_hostnames = [
+                    h.strip() for h in env_hostnames.split(",") if h.strip()
+                ]
+            else:
+                self.direct_markdown_hostnames = []
 
     def create_source(
         self,
@@ -309,14 +327,25 @@ class FileContentParser(BaseMessageParser):
                                 filename = os.path.basename(parsed_url.path) or "downloaded_file"
 
                             # Route based on hostname
-                            if hostname == "139.196.232.20":
-                                # Special handling for 139.196.232.20: directly use response text as markdown
+                            if hostname in self.direct_markdown_hostnames:
+                                # Special handling for configured hostnames: directly use response text as markdown
                                 logger.info(
                                     f"[FileContentParser] Using direct markdown content for {hostname}"
                                 )
                                 parsed_text = response.text
                             else:
-                                logger.warning("[FileContentParser] Outer url not implemented now.")
+                                file_ext = os.path.splitext(filename)[1] or ".tmp"
+
+                                with tempfile.NamedTemporaryFile(
+                                    mode="wb", delete=False, suffix=file_ext
+                                ) as temp_file:
+                                    temp_file.write(response.content)
+                                temp_file_path = temp_file.name
+                                logger.info(
+                                    f"[FileContentParser] Downloaded file to: {temp_file_path}"
+                                )
+                                # Parse the downloaded file
+                                parsed_text = self.parser.parse(temp_file_path)
                         except requests.RequestException as e:
                             logger.error(
                                 f"[FileContentParser] Failed to download URL {url_str}: {e}"
@@ -373,6 +402,8 @@ class FileContentParser(BaseMessageParser):
         source = self.create_source(message, info)
 
         # Extract info fields
+        if not info:
+            info = {}
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
