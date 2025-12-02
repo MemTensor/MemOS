@@ -186,7 +186,12 @@ class MemoryManager:
             )
             futures.append(("working", f_working))
 
-            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
+            if memory.metadata.memory_type in (
+                "LongTermMemory",
+                "UserMemory",
+                "ToolSchemaMemory",
+                "ToolTrajectoryMemory",
+            ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
                     memory=memory,

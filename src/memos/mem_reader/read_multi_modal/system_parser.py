@@ -37,17 +37,21 @@ class SystemParser(BaseMessageParser):
 
     def create_source(
         self,
-        message: str,
+        message: ChatCompletionSystemMessageParam,
         info: dict[str, Any],
     ) -> SourceMessage:
         """Create SourceMessage from system message."""
+        content = message["content"]
+        if isinstance(content, dict):
+            content = content["text"]
+
         content_wo_tool_schema = re.sub(
             r"<tool_schema>(.*?)</tool_schema>",
             r"<tool_schema>omitted</tool_schema>",
-            message,
+            content,
             flags=re.DOTALL,
         )
-        tool_schema_match = re.search(r"<tool_schema>(.*?)</tool_schema>", message, re.DOTALL)
+        tool_schema_match = re.search(r"<tool_schema>(.*?)</tool_schema>", content, re.DOTALL)
         tool_schema_content = tool_schema_match.group(1) if tool_schema_match else ""
 
         return SourceMessage(
@@ -90,7 +94,7 @@ class SystemParser(BaseMessageParser):
             flags=re.DOTALL,
         )
 
-        source = self.create_source(content, info)
+        source = self.create_source(message, info)
         return [
             TextualMemoryItem(
                 memory=content_wo_tool_schema,
@@ -125,9 +129,10 @@ class SystemParser(BaseMessageParser):
         return [
             TextualMemoryItem(
                 id=str(uuid.uuid4()),
-                memory=json.dumps(tool_schema),
+                memory=json.dumps(schema),
                 metadata=TreeNodeTextualMemoryMetadata(
                     memory_type="ToolSchemaMemory",
                 ),
             )
+            for schema in tool_schema
         ]

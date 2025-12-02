@@ -230,26 +230,28 @@ class ToolParser(BaseMessageParser):
         content = message.get("content", "")
         chat_time = message.get("chat_time", None)
 
-        if role != "user":
-            logger.warning(f"[ToolParser] Expected role is `user`, got {role}")
+        if role != "tool":
+            logger.warning(f"[ToolParser] Expected role is `tool`, got {role}")
             return []
         parts = [f"{role}: "]
         if chat_time:
             parts.append(f"[{chat_time}]: ")
         prefix = "".join(parts)
-        content = json.dumps(content) if isinstance(content, list) else content
+        content = json.dumps(content) if isinstance(content, list | dict) else content
         line = f"{prefix}{content}\n"
         if not line:
             return []
-        memory_type = (
-            "LongTermMemory"  # only choce long term memory for tool messages as a placeholder
-        )
 
         sources = self.create_source(message, info)
         return [
             TextualMemoryItem(
                 memory=line,
-                metadata=TreeNodeTextualMemoryMetadata(memory_type=memory_type, sources=sources),
+                metadata=TreeNodeTextualMemoryMetadata(
+                    memory_type="LongTermMemory",  # only choce long term memory for tool messages as a placeholder
+                    status="activated",
+                    tags=["mode:fast"],
+                    sources=sources,
+                ),
             )
         ]
 
