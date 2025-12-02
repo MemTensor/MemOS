@@ -309,7 +309,9 @@ class GeneralScheduler(BaseScheduler):
 
         if missing_ids:
             content_preview = (
-                msg.content[:200] + "..." if isinstance(msg.content, str) and len(msg.content) > 200 else msg.content
+                msg.content[:200] + "..."
+                if isinstance(msg.content, str) and len(msg.content) > 200
+                else msg.content
             )
             logger.warning(
                 "Missing TextualMemoryItem(s) during add log preparation. "
