@@ -229,7 +229,7 @@ class MilvusVecDB(BaseVecDB):
             List of search results with distance scores and payloads.
         """
         # Convert filter to Milvus expression
-        print(f"filter for milvus: {filter}")
+        logger.info(f"filter for milvus: {filter}")
         expr = self._dict_to_expr(filter) if filter else ""
 
         search_func_map = {

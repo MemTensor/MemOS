@@ -50,7 +50,9 @@ class AddHandler(BaseHandler):
         Returns:
             MemoryResponse with added memory information
         """
-        self.logger.info(f"[AddHandler] Add Req is: {add_req}")
+        self.logger.info(
+            f"[DIAGNOSTIC] server_router -> add_handler.handle_add_memories called (Modified at 2025-11-29 18:46). Full request: {add_req.model_dump_json(indent=2)}"
+        )
 
         if add_req.info:
             exclude_fields = list_all_fields()

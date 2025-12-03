@@ -36,7 +36,6 @@ __all__ = [
     "MessagesType",
     "Permission",
     "PermissionDict",
-    "RawMessageList",
     "SearchMode",
     "UserContext",
     "UserID",
@@ -50,7 +49,7 @@ MessageRole: TypeAlias = Literal["user", "assistant", "system"]
 
 # Message structure
 class MessageDict(TypedDict, total=False):
-    """Typed dictionary for chat message dictionaries, will (Deprecate), use ChatCompletionMessageParam instead."""
+    """Typed dictionary for chat message dictionaries."""
 
     role: MessageRole
     content: str
@@ -102,11 +101,10 @@ class FineStrategy(str, Enum):
     REWRITE = "rewrite"
     RECREATE = "recreate"
     DEEP_SEARCH = "deep_search"
-    AGENTIC_SEARCH = "agentic_search"
 
 
 # algorithm strategies
-DEFAULT_FINE_STRATEGY = FineStrategy.DEEP_SEARCH
+DEFAULT_FINE_STRATEGY = FineStrategy.RECREATE
 FINE_STRATEGY = DEFAULT_FINE_STRATEGY
 
 # Read fine strategy from environment variable `FINE_STRATEGY`.

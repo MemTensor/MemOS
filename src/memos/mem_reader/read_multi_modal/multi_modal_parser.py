@@ -35,6 +35,7 @@ class MultiModalParser:
         embedder: BaseEmbedder,
         llm: BaseLLM | None = None,
         parser: Any | None = None,
+        direct_markdown_hostnames: list[str] | None = None,
     ):
         """
         Initialize MultiModalParser.
@@ -43,6 +44,9 @@ class MultiModalParser:
             embedder: Embedder for generating embeddings
             llm: Optional LLM for fine mode processing
             parser: Optional parser for parsing file contents
+            direct_markdown_hostnames: List of hostnames that should return markdown directly
+                without parsing. If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES
+                environment variable (comma-separated). Default: ["139.196.232.20"]
         """
         self.embedder = embedder
         self.llm = llm
@@ -55,7 +59,9 @@ class MultiModalParser:
         self.assistant_parser = AssistantParser(embedder, llm)
         self.tool_parser = ToolParser(embedder, llm)
         self.text_content_parser = TextContentParser(embedder, llm)
-        self.file_content_parser = FileContentParser(embedder, llm, parser)
+        self.file_content_parser = FileContentParser(
+            embedder, llm, parser, direct_markdown_hostnames=direct_markdown_hostnames
+        )
         self.image_parser = ImageParser(embedder, llm)
         self.audio_parser = None  # future
 

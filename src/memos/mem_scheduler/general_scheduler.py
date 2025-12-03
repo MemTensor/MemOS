@@ -153,6 +153,45 @@ class GeneralScheduler(BaseScheduler):
                 mem_cube=self.current_mem_cube,
             )
 
+    def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
+        # Process the query in a session turn
+        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
+
+        self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
+        try:
+            for user_id in grouped_messages:
+                for mem_cube_id in grouped_messages[user_id]:
+                    batch = grouped_messages[user_id][mem_cube_id]
+                    if not batch:
+                        continue
+
+                    # Process each message in the batch
+                    for msg in batch:
+                        prepared_add_items, prepared_update_items_with_original = (
+                            self.log_add_messages(msg=msg)
+                        )
+                        logger.info(
+                            f"prepared_add_items: {prepared_add_items};\n prepared_update_items_with_original: {prepared_update_items_with_original}"
+                        )
+                        # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
+                        is_cloud_env = (
+                            os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+                            == "memos-memory-change"
+                        )
+
+                        if is_cloud_env:
+                            self.send_add_log_messages_to_cloud_env(
+                                msg, prepared_add_items, prepared_update_items_with_original
+                            )
+                        else:
+                            self.send_add_log_messages_to_local_env(
+                                msg, prepared_add_items, prepared_update_items_with_original
+                            )
+
+        except Exception as e:
+            logger.error(f"Error: {e}", exc_info=True)
+
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
         Process and handle query trigger messages from the queue.
@@ -241,6 +280,190 @@ class GeneralScheduler(BaseScheduler):
                 except Exception:
                     logger.exception("Failed to record addMessage log for answer")
 
+    def log_add_messages(self, msg: ScheduleMessageItem):
+        try:
+            userinput_memory_ids = json.loads(msg.content)
+        except Exception as e:
+            logger.error(f"Error: {e}. Content: {msg.content}", exc_info=True)
+            userinput_memory_ids = []
+
+        # Prepare data for both logging paths, fetching original content for updates
+        prepared_add_items = []
+        prepared_update_items_with_original = []
+        missing_ids: list[str] = []
+
+        for memory_id in userinput_memory_ids:
+            try:
+                # This mem_item represents the NEW content that was just added/processed
+                mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
+                    memory_id=memory_id
+                )
+                # Check if a memory with the same key already exists (determining if it's an update)
+                key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
+                    name=mem_item.memory
+                )
+                exists = False
+                original_content = None
+                original_item_id = None
+
+                # Only check graph_store if a key exists and the text_mem has a graph_store
+                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
+                    candidates = self.current_mem_cube.text_mem.graph_store.get_by_metadata(
+                        [
+                            {"field": "key", "op": "=", "value": key},
+                            {
+                                "field": "memory_type",
+                                "op": "=",
+                                "value": mem_item.metadata.memory_type,
+                            },
+                        ]
+                    )
+                    if candidates:
+                        exists = True
+                        original_item_id = candidates[0]
+                        # Crucial step: Fetch the original content for updates
+                        # This `get` is for the *existing* memory that will be updated
+                        original_mem_item = self.current_mem_cube.text_mem.get(
+                            memory_id=original_item_id
+                        )
+                        original_content = original_mem_item.memory
+
+                if exists:
+                    prepared_update_items_with_original.append(
+                        {
+                            "new_item": mem_item,
+                            "original_content": original_content,
+                            "original_item_id": original_item_id,
+                        }
+                    )
+                else:
+                    prepared_add_items.append(mem_item)
+
+            except Exception:
+                missing_ids.append(memory_id)
+                logger.warning(
+                    f"This MemoryItem {memory_id} has already been deleted or an error occurred during preparation.",
+                    stack_info=True,
+                )
+
+        if missing_ids:
+            content_preview = (
+                msg.content[:200] + "..."
+                if isinstance(msg.content, str) and len(msg.content) > 200
+                else msg.content
+            )
+            logger.warning(
+                "Missing TextualMemoryItem(s) during add log preparation. "
+                "memory_ids=%s user_id=%s mem_cube_id=%s task_id=%s item_id=%s redis_msg_id=%s label=%s stream_key=%s content_preview=%s",
+                missing_ids,
+                msg.user_id,
+                msg.mem_cube_id,
+                msg.task_id,
+                msg.item_id,
+                getattr(msg, "redis_message_id", ""),
+                msg.label,
+                getattr(msg, "stream_key", ""),
+                content_preview,
+            )
+
+        if not prepared_add_items and not prepared_update_items_with_original:
+            logger.warning(
+                "No add/update items prepared; skipping addMemory/knowledgeBaseUpdate logs. "
+                "user_id=%s mem_cube_id=%s task_id=%s item_id=%s redis_msg_id=%s label=%s stream_key=%s missing_ids=%s",
+                msg.user_id,
+                msg.mem_cube_id,
+                msg.task_id,
+                msg.item_id,
+                getattr(msg, "redis_message_id", ""),
+                msg.label,
+                getattr(msg, "stream_key", ""),
+                missing_ids,
+            )
+        return prepared_add_items, prepared_update_items_with_original
+
+    def send_add_log_messages_to_local_env(
+        self, msg: ScheduleMessageItem, prepared_add_items, prepared_update_items_with_original
+    ):
+        # Existing: Playground/Default Logging
+        # Reconstruct add_content/add_meta/update_content/update_meta from prepared_items
+        # This ensures existing logging path continues to work with pre-existing data structures
+        add_content_legacy: list[dict] = []
+        add_meta_legacy: list[dict] = []
+        update_content_legacy: list[dict] = []
+        update_meta_legacy: list[dict] = []
+
+        for item in prepared_add_items:
+            key = getattr(item.metadata, "key", None) or transform_name_to_key(name=item.memory)
+            add_content_legacy.append({"content": f"{key}: {item.memory}", "ref_id": item.id})
+            add_meta_legacy.append(
+                {
+                    "ref_id": item.id,
+                    "id": item.id,
+                    "key": item.metadata.key,
+                    "memory": item.memory,
+                    "memory_type": item.metadata.memory_type,
+                    "status": item.metadata.status,
+                    "confidence": item.metadata.confidence,
+                    "tags": item.metadata.tags,
+                    "updated_at": getattr(item.metadata, "updated_at", None)
+                    or getattr(item.metadata, "update_at", None),
+                }
+            )
+
+        for item_data in prepared_update_items_with_original:
+            item = item_data["new_item"]
+            key = getattr(item.metadata, "key", None) or transform_name_to_key(name=item.memory)
+            update_content_legacy.append({"content": f"{key}: {item.memory}", "ref_id": item.id})
+            update_meta_legacy.append(
+                {
+                    "ref_id": item.id,
+                    "id": item.id,
+                    "key": item.metadata.key,
+                    "memory": item.memory,
+                    "memory_type": item.metadata.memory_type,
+                    "status": item.metadata.status,
+                    "confidence": item.metadata.confidence,
+                    "tags": item.metadata.tags,
+                    "updated_at": getattr(item.metadata, "updated_at", None)
+                    or getattr(item.metadata, "update_at", None),
+                }
+            )
+
+        events = []
+        if add_content_legacy:
+            event = self.create_event_log(
+                label="addMemory",
+                from_memory_type=USER_INPUT_TYPE,
+                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                user_id=msg.user_id,
+                mem_cube_id=msg.mem_cube_id,
+                mem_cube=self.current_mem_cube,
+                memcube_log_content=add_content_legacy,
+                metadata=add_meta_legacy,
+                memory_len=len(add_content_legacy),
+                memcube_name=self._map_memcube_name(msg.mem_cube_id),
+            )
+            event.task_id = msg.task_id
+            events.append(event)
+        if update_content_legacy:
+            event = self.create_event_log(
+                label="updateMemory",
+                from_memory_type=LONG_TERM_MEMORY_TYPE,
+                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                user_id=msg.user_id,
+                mem_cube_id=msg.mem_cube_id,
+                mem_cube=self.current_mem_cube,
+                memcube_log_content=update_content_legacy,
+                metadata=update_meta_legacy,
+                memory_len=len(update_content_legacy),
+                memcube_name=self._map_memcube_name(msg.mem_cube_id),
+            )
+            event.task_id = msg.task_id
+            events.append(event)
+        logger.info(f"send_add_log_messages_to_local_env: {len(events)}")
+        if events:
+            self._submit_web_logs(events, additional_log_info="send_add_log_messages_to_cloud_env")
+
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
@@ -256,71 +479,9 @@ class GeneralScheduler(BaseScheduler):
 
                     # Process each message in the batch
                     for msg in batch:
-                        try:
-                            userinput_memory_ids = json.loads(msg.content)
-                        except Exception as e:
-                            logger.error(f"Error: {e}. Content: {msg.content}", exc_info=True)
-                            userinput_memory_ids = []
-
-                        # Prepare data for both logging paths, fetching original content for updates
-                        prepared_add_items = []
-                        prepared_update_items_with_original = []
-
-                        for memory_id in userinput_memory_ids:
-                            try:
-                                # This mem_item represents the NEW content that was just added/processed
-                                mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
-                                    memory_id=memory_id
-                                )
-                                # Check if a memory with the same key already exists (determining if it's an update)
-                                key = getattr(
-                                    mem_item.metadata, "key", None
-                                ) or transform_name_to_key(name=mem_item.memory)
-                                exists = False
-                                original_content = None
-                                original_item_id = None
-
-                                # Only check graph_store if a key exists and the text_mem has a graph_store
-                                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
-                                    candidates = (
-                                        self.current_mem_cube.text_mem.graph_store.get_by_metadata(
-                                            [
-                                                {"field": "key", "op": "=", "value": key},
-                                                {
-                                                    "field": "memory_type",
-                                                    "op": "=",
-                                                    "value": mem_item.metadata.memory_type,
-                                                },
-                                            ]
-                                        )
-                                    )
-                                    if candidates:
-                                        exists = True
-                                        original_item_id = candidates[0]
-                                        # Crucial step: Fetch the original content for updates
-                                        # This `get` is for the *existing* memory that will be updated
-                                        original_mem_item = self.current_mem_cube.text_mem.get(
-                                            memory_id=original_item_id
-                                        )
-                                        original_content = original_mem_item.memory
-
-                                if exists:
-                                    prepared_update_items_with_original.append(
-                                        {
-                                            "new_item": mem_item,
-                                            "original_content": original_content,
-                                            "original_item_id": original_item_id,
-                                        }
-                                    )
-                                else:
-                                    prepared_add_items.append(mem_item)
-
-                            except Exception:
-                                logger.warning(
-                                    f"This MemoryItem {memory_id} has already been deleted or an error occurred during preparation."
-                                )
-                                continue
-
+                        prepared_add_items, prepared_update_items_with_original = (
+                            self.log_add_messages(msg=msg)
+                        )
                         # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
                         is_cloud_env = (
                             os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
@@ -328,149 +489,13 @@ class GeneralScheduler(BaseScheduler):
                         )
 
                         if is_cloud_env:
-                            # New: Knowledge Base Logging (Cloud Service)
-                            kb_log_content = []
-                            for item in prepared_add_items:
-                                kb_log_content.append(
-                                    {
-                                        "log_source": "KNOWLEDGE_BASE_LOG",
-                                        "trigger_source": msg.info.get("trigger_source", "Messages")
-                                        if msg.info
-                                        else "Messages",  # Assuming msg.info is available and contains trigger_source
-                                        "operation": "ADD",
-                                        "memory_id": item.id,
-                                        "content": item.memory,
-                                        "original_content": None,
-                                        "source_doc_id": getattr(
-                                            item.metadata, "source_doc_id", None
-                                        ),
-                                    }
-                                )
-                            for item_data in prepared_update_items_with_original:
-                                new_item = item_data["new_item"]
-                                kb_log_content.append(
-                                    {
-                                        "log_source": "KNOWLEDGE_BASE_LOG",
-                                        "trigger_source": msg.info.get("trigger_source", "Messages")
-                                        if msg.info
-                                        else "Messages",
-                                        "operation": "UPDATE",
-                                        "memory_id": new_item.id,
-                                        "content": new_item.memory,
-                                        "original_content": item_data[
-                                            "original_content"
-                                        ],  # Now correctly fetched
-                                        "source_doc_id": getattr(
-                                            new_item.metadata, "source_doc_id", None
-                                        ),
-                                    }
-                                )
-
-                            if kb_log_content:
-                                event = self.create_event_log(
-                                    label="knowledgeBaseUpdate",
-                                    from_memory_type=USER_INPUT_TYPE,
-                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    user_id=msg.user_id,
-                                    mem_cube_id=msg.mem_cube_id,
-                                    mem_cube=self.current_mem_cube,
-                                    memcube_log_content=kb_log_content,
-                                    metadata=None,  # Per design doc for KB logs
-                                    memory_len=len(kb_log_content),
-                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
-                                )
-                                event.log_content = (
-                                    f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
-                                )
-                                event.task_id = msg.task_id
-                                self._submit_web_logs([event])
+                            self.send_add_log_messages_to_cloud_env(
+                                msg, prepared_add_items, prepared_update_items_with_original
+                            )
                         else:
-                            # Existing: Playground/Default Logging
-                            # Reconstruct add_content/add_meta/update_content/update_meta from prepared_items
-                            # This ensures existing logging path continues to work with pre-existing data structures
-                            add_content_legacy: list[dict] = []
-                            add_meta_legacy: list[dict] = []
-                            update_content_legacy: list[dict] = []
-                            update_meta_legacy: list[dict] = []
-
-                            for item in prepared_add_items:
-                                key = getattr(item.metadata, "key", None) or transform_name_to_key(
-                                    name=item.memory
-                                )
-                                add_content_legacy.append(
-                                    {"content": f"{key}: {item.memory}", "ref_id": item.id}
-                                )
-                                add_meta_legacy.append(
-                                    {
-                                        "ref_id": item.id,
-                                        "id": item.id,
-                                        "key": item.metadata.key,
-                                        "memory": item.memory,
-                                        "memory_type": item.metadata.memory_type,
-                                        "status": item.metadata.status,
-                                        "confidence": item.metadata.confidence,
-                                        "tags": item.metadata.tags,
-                                        "updated_at": getattr(item.metadata, "updated_at", None)
-                                        or getattr(item.metadata, "update_at", None),
-                                    }
-                                )
-
-                            for item_data in prepared_update_items_with_original:
-                                item = item_data["new_item"]
-                                key = getattr(item.metadata, "key", None) or transform_name_to_key(
-                                    name=item.memory
-                                )
-                                update_content_legacy.append(
-                                    {"content": f"{key}: {item.memory}", "ref_id": item.id}
-                                )
-                                update_meta_legacy.append(
-                                    {
-                                        "ref_id": item.id,
-                                        "id": item.id,
-                                        "key": item.metadata.key,
-                                        "memory": item.memory,
-                                        "memory_type": item.metadata.memory_type,
-                                        "status": item.metadata.status,
-                                        "confidence": item.metadata.confidence,
-                                        "tags": item.metadata.tags,
-                                        "updated_at": getattr(item.metadata, "updated_at", None)
-                                        or getattr(item.metadata, "update_at", None),
-                                    }
-                                )
-
-                            events = []
-                            if add_content_legacy:
-                                event = self.create_event_log(
-                                    label="addMemory",
-                                    from_memory_type=USER_INPUT_TYPE,
-                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    user_id=msg.user_id,
-                                    mem_cube_id=msg.mem_cube_id,
-                                    mem_cube=self.current_mem_cube,
-                                    memcube_log_content=add_content_legacy,
-                                    metadata=add_meta_legacy,
-                                    memory_len=len(add_content_legacy),
-                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
-                                )
-                                event.task_id = msg.task_id
-                                events.append(event)
-                            if update_content_legacy:
-                                event = self.create_event_log(
-                                    label="updateMemory",
-                                    from_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    to_memory_type=LONG_TERM_MEMORY_TYPE,
-                                    user_id=msg.user_id,
-                                    mem_cube_id=msg.mem_cube_id,
-                                    mem_cube=self.current_mem_cube,
-                                    memcube_log_content=update_content_legacy,
-                                    metadata=update_meta_legacy,
-                                    memory_len=len(update_content_legacy),
-                                    memcube_name=self._map_memcube_name(msg.mem_cube_id),
-                                )
-                                event.task_id = msg.task_id
-                                events.append(event)
-                            if events:
-                                self._submit_web_logs(events)
+                            self.send_add_log_messages_to_local_env(
+                                msg, prepared_add_items, prepared_update_items_with_original
+                            )
 
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
@@ -534,6 +559,9 @@ class GeneralScheduler(BaseScheduler):
             logger.error(f"Error processing feedbackMemory message: {e}", exc_info=True)
 
     def _mem_read_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(
+            f"[DIAGNOSTIC] general_scheduler._mem_read_message_consumer called. Received messages: {[msg.model_dump_json(indent=2) for msg in messages]}"
+        )
         logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
@@ -541,6 +569,13 @@ class GeneralScheduler(BaseScheduler):
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing",
+                        stack_info=True,
+                    )
+                    return
+
                 content = message.content
                 user_name = message.user_name
                 info = message.info or {}
@@ -577,7 +612,7 @@ class GeneralScheduler(BaseScheduler):
                 )
 
             except Exception as e:
-                logger.error(f"Error processing mem_read message: {e}", exc_info=True)
+                logger.error(f"Error processing mem_read message: {e}", stack_info=True)
 
         with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
             futures = [executor.submit(process_message, msg) for msg in messages]
@@ -585,7 +620,7 @@ class GeneralScheduler(BaseScheduler):
                 try:
                     future.result()
                 except Exception as e:
-                    logger.error(f"Thread task failed: {e}", exc_info=True)
+                    logger.error(f"Thread task failed: {e}", stack_info=True)
 
     def _process_memories_with_reader(
         self,
@@ -598,6 +633,9 @@ class GeneralScheduler(BaseScheduler):
         task_id: str | None = None,
         info: dict | None = None,
     ) -> None:
+        logger.info(
+            f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader called. mem_ids: {mem_ids}, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}"
+        )
         """
         Process memories using mem_reader for enhanced memory processing.
 
@@ -695,6 +733,9 @@ class GeneralScheduler(BaseScheduler):
                                 }
                             )
                         if kb_log_content:
+                            logger.info(
+                                f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader: Creating event log for KB update. Label: knowledgeBaseUpdate, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}. KB content: {json.dumps(kb_log_content, indent=2)}"
+                            )
                             event = self.create_event_log(
                                 label="knowledgeBaseUpdate",
                                 from_memory_type=USER_INPUT_TYPE,
@@ -833,6 +874,11 @@ class GeneralScheduler(BaseScheduler):
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
+                    )
+                    return
                 content = message.content
                 user_name = message.user_name
 
@@ -1058,6 +1104,11 @@ class GeneralScheduler(BaseScheduler):
         def process_message(message: ScheduleMessageItem):
             try:
                 mem_cube = self.current_mem_cube
+                if mem_cube is None:
+                    logger.warning(
+                        f"mem_cube is None for user_id={message.user_id}, mem_cube_id={message.mem_cube_id}, skipping processing"
+                    )
+                    return
 
                 user_id = message.user_id
                 session_id = message.session_id
