@@ -166,7 +166,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 wait_sec = max(0.0, now - enq_epoch)
                 self.metrics.observe_task_wait_duration(wait_sec, m.user_id, m.label)
 
-                dequeue_ts = getattr(first_msg, "dequeue_ts", None)
+                dequeue_ts = getattr(first_msg, "_dequeue_ts", None)
                 start_delay_ms = None
                 if isinstance(dequeue_ts, int | float):
                     start_delay_ms = max(0.0, start_time - dequeue_ts) * 1000
