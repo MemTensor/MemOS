@@ -464,6 +464,25 @@ class GeneralScheduler(BaseScheduler):
         if events:
             self._submit_web_logs(events, additional_log_info="send_add_log_messages_to_cloud_env")
 
+    def send_add_log_messages_to_cloud_env(
+        self, msg: ScheduleMessageItem, prepared_add_items, prepared_update_items_with_original
+    ):
+        """
+        Cloud logging path for add/update events.
+
+        Currently reuses local env logging to avoid missing method errors in subclasses.
+        """
+        logger.info(
+            "send_add_log_messages_to_cloud_env fallback to local handler. user_id=%s mem_cube_id=%s task_id=%s item_id=%s",
+            msg.user_id,
+            msg.mem_cube_id,
+            msg.task_id,
+            msg.item_id,
+        )
+        return self.send_add_log_messages_to_local_env(
+            msg, prepared_add_items, prepared_update_items_with_original
+        )
+
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
         # Process the query in a session turn
