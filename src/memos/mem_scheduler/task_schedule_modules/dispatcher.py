@@ -149,7 +149,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 enq_ts = getattr(first_msg, "timestamp", None)
 
                 # Path 1: epoch seconds (preferred)
-                if isinstance(enq_ts, int | float):
+                if isinstance(enq_ts, (int, float)):
                     enq_epoch = float(enq_ts)
 
                 # Path 2: datetime -> normalize to UTC epoch
@@ -166,9 +166,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 wait_sec = max(0.0, now - enq_epoch)
                 self.metrics.observe_task_wait_duration(wait_sec, m.user_id, m.label)
 
-                dequeue_ts = getattr(first_msg, "dequeue_ts", None)
+                dequeue_ts = getattr(first_msg, "_dequeue_ts", None)
                 start_delay_ms = None
-                if isinstance(dequeue_ts, int | float):
+                if isinstance(dequeue_ts, (int, float)):
                     start_delay_ms = max(0.0, start_time - dequeue_ts) * 1000
 
                 emit_monitor_event(
@@ -180,7 +180,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         "enqueue_ts": to_iso(enq_ts),
                         "dequeue_ts": to_iso(
                             datetime.fromtimestamp(dequeue_ts, tz=timezone.utc)
-                            if isinstance(dequeue_ts, int | float)
+                            if isinstance(dequeue_ts, (int, float))
                             else None
                         ),
                     },
