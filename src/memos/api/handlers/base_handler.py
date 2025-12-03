@@ -8,7 +8,7 @@ dependency injection and common functionality.
 from typing import Any
 
 from memos.log import get_logger
-from memos.mem_scheduler.base_scheduler import BaseScheduler
+from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
 from memos.memories.textual.tree_text_memory.retrieve.advanced_searcher import AdvancedSearcher
 
 
@@ -129,7 +129,7 @@ class BaseHandler:
         return self.deps.mem_reader
 
     @property
-    def mem_scheduler(self) -> BaseScheduler:
+    def mem_scheduler(self) -> OptimizedScheduler:
         """Get scheduler instance."""
         return self.deps.mem_scheduler
 

@@ -16,11 +16,13 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
+from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
+from memos.mem_scheduler.monitors.task_schedule_monitor import TaskScheduleMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_BATCH,
@@ -41,8 +43,6 @@ from memos.mem_scheduler.schemas.message_schemas import (
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
-from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
-from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
 from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.db_utils import get_utc_now
@@ -137,12 +137,18 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.dispatcher = SchedulerDispatcher(
             config=self.config,
             memos_message_queue=self.memos_message_queue,
-            use_redis_queue=self.use_redis_queue,
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
             status_tracker=self.status_tracker,
             metrics=self.metrics,
             submit_web_logs=self._submit_web_logs,
+        )
+        # Task schedule monitor: initialize with underlying queue implementation
+        self.get_status_parallel = self.config.get("get_status_parallel", True)
+        self.task_schedule_monitor = TaskScheduleMonitor(
+            memos_message_queue=self.memos_message_queue.memos_message_queue,
+            dispatcher=self.dispatcher,
+            get_status_parallel=self.get_status_parallel,
         )
 
         # other attributes
@@ -150,6 +156,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
         self.current_mem_cube: BaseMemCube | None = None
+        try:
+            self.components = init_components()
+            self.current_mem_cube: BaseMemCube = self.components["naive_mem_cube"]
+        except Exception:
+            logger.info(
+                "No environment available to initialize mem cube. Using fallback naive_mem_cube."
+            )
+
+        self._mem_cubes: dict[str, BaseMemCube] = {}
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
@@ -232,11 +247,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self._cleanup_on_init_failure()
             raise
 
-        # start queue monitor if enabled and a bot is set later
-
-    def debug_mode_on(self):
-        self.memos_message_queue.debug_mode_on()
-
     def _cleanup_on_init_failure(self):
         """Clean up resources if initialization fails."""
         try:
@@ -255,6 +265,43 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         """The memory cube associated with this MemChat."""
         self.current_mem_cube = value
         self.retriever.mem_cube = value
+
+    @property
+    def mem_cubes(self) -> dict[str, BaseMemCube]:
+        """All available memory cubes registered to the scheduler.
+
+        Setting this property will also initialize `current_mem_cube` if it is not
+        already set, following the initialization pattern used in component_init.py
+        (i.e., calling `init_mem_cube(...)`), without introducing circular imports.
+        """
+        return self._mem_cubes
+
+    @mem_cubes.setter
+    def mem_cubes(self, value: dict[str, BaseMemCube]) -> None:
+        self._mem_cubes = value or {}
+
+        # Initialize current_mem_cube if not set yet and mem_cubes are available
+        try:
+            if self.current_mem_cube is None and self._mem_cubes:
+                selected_cube: BaseMemCube | None = None
+
+                # Prefer the cube matching current_mem_cube_id if provided
+                if self.current_mem_cube_id and self.current_mem_cube_id in self._mem_cubes:
+                    selected_cube = self._mem_cubes[self.current_mem_cube_id]
+                else:
+                    # Fall back to the first available cube deterministically
+                    first_id, first_cube = next(iter(self._mem_cubes.items()))
+                    self.current_mem_cube_id = first_id
+                    selected_cube = first_cube
+
+                if selected_cube is not None:
+                    # Use init_mem_cube to mirror component_init.py behavior
+                    # This sets self.mem_cube (and retriever.mem_cube), text_mem, and searcher.
+                    self.init_mem_cube(mem_cube=selected_cube)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize current_mem_cube from mem_cubes: {e}", exc_info=True
+            )
 
     def transform_working_memories_to_monitors(
         self, query_keywords, memories: list[TextualMemoryItem]
@@ -589,13 +636,20 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.memos_message_queue.submit_messages(messages=messages)
 
     def _submit_web_logs(
-        self, messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem]
+        self,
+        messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem],
+        additional_log_info: str | None = None,
     ) -> None:
         """Submit log messages to the web log queue and optionally to RabbitMQ.
 
         Args:
             messages: Single log message or list of log messages
         """
+        messages_list = [messages] if isinstance(messages, ScheduleLogForWebItem) else messages
+        for message in messages_list:
+            logger.info(
+                f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
+            )
         if self.rabbitmq_config is None:
             return
 
@@ -615,7 +669,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             if self.is_rabbitmq_connected():
                 logger.info(f"Submitted Scheduling log to rabbitmq: {message_info}")
                 self.rabbitmq_publish_message(message=message.to_dict())
-        logger.debug(f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue.")
+        logger.debug(
+            f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
+        )
 
     def get_web_log_messages(self) -> list[dict]:
         """
@@ -720,7 +776,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             except Exception as e:
                 # Don't log error for "No messages available in Redis queue" as it's expected
                 if "No messages available in Redis queue" not in str(e):
-                    logger.error(f"Unexpected error in message consumer: {e!s}")
+                    logger.error(f"Unexpected error in message consumer: {e!s}", exc_info=True)
                 time.sleep(self._consume_interval)  # Prevent tight error loops
 
     def _monitor_loop(self):
@@ -940,47 +996,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         return result
 
-    @staticmethod
-    def init_task_status():
-        return {
-            "running": 0,
-            "remaining": 0,
-            "completed": 0,
-        }
-
     def get_tasks_status(self):
-        task_status = self.init_task_status()
-        memos_message_queue = self.memos_message_queue.memos_message_queue
-        if isinstance(memos_message_queue, SchedulerRedisQueue):
-            stream_keys = memos_message_queue.get_stream_keys(
-                stream_key_prefix=memos_message_queue.stream_key_prefix
-            )
-            for stream_key in stream_keys:
-                if stream_key not in task_status:
-                    task_status[stream_key] = self.init_task_status()
-                # For Redis queue, prefer XINFO GROUPS to compute pending
-                groups_info = memos_message_queue.redis.xinfo_groups(stream_key)
-                if groups_info:
-                    for group in groups_info:
-                        if group.get("name") == memos_message_queue.consumer_group:
-                            task_status[stream_key]["running"] += int(group.get("pending", 0))
-                            task_status[stream_key]["remaining"] += memos_message_queue.qsize()[
-                                stream_key
-                            ]
-                            task_status["running"] += int(group.get("pending", 0))
-                            task_status["remaining"] += task_status[stream_key]["remaining"]
-                            break
+        """Delegate status collection to TaskScheduleMonitor."""
+        return self.task_schedule_monitor.get_tasks_status()
 
-        elif isinstance(memos_message_queue, SchedulerLocalQueue):
-            running_task_count = self.dispatcher.get_running_task_count()
-            task_status["running"] = running_task_count
-            task_status["remaining"] = sum(memos_message_queue.qsize().values())
-        else:
-            logger.error(
-                f"type of self.memos_message_queue is {memos_message_queue}, which is not supported"
-            )
-            raise NotImplementedError()
-        return task_status
+    def print_tasks_status(self, tasks_status: dict | None = None) -> None:
+        """Delegate pretty printing to TaskScheduleMonitor."""
+        self.task_schedule_monitor.print_tasks_status(tasks_status=tasks_status)
 
     def _gather_queue_stats(self) -> dict:
         """Collect queue/dispatcher stats for reporting."""

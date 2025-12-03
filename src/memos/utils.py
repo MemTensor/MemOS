@@ -6,20 +6,48 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
-def timed(func=None, *, log=True, log_prefix=""):
-    """Decorator to measure and optionally log time of retrieval steps.
+def timed(func=None, *, log=True, log_prefix="", log_args=None, log_extra_args=None):
+    """
+    Parameters:
+    - log: enable timing logs (default True)
+    - log_prefix: prefix; falls back to function name
+    - log_args: names to include in logs (str or list/tuple of str).
+      Value priority: kwargs → args[0].config.<name> (if available).
+      Non-string items are ignored.
 
-    Can be used as @timed or @timed(log=True)
+    Examples:
+    - @timed(log=True, log_prefix="OpenAI LLM", log_args=["model_name_or_path", "temperature"])
+    - @timed(log=True, log_prefix="OpenAI LLM", log_args=["temperature"])
+    - @timed()  # defaults
     """
 
     def decorator(fn):
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
             result = fn(*args, **kwargs)
-            elapsed = time.perf_counter() - start
-            elapsed_ms = elapsed * 1000.0
-            if log:
-                logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            ctx_str = ""
+            ctx_parts = []
+
+            if log is not True:
+                return result
+
+            if log_args:
+                for key in log_args:
+                    val = kwargs.get(key)
+                    ctx_parts.append(f"{key}={val}")
+                    ctx_str = f" [{', '.join(ctx_parts)}]"
+
+            if log_extra_args:
+                ctx_parts.extend([f"{key}={val}" for key, val in log_extra_args.items()])
+
+            if ctx_parts:
+                ctx_str = f" [{', '.join(ctx_parts)}]"
+
+            logger.info(
+                f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms, args: {ctx_str}"
+            )
+
             return result
 
         return wrapper

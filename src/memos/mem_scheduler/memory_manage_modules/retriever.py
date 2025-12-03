@@ -209,10 +209,9 @@ class SchedulerRetriever(BaseSchedulerModule):
     def recall_for_missing_memories(
         self,
         query: str,
-        memories: list[TextualMemoryItem],
+        memories: list[str],
     ) -> tuple[str, bool]:
-        text_memories = [one.memory for one in memories] if memories else []
-        text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(text_memories)])
+        text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(memories)])
 
         prompt = self.build_prompt(
             template_name="enlarge_recall",

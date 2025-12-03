@@ -29,7 +29,13 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         """
         from memos.configs.mem_reader import SimpleStructMemReaderConfig
 
+        # Extract direct_markdown_hostnames before converting to SimpleStructMemReaderConfig
+        direct_markdown_hostnames = getattr(config, "direct_markdown_hostnames", None)
+
+        # Create config_dict excluding direct_markdown_hostnames for SimpleStructMemReaderConfig
         config_dict = config.model_dump(exclude_none=True)
+        config_dict.pop("direct_markdown_hostnames", None)
+
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
@@ -38,6 +44,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             embedder=self.embedder,
             llm=self.llm,
             parser=None,
+            direct_markdown_hostnames=direct_markdown_hostnames,
         )
 
     def _concat_multi_modal_memories(
@@ -271,7 +278,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 sources = fast_item.metadata.sources
                 for source in sources:
                     items = self.multi_modal_parser.process_transfer(
-                        source, context_items=[fast_item], custom_tags=custom_tags
+                        source, context_items=[fast_item], custom_tags=custom_tags, info=info
                     )
                     fine_memory_items.extend(items)
             return fine_memory_items
