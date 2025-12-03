@@ -469,19 +469,57 @@ class GeneralScheduler(BaseScheduler):
     ):
         """
         Cloud logging path for add/update events.
-
-        Currently reuses local env logging to avoid missing method errors in subclasses.
         """
-        logger.info(
-            "send_add_log_messages_to_cloud_env fallback to local handler. user_id=%s mem_cube_id=%s task_id=%s item_id=%s",
-            msg.user_id,
-            msg.mem_cube_id,
-            msg.task_id,
-            msg.item_id,
-        )
-        return self.send_add_log_messages_to_local_env(
-            msg, prepared_add_items, prepared_update_items_with_original
-        )
+        kb_log_content: list[dict] = []
+        info = msg.info or {}
+        # Process added items
+        for item in prepared_add_items:
+            kb_log_content.append(
+                {
+                    "log_source": "KNOWLEDGE_BASE_LOG",
+                    "trigger_source": info.get("trigger_source", "Messages"),
+                    "operation": "ADD",
+                    "memory_id": item.id,
+                    "content": item.memory,
+                    "original_content": None,
+                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                }
+            )
+
+        # Process updated items
+        for item_data in prepared_update_items_with_original:
+            item = item_data["new_item"]
+            kb_log_content.append(
+                {
+                    "log_source": "KNOWLEDGE_BASE_LOG",
+                    "trigger_source": info.get("trigger_source", "Messages"),
+                    "operation": "UPDATE",
+                    "memory_id": item.id,
+                    "content": item.memory,
+                    "original_content": item_data.get("original_content"),
+                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                }
+            )
+
+        if kb_log_content:
+            logger.info(
+                f"[DIAGNOSTIC] general_scheduler.send_add_log_messages_to_cloud_env: Creating event log for KB update. Label: knowledgeBaseUpdate, user_id: {msg.user_id}, mem_cube_id: {msg.mem_cube_id}, task_id: {msg.task_id}. KB content: {json.dumps(kb_log_content, indent=2)}"
+            )
+            event = self.create_event_log(
+                label="knowledgeBaseUpdate",
+                from_memory_type=USER_INPUT_TYPE,
+                to_memory_type=LONG_TERM_MEMORY_TYPE,
+                user_id=msg.user_id,
+                mem_cube_id=msg.mem_cube_id,
+                mem_cube=self.current_mem_cube,
+                memcube_log_content=kb_log_content,
+                metadata=None,
+                memory_len=len(kb_log_content),
+                memcube_name=self._map_memcube_name(msg.mem_cube_id),
+            )
+            event.log_content = f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
+            event.task_id = msg.task_id
+            self._submit_web_logs([event])
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
