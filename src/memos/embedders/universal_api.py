@@ -30,7 +30,11 @@ class UniversalAPIEmbedder(BaseEmbedder):
         else:
             raise ValueError(f"Embeddings unsupported provider: {self.provider}")
 
-    @timed(log=True, log_prefix="model_timed_embedding")
+    @timed(
+        log=True,
+        log_prefix="model_timed_embedding",
+        log_extra_args={"model_name_or_path": "text-embedding-3-large"},
+    )
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self.provider == "openai" or self.provider == "azure":
             try:

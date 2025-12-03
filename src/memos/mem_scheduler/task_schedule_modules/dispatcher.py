@@ -160,21 +160,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         task_id=task_item.item_id, user_id=task_item.user_id
                     )
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
-
-                # acknowledge redis messages
-                if (
-                    isinstance(self.memos_message_queue, SchedulerRedisQueue)
-                    and self.memos_message_queue is not None
-                ):
-                    for msg in messages:
-                        redis_message_id = msg.redis_message_id
-                        # Acknowledge message processing
-                        self.memos_message_queue.ack_message(
-                            user_id=msg.user_id,
-                            mem_cube_id=msg.mem_cube_id,
-                            task_label=msg.label,
-                            redis_message_id=redis_message_id,
-                        )
+                # Redis ack is handled in finally to cover failure cases
 
                 # Mark task as completed and remove from tracking
                 with self._task_lock:
@@ -199,6 +185,23 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 logger.error(f"Task failed: {task_item.get_execution_info()}, Error: {e}")
 
                 raise
+            finally:
+                # Ensure Redis messages are acknowledged even if handler fails
+                if (
+                    isinstance(self.memos_message_queue, SchedulerRedisQueue)
+                    and self.memos_message_queue is not None
+                ):
+                    try:
+                        for msg in messages:
+                            redis_message_id = getattr(msg, "redis_message_id", "")
+                            self.memos_message_queue.ack_message(
+                                user_id=msg.user_id,
+                                mem_cube_id=msg.mem_cube_id,
+                                task_label=msg.label,
+                                redis_message_id=redis_message_id,
+                            )
+                    except Exception as ack_err:
+                        logger.warning(f"Ack in finally failed: {ack_err}")
 
         return wrapped_handler
 

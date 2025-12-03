@@ -195,6 +195,58 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             else:
                 logger.error(f"Error creating consumer group: {e}", exc_info=True)
 
+    def _get_pending_lock_key(self, stream_key: str) -> str:
+        """Compose a Redis lock key for pending reads on a specific stream.
+
+        Lock key includes stream prefix and consumer group to avoid collisions
+        across different deployments/groups.
+        """
+        # Use a stable lock namespace; include group to isolate multiple schedulers
+        return f"{self.stream_key_prefix}:lock:pending:{self.consumer_group}:{stream_key}"
+
+    def _acquire_pending_lock(self, stream_key: str, ttl_ms: int = 2000) -> str | None:
+        """Try to acquire a short-lived lock before reading pending messages.
+
+        Returns a unique token if the lock is acquired, otherwise None.
+        """
+        if not self._redis_conn:
+            return None
+        token = uuid4().hex
+        try:
+            ok = self._redis_conn.set(
+                self._get_pending_lock_key(stream_key), token, nx=True, px=ttl_ms
+            )
+            if ok:
+                logger.debug(
+                    f"Acquired pending-read lock for stream '{stream_key}' (ttl_ms={ttl_ms})"
+                )
+                return token
+            else:
+                logger.debug(f"Skip pending-read: lock not acquired for stream '{stream_key}'")
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to acquire pending-read lock for '{stream_key}': {e}")
+            return None
+
+    def _release_pending_lock(self, stream_key: str, token: str) -> None:
+        """Release the pending-read lock only if owned (token matches)."""
+        if not self._redis_conn or not token:
+            return
+        lock_key = self._get_pending_lock_key(stream_key)
+        # Compare-and-delete via Lua to ensure we only release our own lock
+        lua = """
+        if redis.call('get', KEYS[1]) == ARGV[1] then
+            return redis.call('del', KEYS[1])
+        else
+            return 0
+        end
+        """
+        try:
+            self._redis_conn.eval(lua, 1, lock_key, token)
+            logger.debug(f"Released pending-read lock for stream '{stream_key}'")
+        except Exception as e:
+            logger.debug(f"Release lock failed for '{stream_key}': {e}")
+
     def put(
         self, message: ScheduleMessageItem, block: bool = True, timeout: float | None = None
     ) -> None:
@@ -338,34 +390,46 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 need_pending_count = need_pending if need_pending > 0 else 0
 
             if need_pending_count:
-                try:
-                    pending_messages = self._redis_conn.xreadgroup(
-                        self.consumer_group,
-                        self.consumer_name,
-                        {stream_key: "0"},  # read only this consumer's pending
-                        count=need_pending_count,
-                        block=None,  # do not block when checking pending
-                    )
-                except Exception as read_err:
-                    # Handle missing group/stream by creating and retrying once
-                    err_msg = str(read_err).lower()
-                    if "nogroup" in err_msg or "no such key" in err_msg:
-                        logger.warning(
-                            f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (pending)."
-                        )
-                        self._ensure_consumer_group(stream_key=stream_key)
+                # Acquire a short-lived lock to avoid multiple processes reading the same pending
+                # messages concurrently when sharing the same consumer_name.
+                ttl_ms = 2000
+                token = self._acquire_pending_lock(stream_key=stream_key, ttl_ms=ttl_ms)
+                if token:
+                    try:
                         try:
                             pending_messages = self._redis_conn.xreadgroup(
                                 self.consumer_group,
                                 self.consumer_name,
-                                {stream_key: "0"},
+                                {stream_key: "0"},  # read only this consumer's pending
                                 count=need_pending_count,
-                                block=None,
+                                block=None,  # do not block when checking pending
                             )
-                        except Exception:
-                            pending_messages = []
-                    else:
-                        pending_messages = []
+                        except Exception as read_err:
+                            # Handle missing group/stream by creating and retrying once
+                            err_msg = str(read_err).lower()
+                            if "nogroup" in err_msg or "no such key" in err_msg:
+                                logger.warning(
+                                    f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (pending)."
+                                )
+                                self._ensure_consumer_group(stream_key=stream_key)
+                                try:
+                                    pending_messages = self._redis_conn.xreadgroup(
+                                        self.consumer_group,
+                                        self.consumer_name,
+                                        {stream_key: "0"},
+                                        count=need_pending_count,
+                                        block=None,
+                                    )
+                                except Exception:
+                                    pending_messages = []
+                            else:
+                                pending_messages = []
+                    finally:
+                        # Always release the lock
+                        self._release_pending_lock(stream_key=stream_key, token=token)
+                else:
+                    # If lock not acquired, skip pending read in this round
+                    pending_messages = []
 
             # Combine: new first, then pending
             messages = []

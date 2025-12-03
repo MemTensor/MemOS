@@ -16,6 +16,7 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
+from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
@@ -154,7 +155,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._context_lock = threading.Lock()
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
-        self.current_mem_cube: BaseMemCube | None = None
+        self.components = init_components()
+        self.current_mem_cube: BaseMemCube | None = self.components["naive_mem_cube"]
+        self._mem_cubes: dict[str, BaseMemCube] = {}
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
@@ -255,6 +258,43 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         """The memory cube associated with this MemChat."""
         self.current_mem_cube = value
         self.retriever.mem_cube = value
+
+    @property
+    def mem_cubes(self) -> dict[str, BaseMemCube]:
+        """All available memory cubes registered to the scheduler.
+
+        Setting this property will also initialize `current_mem_cube` if it is not
+        already set, following the initialization pattern used in component_init.py
+        (i.e., calling `init_mem_cube(...)`), without introducing circular imports.
+        """
+        return self._mem_cubes
+
+    @mem_cubes.setter
+    def mem_cubes(self, value: dict[str, BaseMemCube]) -> None:
+        self._mem_cubes = value or {}
+
+        # Initialize current_mem_cube if not set yet and mem_cubes are available
+        try:
+            if self.current_mem_cube is None and self._mem_cubes:
+                selected_cube: BaseMemCube | None = None
+
+                # Prefer the cube matching current_mem_cube_id if provided
+                if self.current_mem_cube_id and self.current_mem_cube_id in self._mem_cubes:
+                    selected_cube = self._mem_cubes[self.current_mem_cube_id]
+                else:
+                    # Fall back to the first available cube deterministically
+                    first_id, first_cube = next(iter(self._mem_cubes.items()))
+                    self.current_mem_cube_id = first_id
+                    selected_cube = first_cube
+
+                if selected_cube is not None:
+                    # Use init_mem_cube to mirror component_init.py behavior
+                    # This sets self.mem_cube (and retriever.mem_cube), text_mem, and searcher.
+                    self.init_mem_cube(mem_cube=selected_cube)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize current_mem_cube from mem_cubes: {e}", exc_info=True
+            )
 
     def transform_working_memories_to_monitors(
         self, query_keywords, memories: list[TextualMemoryItem]
@@ -589,7 +629,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.memos_message_queue.submit_messages(messages=messages)
 
     def _submit_web_logs(
-        self, messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem]
+        self,
+        messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem],
+        additional_log_info: str | None = None,
     ) -> None:
         """Submit log messages to the web log queue and optionally to RabbitMQ.
 
@@ -620,7 +662,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             if self.is_rabbitmq_connected():
                 logger.info(f"Submitted Scheduling log to rabbitmq: {message_info}")
                 self.rabbitmq_publish_message(message=message.to_dict())
-        logger.debug(f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue.")
+        logger.debug(
+            f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
+        )
 
     def get_web_log_messages(self) -> list[dict]:
         """

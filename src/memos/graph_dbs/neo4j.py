@@ -1415,9 +1415,9 @@ class Neo4jGraphDB(BaseGraphDB):
             params = {}
 
             for key, value in condition_dict.items():
-                # Check if value is a dict with comparison operators (gt, lt, gte, lte)
+                # Check if value is a dict with comparison operators (gt, lt, gte, lte, contains, in, like)
                 if isinstance(value, dict):
-                    # Handle comparison operators: gt (greater than), lt (less than), gte (greater than or equal), lte (less than or equal)
+                    # Handle comparison operators: gt, lt, gte, lte, contains, in, like
                     for op, op_value in value.items():
                         if op in ("gt", "lt", "gte", "lte"):
                             # Map operator to Cypher operator
@@ -1440,24 +1440,28 @@ class Neo4jGraphDB(BaseGraphDB):
                                     f"{node_alias}.{key} {cypher_op} ${param_name}"
                                 )
                         elif op == "contains":
-                            # Handle contains operator (for array fields)
-                            # Only supports array format: {"field": {"contains": ["value1", "value2"]}}
-                            # Single string values are not supported, use array format instead: {"field": {"contains": ["value"]}}
+                            # Handle contains operator
+                            # For arrays: use IN to check if array contains value (value IN array_field)
+                            # For strings: also use IN syntax to check if string value is in array field
+                            # Note: In Neo4j, for array fields, we use "value IN field" syntax
+                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                            param_counter[0] += 1
+                            params[param_name] = op_value
+                            # Use IN syntax: value IN array_field (works for both string and array values)
+                            condition_parts.append(f"${param_name} IN {node_alias}.{key}")
+                        elif op == "in":
+                            # Handle in operator (for checking if field value is in a list)
+                            # Supports array format: {"field": {"in": ["value1", "value2"]}}
                             if not isinstance(op_value, list):
                                 raise ValueError(
-                                    f"contains operator only supports array format. "
-                                    f"Use {{'{key}': {{'contains': ['{op_value}']}}}} instead of {{'{key}': {{'contains': '{op_value}'}}}}"
+                                    f"in operator only supports array format. "
+                                    f"Use {{'{key}': {{'in': ['{op_value}']}}}} instead of {{'{key}': {{'in': '{op_value}'}}}}"
                                 )
-                            # Handle array of values: generate AND conditions for each value (all must be present)
-                            and_conditions = []
-                            for item in op_value:
-                                param_name = f"filter_{key}_{op}_{param_counter[0]}"
-                                param_counter[0] += 1
-                                params[param_name] = item
-                                # For array fields, check if element is in array
-                                and_conditions.append(f"${param_name} IN {node_alias}.{key}")
-                            if and_conditions:
-                                condition_parts.append(f"({' AND '.join(and_conditions)})")
+                            # Build IN clause
+                            param_name = f"filter_{key}_{op}_{param_counter[0]}"
+                            param_counter[0] += 1
+                            params[param_name] = op_value
+                            condition_parts.append(f"{node_alias}.{key} IN ${param_name}")
                         elif op == "like":
                             # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                             # Neo4j uses CONTAINS for string matching
