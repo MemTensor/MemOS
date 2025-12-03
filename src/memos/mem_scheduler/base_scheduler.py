@@ -589,7 +589,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.memos_message_queue.submit_messages(messages=messages)
 
     def _submit_web_logs(
-        self, messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem]
+        self,
+        messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem],
+        additional_log_info: str | None = None,
     ) -> None:
         """Submit log messages to the web log queue and optionally to RabbitMQ.
 
@@ -620,7 +622,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             if self.is_rabbitmq_connected():
                 logger.info(f"Submitted Scheduling log to rabbitmq: {message_info}")
                 self.rabbitmq_publish_message(message=message.to_dict())
-        logger.debug(f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue.")
+        logger.debug(
+            f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
+        )
 
     def get_web_log_messages(self) -> list[dict]:
         """

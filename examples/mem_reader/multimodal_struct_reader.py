@@ -328,6 +328,102 @@ MULTIMODAL_MESSAGE_CASES = [
         ],
     ),
     TestCase(
+        name="oss_text_file",
+        description="User message with text and file",
+        scene_data=[
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请阅读这个PDF，总结里面的要点。"},
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "file_123",
+                                "filename": "report.pdf",
+                                "file_data": "@http://139.196.232.20:9090/graph-test/algorithm/2025_11_13/1763043889_1763043782_PM1%E8%BD%A6%E9%97%B4PMT%E9%9D%B4%E5%8E%8B%E8%BE%B9%E5%8E%8B%E5%8E%8B%E5%8A%9B%E6%97%A0%E6%B3%95%E5%BB%BA%E7%AB%8B%E6%95%85%E9%9A%9C%E6%8A%A5%E5%91%8A20240720.md",
+                            },
+                        },
+                    ],
+                    "chat_time": "2025-11-24T10:21:00Z",
+                    "message_id": "mm-file-1",
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="pure_data_file",
+        description="User message with text and file",
+        scene_data=[
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请阅读这个PDF，总结里面的要点。"},
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "file_123",
+                                "filename": "report.pdf",
+                                "file_data": "明文记忆是系统与用户对话、操作等交互中动态习得，以及外部提供的、可显式管理的结构化知识形态，通常以文档、提示模板、图结构或用户规则等形式存在。它具备编辑性、可共享性与治理友好性，适合存储需要频繁修改、可审计或多方协同使用的信息。 在 MemOS 中，明文记忆可用于动态生成推理上下文、个性化偏好注入、多代理协作共享等场景，成为连接人类输入与模型认知的关键桥梁。激活记忆是指模型在推理过程中产生的瞬时性认知状态，包括 KV cache、隐藏层激活、注意力权重等中间张量结构。它通常用于维持上下文连续性、对话一致性与行为风格控制。 MemOS 将激活记忆抽象为可调度资源，支持按需唤醒、延迟卸载与结构变换。例如，某些上下文状态可以被压缩为“半结构化记忆片段”用于未来复用，也可以在任务级别转化为参数化模块，支持短期记忆的长期化演进。这一机制为模型行为一致性、风格保持与状态持续性提供了基础。",
+                            },
+                        },
+                    ],
+                    "chat_time": "2025-11-24T10:21:00Z",
+                    "message_id": "mm-file-1",
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="local_data_file",
+        description="User message with text and file",
+        scene_data=[
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请阅读这个PDF，总结里面的要点。"},
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "file_123",
+                                "filename": "report.pdf",
+                                "file_data": "./my_local_file/report.pdf",
+                            },
+                        },
+                    ],
+                    "chat_time": "2025-11-24T10:21:00Z",
+                    "message_id": "mm-file-1",
+                }
+            ]
+        ],
+    ),
+    TestCase(
+        name="internet_file",
+        description="User message with text and file",
+        scene_data=[
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请阅读这个PDF，总结里面的要点。"},
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_id": "file_123",
+                                "filename": "report.pdf",
+                                "file_data": "https://upload.wikimedia.org/wikipedia/commons/c/cb/NLC416-16jh004830-88775_%E7%B4%85%E6%A8%93%E5%A4%A2.pdf",
+                            },
+                        },
+                    ],
+                    "chat_time": "2025-11-24T10:21:00Z",
+                    "message_id": "mm-file-1",
+                }
+            ]
+        ],
+    ),
+    TestCase(
         name="multimodal_mixed",
         description="Mixed multimodal message (text + file + image)",
         scene_data=[
@@ -661,6 +757,12 @@ def get_reader_config() -> dict[str, Any]:
             },
         }
 
+    # Get direct markdown hostnames from environment variable
+    direct_markdown_hostnames = None
+    env_hostnames = os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "139.196.232.20")
+    if env_hostnames:
+        direct_markdown_hostnames = [h.strip() for h in env_hostnames.split(",") if h.strip()]
+
     return {
         "llm": llm_config,
         "embedder": embedder_config,
@@ -673,6 +775,7 @@ def get_reader_config() -> dict[str, Any]:
                 "min_sentences_per_chunk": 1,
             },
         },
+        "direct_markdown_hostnames": direct_markdown_hostnames,
     }
 
 
@@ -863,13 +966,13 @@ Examples:
     parser.add_argument(
         "--example",
         type=str,
-        default="all",
+        default="oss_text_file",
         help="Test case name, category name, or 'all' to run all cases (default: all)",
     )
     parser.add_argument(
         "--mode",
         choices=["fast", "fine"],
-        default="fast",
+        default="fine",
         help="Processing mode: fast (quick) or fine (with LLM) (default: fast)",
     )
     parser.add_argument(

@@ -43,6 +43,151 @@ FILE_EXT_RE = re.compile(
     re.I,
 )
 
+# Default configuration for parser and text splitter
+DEFAULT_PARSER_CONFIG = {
+    "backend": "markitdown",
+    "config": {},
+}
+
+DEFAULT_CHUNK_SIZE = int(os.getenv("FILE_PARSER_CHUNK_SIZE", "1000"))
+DEFAULT_CHUNK_OVERLAP = int(os.getenv("FILE_PARSER_CHUNK_OVERLAP", "200"))
+
+
+def _simple_split_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    """
+    Simple text splitter as fallback when langchain is not available.
+
+    Args:
+        text: Text to split
+        chunk_size: Maximum size of chunks
+        chunk_overlap: Overlap between chunks
+
+    Returns:
+        List of text chunks
+    """
+    if not text or len(text) <= chunk_size:
+        return [text] if text.strip() else []
+
+    chunks = []
+    start = 0
+    text_len = len(text)
+
+    while start < text_len:
+        # Calculate end position
+        end = min(start + chunk_size, text_len)
+
+        # If not the last chunk, try to break at a good position
+        if end < text_len:
+            # Try to break at newline, sentence end, or space
+            for separator in ["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " "]:
+                last_sep = text.rfind(separator, start, end)
+                if last_sep != -1:
+                    end = last_sep + len(separator)
+                    break
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        # Move start position with overlap
+        start = max(start + 1, end - chunk_overlap)
+
+    return chunks
+
+
+# Initialize parser instance
+file_parser = None
+try:
+    parser_config = ParserConfigFactory.model_validate(DEFAULT_PARSER_CONFIG)
+    file_parser = ParserFactory.from_config(parser_config)
+    logger.debug("[FileContentParser] Initialized parser instance")
+except Exception as e:
+    logger.error(f"[FileContentParser] Failed to create parser: {e}")
+    file_parser = None
+
+# Initialize text splitter instance
+text_splitter = None
+_use_simple_splitter = False
+
+try:
+    try:
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+    except ImportError:
+        try:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+        except ImportError:
+            logger.error(
+                "langchain not available. Install with: pip install langchain or pip install langchain-text-splitters"
+            )
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=DEFAULT_CHUNK_SIZE,
+        chunk_overlap=DEFAULT_CHUNK_OVERLAP,
+        length_function=len,
+        separators=["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " ", ""],
+    )
+    logger.debug(
+        f"[FileContentParser] Initialized langchain text splitter with chunk_size={DEFAULT_CHUNK_SIZE}, "
+        f"chunk_overlap={DEFAULT_CHUNK_OVERLAP}"
+    )
+except ImportError as e:
+    logger.warning(
+        f"[FileContentParser] langchain not available, using simple text splitter as fallback: {e}. "
+        "Install with: pip install langchain or pip install langchain-text-splitters"
+    )
+    text_splitter = None
+    _use_simple_splitter = True
+except Exception as e:
+    logger.error(
+        f"[FileContentParser] Failed to initialize text splitter: {e}, using simple splitter as fallback"
+    )
+    text_splitter = None
+    _use_simple_splitter = True
+
+
+def get_parser() -> Any:
+    """
+    Get parser instance.
+
+    Returns:
+        Parser instance (from ParserFactory) or None if not available
+    """
+    return file_parser
+
+
+def get_text_splitter(chunk_size: int | None = None, chunk_overlap: int | None = None) -> Any:
+    """
+    Get text splitter instance or a callable that uses simple splitter.
+
+    Args:
+        chunk_size: Maximum size of chunks when splitting text (used for simple splitter fallback)
+        chunk_overlap: Overlap between chunks when splitting text (used for simple splitter fallback)
+
+    Returns:
+        Text splitter instance (RecursiveCharacterTextSplitter) or a callable wrapper for simple splitter
+    """
+    if text_splitter is not None:
+        return text_splitter
+
+    # Return a callable wrapper that uses simple splitter
+    if _use_simple_splitter:
+        actual_chunk_size = chunk_size or DEFAULT_CHUNK_SIZE
+        actual_chunk_overlap = chunk_overlap or DEFAULT_CHUNK_OVERLAP
+
+        class SimpleTextSplitter:
+            """Simple text splitter wrapper."""
+
+            def __init__(self, chunk_size: int, chunk_overlap: int):
+                self.chunk_size = chunk_size
+                self.chunk_overlap = chunk_overlap
+
+            def split_text(self, text: str) -> list[str]:
+                return _simple_split_text(text, self.chunk_size, self.chunk_overlap)
+
+        return SimpleTextSplitter(actual_chunk_size, actual_chunk_overlap)
+
+    return None
+
 
 def extract_role(message: dict[str, Any]) -> str:
     """Extract role from message."""

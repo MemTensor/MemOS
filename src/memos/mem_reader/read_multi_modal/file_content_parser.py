@@ -1,5 +1,8 @@
 """Parser for file content parts (RawMessageList)."""
 
+import os
+import tempfile
+
 from typing import Any
 
 from memos.embedders.base import BaseEmbedder
@@ -10,10 +13,10 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
-from memos.parsers.factory import ParserFactory
 from memos.types.openai_chat_completion_types import File
 
 from .base import BaseMessageParser, _derive_key
+from .utils import get_parser, get_text_splitter
 
 
 logger = get_logger(__name__)
@@ -22,11 +25,61 @@ logger = get_logger(__name__)
 class FileContentParser(BaseMessageParser):
     """Parser for file content parts."""
 
+    def _handle_url(self, url_str: str, filename: str) -> tuple[str, str | None]:
+        """Download and parse file from URL."""
+        try:
+            from urllib.parse import urlparse
+
+            import requests
+
+            parsed_url = urlparse(url_str)
+            hostname = parsed_url.hostname or ""
+
+            response = requests.get(url_str, timeout=30)
+            response.raise_for_status()
+
+            if not filename:
+                filename = os.path.basename(parsed_url.path) or "downloaded_file"
+
+            if hostname in self.direct_markdown_hostnames:
+                return response.text, None
+
+            file_ext = os.path.splitext(filename)[1].lower()
+            if file_ext in [".md", ".markdown", ".txt"]:
+                return response.text, None
+            with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=file_ext) as temp_file:
+                temp_file.write(response.content)
+            return "", temp_file.name
+        except Exception as e:
+            logger.error(f"[FileContentParser] URL processing error: {e}")
+            return f"[File URL download failed: {url_str}]", None
+
+    def _is_base64(self, data: str) -> bool:
+        """Quick heuristic to check base64-like string."""
+        return data.startswith("data:") or (
+            len(data) > 100
+            and all(
+                c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+                for c in data[:100]
+            )
+        )
+
+    def _handle_base64(self, data: str) -> str:
+        """Base64 not implemented placeholder."""
+        logger.info("[FileContentParser] Base64 content detected but decoding is not implemented.")
+        return ""
+
+    def _handle_local(self, data: str) -> str:
+        """Base64 not implemented placeholder."""
+        logger.info("[FileContentParser] Local file paths are not supported in fine mode.")
+        return ""
+
     def __init__(
         self,
         embedder: BaseEmbedder,
         llm: BaseLLM | None = None,
         parser: Any | None = None,
+        direct_markdown_hostnames: list[str] | None = None,
     ):
         """
         Initialize FileContentParser.
@@ -35,9 +88,52 @@ class FileContentParser(BaseMessageParser):
             embedder: Embedder for generating embeddings
             llm: Optional LLM for fine mode processing
             parser: Optional parser for parsing file contents
+            direct_markdown_hostnames: List of hostnames that should return markdown directly
+                without parsing. If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES
+                environment variable (comma-separated).
         """
         super().__init__(embedder, llm)
         self.parser = parser
+
+        # Get inner markdown hostnames from config or environment
+        if direct_markdown_hostnames is not None:
+            self.direct_markdown_hostnames = direct_markdown_hostnames
+        else:
+            env_hostnames = os.getenv("FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "")
+            if env_hostnames:
+                # Support comma-separated list
+                self.direct_markdown_hostnames = [
+                    h.strip() for h in env_hostnames.split(",") if h.strip()
+                ]
+            else:
+                self.direct_markdown_hostnames = []
+
+    def _split_text(self, text: str) -> list[str]:
+        """
+        Split text into chunks using text splitter from utils.
+
+        Args:
+            text: Text to split
+
+        Returns:
+            List of text chunks
+        """
+        if not text or not text.strip():
+            return []
+
+        splitter = get_text_splitter()
+        if not splitter:
+            # If text splitter is not available, return text as single chunk
+            return [text] if text.strip() else []
+
+        try:
+            chunks = splitter.split_text(text)
+            logger.debug(f"[FileContentParser] Split text into {len(chunks)} chunks")
+            return chunks
+        except Exception as e:
+            logger.error(f"[FileContentParser] Error splitting text: {e}")
+            # Fallback to single chunk
+            return [text] if text.strip() else []
 
     def create_source(
         self,
@@ -83,21 +179,10 @@ class FileContentParser(BaseMessageParser):
         Returns:
             Parsed text content
         """
-        if not self.parser:
-            # Try to create a default parser
-            try:
-                from memos.configs.parser import ParserConfigFactory
-
-                parser_config = ParserConfigFactory.model_validate(
-                    {
-                        "backend": "markitdown",
-                        "config": {},
-                    }
-                )
-                self.parser = ParserFactory.from_config(parser_config)
-            except Exception as e:
-                logger.warning(f"[FileContentParser] Failed to create parser: {e}")
-                return ""
+        parser = self.parser or get_parser()
+        if not parser:
+            logger.warning("[FileContentParser] Parser not available")
+            return ""
 
         file_path = file_info.get("path") or file_info.get("file_id", "")
         filename = file_info.get("filename", "unknown")
@@ -107,10 +192,8 @@ class FileContentParser(BaseMessageParser):
             return f"[File: {filename}]"
 
         try:
-            import os
-
             if os.path.exists(file_path):
-                parsed_text = self.parser.parse(file_path)
+                parsed_text = parser.parse(file_path)
                 return parsed_text
             else:
                 logger.warning(f"[FileContentParser] File not found: {file_path}")
@@ -197,6 +280,9 @@ class FileContentParser(BaseMessageParser):
         # Combine content parts
         content = " ".join(content_parts)
 
+        # Split content into chunks
+        content_chunks = self._split_text(content)
+
         # Create source
         source = self.create_source(message, info)
 
@@ -209,27 +295,59 @@ class FileContentParser(BaseMessageParser):
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
 
-        # Create memory item
-        memory_item = TextualMemoryItem(
-            memory=content,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                status="activated",
-                tags=["mode:fast", "multimodal:file"],
-                key=_derive_key(content),
-                embedding=self.embedder.embed([content])[0],
-                usage=[],
-                sources=[source],
-                background="",
-                confidence=0.99,
-                type="fact",
-                info=info_,
-            ),
-        )
+        # Create memory items for each chunk
+        memory_items = []
+        for chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
 
-        return [memory_item]
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=[
+                        "mode:fast",
+                        "multimodal:file",
+                        f"chunk:{chunk_idx + 1}/{len(content_chunks)}",
+                    ],
+                    key=_derive_key(chunk_text),
+                    embedding=self.embedder.embed([chunk_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        # If no chunks were created, create a placeholder
+        if not memory_items:
+            memory_item = TextualMemoryItem(
+                memory=content,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=["mode:fast", "multimodal:file"],
+                    key=_derive_key(content),
+                    embedding=self.embedder.embed([content])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        return memory_items
 
     def parse_fine(
         self,
@@ -237,4 +355,160 @@ class FileContentParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        return []
+        """
+        Parse file content part in fine mode.
+        Fine mode downloads and parses file content, especially for URLs.
+        Handles various file parameter scenarios:
+        - file_data: URL (http://, https://, or @http://), base64 encoded data, or plain text content
+        - file_id: ID of an uploaded file
+        - filename: name of the file
+        """
+        if not isinstance(message, dict):
+            logger.warning(f"[FileContentParser] Expected dict, got {type(message)}")
+            return []
+
+        # Extract file information
+        file_info = message.get("file", {})
+        if not isinstance(file_info, dict):
+            logger.warning(f"[FileContentParser] Expected file dict, got {type(file_info)}")
+            return []
+
+        # Extract file parameters (all are optional)
+        file_data = file_info.get("file_data", "")
+        file_id = file_info.get("file_id", "")
+        filename = file_info.get("filename", "")
+
+        # Use parser from utils
+        parser = self.parser or get_parser()
+        if not parser:
+            logger.warning("[FileContentParser] Parser not available")
+            return []
+
+        parsed_text = ""
+        temp_file_path = None
+
+        try:
+            # Priority 1: If file_data is provided, process it
+            if file_data:
+                if isinstance(file_data, str):
+                    url_str = file_data[1:] if file_data.startswith("@") else file_data
+
+                    if url_str.startswith(("http://", "https://")):
+                        parsed_text, temp_file_path = self._handle_url(url_str, filename)
+                        if temp_file_path:
+                            try:
+                                # Use parser from utils
+                                if parser:
+                                    parsed_text = parser.parse(temp_file_path)
+                                else:
+                                    parsed_text = "[File parsing error: Parser not available]"
+                            except Exception as e:
+                                logger.error(
+                                    f"[FileContentParser] Error parsing downloaded file: {e}"
+                                )
+                                parsed_text = f"[File parsing error: {e!s}]"
+
+                    elif os.path.exists(file_data):
+                        parsed_text = self._handle_local(file_data)
+
+                    elif self._is_base64(file_data):
+                        parsed_text = self._handle_base64(file_data)
+
+                    else:
+                        parsed_text = file_data
+            # Priority 2: If file_id is provided but no file_data, try to use file_id as path
+            elif file_id:
+                logger.warning(f"[FileContentParser] File data not provided for file_id: {file_id}")
+                parsed_text = f"[File ID: {file_id}]: File data not provided"
+
+            # If no content could be parsed, create a placeholder
+            if not parsed_text:
+                if filename:
+                    parsed_text = f"[File: {filename}] File data not provided"
+                else:
+                    parsed_text = "[File: unknown] File data not provided"
+
+        except Exception as e:
+            logger.error(f"[FileContentParser] Error in parse_fine: {e}")
+            parsed_text = f"[File parsing error: {e!s}]"
+
+        finally:
+            # Clean up temporary file
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                    logger.debug(f"[FileContentParser] Cleaned up temporary file: {temp_file_path}")
+                except Exception as e:
+                    logger.warning(
+                        f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
+                    )
+
+        # Create source
+        source = self.create_source(message, info)
+
+        # Extract info fields
+        if not info:
+            info = {}
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # For file content parts, default to LongTermMemory
+        memory_type = "LongTermMemory"
+
+        # Split parsed text into chunks
+        content_chunks = self._split_text(parsed_text)
+
+        # Create memory items for each chunk
+        memory_items = []
+        for chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
+
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=[
+                        "mode:fine",
+                        "multimodal:file",
+                        f"chunk:{chunk_idx + 1}/{len(content_chunks)}",
+                    ],
+                    key=_derive_key(chunk_text),
+                    embedding=self.embedder.embed([chunk_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        # If no chunks were created, create a placeholder
+        if not memory_items:
+            memory_item = TextualMemoryItem(
+                memory=parsed_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=["mode:fine", "multimodal:file"],
+                    key=_derive_key(parsed_text),
+                    embedding=self.embedder.embed([parsed_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+
+        return memory_items
