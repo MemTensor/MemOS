@@ -268,11 +268,12 @@ class ToolParser(BaseMessageParser):
                 # text will fine parse in full chat content, no need to parse specially
                 return []
             elif part_type == "file":
-                # TODO: use OCR to extract text from file and generate mem by llm
-                content = content[0].get("file", {}).get("file_data", "")
+                # use file content parser to parse file content, no need to parse here
+                return []
             elif part_type == "image_url":
                 # TODO: use multi-modal llm to generate mem by image url
                 content = content[0].get("image_url", {}).get("url", "")
+                return []
             elif part_type == "input_audio":
                 # TODO: unsupport audio for now
                 return []
@@ -282,4 +283,3 @@ class ToolParser(BaseMessageParser):
         else:
             # simple string content message, fine parse in full chat content, no need to parse specially
             return []
-        return []
