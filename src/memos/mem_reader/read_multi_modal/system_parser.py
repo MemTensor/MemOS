@@ -126,12 +126,21 @@ class SystemParser(BaseMessageParser):
             logger.warning(f"[SystemParser] Tool schema must be a list[dict]: {content}")
             return []
 
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
         return [
             TextualMemoryItem(
                 id=str(uuid.uuid4()),
                 memory=json.dumps(schema),
                 metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
                     memory_type="ToolSchemaMemory",
+                    status="activated",
+                    embedding=self.embedder.embed([json.dumps(schema)])[0],
+                    info=info_,
                 ),
             )
             for schema in tool_schema
