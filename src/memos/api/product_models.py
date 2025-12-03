@@ -326,6 +326,21 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    search_tool_memory: bool = Field(
+        True,
+        description=(
+            "Whether to retrieve tool memories along with general memories. "
+            "If enabled, the system will automatically recall tool memories "
+            "relevant to the query. Default: True."
+        ),
+    )
+
+    tool_mem_top_k: int = Field(
+        6,
+        ge=0,
+        description="Number of tool memories to retrieve (top-K). Default: 6.",
+    )
+
     # ==== Filter conditions ====
     # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(

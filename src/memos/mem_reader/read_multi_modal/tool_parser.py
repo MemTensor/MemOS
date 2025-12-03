@@ -135,91 +135,6 @@ class ToolParser(BaseMessageParser):
     ) -> ChatCompletionToolMessageParam:
         """Rebuild tool message from SourceMessage."""
 
-        # Priority 1: Use original_part if available
-        if hasattr(source, "original_part") and source.original_part:
-            original = source.original_part
-            # If it's a content part, wrap it in a message
-            if isinstance(original, dict) and "type" in original:
-                return {
-                    "role": source.role or "user",
-                    "tool_call_id": source.tool_call_id or "",
-                    "content": [original],
-                    "chat_time": source.chat_time,
-                    "message_id": source.message_id,
-                }
-            # If it's already a full message, return it
-            if isinstance(original, dict) and "role" in original:
-                return original
-
-        # Priority 2: Rebuild from source fields
-        if source.type == "text":
-            return {
-                "role": source.role or "tool",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": source.content or "",
-                    }
-                ],
-                "chat_time": source.chat_time,
-                "message_id": source.message_id,
-            }
-        elif source.type == "file":
-            return {
-                "role": source.role or "tool",
-                "content": [
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_id": source.file_id or "",
-                            "filename": source.filename or "",
-                            "file_data": source.content or "",
-                        },
-                    }
-                ],
-                "chat_time": source.chat_time,
-                "message_id": source.message_id,
-            }
-        elif source.type == "image_url":
-            return {
-                "role": source.role or "tool",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": source.content or "",
-                            "detail": source.detail or "auto",
-                        },
-                    }
-                ],
-                "chat_time": source.chat_time,
-                "message_id": source.message_id,
-            }
-        elif source.type == "input_audio":
-            return {
-                "role": source.role or "tool",
-                "content": [
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": source.content or "",
-                            "format": source.format or "wav",
-                        },
-                    }
-                ],
-                "chat_time": source.chat_time,
-                "message_id": source.message_id,
-            }
-
-        # Simple text message
-        return {
-            "role": "tool",
-            "content": source.content or "",
-            "tool_call_id": source.message_id or "",
-            "chat_time": source.chat_time,
-            "message_id": source.message_id,
-        }
-
     def parse_fast(
         self,
         message: ChatCompletionToolMessageParam,
@@ -261,25 +176,5 @@ class ToolParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        content = message.get("content", "")
-        if isinstance(content, list):
-            part_type = content[0].get("type", "")
-            if part_type == "text":
-                # text will fine parse in full chat content, no need to parse specially
-                return []
-            elif part_type == "file":
-                # use file content parser to parse file content, no need to parse here
-                return []
-            elif part_type == "image_url":
-                # TODO: use multi-modal llm to generate mem by image url
-                content = content[0].get("image_url", {}).get("url", "")
-                return []
-            elif part_type == "input_audio":
-                # TODO: unsupport audio for now
-                return []
-            else:
-                logger.warning(f"[ToolParser] Unsupported part type: {part_type}")
-                return []
-        else:
-            # simple string content message, fine parse in full chat content, no need to parse specially
-            return []
+        # tool message no special multimodal handling is required in fine mode.
+        return []
