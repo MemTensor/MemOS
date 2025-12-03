@@ -5,6 +5,8 @@ This module provides a class-based implementation of add handlers,
 using dependency injection for better modularity and testability.
 """
 
+from pydantic import validate_call
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import APIADDRequest, APIFeedbackRequest, MemoryResponse
 from memos.memories.textual.item import (
@@ -13,6 +15,7 @@ from memos.memories.textual.item import (
 from memos.multi_mem_cube.composite_cube import CompositeCubeView
 from memos.multi_mem_cube.single_cube import SingleCubeView
 from memos.multi_mem_cube.views import MemCubeView
+from memos.types import MessageList
 
 
 class AddHandler(BaseHandler):
@@ -60,38 +63,45 @@ class AddHandler(BaseHandler):
 
         cube_view = self._build_cube_view(add_req)
 
+        @validate_call
+        def _check_messages(messages: MessageList) -> None:
+            pass
+
         if add_req.is_feedback:
-            chat_history = add_req.chat_history
-            messages = add_req.messages
-            if chat_history is None:
-                chat_history = []
-            if messages is None:
-                messages = []
-            concatenate_chat = chat_history + messages
+            try:
+                messages = add_req.messages
+                _check_messages(messages)
 
-            last_user_index = max(i for i, d in enumerate(concatenate_chat) if d["role"] == "user")
-            feedback_content = concatenate_chat[last_user_index]["content"]
-            feedback_history = concatenate_chat[:last_user_index]
+                chat_history = add_req.chat_history if add_req.chat_history else []
+                concatenate_chat = chat_history + messages
 
-            feedback_req = APIFeedbackRequest(
-                user_id=add_req.user_id,
-                session_id=add_req.session_id,
-                task_id=add_req.task_id,
-                history=feedback_history,
-                feedback_content=feedback_content,
-                writable_cube_ids=add_req.writable_cube_ids,
-                async_mode=add_req.async_mode,
-            )
-            process_record = cube_view.feedback_memories(feedback_req)
+                last_user_index = max(
+                    i for i, d in enumerate(concatenate_chat) if d["role"] == "user"
+                )
+                feedback_content = concatenate_chat[last_user_index]["content"]
+                feedback_history = concatenate_chat[:last_user_index]
 
-            self.logger.info(
-                f"[FeedbackHandler] Final feedback results count={len(process_record)}"
-            )
+                feedback_req = APIFeedbackRequest(
+                    user_id=add_req.user_id,
+                    session_id=add_req.session_id,
+                    task_id=add_req.task_id,
+                    history=feedback_history,
+                    feedback_content=feedback_content,
+                    writable_cube_ids=add_req.writable_cube_ids,
+                    async_mode=add_req.async_mode,
+                )
+                process_record = cube_view.feedback_memories(feedback_req)
 
-            return MemoryResponse(
-                message="Memory feedback successfully",
-                data=[process_record],
-            )
+                self.logger.info(
+                    f"[ADDFeedbackHandler] Final feedback results count={len(process_record)}"
+                )
+
+                return MemoryResponse(
+                    message="Memory feedback successfully",
+                    data=[process_record],
+                )
+            except Exception as e:
+                self.logger.warning(f"[ADDFeedbackHandler] Running error: {e}")
 
         results = cube_view.add_memories(add_req)
 

@@ -10,10 +10,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from memos import log
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
+from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.mem_feedback.base import BaseMemFeedback
+from memos.mem_feedback.utils import should_keep_update, split_into_chunks
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.simple_struct import detect_lang
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -30,6 +32,8 @@ from memos.templates.mem_feedback_prompts import (
     FEEDBACK_ANSWER_PROMPT_ZH,
     FEEDBACK_JUDGEMENT_PROMPT,
     FEEDBACK_JUDGEMENT_PROMPT_ZH,
+    KEYWORDS_REPLACE,
+    KEYWORDS_REPLACE_ZH,
     UPDATE_FORMER_MEMORIES,
     UPDATE_FORMER_MEMORIES_ZH,
 )
@@ -37,6 +41,7 @@ from memos.types import MessageDict
 
 
 FEEDBACK_PROMPT_DICT = {
+    "if_kw_replace": {"en": KEYWORDS_REPLACE, "zh": KEYWORDS_REPLACE_ZH},
     "judge": {"en": FEEDBACK_JUDGEMENT_PROMPT, "zh": FEEDBACK_JUDGEMENT_PROMPT_ZH},
     "compare": {"en": UPDATE_FORMER_MEMORIES, "zh": UPDATE_FORMER_MEMORIES_ZH},
     "generation": {"en": FEEDBACK_ANSWER_PROMPT, "zh": FEEDBACK_ANSWER_PROMPT_ZH},
@@ -74,6 +79,20 @@ class MemFeedback(BaseMemFeedback):
         )
         self.searcher: Searcher = self.memory_manager.searcher
 
+    def _batch_embed(self, texts: list[str], embed_bs: int = 5):
+        embed_bs = 5
+        texts_embeddings = []
+        for i in range(0, len(texts), embed_bs):
+            batch = texts[i : i + embed_bs]
+            try:
+                texts_embeddings.extend(self.embedder.embed(batch))
+            except Exception as e:
+                logger.error(
+                    f"[Feedback Core: process_feedback_core] Embedding batch failed: {e}",
+                    exc_info=True,
+                )
+        return texts_embeddings
+
     def _pure_add(self, user_name: str, feedback_content: str, feedback_time: str, info: dict):
         """
         Directly add new memory
@@ -96,6 +115,25 @@ class MemFeedback(BaseMemFeedback):
                 "update": [],
             }
         }
+
+    def _keyword_replace_judgement(self, feedback_content: str) -> dict | None:
+        """
+        Determine whether it is keyword replacement
+        """
+        lang = detect_lang(feedback_content)
+        template = FEEDBACK_PROMPT_DICT["if_kw_replace"][lang]
+        prompt = template.format(
+            user_feedback=feedback_content,
+        )
+
+        judge_res = self._get_llm_response(prompt)
+        if judge_res:
+            return judge_res
+        else:
+            logger.warning(
+                "[Feedback Core: _feedback_judgement] feedback judgement failed, return []"
+            )
+            return {}
 
     def _feedback_judgement(
         self, chat_history: list[MessageDict], feedback_content: str, feedback_time: str = ""
@@ -128,7 +166,7 @@ class MemFeedback(BaseMemFeedback):
         new_memory_item: TextualMemoryItem,
         user_id: str,
         user_name: str,
-        async_mode: str,
+        async_mode: str = "sync",
     ) -> dict:
         """
         Individual addition operations
@@ -166,7 +204,7 @@ class MemFeedback(BaseMemFeedback):
         new_memory_item: TextualMemoryItem,
         user_id: str,
         user_name: str,
-        async_mode: str,
+        async_mode: str = "sync",
     ) -> dict:
         """
         Individual update operations
@@ -231,10 +269,111 @@ class MemFeedback(BaseMemFeedback):
                     f"[Feedback Core:_del_working_binding] TreeTextMemory.delete_hard: failed to delete {mid}: {e}"
                 )
 
+    def semantics_feedback(
+        self,
+        user_id: str,
+        user_name: str,
+        memory_item: TextualMemoryItem,
+        current_memories: list[TextualMemoryItem],
+        fact_history: str,
+    ):
+        lang = detect_lang("".join(memory_item.memory))
+        template = FEEDBACK_PROMPT_DICT["compare"][lang]
+        if current_memories == []:
+            current_memories = self._retrieve(
+                memory_item.memory, info={"user_id": user_id}, user_name=user_name
+            )
+
+        if not current_memories:
+            operations = [{"operation": "ADD"}]
+        else:
+            memory_chunks = split_into_chunks(current_memories, max_tokens_per_chunk=500)
+
+            all_operations = []
+            with ContextThreadPoolExecutor(max_workers=10) as executor:
+                future_to_chunk_idx = {}
+                for chunk in memory_chunks:
+                    current_memories_str = "\n".join(
+                        [f"{item.id}: {item.memory}" for item in chunk]
+                    )
+                    prompt = template.format(
+                        current_memories=current_memories_str,
+                        new_facts=memory_item.memory,
+                        chat_history=fact_history,
+                    )
+
+                    future = executor.submit(self._get_llm_response, prompt)
+                    future_to_chunk_idx[future] = chunk
+                for future in concurrent.futures.as_completed(future_to_chunk_idx):
+                    try:
+                        chunk_operations = future.result()
+                        if (
+                            chunk_operations
+                            and "operations" in chunk_operations
+                            and isinstance(chunk_operations["operations"], list)
+                        ):
+                            all_operations.extend(chunk_operations["operations"])
+                    except Exception as e:
+                        logger.error(f"[Feedback Core: semantics_feedback] Operation failed: {e}")
+
+            operations = self.standard_operations(all_operations, current_memories)
+
+        # TODO based on the operation, change memory_item memory info ; change source info
+        logger.info(f"[Feedback memory operations]: {operations!s}")
+
+        if not operations:
+            return {"record": {"add": [], "update": []}}
+
+        add_results = []
+        update_results = []
+        id_to_item = {item.id: item for item in current_memories}
+
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            future_to_op = {}
+            for op in operations:
+                event_type = op.get("operation", "").lower()
+
+                if event_type == "add":
+                    future = executor.submit(
+                        self._single_add_operation,
+                        None,
+                        memory_item,
+                        user_id,
+                        user_name,
+                    )
+                    future_to_op[future] = ("add", op)
+                elif event_type == "update":
+                    future = executor.submit(
+                        self._single_update_operation,
+                        id_to_item[op["id"]],
+                        memory_item,
+                        user_id,
+                        user_name,
+                    )
+                    future_to_op[future] = ("update", op)
+
+            for future in concurrent.futures.as_completed(future_to_op):
+                result_type, original_op = future_to_op[future]
+                try:
+                    result = future.result()
+                    if result_type == "add" and result:
+                        add_results.append(result)
+                    elif result_type == "update" and result:
+                        update_results.append(result)
+                except Exception as e:
+                    logger.error(
+                        f"[Feedback Core: semantics_feedback] Operation failed for {original_op}: {e}",
+                        exc_info=True,
+                    )
+        if update_results:
+            updated_ids = [item["archived_id"] for item in update_results]
+            self._del_working_binding(updated_ids, user_name)
+
+        return {"record": {"add": add_results, "update": update_results}}
+
     def _feedback_memory(
         self, user_id: str, user_name: str, feedback_memories: list[TextualMemoryItem], **kwargs
     ) -> dict:
-        async_mode = kwargs.get("async_mode")
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
         chat_history = kwargs.get("chat_history", [])
         feedback_content = kwargs.get("feedback_content", "")
@@ -259,90 +398,11 @@ class MemFeedback(BaseMemFeedback):
             if "mode:fast" not in item["metadata"]["tags"]
         ]
 
-        def _add_or_update(
-            memory_item: TextualMemoryItem,
-            current_memories: list[TextualMemoryItem],
-            fact_history: str,
-        ):
-            if current_memories == []:
-                current_memories = self._retrieve(
-                    memory_item.memory, info={"user_id": user_id}, user_name=user_name
-                )
-
-            if current_memories:
-                lang = detect_lang("".join(memory_item.memory))
-                template = FEEDBACK_PROMPT_DICT["compare"][lang]
-                current_memories_str = "\n".join(
-                    [f"{item.id}: {item.memory}" for item in current_memories]
-                )
-                prompt = template.format(
-                    current_memories=current_memories_str,
-                    new_facts=memory_item.memory,
-                    chat_history=fact_history,
-                )
-
-                operations = self._get_llm_response(prompt).get("operations", [])
-                operations = self._id_dehallucination(operations, current_memories)
-            else:
-                operations = [{"operation": "ADD"}]
-
-            # TODO based on the operation, change memory_item memory info ; change source info
-            logger.info(f"[Feedback memory operations]: {operations!s}")
-
-            if not operations:
-                return {"record": {"add": [], "update": []}}
-
-            add_results = []
-            update_results = []
-            id_to_item = {item.id: item for item in current_memories}
-            with ContextThreadPoolExecutor(max_workers=10) as executor:
-                future_to_op = {}
-                for op in operations:
-                    event_type = op.get("operation", "").lower()
-
-                    if event_type == "add":
-                        future = executor.submit(
-                            self._single_add_operation,
-                            None,
-                            memory_item,
-                            user_id,
-                            user_name,
-                            async_mode,
-                        )
-                        future_to_op[future] = ("add", op)
-                    elif event_type == "update":
-                        future = executor.submit(
-                            self._single_update_operation,
-                            id_to_item[op["id"]],
-                            memory_item,
-                            user_id,
-                            user_name,
-                            async_mode,
-                        )
-                        future_to_op[future] = ("update", op)
-
-                for future in concurrent.futures.as_completed(future_to_op):
-                    result_type, original_op = future_to_op[future]
-                    try:
-                        result = future.result()
-                        if result_type == "add" and result:
-                            add_results.append(result)
-                        elif result_type == "update" and result:
-                            update_results.append(result)
-                    except Exception as e:
-                        logger.error(
-                            f"[Feedback Core: _add_or_update] Operation failed for {original_op}: {e}",
-                            exc_info=True,
-                        )
-            if update_results:
-                updated_ids = [item["archived_id"] for item in update_results]
-                self._del_working_binding(updated_ids, user_name)
-
-            return {"record": {"add": add_results, "update": update_results}}
-
         with ContextThreadPoolExecutor(max_workers=3) as ex:
             futures = {
-                ex.submit(_add_or_update, mem, current_memories, fact_history): i
+                ex.submit(
+                    self.semantics_feedback, user_id, user_name, mem, current_memories, fact_history
+                ): i
                 for i, mem in enumerate(feedback_memories)
             }
             results = [None] * len(futures)
@@ -368,7 +428,10 @@ class MemFeedback(BaseMemFeedback):
 
     def _retrieve(self, query: str, info=None, user_name=None):
         """Retrieve memory items"""
-        retrieved_mems = self.searcher.search(query, info=info, user_name=user_name)
+        retrieved_mems = self.searcher.search(
+            query, info=info, user_name=user_name, topk=50, full_recall=True
+        )
+        retrieved_mems = [item[0] for item in retrieved_mems]
         return retrieved_mems
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
@@ -430,28 +493,51 @@ class MemFeedback(BaseMemFeedback):
             response_json = None
         return response_json
 
-    def _id_dehallucination(self, operations, current_memories):
+    def standard_operations(self, operations, current_memories):
         right_ids = [item.id for item in current_memories]
         right_lower_map = {x.lower(): x for x in right_ids}
 
         def correct_item(data):
-            if data.get("operation", "").lower() != "update":
-                return data
+            try:
+                assert "operation" in data
+                if data.get("operation", "").lower() == "add":
+                    return data
 
-            original_id = data["id"]
-            if original_id in right_ids:
-                return data
+                if data.get("operation", "").lower() == "none":
+                    return None
 
-            lower_id = original_id.lower()
-            if lower_id in right_lower_map:
-                data["id"] = right_lower_map[lower_id]
-                return data
+                assert (
+                    "id" in data
+                    and "text" in data
+                    and "old_memory" in data
+                    and data["operation"].lower() == "update"
+                )
 
-            matches = difflib.get_close_matches(original_id, right_ids, n=1, cutoff=0.8)
-            if matches:
-                data["id"] = matches[0]
-                return data
+                if not should_keep_update(data["text"], data["old_memory"]):
+                    logger.warning(
+                        f"[Feedback Core: semantics_feedback] Due to the excessive proportion of changes, skip update: {data}"
+                    )
+                    return None
 
+                # id dehallucination
+                original_id = data["id"]
+                if original_id in right_ids:
+                    return data
+
+                lower_id = original_id.lower()
+                if lower_id in right_lower_map:
+                    data["id"] = right_lower_map[lower_id]
+                    return data
+
+                matches = difflib.get_close_matches(original_id, right_ids, n=1, cutoff=0.8)
+                if matches:
+                    data["id"] = matches[0]
+                    return data
+            except Exception:
+                logger.error(
+                    f"[Feedback Core: standard_operations] Error processing operation item: {data}",
+                    exc_info=True,
+                )
             return None
 
         dehallu_res = [correct_item(item) for item in operations]
@@ -475,6 +561,86 @@ class MemFeedback(BaseMemFeedback):
 
         return self._get_llm_response(prompt, dsl=False)
 
+    def process_keyword_replace(self, user_id: str, user_name: str, kwp_judge: dict | None = None):
+        """
+        memory keyword replace process
+        """
+        doc_scope = kwp_judge.get("doc_scope", "NONE")
+        original_word = kwp_judge.get("original")
+        target_word = kwp_judge.get("target")
+
+        # retrieve
+        lang = detect_lang(original_word)
+        queries = self._tokenize_chinese(original_word) if lang == "zh" else original_word.split()
+
+        must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
+        retrieved_ids = self.graph_store.seach_by_keywords([must_part], user_name=user_name)
+        if len(retrieved_ids) < 1:
+            retrieved_ids = self.graph_store.search_by_fulltext(
+                queries, top_k=100, user_name=user_name
+            )
+
+        # filter by doc scope
+        mem_data = [
+            self.graph_store.get_node(item["id"], user_name=user_name) for item in retrieved_ids
+        ]
+        retrieved_memories = [TextualMemoryItem(**item) for item in mem_data]
+
+        if doc_scope != "NONE":
+            retrieved_memories = [
+                item
+                for item in retrieved_memories
+                if doc_scope in item.metadata.sources  # TODO
+            ]
+
+        if not retrieved_memories:
+            return {"record": {"add": [], "update": []}}
+
+        # replace keywords
+        pick_index = []
+        update_memories = []
+        for i, old_mem in enumerate(retrieved_memories):
+            if original_word in old_mem.memory:
+                mem = old_mem.model_copy(deep=True)
+                mem.memory = mem.memory.replace(original_word, target_word)
+                if target_word not in mem.metadata.tags:
+                    mem.metadata.tags.append(target_word)
+                pick_index.append(i)
+                update_memories.append(mem)
+
+        update_memories_embed = self._retry_db_operation(
+            lambda: self._batch_embed([mem.memory for mem in update_memories])
+        )
+        for _i, embed in zip(range(len(update_memories)), update_memories_embed, strict=False):
+            update_memories[_i].metadata.embedding = embed
+
+        update_results = []
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            future_to_info = {}
+            for new_mem, old_idx in zip(update_memories, pick_index, strict=False):
+                old_mem = retrieved_memories[old_idx]
+
+                future = executor.submit(
+                    self._single_update_operation,
+                    old_mem,
+                    new_mem,
+                    user_id,
+                    user_name,
+                )
+                future_to_info[future] = old_mem.id
+
+            for future in future_to_info:
+                try:
+                    result = future.result()
+                    update_results.append(result)
+                except Exception as e:
+                    mem_id = future_to_info[future][0]
+                    self.logger.error(
+                        f"[Feedback Core DB] Exception during update operation for memory {mem_id}: {e}"
+                    )
+
+        return {"record": {"add": [], "update": update_results}}
+
     def process_feedback_core(
         self,
         user_id: str,
@@ -497,19 +663,28 @@ class MemFeedback(BaseMemFeedback):
                 and "tags" in item
             )
 
+        if feedback_content.strip() == "":
+            return {"record": {"add": [], "update": []}}
         try:
             feedback_time = kwargs.get("feedback_time") or datetime.now().isoformat()
             session_id = kwargs.get("session_id")
-            if feedback_content.strip() == "":
-                return {"record": {"add": [], "update": []}}
-
             info = {"user_id": user_id, "user_name": user_name, "session_id": session_id}
             logger.info(
                 f"[Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
             )
+            # feedback keywords update
+            kwp_judge = self._keyword_replace_judgement(feedback_content)
+            if (
+                kwp_judge
+                and kwp_judge["if_keyword_replace"].lower() == "true"
+                and kwp_judge.get("original", "NONE") != "NONE"
+                and kwp_judge.get("target", "NONE") != "NONE"
+            ):
+                return self.process_keyword_replace(user_id, user_name, kwp_judge=kwp_judge)
+
+            # llm update memory
             if not chat_history:
                 return self._pure_add(user_name, feedback_content, feedback_time, info)
-
             else:
                 raw_judge = self._feedback_judgement(
                     chat_history, feedback_content, feedback_time=feedback_time
@@ -533,17 +708,9 @@ class MemFeedback(BaseMemFeedback):
                 feedback_memories = []
 
                 corrected_infos = [item["corrected_info"] for item in valid_feedback]
-                embed_bs = 5
-                feedback_memories_embeddings = []
-                for i in range(0, len(corrected_infos), embed_bs):
-                    batch = corrected_infos[i : i + embed_bs]
-                    try:
-                        feedback_memories_embeddings.extend(self.embedder.embed(batch))
-                    except Exception as e:
-                        logger.error(
-                            f"[Feedback Core: process_feedback_core] Embedding batch failed: {e}",
-                            exc_info=True,
-                        )
+                feedback_memories_embeddings = self._retry_db_operation(
+                    lambda: self._batch_embed(corrected_infos)
+                )
 
                 for item, embedding in zip(
                     valid_feedback, feedback_memories_embeddings, strict=False
@@ -664,3 +831,16 @@ class MemFeedback(BaseMemFeedback):
                 f"[MemFeedback: _retry_db_operation] DB operation failed: {e}", exc_info=True
             )
             raise
+
+    @require_python_package(
+        import_name="jieba",
+        install_command="pip install jieba",
+        install_link="https://github.com/fxsjy/jieba",
+    )
+    def _tokenize_chinese(self, text):
+        """split zh jieba"""
+        import jieba
+
+        tokens = jieba.lcut(text)
+        tokens = [token.strip() for token in tokens if token.strip()]
+        return self.stopword_manager.filter_words(tokens)

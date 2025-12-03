@@ -93,12 +93,6 @@ def find_project_root(marker=".git"):
     return Path(".")
 
 
-PROJECT_ROOT = find_project_root()
-DEFAULT_STOPWORD_FILE = (
-    PROJECT_ROOT / "examples" / "data" / "config" / "stopwords.txt"
-)  # cause time delay
-
-
 class StopwordManager:
     _stopwords = None
 
@@ -109,13 +103,7 @@ class StopwordManager:
             return cls._stopwords
 
         stopwords = set()
-        try:
-            with open(DEFAULT_STOPWORD_FILE, encoding="utf-8") as f:
-                stopwords = {line.strip() for line in f if line.strip()}
-            logger.info("Stopwords loaded successfully.")
-        except Exception as e:
-            logger.warning(f"Error loading stopwords: {e}, using default stopwords.")
-            stopwords = cls._load_default_stopwords()
+        stopwords = cls._load_default_stopwords()
 
         cls._stopwords = stopwords
         return stopwords
@@ -369,14 +357,6 @@ class StopwordManager:
         if cls._stopwords is None:
             cls._load_stopwords()
         return word in cls._stopwords
-
-    @classmethod
-    def reload_stopwords(cls, file_path=None):
-        cls._stopwords = None
-        if file_path:
-            global DEFAULT_STOPWORD_FILE
-            DEFAULT_STOPWORD_FILE = file_path
-        cls._load_stopwords()
 
 
 class FastTokenizer:
