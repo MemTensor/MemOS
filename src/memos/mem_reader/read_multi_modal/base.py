@@ -16,6 +16,8 @@ from memos.memories.textual.item import (
     TreeNodeTextualMemoryMetadata,
 )
 
+from .utils import get_text_splitter
+
 
 logger = log.get_logger(__name__)
 
@@ -223,3 +225,30 @@ class BaseMessageParser(ABC):
             return self.parse_fine(message, info, **kwargs)
         else:
             raise ValueError(f"Unknown mode: {mode}. Must be 'fast' or 'fine'")
+
+    def _split_text(self, text: str) -> list[str]:
+        """
+        Split text into chunks using text splitter from utils.
+
+        Args:
+            text: Text to split
+
+        Returns:
+            List of text chunks
+        """
+        if not text or not text.strip():
+            return []
+
+        splitter = get_text_splitter()
+        if not splitter:
+            # If text splitter is not available, return text as single chunk
+            return [text] if text.strip() else []
+
+        try:
+            chunks = splitter.split_text(text)
+            logger.debug(f"[FileContentParser] Split text into {len(chunks)} chunks")
+            return chunks
+        except Exception as e:
+            logger.error(f"[FileContentParser] Error splitting text: {e}")
+            # Fallback to single chunk
+            return [text] if text.strip() else []

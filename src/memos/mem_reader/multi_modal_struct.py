@@ -255,14 +255,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for msg in scene_data_info:
                 items = self.multi_modal_parser.parse(msg, info, mode="fast", **kwargs)
                 all_memory_items.extend(items)
-            fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
-
         else:
             # Parse as single message
-            fast_memory_items = self.multi_modal_parser.parse(
+            all_memory_items = self.multi_modal_parser.parse(
                 scene_data_info, info, mode="fast", **kwargs
             )
-
+        fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
         if mode == "fast":
             return fast_memory_items
         else:
