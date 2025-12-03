@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
 from memos.log import get_logger
-from memos.types import MessageDict, MessageList, MessagesType, PermissionDict, SearchMode
+from memos.types import MessageDict, PermissionDict, SearchMode
 
 
 logger = get_logger(__name__)
