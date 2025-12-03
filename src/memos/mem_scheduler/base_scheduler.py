@@ -155,8 +155,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self._context_lock = threading.Lock()
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
-        self.components = init_components()
-        self.current_mem_cube: BaseMemCube | None = self.components["naive_mem_cube"]
+        self.current_mem_cube: BaseMemCube | None = None
+        try:
+            self.components = init_components()
+            self.current_mem_cube: BaseMemCube = self.components["naive_mem_cube"]
+        except Exception:
+            logger.info(
+                "No environment available to initialize mem cube. Using fallback naive_mem_cube."
+            )
+
         self._mem_cubes: dict[str, BaseMemCube] = {}
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None

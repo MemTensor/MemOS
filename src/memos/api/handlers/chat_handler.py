@@ -383,6 +383,10 @@ class ChatHandler(BaseHandler):
                     readable_cube_ids = chat_req.readable_cube_ids or (
                         [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                     )
+                    # Resolve writable cube IDs (for add)
+                    writable_cube_ids = chat_req.writable_cube_ids or (
+                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                    )
 
                     search_req = APISearchRequest(
                         query=chat_req.query,
@@ -399,6 +403,15 @@ class ChatHandler(BaseHandler):
                     )
 
                     search_response = self.search_handler.handle_search_memories(search_req)
+                    # for playground, add the query to memory without response
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        writable_cube_ids=writable_cube_ids,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=None,
+                        async_mode="sync",
+                    )
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
                     # Use first readable cube ID for scheduler (backward compatibility)
@@ -540,11 +553,6 @@ class ChatHandler(BaseHandler):
                         time_end=time_end,
                         speed_improvement=speed_improvement,
                         current_messages=current_messages,
-                    )
-
-                    # Resolve writable cube IDs (for add)
-                    writable_cube_ids = chat_req.writable_cube_ids or (
-                        [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                     )
                     self._start_add_to_memory(
                         user_id=chat_req.user_id,
@@ -907,25 +915,29 @@ class ChatHandler(BaseHandler):
         writable_cube_ids: list[str],
         session_id: str,
         query: str,
-        clean_response: str,
+        clean_response: str | None = None,
         async_mode: Literal["async", "sync"] = "sync",
     ) -> None:
-        add_req = APIADDRequest(
-            user_id=user_id,
-            writable_cube_ids=writable_cube_ids,
-            session_id=session_id,
-            messages=[
-                {
-                    "role": "user",
-                    "content": query,
-                    "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                },
+        messages = [
+            {
+                "role": "user",
+                "content": query,
+                "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            }
+        ]
+        if clean_response:
+            messages.append(
                 {
                     "role": "assistant",
                     "content": clean_response,
                     "chat_time": str(datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
-                },
-            ],
+                }
+            )
+        add_req = APIADDRequest(
+            user_id=user_id,
+            writable_cube_ids=writable_cube_ids,
+            session_id=session_id,
+            messages=messages,
             async_mode=async_mode,
         )
 
@@ -1130,7 +1142,7 @@ class ChatHandler(BaseHandler):
         writable_cube_ids: list[str],
         session_id: str,
         query: str,
-        full_response: str,
+        full_response: str | None = None,
         async_mode: Literal["async", "sync"] = "sync",
     ) -> None:
         def run_async_in_thread():
@@ -1138,7 +1150,9 @@ class ChatHandler(BaseHandler):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    clean_response, _ = self._extract_references_from_response(full_response)
+                    clean_response = full_response
+                    if full_response:
+                        clean_response, _ = self._extract_references_from_response(full_response)
                     loop.run_until_complete(
                         self._add_conversation_to_memory(
                             user_id=user_id,
@@ -1159,7 +1173,9 @@ class ChatHandler(BaseHandler):
 
         try:
             asyncio.get_running_loop()
-            clean_response, _ = self._extract_references_from_response(full_response)
+            clean_response = full_response
+            if full_response:
+                clean_response, _ = self._extract_references_from_response(full_response)
             task = asyncio.create_task(
                 self._add_conversation_to_memory(
                     user_id=user_id,
