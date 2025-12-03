@@ -67,6 +67,9 @@ class OllamaEmbedder(BaseEmbedder):
         Returns:
             List of embeddings, each represented as a list of floats.
         """
+        # Truncate texts if max_tokens is configured
+        texts = self._truncate_texts(texts)
+
         response = self.client.embed(
             model=self.config.model_name_or_path,
             input=texts,
