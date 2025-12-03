@@ -503,7 +503,9 @@ class PolarDBGraphDB(BaseGraphDB):
                 cursor.execute(delete_query, delete_params)
                 deleted_count = cursor.rowcount
                 logger.info(
-                    f"Removed {deleted_count} oldest {memory_type} memories, keeping {keep_latest} latest for user {user_name}"
+                    f"Removed {deleted_count} oldest {memory_type} memories, "
+                    f"keeping {keep_latest} latest for user {user_name}, "
+                    f"removed ids: {ids_to_delete}"
                 )
         except Exception as e:
             logger.error(f"[remove_oldest_memory] Failed: {e}", exc_info=True)
@@ -2711,6 +2713,28 @@ class PolarDBGraphDB(BaseGraphDB):
             if time_field in node and hasattr(node[time_field], "isoformat"):
                 node[time_field] = node[time_field].isoformat()
 
+        # Deserialize sources from JSON strings back to dict objects
+        if "sources" in node and node.get("sources"):
+            sources = node["sources"]
+            if isinstance(sources, list):
+                deserialized_sources = []
+                for source_item in sources:
+                    if isinstance(source_item, str):
+                        # Try to parse JSON string
+                        try:
+                            parsed = json.loads(source_item)
+                            deserialized_sources.append(parsed)
+                        except (json.JSONDecodeError, TypeError):
+                            # If parsing fails, keep as string or create a simple dict
+                            deserialized_sources.append({"type": "doc", "content": source_item})
+                    elif isinstance(source_item, dict):
+                        # Already a dict, keep as is
+                        deserialized_sources.append(source_item)
+                    else:
+                        # Unknown type, create a simple dict
+                        deserialized_sources.append({"type": "doc", "content": str(source_item)})
+                node["sources"] = deserialized_sources
+
         return {"id": node.get("id"), "memory": node.get("memory", ""), "metadata": node}
 
     def _parse_node_new(self, node_data: dict[str, Any]) -> dict[str, Any]:
@@ -2742,6 +2766,28 @@ class PolarDBGraphDB(BaseGraphDB):
         for time_field in ("created_at", "updated_at"):
             if time_field in node and hasattr(node[time_field], "isoformat"):
                 node[time_field] = node[time_field].isoformat()
+
+        # Deserialize sources from JSON strings back to dict objects
+        if "sources" in node and node.get("sources"):
+            sources = node["sources"]
+            if isinstance(sources, list):
+                deserialized_sources = []
+                for source_item in sources:
+                    if isinstance(source_item, str):
+                        # Try to parse JSON string
+                        try:
+                            parsed = json.loads(source_item)
+                            deserialized_sources.append(parsed)
+                        except (json.JSONDecodeError, TypeError):
+                            # If parsing fails, keep as string or create a simple dict
+                            deserialized_sources.append({"type": "doc", "content": source_item})
+                    elif isinstance(source_item, dict):
+                        # Already a dict, keep as is
+                        deserialized_sources.append(source_item)
+                    else:
+                        # Unknown type, create a simple dict
+                        deserialized_sources.append({"type": "doc", "content": str(source_item)})
+                node["sources"] = deserialized_sources
 
         # Do not remove user_name; keep all fields
 
