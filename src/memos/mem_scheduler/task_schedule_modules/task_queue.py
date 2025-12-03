@@ -7,6 +7,7 @@ the local memos_message_queue functionality in BaseScheduler.
 
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.context.context import get_current_trace_id
 from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.utils.db_utils import get_utc_now
@@ -63,7 +64,12 @@ class ScheduleTaskQueue:
         if isinstance(messages, ScheduleMessageItem):
             messages = [messages]
 
+        current_trace_id = get_current_trace_id()
+
         for msg in messages:
+            if current_trace_id:
+                # Prefer current request trace_id so logs can be correlated
+                msg.trace_id = current_trace_id
             msg.stream_key = self.memos_message_queue.get_stream_key(
                 user_id=msg.user_id, mem_cube_id=msg.mem_cube_id, task_label=msg.label
             )

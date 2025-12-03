@@ -7,7 +7,12 @@ from collections.abc import Callable
 from datetime import timezone
 from typing import Any
 
-from memos.context.context import ContextThreadPoolExecutor
+from memos.context.context import (
+    ContextThreadPoolExecutor,
+    RequestContext,
+    generate_trace_id,
+    set_request_context,
+)
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.task_threads import ThreadManager
@@ -126,10 +131,20 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     task_id=task_item.item_id, user_id=task_item.user_id
                 )
             try:
+                first_msg = messages[0]
+                trace_id = getattr(first_msg, "trace_id", None) or generate_trace_id()
+                # Propagate trace_id and user info to logging context for this handler execution
+                ctx = RequestContext(
+                    trace_id=trace_id,
+                    user_name=getattr(first_msg, "user_name", None),
+                    user_type=None,
+                )
+                set_request_context(ctx)
+
                 # --- mark start: record queuing time(now - enqueue_ts)---
                 now = time.time()
-                m = messages[0]  # All messages in this batch have same user and type
-                enq_ts = getattr(m, "timestamp", None)
+                m = first_msg  # All messages in this batch have same user and type
+                enq_ts = getattr(first_msg, "timestamp", None)
 
                 # Path 1: epoch seconds (preferred)
                 if isinstance(enq_ts, int | float):
