@@ -47,6 +47,61 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             direct_markdown_hostnames=direct_markdown_hostnames,
         )
 
+    def _split_large_memory_item(
+        self, item: TextualMemoryItem, max_tokens: int
+    ) -> list[TextualMemoryItem]:
+        """
+        Split a single memory item that exceeds max_tokens into multiple chunks.
+
+        Args:
+            item: TextualMemoryItem to split
+            max_tokens: Maximum tokens per chunk
+
+        Returns:
+            List of TextualMemoryItem chunks
+        """
+        item_text = item.memory or ""
+        if not item_text:
+            return [item]
+
+        item_tokens = self._count_tokens(item_text)
+        if item_tokens <= max_tokens:
+            return [item]
+
+        # Use chunker to split the text
+        try:
+            chunks = self.chunker.chunk(item_text)
+            split_items = []
+
+            for chunk in chunks:
+                # Chunk objects have a 'text' attribute
+                chunk_text = chunk.text
+                if not chunk_text or not chunk_text.strip():
+                    continue
+
+                # Create a new memory item for each chunk, preserving original metadata
+                split_item = self._make_memory_item(
+                    value=chunk_text,
+                    info={
+                        "user_id": item.metadata.user_id,
+                        "session_id": item.metadata.session_id,
+                        **(item.metadata.info or {}),
+                    },
+                    memory_type=item.metadata.memory_type,
+                    tags=item.metadata.tags or [],
+                    key=item.metadata.key,
+                    sources=item.metadata.sources or [],
+                    background=item.metadata.background or "",
+                )
+                split_items.append(split_item)
+
+            return split_items if split_items else [item]
+        except Exception as e:
+            logger.warning(
+                f"[MultiModalStruct] Failed to split large memory item: {e}. Returning original item."
+            )
+            return [item]
+
     def _concat_multi_modal_memories(
         self, all_memory_items: list[TextualMemoryItem], max_tokens=None, overlap=200
     ) -> list[TextualMemoryItem]:
@@ -57,35 +112,49 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         2. Each window has overlap tokens for context continuity
         3. Aggregates items within each window into a single memory item
         4. Determines memory_type based on roles in each window
+        5. Splits single large memory items that exceed max_tokens
         """
         if not all_memory_items:
             return []
 
-        # If only one item, return as-is (no need to aggregate)
-        if len(all_memory_items) == 1:
-            return all_memory_items
-
         max_tokens = max_tokens or self.chat_window_max_tokens
+
+        # Split large memory items before processing
+        processed_items = []
+        for item in all_memory_items:
+            item_text = item.memory or ""
+            item_tokens = self._count_tokens(item_text)
+            if item_tokens > max_tokens:
+                # Split the large item into multiple chunks
+                split_items = self._split_large_memory_item(item, max_tokens)
+                processed_items.extend(split_items)
+            else:
+                processed_items.append(item)
+
+        # If only one item after processing, return as-is
+        if len(processed_items) == 1:
+            return processed_items
+
         windows = []
         buf_items = []
         cur_text = ""
 
         # Extract info from first item (all items should have same user_id, session_id)
-        first_item = all_memory_items[0]
+        first_item = processed_items[0]
         info = {
             "user_id": first_item.metadata.user_id,
             "session_id": first_item.metadata.session_id,
             **(first_item.metadata.info or {}),
         }
 
-        for _idx, item in enumerate(all_memory_items):
+        for _idx, item in enumerate(processed_items):
             item_text = item.memory or ""
             # Ensure line ends with newline (same format as simple_struct)
             line = item_text if item_text.endswith("\n") else f"{item_text}\n"
 
             # Check if adding this item would exceed max_tokens (same logic as _iter_chat_windows)
-            # Note: The `and cur_text` condition ensures that single large messages are not truncated.
-            # If cur_text is empty (new window), even if line exceeds max_tokens, it won't trigger output.
+            # Note: After splitting large items, each item should be <= max_tokens,
+            # but we still check to handle edge cases
             if self._count_tokens(cur_text + line) > max_tokens and cur_text:
                 # Yield current window
                 window = self._build_window_from_items(buf_items, info)
@@ -102,8 +171,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 # Recalculate cur_text from remaining items
                 cur_text = "".join([it.memory or "" for it in buf_items])
 
-            # Add item to current window (always, even if it exceeds max_tokens)
-            # This ensures single large messages are not truncated, same as simple_struct
+            # Add item to current window
             buf_items.append(item)
             # Recalculate cur_text from all items in buffer (same as _iter_chat_windows)
             cur_text = "".join([it.memory or "" for it in buf_items])
