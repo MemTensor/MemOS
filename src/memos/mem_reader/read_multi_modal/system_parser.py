@@ -95,17 +95,34 @@ class SystemParser(BaseMessageParser):
         )
 
         source = self.create_source(message, info)
-        return [
-            TextualMemoryItem(
-                memory=content_wo_tool_schema,
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # Split parsed text into chunks
+        content_chunks = self._split_text(content_wo_tool_schema)
+
+        memory_items = []
+        for _chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
+
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
                 metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
                     memory_type="LongTermMemory",  # only choce long term memory for system messages as a placeholder
                     status="activated",
                     tags=["mode:fast"],
                     sources=[source],
+                    info=info_,
                 ),
             )
-        ]
+            memory_items.append(memory_item)
+        return memory_items
 
     def parse_fine(
         self,

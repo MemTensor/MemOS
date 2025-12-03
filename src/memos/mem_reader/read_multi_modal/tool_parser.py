@@ -158,17 +158,32 @@ class ToolParser(BaseMessageParser):
             return []
 
         sources = self.create_source(message, info)
-        return [
-            TextualMemoryItem(
-                memory=line,
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        content_chunks = self._split_text(line)
+        memory_items = []
+        for _chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
+
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
                 metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
                     memory_type="LongTermMemory",  # only choce long term memory for tool messages as a placeholder
                     status="activated",
                     tags=["mode:fast"],
                     sources=sources,
+                    info=info_,
                 ),
             )
-        ]
+            memory_items.append(memory_item)
+        return memory_items
 
     def parse_fine(
         self,
