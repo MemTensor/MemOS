@@ -579,6 +579,7 @@ class GeneralScheduler(BaseScheduler):
                 logger.error(f"Invalid JSON content for feedback message: {content}", exc_info=True)
                 return
 
+            task_id = feedback_data.get("task_id") or message.task_id
             feedback_result = self.feedback_server.process_feedback(
                 user_id=user_id,
                 user_name=mem_cube_id,
@@ -587,7 +588,7 @@ class GeneralScheduler(BaseScheduler):
                 retrieved_memory_ids=feedback_data.get("retrieved_memory_ids", []),
                 feedback_content=feedback_data.get("feedback_content"),
                 feedback_time=feedback_data.get("feedback_time"),
-                task_id=feedback_data.get("task_id"),
+                task_id=task_id,
             )
 
             logger.info(
@@ -623,11 +624,22 @@ class GeneralScheduler(BaseScheduler):
                         )
                     else:
                         logger.warning(
-                            f"Skipping malformed mem_item in feedback_result: {mem_item}"
+                            "Skipping malformed mem_item in feedback_result. user_id=%s mem_cube_id=%s task_id=%s item=%s",
+                            user_id,
+                            mem_cube_id,
+                            task_id,
+                            mem_item,
+                            stack_info=True,
                         )
 
                 if not feedback_content:
-                    logger.warning("No valid feedback content generated from feedback_result.")
+                    logger.warning(
+                        "No valid feedback content generated from feedback_result. user_id=%s mem_cube_id=%s task_id=%s",
+                        user_id,
+                        mem_cube_id,
+                        task_id,
+                        stack_info=True,
+                    )
                     return
 
                 event = self.create_event_log(
@@ -642,7 +654,7 @@ class GeneralScheduler(BaseScheduler):
                     memory_len=len(feedback_content),
                     memcube_name=self._map_memcube_name(mem_cube_id),
                 )
-                event.task_id = message.task_id
+                event.task_id = task_id
                 self._submit_web_logs([event])
 
         except Exception as e:
