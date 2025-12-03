@@ -571,7 +571,9 @@ class GeneralScheduler(BaseScheduler):
             try:
                 feedback_data = json.loads(content) if isinstance(content, str) else content
                 if not isinstance(feedback_data, dict):
-                    logger.error(f"Failed to decode feedback_data or it is not a dict: {feedback_data}")
+                    logger.error(
+                        f"Failed to decode feedback_data or it is not a dict: {feedback_data}"
+                    )
                     return
             except json.JSONDecodeError:
                 logger.error(f"Invalid JSON content for feedback message: {content}", exc_info=True)
@@ -601,8 +603,16 @@ class GeneralScheduler(BaseScheduler):
                 feedback_content = []
                 for mem_item in feedback_result:
                     # Safely access attributes, assuming mem_item could be dict or object
-                    mem_id = getattr(mem_item, 'id', None) or mem_item.get('id') if isinstance(mem_item, dict) else None
-                    mem_memory = getattr(mem_item, 'memory', None) or mem_item.get('memory') if isinstance(mem_item, dict) else None
+                    mem_id = (
+                        getattr(mem_item, "id", None) or mem_item.get("id")
+                        if isinstance(mem_item, dict)
+                        else None
+                    )
+                    mem_memory = (
+                        getattr(mem_item, "memory", None) or mem_item.get("memory")
+                        if isinstance(mem_item, dict)
+                        else None
+                    )
 
                     if mem_id and mem_memory:
                         feedback_content.append(
@@ -612,7 +622,9 @@ class GeneralScheduler(BaseScheduler):
                             }
                         )
                     else:
-                        logger.warning(f"Skipping malformed mem_item in feedback_result: {mem_item}")
+                        logger.warning(
+                            f"Skipping malformed mem_item in feedback_result: {mem_item}"
+                        )
 
                 if not feedback_content:
                     logger.warning("No valid feedback content generated from feedback_result.")
