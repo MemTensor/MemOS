@@ -559,6 +559,8 @@ class GeneralScheduler(BaseScheduler):
 
     def _mem_feedback_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         try:
+            if not messages:
+                return
             message = messages[0]
             mem_cube = self.current_mem_cube
 
@@ -566,21 +568,28 @@ class GeneralScheduler(BaseScheduler):
             mem_cube_id = message.mem_cube_id
             content = message.content
 
-            feedback_data = json.loads(content)
+            try:
+                feedback_data = json.loads(content) if isinstance(content, str) else content
+                if not isinstance(feedback_data, dict):
+                    logger.error(f"Failed to decode feedback_data or it is not a dict: {feedback_data}")
+                    return
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON content for feedback message: {content}", exc_info=True)
+                return
 
             feedback_result = self.feedback_server.process_feedback(
                 user_id=user_id,
                 user_name=mem_cube_id,
-                session_id=feedback_data["session_id"],
-                chat_history=feedback_data["history"],
-                retrieved_memory_ids=feedback_data["retrieved_memory_ids"],
-                feedback_content=feedback_data["feedback_content"],
-                feedback_time=feedback_data["feedback_time"],
-                task_id=feedback_data["task_id"],
+                session_id=feedback_data.get("session_id"),
+                chat_history=feedback_data.get("history", []),
+                retrieved_memory_ids=feedback_data.get("retrieved_memory_ids", []),
+                feedback_content=feedback_data.get("feedback_content"),
+                feedback_time=feedback_data.get("feedback_time"),
+                task_id=feedback_data.get("task_id"),
             )
 
             logger.info(
-                f"Successfully feedback memories for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                f"Successfully processed feedback for user_id={user_id}, mem_cube_id={mem_cube_id}"
             )
 
             should_send_log = (
@@ -590,13 +599,25 @@ class GeneralScheduler(BaseScheduler):
             )
             if feedback_result and should_send_log:
                 feedback_content = []
-                for _i, mem_item in enumerate(feedback_result):
-                    feedback_content.append(
-                        {
-                            "content": mem_item.memory,
-                            "id": mem_item["id"],
-                        }
-                    )
+                for mem_item in feedback_result:
+                    # Safely access attributes, assuming mem_item could be dict or object
+                    mem_id = getattr(mem_item, 'id', None) or mem_item.get('id') if isinstance(mem_item, dict) else None
+                    mem_memory = getattr(mem_item, 'memory', None) or mem_item.get('memory') if isinstance(mem_item, dict) else None
+
+                    if mem_id and mem_memory:
+                        feedback_content.append(
+                            {
+                                "content": mem_memory,
+                                "id": mem_id,
+                            }
+                        )
+                    else:
+                        logger.warning(f"Skipping malformed mem_item in feedback_result: {mem_item}")
+
+                if not feedback_content:
+                    logger.warning("No valid feedback content generated from feedback_result.")
+                    return
+
                 event = self.create_event_log(
                     label="feedbackMemory",
                     from_memory_type=USER_INPUT_TYPE,
