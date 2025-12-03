@@ -166,6 +166,8 @@ class TreeTextMemory(BaseTextMemory):
         search_priority: dict | None = None,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        search_tool_memory: bool = False,
+        tool_mem_top_k: int = 6,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -223,6 +225,8 @@ class TreeTextMemory(BaseTextMemory):
             search_priority,
             user_name=user_name,
             plugin=kwargs.get("plugin", False),
+            search_tool_memory=search_tool_memory,
+            tool_mem_top_k=tool_mem_top_k,
         )
 
     def get_relevant_subgraph(

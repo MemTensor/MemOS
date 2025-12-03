@@ -223,6 +223,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         background: str = "",
         type_: str = "fact",
         confidence: float = 0.99,
+        **kwargs,
     ) -> TextualMemoryItem:
         """construct memory item"""
         info_ = info.copy()
@@ -245,6 +246,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 confidence=confidence,
                 type=type_,
                 info=info_,
+                **kwargs,
             ),
         )
 

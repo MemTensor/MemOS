@@ -24,7 +24,7 @@ class SourceMessage(BaseModel):
         - type: Source kind (e.g., "chat", "doc", "web", "file", "system", ...).
             If not provided, upstream logic may infer it:
             presence of `role` ⇒ "chat"; otherwise ⇒ "doc".
-        - role: Conversation role ("user" | "assistant" | "system") when the
+        - role: Conversation role ("user" | "assistant" | "system" | "tool") when the
             source is a chat turn.
         - content: Minimal reproducible snippet from the source. If omitted,
             upstream may fall back to `doc_path` / `url` / `message_id`.
@@ -90,6 +90,11 @@ class TextualMemoryMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    covered_history: Any | None = Field(
+        default=None,
+        description="Record the memory id covered by the update",
+    )
+
     def __str__(self) -> str:
         """Pretty string representation of the metadata."""
         meta = self.model_dump(exclude_none=True)
@@ -99,9 +104,14 @@ class TextualMemoryMetadata(BaseModel):
 class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     """Extended metadata for structured memory, layered retrieval, and lifecycle tracking."""
 
-    memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"] = Field(
-        default="WorkingMemory", description="Memory lifecycle type."
-    )
+    memory_type: Literal[
+        "WorkingMemory",
+        "LongTermMemory",
+        "UserMemory",
+        "OuterMemory",
+        "ToolSchemaMemory",
+        "ToolTrajectoryMemory",
+    ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )

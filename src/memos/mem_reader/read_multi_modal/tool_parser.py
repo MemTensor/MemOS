@@ -1,14 +1,20 @@
 """Parser for tool messages."""
 
+import json
+
 from typing import Any
 
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.memories.textual.item import SourceMessage, TextualMemoryItem
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.types.openai_chat_completion_types import ChatCompletionToolMessageParam
 
-from .base import BaseMessageParser, _extract_text_from_content
+from .base import BaseMessageParser
 
 
 logger = get_logger(__name__)
@@ -29,190 +35,155 @@ class ToolParser(BaseMessageParser):
 
     def create_source(
         self,
-        message: ChatCompletionToolMessageParam | dict[str, Any],
+        message: ChatCompletionToolMessageParam,
         info: dict[str, Any],
-    ) -> SourceMessage:
-        """Create SourceMessage from tool message or custom tool format."""
+    ) -> SourceMessage | list[SourceMessage]:
+        """Create SourceMessage from tool message."""
+
         if not isinstance(message, dict):
-            return SourceMessage(type="chat", role="tool")
+            return []
 
-        # Handle custom tool formats (tool_description, tool_input, tool_output)
-        msg_type = message.get("type", "")
-        if msg_type == "tool_description":
-            name = message.get("name", "")
-            description = message.get("description", "")
-            parameters = message.get("parameters", {})
-            content = f"[tool_description] name={name}, description={description}, parameters={parameters}"
-            return SourceMessage(
-                type="tool_description",
-                content=content,
-                original_part=message,
-            )
-        elif msg_type == "tool_input":
-            call_id = message.get("call_id", "")
-            name = message.get("name", "")
-            argument = message.get("argument", {})
-            content = f"[tool_input] call_id={call_id}, name={name}, argument={argument}"
-            return SourceMessage(
-                type="tool_input",
-                content=content,
-                message_id=call_id,
-                original_part=message,
-            )
-        elif msg_type == "tool_output":
-            call_id = message.get("call_id", "")
-            name = message.get("name", "")
-            output = message.get("output", {})
-            content = f"[tool_output] call_id={call_id}, name={name}, output={output}"
-            return SourceMessage(
-                type="tool_output",
-                content=content,
-                message_id=call_id,
-                original_part=message,
-            )
+        role = message.get("role", "tool")
+        raw_content = message.get("content", "")
+        tool_call_id = message.get("tool_call_id", "")
+        chat_time = message.get("chat_time")
+        message_id = message.get("message_id")
 
-        # Handle standard tool message
-        content = _extract_text_from_content(message.get("content", ""))
-        return SourceMessage(
-            type="tool",
-            role="tool",
-            chat_time=message.get("chat_time"),
-            message_id=message.get("message_id"),
-            content=content,
-        )
+        sources = []
+
+        if isinstance(raw_content, list):
+            # Multimodal: create one SourceMessage per part
+            for part in raw_content:
+                if isinstance(part, dict):
+                    part_type = part.get("type", "")
+                    if part_type == "text":
+                        sources.append(
+                            SourceMessage(
+                                type="text",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=part.get("text", ""),
+                                tool_call_id=tool_call_id,
+                            )
+                        )
+                    elif part_type == "file":
+                        file_info = part.get("file", {})
+                        sources.append(
+                            SourceMessage(
+                                type="file",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=file_info.get("file_data", ""),
+                                filename=file_info.get("filename", ""),
+                                file_id=file_info.get("file_id", ""),
+                                tool_call_id=tool_call_id,
+                                original_part=part,
+                            )
+                        )
+                    elif part_type == "image_url":
+                        file_info = part.get("image_url", {})
+                        sources.append(
+                            SourceMessage(
+                                type="image_url",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=file_info.get("url", ""),
+                                detail=file_info.get("detail", "auto"),
+                                tool_call_id=tool_call_id,
+                                original_part=part,
+                            )
+                        )
+                    elif part_type == "input_audio":
+                        file_info = part.get("input_audio", {})
+                        sources.append(
+                            SourceMessage(
+                                type="input_audio",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                content=file_info.get("data", ""),
+                                format=file_info.get("format", "wav"),
+                                tool_call_id=tool_call_id,
+                                original_part=part,
+                            )
+                        )
+                    else:
+                        logger.warning(f"[ToolParser] Unsupported part type: {part_type}")
+                        continue
+        else:
+            # Simple string content message: single SourceMessage
+            if raw_content:
+                sources.append(
+                    SourceMessage(
+                        type="chat",
+                        role=role,
+                        chat_time=chat_time,
+                        message_id=message_id,
+                        content=raw_content,
+                        tool_call_id=tool_call_id,
+                    )
+                )
+
+        return sources
 
     def rebuild_from_source(
         self,
         source: SourceMessage,
     ) -> ChatCompletionToolMessageParam:
         """Rebuild tool message from SourceMessage."""
-        return {
-            "role": "tool",
-            "content": source.content or "",
-            "tool_call_id": source.message_id or "",  # tool_call_id might be in message_id
-            "chat_time": source.chat_time,
-            "message_id": source.message_id,
-        }
 
     def parse_fast(
         self,
-        message: ChatCompletionToolMessageParam | dict[str, Any],
+        message: ChatCompletionToolMessageParam,
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        """
-        Parse tool message in fast mode.
+        role = message.get("role", "")
+        content = message.get("content", "")
+        chat_time = message.get("chat_time", None)
 
-        Handles both standard tool messages and custom tool formats:
-        - Standard tool message: role="tool", content, tool_call_id
-        - Custom formats: tool_description, tool_input, tool_output
-
-        Args:
-            message: Tool message to parse
-            info: Dictionary containing user_id and session_id
-            **kwargs: Additional parameters
-
-        Returns:
-            List of TextualMemoryItem objects
-        """
-        from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
-
-        from .base import _derive_key
-
-        if not isinstance(message, dict):
-            logger.warning(f"[ToolParser] Expected dict, got {type(message)}")
-            return []
-
-        # Handle custom tool formats (tool_description, tool_input, tool_output)
-        msg_type = message.get("type", "")
-        if msg_type in ("tool_description", "tool_input", "tool_output"):
-            # Create source
-            source = self.create_source(message, info)
-            content = source.content or ""
-            if not content:
-                return []
-
-            # Extract info fields
-            info_ = info.copy()
-            user_id = info_.pop("user_id", "")
-            session_id = info_.pop("session_id", "")
-
-            # Create memory item
-            memory_item = TextualMemoryItem(
-                memory=content,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    user_id=user_id,
-                    session_id=session_id,
-                    memory_type="LongTermMemory",
-                    status="activated",
-                    tags=["mode:fast"],
-                    key=_derive_key(content),
-                    embedding=self.embedder.embed([content])[0],
-                    usage=[],
-                    sources=[source],
-                    background="",
-                    confidence=0.99,
-                    type="fact",
-                    info=info_,
-                ),
-            )
-            return [memory_item]
-
-        # Handle standard tool message (role="tool")
-        role = message.get("role", "").strip().lower()
         if role != "tool":
-            logger.warning(f"[ToolParser] Expected role='tool', got role='{role}'")
+            logger.warning(f"[ToolParser] Expected role is `tool`, got {role}")
             return []
-
-        # Extract content from tool message
-        content = _extract_text_from_content(message.get("content", ""))
-        if not content:
-            return []
-
-        # Build formatted line similar to assistant_parser
-        tool_call_id = message.get("tool_call_id", "")
-        chat_time = message.get("chat_time")
-
         parts = [f"{role}: "]
         if chat_time:
             parts.append(f"[{chat_time}]: ")
-        if tool_call_id:
-            parts.append(f"[tool_call_id: {tool_call_id}]: ")
         prefix = "".join(parts)
+        content = json.dumps(content) if isinstance(content, list | dict) else content
         line = f"{prefix}{content}\n"
+        if not line:
+            return []
 
-        # Create source
-        source = self.create_source(message, info)
+        sources = self.create_source(message, info)
 
         # Extract info fields
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
-        # Tool messages are typically LongTermMemory (they're system/assistant tool results)
-        memory_type = "LongTermMemory"
+        content_chunks = self._split_text(line)
+        memory_items = []
+        for _chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
 
-        # Create memory item
-        memory_item = TextualMemoryItem(
-            memory=line,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                status="activated",
-                tags=["mode:fast"],
-                key=_derive_key(line),
-                embedding=self.embedder.embed([line])[0],
-                usage=[],
-                sources=[source],
-                background="",
-                confidence=0.99,
-                type="fact",
-                info=info_,
-            ),
-        )
-
-        return [memory_item]
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type="LongTermMemory",  # only choce long term memory for tool messages as a placeholder
+                    status="activated",
+                    tags=["mode:fast"],
+                    sources=sources,
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+        return memory_items
 
     def parse_fine(
         self,
@@ -220,4 +191,5 @@ class ToolParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
+        # tool message no special multimodal handling is required in fine mode.
         return []
