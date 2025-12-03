@@ -5,6 +5,7 @@ from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.mem_feedback.feedback import MemFeedback
 from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 
 
@@ -27,3 +28,4 @@ class SimpleMemFeedback(MemFeedback):
         self.memory_manager = memory_manager
         self.mem_reader = mem_reader
         self.searcher = searcher
+        self.stopword_manager = StopwordManager

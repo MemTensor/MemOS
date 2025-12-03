@@ -173,6 +173,10 @@ class Searcher:
                 user_name=user_name,
             )
 
+        full_recall = kwargs.get("full_recall", False)
+        if full_recall:
+            return retrieved_results
+
         final_results = self.post_retrieve(
             retrieved_results=retrieved_results,
             top_k=top_k,

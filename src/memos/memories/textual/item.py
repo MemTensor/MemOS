@@ -90,7 +90,7 @@ class TextualMemoryMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    covered_history: str | None = Field(
+    covered_history: Any | None = Field(
         default=None,
         description="Record the memory id covered by the update",
     )

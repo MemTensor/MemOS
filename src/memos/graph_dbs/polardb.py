@@ -1452,6 +1452,98 @@ class PolarDBGraphDB(BaseGraphDB):
         raise NotImplementedError
 
     @timed
+    def seach_by_keywords(
+        self,
+        query_words: list[str],
+        scope: str | None = None,
+        status: str | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsvector_field: str = "properties_tsvector_zh",
+        tsquery_config: str = "jiebaqry",
+        **kwargs,
+    ) -> list[dict]:
+        where_clauses = []
+
+        if scope:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+            )
+        if status:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+            )
+        else:
+            where_clauses.append(
+                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+            )
+
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
+            user_name=user_name,
+            knowledgebase_ids=knowledgebase_ids,
+            default_user_name=self.config.user_name,
+        )
+
+        # Add OR condition if we have any user_name conditions
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+
+        # Add search_filter conditions
+        if search_filter:
+            for key, value in search_filter.items():
+                if isinstance(value, str):
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                    )
+                else:
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                    )
+
+        # Build filter conditions using common method
+        filter_conditions = self._build_filter_conditions_sql(filter)
+        where_clauses.extend(filter_conditions)
+        # Add fulltext search condition
+        # Convert query_text to OR query format: "word1 | word2 | word3"
+        tsquery_string = " | ".join(query_words)
+
+        where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
+
+        where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        # Build fulltext search query
+        query = f"""
+            SELECT
+                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                agtype_object_field_text(properties, 'memory') as memory_text
+            FROM "{self.db_name}_graph"."Memory"
+            {where_clause}
+        """
+
+        params = (tsquery_string,)
+        logger.info(f"[search_by_fulltext] query: {query}, params: {params}")
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                results = cursor.fetchall()
+                output = []
+                for row in results:
+                    oldid = row[0]
+                    id_val = str(oldid)
+                    output.append({"id": id_val})
+
+                return output
+        finally:
+            self._return_connection(conn)
+
+    @timed
     def search_by_fulltext(
         self,
         query_words: list[str],
