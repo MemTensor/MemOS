@@ -66,7 +66,7 @@ DEFAULT_WEIGHT_VECTOR_FOR_RANKING = [0.9, 0.05, 0.05]
 DEFAULT_MAX_WEB_LOG_QUEUE_SIZE = 50
 
 # task queue
-DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v1.3"
+DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v1.4"
 exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME", None)
 if exchange_name is not None:
     DEFAULT_STREAM_KEY_PREFIX += f":{exchange_name}"

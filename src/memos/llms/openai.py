@@ -28,7 +28,7 @@ class OpenAILLM(BaseLLM):
         )
         logger.info("OpenAI LLM instance initialized")
 
-    @timed(log=True, log_prefix="OpenAI LLM")
+    @timed(log=True, log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM, optionally overriding generation params."""
         response = self.client.chat.completions.create(
