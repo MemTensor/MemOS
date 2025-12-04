@@ -6,19 +6,13 @@ from memos.log import get_logger
 logger = get_logger(__name__)
 
 
-def timed(func=None, *, log=True, log_prefix="", log_args=None, log_extra_args=None):
+def timed_with_status(func=None, *, log=True, log_prefix="", log_args=None, log_extra_args=None):
     """
     Parameters:
     - log: enable timing logs (default True)
     - log_prefix: prefix; falls back to function name
     - log_args: names to include in logs (str or list/tuple of str).
-      Value priority: kwargs → args[0].config.<name> (if available).
-      Non-string items are ignored.
-
-    Examples:
-    - @timed(log=True, log_prefix="OpenAI LLM", log_args=["model_name_or_path", "temperature"])
-    - @timed(log=True, log_prefix="OpenAI LLM", log_args=["temperature"])
-    - @timed()  # defaults
+    - log_extra_args: extra arguments to include in logs (dict).
     """
 
     def decorator(fn):
@@ -47,6 +41,27 @@ def timed(func=None, *, log=True, log_prefix="", log_args=None, log_extra_args=N
             logger.info(
                 f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms, args: {ctx_str}"
             )
+
+            return result
+
+        return wrapper
+
+    if func is None:
+        return decorator
+    return decorator(func)
+
+
+def timed(func=None, *, log=True):
+    def decorator(fn):
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = fn(*args, **kwargs)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+            if log is not True:
+                return result
+
+            logger.info(f"[TIMER] {fn.__name__} took {elapsed_ms:.0f} ms")
 
             return result
 
