@@ -389,6 +389,7 @@ class SingleCubeView(MemCubeView):
                 top_k=search_req.pref_top_k,
                 info={
                     "user_id": search_req.user_id,
+                    "mem_cube_id": user_context.mem_cube_id,
                     "session_id": search_req.session_id,
                     "chat_history": search_req.chat_history,
                 },
