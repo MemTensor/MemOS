@@ -626,18 +626,8 @@ class GeneralScheduler(BaseScheduler):
                         or mem_item.get("original_content")
                     )
                     source_doc_id = None
-                    if isinstance(mem_item, dict):
-                        source_doc_id = (
-                            mem_item.get("source_doc_id")
-                            or mem_item.get("doc_id")
-                            or (mem_item.get("metadata") or {}).get("source_doc_id")
-                        )
-                    else:
-                        metadata = getattr(mem_item, "metadata", None)
-                        if metadata:
-                            source_doc_id = getattr(metadata, "source_doc_id", None) or getattr(
-                                metadata, "doc_id", None
-                            )
+                    if "archived_id" in mem_item:
+                        source_doc_id = mem_item.get("archived_id")
 
                     return mem_id, mem_memory, original_content, source_doc_id
 
