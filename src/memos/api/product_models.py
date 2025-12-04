@@ -374,6 +374,9 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    # TODO: tmp field for playground search goal parser, will be removed later
+    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
+
     # ==== Context ====
     chat_history: MessageList | None = Field(
         None,
