@@ -226,7 +226,7 @@ class BaseMessageParser(ABC):
         else:
             raise ValueError(f"Unknown mode: {mode}. Must be 'fast' or 'fine'")
 
-    def _split_text(self, text: str) -> list[str]:
+    def _split_text(self, text: str, is_markdown: bool = False) -> list[str]:
         """
         Split text into chunks using text splitter from utils.
 
@@ -245,7 +245,7 @@ class BaseMessageParser(ABC):
             return [text] if text.strip() else []
 
         try:
-            chunks = splitter.split_text(text)
+            chunks = splitter.chunk(text, is_markdown)
             logger.debug(f"[FileContentParser] Split text into {len(chunks)} chunks")
             return chunks
         except Exception as e:
