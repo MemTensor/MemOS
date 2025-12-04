@@ -90,6 +90,7 @@ class Searcher:
             search_filter=search_filter,
             search_priority=search_priority,
             user_name=user_name,
+            **kwargs,
         )
         results = self._retrieve_paths(
             query,
@@ -166,7 +167,7 @@ class Searcher:
         else:
             logger.debug(f"[SEARCH] Received info dict: {info}")
 
-        if kwargs.get("plugin"):
+        if kwargs.get("plugin", False):
             logger.info(f"[SEARCH] Retrieve from plugin: {query}")
             retrieved_results = self._retrieve_simple(
                 query=query, top_k=top_k, search_filter=search_filter, user_name=user_name
@@ -183,6 +184,7 @@ class Searcher:
                 user_name=user_name,
                 search_tool_memory=search_tool_memory,
                 tool_mem_top_k=tool_mem_top_k,
+                **kwargs,
             )
 
         full_recall = kwargs.get("full_recall", False)
@@ -218,6 +220,7 @@ class Searcher:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
+        **kwargs,
     ):
         """Parse user query, do embedding search and create context"""
         context = []
@@ -268,6 +271,7 @@ class Searcher:
             conversation=info.get("chat_history", []),
             mode=mode,
             use_fast_graph=self.use_fast_graph,
+            **kwargs,
         )
 
         query = parsed_goal.rephrased_query or query
@@ -351,7 +355,7 @@ class Searcher:
                         query,
                         parsed_goal,
                         query_embedding,
-                        top_k,
+                        tool_mem_top_k,
                         memory_type,
                         search_filter,
                         search_priority,
@@ -516,7 +520,10 @@ class Searcher:
         user_id: str | None = None,
     ):
         """Retrieve and rerank from Internet source"""
-        if not self.internet_retriever or self.manual_close_internet:
+        if not self.internet_retriever:
+            logger.info(f"[PATH-C] '{query}' Skipped (no retriever)")
+            return []
+        if self.manual_close_internet and not parsed_goal.internet_search:
             logger.info(f"[PATH-C] '{query}' Skipped (no retriever, fast mode)")
             return []
         if memory_type not in ["All"]:

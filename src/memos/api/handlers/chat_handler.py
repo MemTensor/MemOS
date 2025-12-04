@@ -400,6 +400,7 @@ class ChatHandler(BaseHandler):
                         include_preference=chat_req.include_preference,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
+                        playground_search_goal_parser=True,
                     )
 
                     search_response = self.search_handler.handle_search_memories(search_req)

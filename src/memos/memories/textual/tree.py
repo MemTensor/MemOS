@@ -132,27 +132,15 @@ class TreeTextMemory(BaseTextMemory):
     def get_searcher(
         self, manual_close_internet: bool = False, moscube: bool = False, process_llm=None
     ):
-        if (self.internet_retriever is not None) and manual_close_internet:
-            logger.warning(
-                "Internet retriever is init by config , but  this search set manual_close_internet is True  and will close it"
-            )
-            searcher = Searcher(
-                self.dispatcher_llm,
-                self.graph_store,
-                self.embedder,
-                self.reranker,
-                internet_retriever=None,
-                process_llm=process_llm,
-            )
-        else:
-            searcher = Searcher(
-                self.dispatcher_llm,
-                self.graph_store,
-                self.embedder,
-                self.reranker,
-                internet_retriever=self.internet_retriever,
-                process_llm=process_llm,
-            )
+        searcher = Searcher(
+            self.dispatcher_llm,
+            self.graph_store,
+            self.embedder,
+            self.reranker,
+            internet_retriever=self.internet_retriever,
+            manual_close_internet=manual_close_internet,
+            process_llm=process_llm,
+        )
         return searcher
 
     def search(
@@ -191,30 +179,17 @@ class TreeTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        if (self.internet_retriever is not None) and manual_close_internet:
-            searcher = Searcher(
-                self.dispatcher_llm,
-                self.graph_store,
-                self.embedder,
-                self.reranker,
-                bm25_retriever=self.bm25_retriever,
-                internet_retriever=None,
-                search_strategy=self.search_strategy,
-                manual_close_internet=manual_close_internet,
-                tokenizer=self.tokenizer,
-            )
-        else:
-            searcher = Searcher(
-                self.dispatcher_llm,
-                self.graph_store,
-                self.embedder,
-                self.reranker,
-                bm25_retriever=self.bm25_retriever,
-                internet_retriever=self.internet_retriever,
-                search_strategy=self.search_strategy,
-                manual_close_internet=manual_close_internet,
-                tokenizer=self.tokenizer,
-            )
+        searcher = Searcher(
+            self.dispatcher_llm,
+            self.graph_store,
+            self.embedder,
+            self.reranker,
+            bm25_retriever=self.bm25_retriever,
+            internet_retriever=self.internet_retriever,
+            search_strategy=self.search_strategy,
+            manual_close_internet=manual_close_internet,
+            tokenizer=self.tokenizer,
+        )
         return searcher.search(
             query,
             top_k,
@@ -224,9 +199,9 @@ class TreeTextMemory(BaseTextMemory):
             search_filter,
             search_priority,
             user_name=user_name,
-            plugin=kwargs.get("plugin", False),
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            **kwargs,
         )
 
     def get_relevant_subgraph(
