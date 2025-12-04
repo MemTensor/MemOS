@@ -245,7 +245,7 @@ class BaseMessageParser(ABC):
             return [text] if text.strip() else []
 
         try:
-            chunks = splitter.chunk(text, is_markdown)
+            chunks = splitter.chunk(text)
             logger.debug(f"[FileContentParser] Split text into {len(chunks)} chunks")
             return chunks
         except Exception as e:
