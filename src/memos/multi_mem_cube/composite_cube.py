@@ -43,6 +43,7 @@ class CompositeCubeView(MemCubeView):
             "para_mem": [],
             "pref_mem": [],
             "pref_note": "",
+            "tool_mem": [],
         }
 
         for view in self.cube_views:
@@ -52,6 +53,7 @@ class CompositeCubeView(MemCubeView):
             merged_results["act_mem"].extend(cube_result.get("act_mem", []))
             merged_results["para_mem"].extend(cube_result.get("para_mem", []))
             merged_results["pref_mem"].extend(cube_result.get("pref_mem", []))
+            merged_results["tool_mem"].extend(cube_result.get("tool_mem", []))
 
             note = cube_result.get("pref_note")
             if note:
