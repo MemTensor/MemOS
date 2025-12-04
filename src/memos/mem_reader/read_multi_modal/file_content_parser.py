@@ -12,6 +12,12 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
+from memos.mem_reader.read_multi_modal.base import BaseMessageParser, _derive_key
+from memos.mem_reader.read_multi_modal.utils import (
+    detect_lang,
+    get_parser,
+    parse_json_result,
+)
 from memos.memories.textual.item import (
     SourceMessage,
     TextualMemoryItem,
@@ -24,13 +30,6 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
 )
 from memos.types.openai_chat_completion_types import File
-
-from .base import BaseMessageParser, _derive_key
-from .utils import (
-    detect_lang,
-    get_parser,
-    parse_json_result,
-)
 
 
 logger = get_logger(__name__)
