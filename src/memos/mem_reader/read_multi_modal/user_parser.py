@@ -85,8 +85,20 @@ class UserParser(BaseMessageParser):
                                 original_part=part,
                             )
                         )
+                    elif part_type == "image_url":
+                        image_info = part.get("image_url", {})
+                        sources.append(
+                            SourceMessage(
+                                type="image",
+                                role=role,
+                                chat_time=chat_time,
+                                message_id=message_id,
+                                image_path=image_info.get("url"),
+                                original_part=part,
+                            )
+                        )
                     else:
-                        # image_url, input_audio, etc.
+                        # input_audio, etc.
                         sources.append(
                             SourceMessage(
                                 type=part_type,
