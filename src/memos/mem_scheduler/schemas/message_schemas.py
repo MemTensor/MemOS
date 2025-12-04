@@ -5,6 +5,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
+from memos.context.context import generate_trace_id
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
 from memos.mem_scheduler.utils.db_utils import get_utc_now
@@ -36,6 +37,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     redis_message_id: str = Field(default="", description="the message get from redis stream")
     stream_key: str = Field("", description="stream_key for identifying the queue in line")
     user_id: str = Field(..., description="user id")
+    trace_id: str = Field(default_factory=generate_trace_id, description="trace id for logging")
     mem_cube_id: str = Field(..., description="memcube id")
     session_id: str = Field(default="", description="Session ID for soft-filtering memories")
     label: str = Field(..., description="Label of the schedule message")
@@ -80,6 +82,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "item_id": self.item_id,
             "user_id": self.user_id,
             "cube_id": self.mem_cube_id,
+            "trace_id": self.trace_id,
             "label": self.label,
             "cube": "Not Applicable",  # Custom cube serialization
             "content": self.content,
@@ -95,6 +98,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             item_id=data.get("item_id", str(uuid4())),
             user_id=data["user_id"],
             mem_cube_id=data["cube_id"],
+            trace_id=data.get("trace_id", generate_trace_id()),
             label=data["label"],
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),

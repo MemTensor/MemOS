@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Literal
 
 from typing_extensions import Required, TypedDict
@@ -14,7 +13,9 @@ __all__ = ["ChatCompletionSystemMessageParam"]
 
 
 class ChatCompletionSystemMessageParam(TypedDict, total=False):
-    content: Required[str | Iterable[ChatCompletionContentPartTextParam]]
+    content: Required[
+        str | list[ChatCompletionContentPartTextParam] | ChatCompletionContentPartTextParam
+    ]
     """The contents of the system message."""
 
     role: Required[Literal["system"]]

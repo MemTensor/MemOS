@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Literal
 
 from typing_extensions import Required, TypedDict
@@ -14,7 +13,7 @@ __all__ = ["ChatCompletionUserMessageParam"]
 
 
 class ChatCompletionUserMessageParam(TypedDict, total=False):
-    content: Required[str | Iterable[ChatCompletionContentPartParam]]
+    content: Required[str | list[ChatCompletionContentPartParam] | ChatCompletionContentPartParam]
     """The contents of the user message."""
 
     role: Required[Literal["user"]]

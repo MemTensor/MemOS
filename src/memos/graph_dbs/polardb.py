@@ -503,7 +503,9 @@ class PolarDBGraphDB(BaseGraphDB):
                 cursor.execute(delete_query, delete_params)
                 deleted_count = cursor.rowcount
                 logger.info(
-                    f"Removed {deleted_count} oldest {memory_type} memories, keeping {keep_latest} latest for user {user_name}"
+                    f"Removed {deleted_count} oldest {memory_type} memories, "
+                    f"keeping {keep_latest} latest for user {user_name}, "
+                    f"removed ids: {ids_to_delete}"
                 )
         except Exception as e:
             logger.error(f"[remove_oldest_memory] Failed: {e}", exc_info=True)
@@ -1454,6 +1456,98 @@ class PolarDBGraphDB(BaseGraphDB):
     def get_context_chain(self, id: str, type: str = "FOLLOWS") -> list[str]:
         """Get the ordered context chain starting from a node."""
         raise NotImplementedError
+
+    @timed
+    def seach_by_keywords(
+        self,
+        query_words: list[str],
+        scope: str | None = None,
+        status: str | None = None,
+        search_filter: dict | None = None,
+        user_name: str | None = None,
+        filter: dict | None = None,
+        knowledgebase_ids: list[str] | None = None,
+        tsvector_field: str = "properties_tsvector_zh",
+        tsquery_config: str = "jiebaqry",
+        **kwargs,
+    ) -> list[dict]:
+        where_clauses = []
+
+        if scope:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) = '\"{scope}\"'::agtype"
+            )
+        if status:
+            where_clauses.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"{status}\"'::agtype"
+            )
+        else:
+            where_clauses.append(
+                "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) = '\"activated\"'::agtype"
+            )
+
+        # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
+        user_name_conditions = self._build_user_name_and_kb_ids_conditions_sql(
+            user_name=user_name,
+            knowledgebase_ids=knowledgebase_ids,
+            default_user_name=self.config.user_name,
+        )
+
+        # Add OR condition if we have any user_name conditions
+        if user_name_conditions:
+            if len(user_name_conditions) == 1:
+                where_clauses.append(user_name_conditions[0])
+            else:
+                where_clauses.append(f"({' OR '.join(user_name_conditions)})")
+
+        # Add search_filter conditions
+        if search_filter:
+            for key, value in search_filter.items():
+                if isinstance(value, str):
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{value}\"'::agtype"
+                    )
+                else:
+                    where_clauses.append(
+                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {value}::agtype"
+                    )
+
+        # Build filter conditions using common method
+        filter_conditions = self._build_filter_conditions_sql(filter)
+        where_clauses.extend(filter_conditions)
+        # Add fulltext search condition
+        # Convert query_text to OR query format: "word1 | word2 | word3"
+        tsquery_string = " | ".join(query_words)
+
+        where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
+
+        where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        # Build fulltext search query
+        query = f"""
+            SELECT
+                ag_catalog.agtype_access_operator(properties, '"id"'::agtype) AS old_id,
+                agtype_object_field_text(properties, 'memory') as memory_text
+            FROM "{self.db_name}_graph"."Memory"
+            {where_clause}
+        """
+
+        params = (tsquery_string,)
+        logger.info(f"[search_by_fulltext] query: {query}, params: {params}")
+        conn = self._get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                results = cursor.fetchall()
+                output = []
+                for row in results:
+                    oldid = row[0]
+                    id_val = str(oldid)
+                    output.append({"id": id_val})
+
+                return output
+        finally:
+            self._return_connection(conn)
 
     @timed
     def search_by_fulltext(
@@ -2711,6 +2805,28 @@ class PolarDBGraphDB(BaseGraphDB):
             if time_field in node and hasattr(node[time_field], "isoformat"):
                 node[time_field] = node[time_field].isoformat()
 
+        # Deserialize sources from JSON strings back to dict objects
+        if "sources" in node and node.get("sources"):
+            sources = node["sources"]
+            if isinstance(sources, list):
+                deserialized_sources = []
+                for source_item in sources:
+                    if isinstance(source_item, str):
+                        # Try to parse JSON string
+                        try:
+                            parsed = json.loads(source_item)
+                            deserialized_sources.append(parsed)
+                        except (json.JSONDecodeError, TypeError):
+                            # If parsing fails, keep as string or create a simple dict
+                            deserialized_sources.append({"type": "doc", "content": source_item})
+                    elif isinstance(source_item, dict):
+                        # Already a dict, keep as is
+                        deserialized_sources.append(source_item)
+                    else:
+                        # Unknown type, create a simple dict
+                        deserialized_sources.append({"type": "doc", "content": str(source_item)})
+                node["sources"] = deserialized_sources
+
         return {"id": node.get("id"), "memory": node.get("memory", ""), "metadata": node}
 
     def _parse_node_new(self, node_data: dict[str, Any]) -> dict[str, Any]:
@@ -2742,6 +2858,28 @@ class PolarDBGraphDB(BaseGraphDB):
         for time_field in ("created_at", "updated_at"):
             if time_field in node and hasattr(node[time_field], "isoformat"):
                 node[time_field] = node[time_field].isoformat()
+
+        # Deserialize sources from JSON strings back to dict objects
+        if "sources" in node and node.get("sources"):
+            sources = node["sources"]
+            if isinstance(sources, list):
+                deserialized_sources = []
+                for source_item in sources:
+                    if isinstance(source_item, str):
+                        # Try to parse JSON string
+                        try:
+                            parsed = json.loads(source_item)
+                            deserialized_sources.append(parsed)
+                        except (json.JSONDecodeError, TypeError):
+                            # If parsing fails, keep as string or create a simple dict
+                            deserialized_sources.append({"type": "doc", "content": source_item})
+                    elif isinstance(source_item, dict):
+                        # Already a dict, keep as is
+                        deserialized_sources.append(source_item)
+                    else:
+                        # Unknown type, create a simple dict
+                        deserialized_sources.append({"type": "doc", "content": str(source_item)})
+                node["sources"] = deserialized_sources
 
         # Do not remove user_name; keep all fields
 

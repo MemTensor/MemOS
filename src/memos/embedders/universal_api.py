@@ -36,6 +36,9 @@ class UniversalAPIEmbedder(BaseEmbedder):
         log_extra_args={"model_name_or_path": "text-embedding-3-large"},
     )
     def embed(self, texts: list[str]) -> list[list[float]]:
+        # Truncate texts if max_tokens is configured
+        texts = self._truncate_texts(texts)
+
         if self.provider == "openai" or self.provider == "azure":
             try:
                 response = self.client.embeddings.create(
