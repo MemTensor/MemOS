@@ -497,6 +497,8 @@ class FileContentParser(BaseMessageParser):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
+        if file_id:
+            info_["file_id"] = file_id
 
         # For file content parts, default to LongTermMemory
         memory_type = "LongTermMemory"
