@@ -88,13 +88,16 @@ class RequestContext:
         }
 
 
-def set_request_context(context: RequestContext) -> None:
+def set_request_context(context: RequestContext | None) -> None:
     """
     Set the current request context.
 
     This is typically called by the API dependency injection system.
     """
-    _request_context.set(context.to_dict())
+    if context:
+        _request_context.set(context.to_dict())
+    else:
+        _request_context.set(None)
 
 
 def get_current_trace_id() -> str | None:

@@ -324,7 +324,7 @@ class FileContentParser(BaseMessageParser):
         # For file content parts, default to LongTermMemory
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
-
+        file_ids = [file_id] if file_id else []
         # Create memory items for each chunk
         memory_items = []
         for chunk_idx, chunk_text in enumerate(content_chunks):
@@ -351,6 +351,7 @@ class FileContentParser(BaseMessageParser):
                     confidence=0.99,
                     type="fact",
                     info=info_,
+                    file_ids=file_ids,
                 ),
             )
             memory_items.append(memory_item)
@@ -373,6 +374,7 @@ class FileContentParser(BaseMessageParser):
                     confidence=0.99,
                     type="fact",
                     info=info_,
+                    file_ids=file_ids,
                 ),
             )
             memory_items.append(memory_item)
@@ -499,12 +501,12 @@ class FileContentParser(BaseMessageParser):
         session_id = info_.pop("session_id", "")
         if file_id:
             info_["file_id"] = file_id
-
+        file_ids = [file_id] if file_id else []
         # For file content parts, default to LongTermMemory
         memory_type = "LongTermMemory"
 
         # Split parsed text into chunks
-        content_chunks = self._split_text(parsed_text)
+        content_chunks = self._split_text(parsed_text, is_markdown)
 
         # Filter out empty chunks and create indexed list
         valid_chunks = [
@@ -536,6 +538,7 @@ class FileContentParser(BaseMessageParser):
                     confidence=0.99,
                     type="fact",
                     info=info_,
+                    file_ids=file_ids,
                 ),
             )
 
