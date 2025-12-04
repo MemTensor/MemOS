@@ -29,11 +29,11 @@ from memos.mem_os.utils.reference_utils import (
     prepare_reference_data,
     process_streaming_references_complete,
 )
-from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 from memos.mem_user.persistent_factory import PersistentUserManagerFactory
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
@@ -710,7 +710,7 @@ class MOSProduct(MOSCore):
                     logger.warning(f"Failed to send chat notification (async): {e}")
 
             self._send_message_to_scheduler(
-                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
+                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_TASK_LABEL
             )
 
             self.add(
@@ -1151,7 +1151,7 @@ class MOSProduct(MOSCore):
             f"time chat: search text_mem time user_id: {user_id} time is: {search_time_end - time_start}"
         )
         self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
+            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_TASK_LABEL
         )
         if memories_result:
             memories_list = memories_result[0]["memories"]

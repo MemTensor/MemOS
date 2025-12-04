@@ -12,9 +12,11 @@ from pydantic import BaseModel, Field, computed_field, field_validator
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue, DictConversionMixin
 from memos.mem_scheduler.schemas.general_schemas import (
-    DEFAULT_MAX_QUERY_KEY_WORDS,
     DEFAULT_WEIGHT_VECTOR_FOR_RANKING,
     NOT_INITIALIZED,
+)
+from memos.mem_scheduler.schemas.task_schemas import (
+    DEFAULT_MAX_QUERY_KEY_WORDS,
 )
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
 from memos.memories.textual.tree import TextualMemoryItem

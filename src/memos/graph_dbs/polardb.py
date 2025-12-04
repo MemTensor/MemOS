@@ -4113,6 +4113,7 @@ class PolarDBGraphDB(BaseGraphDB):
             "memory_type",
             "node_type",
             "info",
+            "source",
         }
 
         def process_condition(condition):
@@ -4216,7 +4217,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 file_id_and_conditions.append(f"'{escaped_id}' IN n.file_ids")
             if file_id_and_conditions:
                 # Use AND to require all file_ids to be present
-                where_conditions.append(f"({' AND '.join(file_id_and_conditions)})")
+                where_conditions.append(f"({' OR '.join(file_id_and_conditions)})")
 
         # Query nodes by filter if provided
         filter_ids = set()
