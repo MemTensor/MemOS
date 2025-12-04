@@ -168,6 +168,14 @@ class GeneralScheduler(BaseScheduler):
 
                     # Process each message in the batch
                     for msg in batch:
+                        if not (msg.user_name or "").strip():
+                            logger.warning(
+                                "[AddConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                msg.user_id,
+                                msg.mem_cube_id,
+                                msg.content,
+                            )
+                            continue
                         prepared_add_items, prepared_update_items_with_original = (
                             self.log_add_messages(msg=msg)
                         )
@@ -212,6 +220,14 @@ class GeneralScheduler(BaseScheduler):
                     continue
                 try:
                     for msg in batch:
+                        if not (msg.user_name or "").strip():
+                            logger.warning(
+                                "[QueryConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                msg.user_id,
+                                msg.mem_cube_id,
+                                msg.content,
+                            )
+                            continue
                         event = self.create_event_log(
                             label="addMessage",
                             from_memory_type=USER_INPUT_TYPE,
@@ -257,6 +273,14 @@ class GeneralScheduler(BaseScheduler):
                     continue
                 try:
                     for msg in batch:
+                        if not (msg.user_name or "").strip():
+                            logger.warning(
+                                "[AnswerConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                msg.user_id,
+                                msg.mem_cube_id,
+                                msg.content,
+                            )
+                            continue
                         event = self.create_event_log(
                             label="addMessage",
                             from_memory_type=USER_INPUT_TYPE,
@@ -536,6 +560,14 @@ class GeneralScheduler(BaseScheduler):
 
                     # Process each message in the batch
                     for msg in batch:
+                        if not (msg.user_name or "").strip():
+                            logger.warning(
+                                "[AddConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                msg.user_id,
+                                msg.mem_cube_id,
+                                msg.content,
+                            )
+                            continue
                         prepared_add_items, prepared_update_items_with_original = (
                             self.log_add_messages(msg=msg)
                         )
@@ -737,7 +769,15 @@ class GeneralScheduler(BaseScheduler):
                     return
 
                 content = message.content
-                user_name = message.user_name
+                user_name = message.user_name or ""
+                if not user_name:
+                    logger.warning(
+                        "[MemRead] Dropping message with empty user_name; user_id=%s mem_cube_id=%s mem_ids=%s",
+                        user_id,
+                        mem_cube_id,
+                        content,
+                    )
+                    return
                 info = message.info or {}
 
                 # Parse the memory IDs from content
@@ -1040,7 +1080,15 @@ class GeneralScheduler(BaseScheduler):
                     )
                     return
                 content = message.content
-                user_name = message.user_name
+                user_name = message.user_name or ""
+                if not user_name:
+                    logger.warning(
+                        "[MemReorganize] Dropping message with empty user_name; user_id=%s mem_cube_id=%s mem_ids=%s",
+                        user_id,
+                        mem_cube_id,
+                        content,
+                    )
+                    return
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
@@ -1263,6 +1311,14 @@ class GeneralScheduler(BaseScheduler):
 
         def process_message(message: ScheduleMessageItem):
             try:
+                if not (message.user_name or "").strip():
+                    logger.warning(
+                        "[PrefAdd] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                        message.user_id,
+                        message.mem_cube_id,
+                        message.content,
+                    )
+                    return
                 mem_cube = self.current_mem_cube
                 if mem_cube is None:
                     logger.warning(
