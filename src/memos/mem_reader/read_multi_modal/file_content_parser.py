@@ -29,7 +29,6 @@ from .base import BaseMessageParser, _derive_key
 from .utils import (
     detect_lang,
     get_parser,
-    get_text_splitter,
     parse_json_result,
 )
 
@@ -504,7 +503,7 @@ class FileContentParser(BaseMessageParser):
         memory_type = "LongTermMemory"
 
         # Split parsed text into chunks
-        content_chunks = self._split_text(parsed_text, is_markdown)
+        content_chunks = self._split_text(parsed_text)
 
         # Filter out empty chunks and create indexed list
         valid_chunks = [
