@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Union
 from sqlalchemy.engine import Engine
 
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
-from memos.context.context import ContextThread
+from memos.context.context import (
+    ContextThread,
+    RequestContext,
+    get_current_context,
+    set_request_context,
+)
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
@@ -775,35 +780,46 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 if messages:
                     now = time.time()
                     for msg in messages:
-                        enqueue_ts_obj = getattr(msg, "timestamp", None)
-                        enqueue_epoch = None
-                        if isinstance(enqueue_ts_obj, int | float):
-                            enqueue_epoch = float(enqueue_ts_obj)
-                        elif hasattr(enqueue_ts_obj, "timestamp"):
-                            dt = enqueue_ts_obj
-                            if dt.tzinfo is None:
-                                dt = dt.replace(tzinfo=timezone.utc)
-                            enqueue_epoch = dt.timestamp()
+                        prev_context = get_current_context()
+                        try:
+                            # Set context for this message
+                            msg_context = RequestContext(
+                                trace_id=msg.trace_id,
+                                user_name=msg.user_name,
+                            )
+                            set_request_context(msg_context)
 
-                        queue_wait_ms = None
-                        if enqueue_epoch is not None:
-                            queue_wait_ms = max(0.0, now - enqueue_epoch) * 1000
+                            enqueue_ts_obj = getattr(msg, "timestamp", None)
+                            enqueue_epoch = None
+                            if isinstance(enqueue_ts_obj, int | float):
+                                enqueue_epoch = float(enqueue_ts_obj)
+                            elif hasattr(enqueue_ts_obj, "timestamp"):
+                                dt = enqueue_ts_obj
+                                if dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                enqueue_epoch = dt.timestamp()
 
-                        # Avoid pydantic field enforcement by using object.__setattr__
-                        object.__setattr__(msg, "_dequeue_ts", now)
-                        emit_monitor_event(
-                            "dequeue",
-                            msg,
-                            {
-                                "enqueue_ts": to_iso(enqueue_ts_obj),
-                                "dequeue_ts": datetime.fromtimestamp(
-                                    now, tz=timezone.utc
-                                ).isoformat(),
-                                "queue_wait_ms": queue_wait_ms,
-                            },
-                        )
+                            queue_wait_ms = None
+                            if enqueue_epoch is not None:
+                                queue_wait_ms = max(0.0, now - enqueue_epoch) * 1000
 
-                        self.metrics.task_dequeued(user_id=msg.user_id, task_type=msg.label)
+                            # Avoid pydantic field enforcement by using object.__setattr__
+                            object.__setattr__(msg, "_dequeue_ts", now)
+                            emit_monitor_event(
+                                "dequeue",
+                                msg,
+                                {
+                                    "enqueue_ts": to_iso(enqueue_ts_obj),
+                                    "dequeue_ts": datetime.fromtimestamp(
+                                        now, tz=timezone.utc
+                                    ).isoformat(),
+                                    "queue_wait_ms": queue_wait_ms,
+                                },
+                            )
+                            self.metrics.task_dequeued(user_id=msg.user_id, task_type=msg.label)
+                        finally:
+                            # Restore the prior context of the consumer thread
+                            set_request_context(prev_context)
                     try:
                         import contextlib
 
