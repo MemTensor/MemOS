@@ -209,12 +209,8 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             if naive_mem_cube.pref_mem is not None:
                 naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
         elif delete_mem_req.file_ids is not None:
-            # TODO: Implement deletion by file_ids
-            # Need to find memory_ids associated with file_ids and delete them
-            logger.warning("Deletion by file_ids not implemented yet")
-            return DeleteMemoryResponse(
-                message="Deletion by file_ids not implemented yet",
-                data={"status": "failure"},
+            naive_mem_cube.text_mem.delete_by_filter(
+                writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
         elif delete_mem_req.filter is not None:
             # TODO: Implement deletion by filter
