@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, ClassVar
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from memos.configs.base import BaseConfig
 from memos.configs.chunker import ChunkerConfigFactory
@@ -44,6 +44,8 @@ class BaseMemReaderConfig(BaseConfig):
 class SimpleStructMemReaderConfig(BaseMemReaderConfig):
     """SimpleStruct MemReader configuration class."""
 
+    model_config = ConfigDict(extra="allow", strict=True)
+
 
 class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
     """MultiModalStruct MemReader configuration class."""
@@ -57,6 +59,8 @@ class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
 
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):
     """StrategyStruct MemReader configuration class."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
 
 
 class MemReaderConfigFactory(BaseConfig):
