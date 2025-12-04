@@ -567,7 +567,7 @@ class SingleCubeView(MemCubeView):
                 message_item_pref = ScheduleMessageItem(
                     user_id=add_req.user_id,
                     session_id=target_session_id,
-                    mem_cube_id=self.cube_id,
+                    mem_cube_id=user_context.mem_cube_id,
                     mem_cube=self.naive_mem_cube,
                     label=PREF_ADD_LABEL,
                     content=json.dumps(messages_list),
@@ -592,7 +592,7 @@ class SingleCubeView(MemCubeView):
                     **(add_req.info or {}),
                     "user_id": add_req.user_id,
                     "session_id": target_session_id,
-                    "mem_cube_id": self.cube_id,
+                    "mem_cube_id": user_context.mem_cube_id,
                 },
             )
             pref_ids_local: list[str] = self.naive_mem_cube.pref_mem.add(pref_memories_local)
