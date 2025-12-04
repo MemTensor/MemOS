@@ -12,7 +12,7 @@ from memos.llms.base import BaseLLM
 from memos.llms.utils import remove_thinking_tags
 from memos.log import get_logger
 from memos.types import MessageList
-from memos.utils import timed
+from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -28,7 +28,7 @@ class OpenAILLM(BaseLLM):
         )
         logger.info("OpenAI LLM instance initialized")
 
-    @timed(log=True, log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
+    @timed_with_status(log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM, optionally overriding generation params."""
         response = self.client.chat.completions.create(
@@ -55,7 +55,7 @@ class OpenAILLM(BaseLLM):
             return reasoning_content + response_content
         return response_content
 
-    @timed(log=True, log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
+    @timed_with_status(log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from OpenAI LLM with optional reasoning support."""
         if kwargs.get("tools"):
