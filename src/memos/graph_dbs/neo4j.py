@@ -1588,7 +1588,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 file_id_and_conditions.append(f"${param_name} IN n.file_ids")
             if file_id_and_conditions:
                 # Use AND to require all file_ids to be present
-                where_clauses.append(f"({' AND '.join(file_id_and_conditions)})")
+                where_clauses.append(f"({' OR '.join(file_id_and_conditions)})")
 
         # Query nodes by filter if provided
         filter_ids = []

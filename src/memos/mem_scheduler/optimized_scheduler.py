@@ -11,10 +11,10 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_scheduler.general_modules.api_misc import SchedulerAPIModule
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.schemas.general_schemas import (
-    API_MIX_SEARCH_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    API_MIX_SEARCH_TASK_LABEL,
+)
 from memos.mem_scheduler.utils.api_utils import format_textual_memory_item
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
@@ -49,7 +49,7 @@ class OptimizedScheduler(GeneralScheduler):
         )
         self.register_handlers(
             {
-                API_MIX_SEARCH_LABEL: self._api_mix_search_message_consumer,
+                API_MIX_SEARCH_TASK_LABEL: self._api_mix_search_message_consumer,
             }
         )
         self.searcher = None
@@ -83,7 +83,7 @@ class OptimizedScheduler(GeneralScheduler):
             item_id=async_task_id,
             user_id=search_req.user_id,
             mem_cube_id=user_context.mem_cube_id,
-            label=API_MIX_SEARCH_LABEL,
+            label=API_MIX_SEARCH_TASK_LABEL,
             content=json.dumps(message_content),
             timestamp=get_utc_now(),
         )
@@ -259,12 +259,12 @@ class OptimizedScheduler(GeneralScheduler):
         Args:
             messages: List of query messages to process
         """
-        logger.info(f"Messages {messages} assigned to {API_MIX_SEARCH_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {API_MIX_SEARCH_TASK_LABEL} handler.")
 
         # Process the query in a session turn
         grouped_messages = group_messages_by_user_and_mem_cube(messages)
 
-        self.validate_schedule_messages(messages=messages, label=API_MIX_SEARCH_LABEL)
+        self.validate_schedule_messages(messages=messages, label=API_MIX_SEARCH_TASK_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
@@ -303,7 +303,7 @@ class OptimizedScheduler(GeneralScheduler):
 
             # Apply combined filtering (unrelated + redundant)
             logger.info(
-                f"Applying combined unrelated and redundant memory filtering to {len(memories_with_new_order)} memories"
+                f"[optimized replace_working_memory] Applying combined unrelated and redundant memory filtering to {len(memories_with_new_order)} memories"
             )
             filtered_memories, filtering_success_flag = (
                 self.retriever.filter_unrelated_and_redundant_memories(
@@ -314,20 +314,20 @@ class OptimizedScheduler(GeneralScheduler):
 
             if filtering_success_flag:
                 logger.info(
-                    f"Combined filtering completed successfully. "
+                    f"[optimized replace_working_memory] Combined filtering completed successfully. "
                     f"Filtered from {len(memories_with_new_order)} to {len(filtered_memories)} memories"
                 )
                 memories_with_new_order = filtered_memories
             else:
                 logger.warning(
-                    "Combined filtering failed - keeping memories as fallback. "
+                    "[optimized replace_working_memory] Combined filtering failed - keeping memories as fallback. "
                     f"Count: {len(memories_with_new_order)}"
                 )
 
             # Update working memory monitors
             query_keywords = query_db_manager.obj.get_keywords_collections()
             logger.info(
-                f"Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
+                f"[optimized replace_working_memory] Processing {len(memories_with_new_order)} memories with {len(query_keywords)} query keywords"
             )
             new_working_memory_monitors = self.transform_working_memories_to_monitors(
                 query_keywords=query_keywords,
@@ -338,7 +338,9 @@ class OptimizedScheduler(GeneralScheduler):
                 for one in new_working_memory_monitors:
                     one.sorting_score = 0
 
-            logger.info(f"update {len(new_working_memory_monitors)} working_memory_monitors")
+            logger.info(
+                f"[optimized replace_working_memory] update {len(new_working_memory_monitors)} working_memory_monitors"
+            )
             self.monitor.update_working_memory_monitors(
                 new_working_memory_monitors=new_working_memory_monitors,
                 user_id=user_id,
@@ -356,7 +358,7 @@ class OptimizedScheduler(GeneralScheduler):
             new_working_memories = [mem_monitor.tree_memory_item for mem_monitor in mem_monitors]
 
             logger.info(
-                f"The working memory has been replaced with {len(memories_with_new_order)} new memories."
+                f"[optimized replace_working_memory] The working memory has been replaced with {len(memories_with_new_order)} new memories."
             )
             self.log_working_memory_replacement(
                 original_memory=original_memory,

@@ -15,14 +15,14 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas.general_schemas import (
-    ADD_LABEL,
-    ANSWER_LABEL,
-    MEM_READ_LABEL,
-    PREF_ADD_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    ANSWER_TASK_LABEL,
+    MEM_READ_TASK_LABEL,
+    PREF_ADD_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 from memos.mem_user.user_manager import UserManager, UserRole
 from memos.memories.activation.item import ActivationMemoryItem
 from memos.memories.parametric.item import ParametricMemoryItem
@@ -283,7 +283,7 @@ class MOSCore:
                     message_item = ScheduleMessageItem(
                         user_id=target_user_id,
                         mem_cube_id=mem_cube_id,
-                        label=QUERY_LABEL,
+                        label=QUERY_TASK_LABEL,
                         content=query,
                         timestamp=datetime.utcnow(),
                     )
@@ -343,7 +343,7 @@ class MOSCore:
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    label=ANSWER_LABEL,
+                    label=ANSWER_TASK_LABEL,
                     content=response,
                     timestamp=datetime.utcnow(),
                 )
@@ -771,7 +771,7 @@ class MOSCore:
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
                                 mem_cube_id=mem_cube_id,
-                                label=MEM_READ_LABEL,
+                                label=MEM_READ_TASK_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
                                 task_id=task_id,
@@ -783,7 +783,7 @@ class MOSCore:
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
                                 mem_cube_id=mem_cube_id,
-                                label=ADD_LABEL,
+                                label=ADD_TASK_LABEL,
                                 content=json.dumps(mem_ids),
                                 timestamp=datetime.utcnow(),
                                 task_id=task_id,
@@ -824,7 +824,7 @@ class MOSCore:
                         user_id=target_user_id,
                         session_id=target_session_id,
                         mem_cube_id=mem_cube_id,
-                        label=PREF_ADD_LABEL,
+                        label=PREF_ADD_TASK_LABEL,
                         content=json.dumps(messages_list),
                         timestamp=datetime.utcnow(),
                     )
@@ -878,7 +878,7 @@ class MOSCore:
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
                             mem_cube_id=mem_cube_id,
-                            label=MEM_READ_LABEL,
+                            label=MEM_READ_TASK_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
@@ -889,7 +889,7 @@ class MOSCore:
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
                             mem_cube_id=mem_cube_id,
-                            label=ADD_LABEL,
+                            label=ADD_TASK_LABEL,
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
@@ -920,7 +920,7 @@ class MOSCore:
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    label=ADD_LABEL,
+                    label=ADD_TASK_LABEL,
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                 )
