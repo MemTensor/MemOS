@@ -6,7 +6,7 @@ class SimpleTextSplitter:
         self.chunk_overlap = chunk_overlap
 
     def chunk(self, text: str, **kwargs) -> list[str]:
-        return _simple_split_text(text, self.chunk_size, self.chunk_overlap)
+        return self._simple_split_text(text, self.chunk_size, self.chunk_overlap)
 
     def _simple_split_text(self, text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
         """
