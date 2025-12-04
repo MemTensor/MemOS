@@ -55,7 +55,7 @@ class OpenAILLM(BaseLLM):
             return reasoning_content + response_content
         return response_content
 
-    @timed_with_status(log=True, log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
+    @timed_with_status(log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from OpenAI LLM with optional reasoning support."""
         if kwargs.get("tools"):
