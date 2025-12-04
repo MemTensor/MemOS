@@ -168,9 +168,12 @@ class GeneralScheduler(BaseScheduler):
 
                     # Process each message in the batch
                     for msg in batch:
-                        if not (msg.user_name or "").strip():
+                        if (
+                            not (msg.user_name or "").strip()
+                            or (msg.user_name or "").strip() == "memosdefault"
+                        ):
                             logger.warning(
-                                "[AddConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                "[AddConsumer] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s content=%s",
                                 msg.user_id,
                                 msg.mem_cube_id,
                                 msg.content,
@@ -220,9 +223,12 @@ class GeneralScheduler(BaseScheduler):
                     continue
                 try:
                     for msg in batch:
-                        if not (msg.user_name or "").strip():
+                        if (
+                            not (msg.user_name or "").strip()
+                            or (msg.user_name or "").strip() == "memosdefault"
+                        ):
                             logger.warning(
-                                "[QueryConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                "[QueryConsumer] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s content=%s",
                                 msg.user_id,
                                 msg.mem_cube_id,
                                 msg.content,
@@ -273,9 +279,12 @@ class GeneralScheduler(BaseScheduler):
                     continue
                 try:
                     for msg in batch:
-                        if not (msg.user_name or "").strip():
+                        if (
+                            not (msg.user_name or "").strip()
+                            or (msg.user_name or "").strip() == "memosdefault"
+                        ):
                             logger.warning(
-                                "[AnswerConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                "[AnswerConsumer] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s content=%s",
                                 msg.user_id,
                                 msg.mem_cube_id,
                                 msg.content,
@@ -560,9 +569,12 @@ class GeneralScheduler(BaseScheduler):
 
                     # Process each message in the batch
                     for msg in batch:
-                        if not (msg.user_name or "").strip():
+                        if (
+                            not (msg.user_name or "").strip()
+                            or (msg.user_name or "").strip() == "memosdefault"
+                        ):
                             logger.warning(
-                                "[AddConsumer] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                                "[AddConsumer] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s content=%s",
                                 msg.user_id,
                                 msg.mem_cube_id,
                                 msg.content,
@@ -769,10 +781,10 @@ class GeneralScheduler(BaseScheduler):
                     return
 
                 content = message.content
-                user_name = message.user_name or ""
-                if not user_name:
+                user_name = (message.user_name or "").strip()
+                if not user_name or user_name == "memosdefault":
                     logger.warning(
-                        "[MemRead] Dropping message with empty user_name; user_id=%s mem_cube_id=%s mem_ids=%s",
+                        "[MemRead] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s mem_ids=%s",
                         user_id,
                         mem_cube_id,
                         content,
@@ -1080,10 +1092,10 @@ class GeneralScheduler(BaseScheduler):
                     )
                     return
                 content = message.content
-                user_name = message.user_name or ""
-                if not user_name:
+                user_name = (message.user_name or "").strip()
+                if not user_name or user_name == "memosdefault":
                     logger.warning(
-                        "[MemReorganize] Dropping message with empty user_name; user_id=%s mem_cube_id=%s mem_ids=%s",
+                        "[MemReorganize] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s mem_ids=%s",
                         user_id,
                         mem_cube_id,
                         content,
@@ -1311,9 +1323,10 @@ class GeneralScheduler(BaseScheduler):
 
         def process_message(message: ScheduleMessageItem):
             try:
-                if not (message.user_name or "").strip():
+                user_name = (message.user_name or "").strip()
+                if not user_name or user_name == "memosdefault":
                     logger.warning(
-                        "[PrefAdd] Dropping message with empty user_name; user_id=%s mem_cube_id=%s content=%s",
+                        "[PrefAdd] Dropping message with empty or default user_name; user_id=%s mem_cube_id=%s content=%s",
                         message.user_id,
                         message.mem_cube_id,
                         message.content,
