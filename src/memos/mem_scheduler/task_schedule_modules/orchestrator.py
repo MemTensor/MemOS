@@ -16,23 +16,41 @@ Default behavior:
 from __future__ import annotations
 
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
+    TaskPriorityLevel,
+)
+from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 
 
 logger = get_logger(__name__)
 
 
-class SchedulerOrchestrator:
-    def __init__(self, queue):
+class SchedulerOrchestrator(RedisSchedulerModule):
+    def __init__(self):
         """
         Args:
             queue: An instance of `SchedulerRedisQueue`.
         """
-        self.queue = queue
         # Cache of fetched messages grouped by (user_id, mem_cube_id, task_label)
         self._cache = None
+        self.tasks_priorities = {
+            ADD_TASK_LABEL: TaskPriorityLevel.LEVEL_1,
+            QUERY_TASK_LABEL: TaskPriorityLevel.LEVEL_1,
+            ANSWER_TASK_LABEL: TaskPriorityLevel.LEVEL_1,
+        }
 
     def get_stream_priorities(self) -> None | dict:
         return None
+
+    def get_task_priority(self, task_label: str):
+        task_priority = TaskPriorityLevel.LEVEL_3
+        if task_label in self.tasks_priorities:
+            task_priority = self.tasks_priorities[task_label]
+        logger.info(f"get_task_priority: {task_priority}")
+        return task_priority
 
     def get_stream_quotas(self, stream_keys, consume_batch_size) -> dict:
         stream_priorities = self.get_stream_priorities()

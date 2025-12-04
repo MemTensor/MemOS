@@ -20,7 +20,8 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_STOP_WAIT,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
+from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem, TaskPriorityLevel
+from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
@@ -53,6 +54,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         status_tracker: TaskStatusTracker | None = None,
         metrics: Any | None = None,
         submit_web_logs: Callable | None = None,  # ADDED
+        orchestrator: SchedulerOrchestrator | None = None,
     ):
         super().__init__()
         self.config = config
@@ -66,7 +68,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
             if hasattr(memos_message_queue, "memos_message_queue")
             else memos_message_queue
         )
-
+        self.orchestrator = SchedulerOrchestrator() if orchestrator is None else orchestrator
         # Get multi-task timeout from config
         self.multi_task_running_timeout = (
             self.config.get("multi_task_running_timeout") if self.config else None
@@ -79,6 +81,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
             self.dispatcher_executor = ContextThreadPoolExecutor(
                 max_workers=self.max_workers, thread_name_prefix=self.thread_name_prefix
             )
+            logger.info(f"Max works of dispatcher is set to {self.max_workers}")
         else:
             self.dispatcher_executor = None
         logger.info(f"enable_parallel_dispatch is set to {self.enable_parallel_dispatch}")
@@ -463,9 +466,19 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     # Create wrapped handler for task tracking
                     wrapped_handler = self._create_task_wrapper(handler, task_item)
 
+                    task_priority = self.orchestrator.get_task_priority(task_label=label)
+
                     # dispatch to different handler
                     logger.debug(f"Task started: {task_item.get_execution_info()}")
-                    if self.enable_parallel_dispatch and self.dispatcher_executor is not None:
+
+                    # If priority is LEVEL_1, force synchronous execution regardless of thread pool availability
+                    use_thread_pool = (
+                        self.enable_parallel_dispatch
+                        and self.dispatcher_executor is not None
+                        and task_priority != TaskPriorityLevel.LEVEL_1
+                    )
+
+                    if use_thread_pool:
                         # Submit and track the future
                         future = self.dispatcher_executor.submit(wrapped_handler, msgs)
                         with self._task_lock:
@@ -476,6 +489,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         )
                     else:
                         # For synchronous execution, the wrapper will run and remove the task upon completion
+                        logger.info(
+                            f"Execute {len(msgs)} message(s) synchronously for {label} (priority: {task_priority}) for user {user_id} and mem_cube {mem_cube_id}."
+                        )
                         wrapped_handler(msgs)
 
     def join(self, timeout: float | None = None) -> bool:

@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from memos.log import get_logger
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.schemas.general_schemas import (
+from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
+from memos.mem_scheduler.schemas.task_schemas import (
     DEFAULT_MAX_QUERY_KEY_WORDS,
 )
-from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 
 
 if TYPE_CHECKING:

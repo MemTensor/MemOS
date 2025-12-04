@@ -30,11 +30,11 @@ from memos.mem_os.utils.reference_utils import (
     prepare_reference_data,
     process_streaming_references_complete,
 )
-from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 from memos.templates.mos_prompts import (
     FURTHER_SUGGESTION_PROMPT,
     get_memos_prompt,
@@ -244,7 +244,7 @@ class ChatHandler(BaseHandler):
                         user_id=chat_req.user_id,
                         mem_cube_id=scheduler_cube_id,
                         query=chat_req.query,
-                        label=QUERY_LABEL,
+                        label=QUERY_TASK_LABEL,
                     )
                     # Extract memories from search results
                     memories_list = []
@@ -406,7 +406,7 @@ class ChatHandler(BaseHandler):
                         user_id=chat_req.user_id,
                         mem_cube_id=scheduler_cube_id,
                         query=chat_req.query,
-                        label=QUERY_LABEL,
+                        label=QUERY_TASK_LABEL,
                     )
 
                     # ====== first search without parse goal ======
@@ -1091,7 +1091,7 @@ class ChatHandler(BaseHandler):
 
             # Send answer to scheduler
             self._send_message_to_scheduler(
-                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
+                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_TASK_LABEL
             )
 
             self.logger.info(f"Post-chat processing completed for user {user_id}")

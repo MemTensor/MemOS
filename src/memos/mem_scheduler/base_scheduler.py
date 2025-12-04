@@ -43,6 +43,7 @@ from memos.mem_scheduler.schemas.message_schemas import (
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
+from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
 from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.db_utils import get_utc_now
@@ -121,10 +122,12 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.max_internal_message_queue_size = self.config.get(
             "max_internal_message_queue_size", DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE
         )
+        self.orchestrator = SchedulerOrchestrator()
         self.memos_message_queue = ScheduleTaskQueue(
             use_redis_queue=self.use_redis_queue,
             maxsize=self.max_internal_message_queue_size,
             disabled_handlers=self.disabled_handlers,
+            orchestrator=self.orchestrator,
         )
         self.searcher: Searcher | None = None
         self.retriever: SchedulerRetriever | None = None
@@ -143,6 +146,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             status_tracker=self.status_tracker,
             metrics=self.metrics,
             submit_web_logs=self._submit_web_logs,
+            orchestrator=self.orchestrator,
         )
         # Task schedule monitor: initialize with underlying queue implementation
         self.get_status_parallel = self.config.get("get_status_parallel", True)
@@ -697,22 +701,22 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 break
 
         def _map_label(label: str) -> str:
-            from memos.mem_scheduler.schemas.general_schemas import (
-                ADD_LABEL,
-                ANSWER_LABEL,
-                MEM_ARCHIVE_LABEL,
-                MEM_ORGANIZE_LABEL,
-                MEM_UPDATE_LABEL,
-                QUERY_LABEL,
+            from memos.mem_scheduler.schemas.task_schemas import (
+                ADD_TASK_LABEL,
+                ANSWER_TASK_LABEL,
+                MEM_ARCHIVE_TASK_LABEL,
+                MEM_ORGANIZE_TASK_LABEL,
+                MEM_UPDATE_TASK_LABEL,
+                QUERY_TASK_LABEL,
             )
 
             mapping = {
-                QUERY_LABEL: "addMessage",
-                ANSWER_LABEL: "addMessage",
-                ADD_LABEL: "addMemory",
-                MEM_UPDATE_LABEL: "updateMemory",
-                MEM_ORGANIZE_LABEL: "mergeMemory",
-                MEM_ARCHIVE_LABEL: "archiveMemory",
+                QUERY_TASK_LABEL: "addMessage",
+                ANSWER_TASK_LABEL: "addMessage",
+                ADD_TASK_LABEL: "addMemory",
+                MEM_UPDATE_TASK_LABEL: "updateMemory",
+                MEM_ORGANIZE_TASK_LABEL: "mergeMemory",
+                MEM_ARCHIVE_TASK_LABEL: "archiveMemory",
             }
             return mapping.get(label, label)
 
@@ -785,7 +789,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                         if enqueue_epoch is not None:
                             queue_wait_ms = max(0.0, now - enqueue_epoch) * 1000
 
-                        # Avoid pydantic attribute enforcement
+                        # Avoid pydantic field enforcement by using object.__setattr__
                         object.__setattr__(msg, "_dequeue_ts", now)
                         emit_monitor_event(
                             "dequeue",
