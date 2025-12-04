@@ -4,7 +4,7 @@ from openai import OpenAI as OpenAIClient
 from memos.configs.embedder import UniversalAPIEmbedderConfig
 from memos.embedders.base import BaseEmbedder
 from memos.log import get_logger
-from memos.utils import timed
+from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -30,8 +30,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
         else:
             raise ValueError(f"Embeddings unsupported provider: {self.provider}")
 
-    @timed(
-        log=True,
+    @timed_with_status(
         log_prefix="model_timed_embedding",
         log_extra_args={"model_name_or_path": "text-embedding-3-large"},
     )
