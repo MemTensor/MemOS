@@ -337,3 +337,34 @@ def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[Messa
 
     # fallback
     return [str(scene_data)]
+
+
+def detect_lang(text):
+    """
+    Detect the language of the given text (Chinese or English).
+
+    Args:
+        text: Text to analyze
+
+    Returns:
+        "zh" for Chinese, "en" for English (default)
+    """
+    try:
+        if not text or not isinstance(text, str):
+            return "en"
+        cleaned_text = text
+        # remove role and timestamp
+        cleaned_text = re.sub(
+            r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
+        )
+        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
+
+        # extract chinese characters
+        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
+        chinese_chars = re.findall(chinese_pattern, cleaned_text)
+        text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
+        if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
+            return "zh"
+        return "en"
+    except Exception:
+        return "en"

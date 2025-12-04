@@ -16,7 +16,7 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
-from memos.mem_reader.read_multi_modal import coerce_scene_data
+from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.memories.textual.item import (
     SourceMessage,
     TextualMemoryItem,
@@ -99,28 +99,6 @@ except Exception:
         zh = len(zh_chars)
         rest = len(s) - zh
         return zh + max(1, rest // 4)
-
-
-def detect_lang(text):
-    try:
-        if not text or not isinstance(text, str):
-            return "en"
-        cleaned_text = text
-        # remove role and timestamp
-        cleaned_text = re.sub(
-            r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
-        )
-        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
-
-        # extract chinese characters
-        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
-        chinese_chars = re.findall(chinese_pattern, cleaned_text)
-        text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
-        if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
-            return "zh"
-        return "en"
-    except Exception:
-        return "en"
 
 
 def _build_node(idx, message, info, source_info, llm, parse_json_result, embedder):
@@ -223,6 +201,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         background: str = "",
         type_: str = "fact",
         confidence: float = 0.99,
+        **kwargs,
     ) -> TextualMemoryItem:
         """construct memory item"""
         info_ = info.copy()
@@ -245,6 +224,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 confidence=confidence,
                 type=type_,
                 info=info_,
+                **kwargs,
             ),
         )
 

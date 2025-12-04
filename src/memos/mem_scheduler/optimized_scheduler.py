@@ -159,6 +159,8 @@ class OptimizedScheduler(GeneralScheduler):
             search_filter=search_filter,
             search_priority=search_priority,
             info=info,
+            search_tool_memory=search_req.search_tool_memory,
+            tool_mem_top_k=search_req.tool_mem_top_k,
         )
 
         # Try to get pre-computed memories if available
@@ -182,6 +184,8 @@ class OptimizedScheduler(GeneralScheduler):
             top_k=search_req.top_k,
             user_name=user_context.mem_cube_id,
             info=info,
+            search_tool_memory=search_req.search_tool_memory,
+            tool_mem_top_k=search_req.tool_mem_top_k,
         )
         memories = merged_memories[: search_req.top_k]
 

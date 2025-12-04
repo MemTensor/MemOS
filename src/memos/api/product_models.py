@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 # Import message types from core types module
 from memos.log import get_logger
-from memos.types import MessageDict, PermissionDict, SearchMode
+from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 
 
 logger = get_logger(__name__)
@@ -56,7 +56,7 @@ class Message(BaseModel):
 
 class MemoryCreate(BaseRequest):
     user_id: str = Field(..., description="User ID")
-    messages: list | None = Field(None, description="List of messages to store.")
+    messages: MessageList | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Content to store as memory")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="ID of the memory cube")
@@ -83,7 +83,7 @@ class ChatRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube chat"
     )
-    history: list | None = Field(None, description="Chat history")
+    history: MessageList | None = Field(None, description="Chat history")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -165,7 +165,7 @@ class ChatCompleteRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     query: str = Field(..., description="Chat query message")
     mem_cube_id: str | None = Field(None, description="Cube ID to use for chat")
-    history: list | None = Field(None, description="Chat history")
+    history: MessageList | None = Field(None, description="Chat history")
     internet_search: bool = Field(False, description="Whether to use internet search")
     system_prompt: str | None = Field(None, description="Base prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -251,7 +251,7 @@ class MemoryCreateRequest(BaseRequest):
     """Request model for creating memories."""
 
     user_id: str = Field(..., description="User ID")
-    messages: str | list | None = Field(None, description="List of messages to store.")
+    messages: str | MessagesType | None = Field(None, description="List of messages to store.")
     memory_content: str | None = Field(None, description="Memory content to store")
     doc_path: str | None = Field(None, description="Path to document to store")
     mem_cube_id: str | None = Field(None, description="Cube ID")
@@ -326,6 +326,21 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    search_tool_memory: bool = Field(
+        True,
+        description=(
+            "Whether to retrieve tool memories along with general memories. "
+            "If enabled, the system will automatically recall tool memories "
+            "relevant to the query. Default: True."
+        ),
+    )
+
+    tool_mem_top_k: int = Field(
+        6,
+        ge=0,
+        description="Number of tool memories to retrieve (top-K). Default: 6.",
+    )
+
     # ==== Filter conditions ====
     # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
@@ -359,8 +374,11 @@ class APISearchRequest(BaseRequest):
         ),
     )
 
+    # TODO: tmp field for playground search goal parser, will be removed later
+    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
+
     # ==== Context ====
-    chat_history: list | None = Field(
+    chat_history: MessageList | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -490,7 +508,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Input content ====
-    messages: str | list | None = Field(
+    messages: MessagesType | None = Field(
         None,
         description=(
             "List of messages to store. Supports: "
@@ -506,7 +524,7 @@ class APIADDRequest(BaseRequest):
     )
 
     # ==== Chat history ====
-    chat_history: list | None = Field(
+    chat_history: MessageList | None = Field(
         None,
         description=(
             "Historical chat messages used internally by algorithms. "
@@ -636,13 +654,12 @@ class APIFeedbackRequest(BaseRequest):
         "default_session", description="Session ID for soft-filtering memories"
     )
     task_id: str | None = Field(None, description="Task ID for monitering async tasks")
-    history: list[MessageDict] | None = Field(..., description="Chat history")
+    history: MessageList | None = Field(..., description="Chat history")
     retrieved_memory_ids: list[str] | None = Field(
         None, description="Retrieved memory ids at last turn"
     )
     feedback_content: str | None = Field(..., description="Feedback content to process")
     feedback_time: str | None = Field(None, description="Feedback time")
-    # ==== Multi-cube writing ====
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube add"
     )
@@ -650,7 +667,7 @@ class APIFeedbackRequest(BaseRequest):
         "async", description="feedback mode: sync or async"
     )
     corrected_answer: bool = Field(False, description="Whether need return corrected answer")
-    # ==== Backward compatibility ====
+    # ==== mem_cube_id is NOT enabled====
     mem_cube_id: str | None = Field(
         None,
         description=(
@@ -671,7 +688,7 @@ class APIChatCompleteRequest(BaseRequest):
     writable_cube_ids: list[str] | None = Field(
         None, description="List of cube IDs user can write for multi-cube chat"
     )
-    history: list | None = Field(None, description="Chat history")
+    history: MessageList | None = Field(None, description="Chat history")
     mode: SearchMode = Field(SearchMode.FAST, description="search mode: fast, fine, or mixture")
     system_prompt: str | None = Field(None, description="Base system prompt to use for chat")
     top_k: int = Field(10, description="Number of results to return")
@@ -740,7 +757,7 @@ class SuggestionRequest(BaseRequest):
     user_id: str = Field(..., description="User ID")
     mem_cube_id: str = Field(..., description="Cube ID")
     language: Literal["zh", "en"] = Field("zh", description="Language for suggestions")
-    message: list | None = Field(None, description="List of messages to store.")
+    message: MessagesType | None = Field(None, description="List of messages to store.")
 
 
 # ─── MemOS Client Response Models ──────────────────────────────────────────────

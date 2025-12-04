@@ -181,12 +181,18 @@ class MemoryManager:
         working_id = str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            f_working = ex.submit(
-                self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
-            )
-            futures.append(("working", f_working))
+            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+                f_working = ex.submit(
+                    self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
+                )
+                futures.append(("working", f_working))
 
-            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
+            if memory.metadata.memory_type in (
+                "LongTermMemory",
+                "UserMemory",
+                "ToolSchemaMemory",
+                "ToolTrajectoryMemory",
+            ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
                     memory=memory,

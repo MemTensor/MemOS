@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from memos.api.handlers.formatters_handler import (
     format_memory_item,
     post_process_pref_mem,
+    post_process_textual_mem,
 )
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
@@ -109,6 +110,7 @@ class SingleCubeView(MemCubeView):
             "para_mem": [],
             "pref_mem": [],
             "pref_note": "",
+            "tool_mem": [],
         }
 
         # Determine search mode
@@ -123,11 +125,10 @@ class SingleCubeView(MemCubeView):
             pref_formatted_memories = pref_future.result()
 
         # Build result
-        memories_result["text_mem"].append(
-            {
-                "cube_id": self.cube_id,
-                "memories": text_formatted_memories,
-            }
+        memories_result = post_process_textual_mem(
+            memories_result,
+            text_formatted_memories,
+            self.cube_id,
         )
 
         memories_result = post_process_pref_mem(
@@ -278,6 +279,8 @@ class SingleCubeView(MemCubeView):
         Returns:
             List of enhanced search results
         """
+        # TODO: support tool memory search in future
+
         logger.info(f"Fine strategy: {FINE_STRATEGY}")
         if FINE_STRATEGY == FineStrategy.DEEP_SEARCH:
             return self._deep_search(search_req=search_req, user_context=user_context)
@@ -375,6 +378,9 @@ class SingleCubeView(MemCubeView):
         """
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
+        if not search_req.include_preference:
+            return []
+
         logger.info(f"search_req.filter for preference memory: {search_req.filter}")
         logger.info(f"type of pref_mem: {type(self.naive_mem_cube.pref_mem)}")
         try:
@@ -383,6 +389,7 @@ class SingleCubeView(MemCubeView):
                 top_k=search_req.pref_top_k,
                 info={
                     "user_id": search_req.user_id,
+                    "mem_cube_id": user_context.mem_cube_id,
                     "session_id": search_req.session_id,
                     "chat_history": search_req.chat_history,
                 },
@@ -427,6 +434,10 @@ class SingleCubeView(MemCubeView):
                 "chat_history": search_req.chat_history,
             },
             plugin=plugin,
+            search_tool_memory=search_req.search_tool_memory,
+            tool_mem_top_k=search_req.tool_mem_top_k,
+            # TODO: tmp field for playground search goal parser, will be removed later
+            playground_search_goal_parser=search_req.playground_search_goal_parser,
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]
@@ -543,6 +554,13 @@ class SingleCubeView(MemCubeView):
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false").lower() != "true":
             return []
 
+        if add_req.messages is None or isinstance(add_req.messages, str):
+            return []
+
+        for message in add_req.messages:
+            if isinstance(message, dict) and message.get("role", None) is None:
+                return []
+
         target_session_id = add_req.session_id or "default_session"
 
         if sync_mode == "async":
@@ -551,7 +569,7 @@ class SingleCubeView(MemCubeView):
                 message_item_pref = ScheduleMessageItem(
                     user_id=add_req.user_id,
                     session_id=target_session_id,
-                    mem_cube_id=self.cube_id,
+                    mem_cube_id=user_context.mem_cube_id,
                     mem_cube=self.naive_mem_cube,
                     label=PREF_ADD_LABEL,
                     content=json.dumps(messages_list),
@@ -576,7 +594,7 @@ class SingleCubeView(MemCubeView):
                     **(add_req.info or {}),
                     "user_id": add_req.user_id,
                     "session_id": target_session_id,
-                    "mem_cube_id": self.cube_id,
+                    "mem_cube_id": user_context.mem_cube_id,
                 },
             )
             pref_ids_local: list[str] = self.naive_mem_cube.pref_mem.add(pref_memories_local)

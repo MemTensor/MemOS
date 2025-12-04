@@ -142,7 +142,9 @@ class ChatHandler(BaseHandler):
 
             # Step 2: Build system prompt
             system_prompt = self._build_system_prompt(
-                filtered_memories, search_response.data["pref_string"], chat_req.system_prompt
+                filtered_memories,
+                search_response.data.get("pref_string", ""),
+                chat_req.system_prompt,
             )
 
             # Prepare message history
@@ -257,7 +259,7 @@ class ChatHandler(BaseHandler):
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_system_prompt(
                         filtered_memories,
-                        search_response.data["pref_string"],
+                        search_response.data.get("pref_string", ""),
                         chat_req.system_prompt,
                     )
 
@@ -398,6 +400,7 @@ class ChatHandler(BaseHandler):
                         include_preference=chat_req.include_preference,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
+                        playground_search_goal_parser=True,
                     )
 
                     search_response = self.search_handler.handle_search_memories(search_req)
@@ -449,7 +452,7 @@ class ChatHandler(BaseHandler):
 
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_enhance_system_prompt(
-                        filtered_memories, search_response.data["pref_string"]
+                        filtered_memories, search_response.data.get("pref_string", "")
                     )
 
                     # Prepare messages

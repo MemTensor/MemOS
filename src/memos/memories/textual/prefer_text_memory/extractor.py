@@ -8,7 +8,7 @@ from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
-from memos.mem_reader.simple_struct import detect_lang
+from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import (
     PreferenceTextualMemoryMetadata,
     TextualMemoryItem,

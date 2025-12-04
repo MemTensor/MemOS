@@ -59,7 +59,13 @@ class GraphMemoryRetriever:
         Returns:
             list: Combined memory items.
         """
-        if memory_scope not in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+        if memory_scope not in [
+            "WorkingMemory",
+            "LongTermMemory",
+            "UserMemory",
+            "ToolSchemaMemory",
+            "ToolTrajectoryMemory",
+        ]:
             raise ValueError(f"Unsupported memory scope: {memory_scope}")
 
         if memory_scope == "WorkingMemory":
