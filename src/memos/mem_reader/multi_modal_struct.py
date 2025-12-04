@@ -7,8 +7,8 @@ from typing import Any
 from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
-from memos.mem_reader.read_multi_modal import MultiModalParser
-from memos.mem_reader.simple_struct import SimpleStructMemReader, detect_lang
+from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
+from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType

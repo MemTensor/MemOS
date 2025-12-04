@@ -404,12 +404,12 @@ def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[Messa
     return [str(scene_data)]
 
 
-def detect_lang(text: str) -> str:
+def detect_lang(text):
     """
-    Detect language of text (zh or en).
+    Detect the language of the given text (Chinese or English).
 
     Args:
-        text: Text to detect language for
+        text: Text to analyze
 
     Returns:
         "zh" for Chinese, "en" for English (default)

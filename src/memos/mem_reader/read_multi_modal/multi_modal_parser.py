@@ -226,6 +226,8 @@ class MultiModalParser:
             parser = self.file_content_parser
         elif source.type == "text":
             parser = self.text_content_parser
+        elif source.type in ["image", "image_url"]:
+            parser = self.image_parser
         elif source.role:
             # Chat message, use role parser
             parser = self.role_parsers.get(source.role)
