@@ -506,7 +506,7 @@ class FileContentParser(BaseMessageParser):
         memory_type = "LongTermMemory"
 
         # Split parsed text into chunks
-        content_chunks = self._split_text(parsed_text)
+        content_chunks = self._split_text(parsed_text, is_markdown)
 
         # Filter out empty chunks and create indexed list
         valid_chunks = [
