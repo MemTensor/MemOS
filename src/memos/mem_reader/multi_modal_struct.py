@@ -249,7 +249,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         return aggregated_item
 
     def _get_llm_response(
-        self, mem_str: str, custom_tags: list[str] | None = None, sources: list | None = None
+        self,
+        mem_str: str,
+        custom_tags: list[str] | None = None,
+        sources: list | None = None,
+        prompt_type: str = "chat",
     ) -> dict:
         """
         Override parent method to improve language detection by using actual text content
@@ -259,6 +263,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             mem_str: Memory string (may contain JSON structures)
             custom_tags: Optional custom tags
             sources: Optional list of SourceMessage objects to extract text content from
+            prompt_type: Type of prompt to use ("chat" or "doc")
 
         Returns:
             LLM response dictionary
@@ -279,18 +284,30 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         # Use the extracted text for language detection
         lang = detect_lang(text_for_lang_detection)
-        template = PROMPT_DICT["chat"][lang]
-        examples = PROMPT_DICT["chat"][f"{lang}_example"]
-        prompt = template.replace("${conversation}", mem_str)
+
+        # Select prompt template based on prompt_type
+        if prompt_type == "doc":
+            template = PROMPT_DICT["doc"][lang]
+            examples = ""  # doc prompts don't have examples
+            prompt = template.replace("{chunk_text}", mem_str)
+        else:
+            template = PROMPT_DICT["chat"][lang]
+            examples = PROMPT_DICT["chat"][f"{lang}_example"]
+            prompt = template.replace("${conversation}", mem_str)
 
         custom_tags_prompt = (
             PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
             if custom_tags
             else ""
         )
-        prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
 
-        if self.config.remove_prompt_example:
+        # Replace custom_tags_prompt placeholder (different for doc vs chat)
+        if prompt_type == "doc":
+            prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
+        else:
+            prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
+
+        if self.config.remove_prompt_example and examples:
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -310,6 +327,24 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 "summary": mem_str,
             }
         return response_json
+
+    def _determine_prompt_type(self, sources: list) -> str:
+        """
+        Determine prompt type based on sources.
+        """
+        if not sources:
+            return "chat"
+        prompt_type = "doc"
+        for source in sources:
+            source_role = None
+            if hasattr(source, "role"):
+                source_role = source.role
+            elif isinstance(source, dict):
+                source_role = source.get("role")
+            if source_role in {"user", "assistant", "system", "tool"}:
+                prompt_type = "chat"
+
+        return prompt_type
 
     def _process_string_fine(
         self,
@@ -333,8 +368,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             sources = fast_item.metadata.sources or []
             if not isinstance(sources, list):
                 sources = [sources]
+
+            # Determine prompt type based on sources
+            prompt_type = self._determine_prompt_type(sources)
+
             try:
-                resp = self._get_llm_response(mem_str, custom_tags, sources)
+                resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 continue
