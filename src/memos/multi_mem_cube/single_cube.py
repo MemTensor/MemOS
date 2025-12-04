@@ -558,7 +558,7 @@ class SingleCubeView(MemCubeView):
             return []
 
         for message in add_req.messages:
-            if message.get("role", None) is None:
+            if isinstance(message, dict) and message.get("role", None) is None:
                 return []
 
         target_session_id = add_req.session_id or "default_session"

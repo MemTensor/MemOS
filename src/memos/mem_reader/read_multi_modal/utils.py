@@ -1,5 +1,6 @@
 """Utility functions for message parsing."""
 
+import json
 import os
 import re
 
@@ -42,6 +43,63 @@ FILE_EXT_RE = re.compile(
     r"\.(pdf|docx?|pptx?|xlsx?|txt|md|html?|json|csv|png|jpe?g|webp|wav|mp3|m4a)$",
     re.I,
 )
+
+
+def parse_json_result(response_text: str) -> dict:
+    """
+    Parse JSON result from LLM response.
+
+    Handles various formats including:
+    - JSON wrapped in markdown code blocks
+    - Raw JSON
+    - Incomplete JSON (attempts to fix)
+
+    Args:
+        response_text: Raw response text from LLM
+
+    Returns:
+        Parsed dictionary or empty dict if parsing fails
+    """
+    s = (response_text or "").strip()
+
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.I)
+    s = (m.group(1) if m else s.replace("```", "")).strip()
+
+    i = s.find("{")
+    if i == -1:
+        return {}
+    s = s[i:].strip()
+
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+
+    j = max(s.rfind("}"), s.rfind("]"))
+    if j != -1:
+        try:
+            return json.loads(s[: j + 1])
+        except json.JSONDecodeError:
+            pass
+
+    def _cheap_close(t: str) -> str:
+        t += "}" * max(0, t.count("{") - t.count("}"))
+        t += "]" * max(0, t.count("[") - t.count("]"))
+        return t
+
+    t = _cheap_close(s)
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError as e:
+        if "Invalid \\escape" in str(e):
+            s = s.replace("\\", "\\\\")
+            try:
+                return json.loads(s)
+            except json.JSONDecodeError:
+                pass
+        logger.error(f"[JSONParse] Failed to decode JSON: {e}\nRaw: {response_text}")
+        return {}
+
 
 # Default configuration for parser and text splitter
 DEFAULT_PARSER_CONFIG = {
@@ -114,7 +172,10 @@ try:
         from langchain.text_splitter import RecursiveCharacterTextSplitter
     except ImportError:
         try:
-            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            from langchain_text_splitters import (
+                MarkdownHeaderTextSplitter,
+                RecursiveCharacterTextSplitter,
+            )
         except ImportError:
             logger.error(
                 "langchain not available. Install with: pip install langchain or pip install langchain-text-splitters"
@@ -125,6 +186,10 @@ try:
         chunk_overlap=DEFAULT_CHUNK_OVERLAP,
         length_function=len,
         separators=["\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", " ", ""],
+    )
+    markdown_text_splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=[("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")],
+        strip_headers=False,
     )
     logger.debug(
         f"[FileContentParser] Initialized langchain text splitter with chunk_size={DEFAULT_CHUNK_SIZE}, "
@@ -337,3 +402,34 @@ def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[Messa
 
     # fallback
     return [str(scene_data)]
+
+
+def detect_lang(text):
+    """
+    Detect the language of the given text (Chinese or English).
+
+    Args:
+        text: Text to analyze
+
+    Returns:
+        "zh" for Chinese, "en" for English (default)
+    """
+    try:
+        if not text or not isinstance(text, str):
+            return "en"
+        cleaned_text = text
+        # remove role and timestamp
+        cleaned_text = re.sub(
+            r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
+        )
+        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
+
+        # extract chinese characters
+        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
+        chinese_chars = re.findall(chinese_pattern, cleaned_text)
+        text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
+        if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
+            return "zh"
+        return "en"
+    except Exception:
+        return "en"
