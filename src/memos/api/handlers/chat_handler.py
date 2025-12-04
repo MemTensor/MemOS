@@ -388,22 +388,6 @@ class ChatHandler(BaseHandler):
                         [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                     )
 
-                    search_req = APISearchRequest(
-                        query=chat_req.query,
-                        user_id=chat_req.user_id,
-                        readable_cube_ids=readable_cube_ids,
-                        mode=chat_req.mode,
-                        internet_search=chat_req.internet_search,
-                        top_k=chat_req.top_k,
-                        chat_history=chat_req.history,
-                        session_id=chat_req.session_id,
-                        include_preference=chat_req.include_preference,
-                        pref_top_k=chat_req.pref_top_k,
-                        filter=chat_req.filter,
-                        playground_search_goal_parser=True,
-                    )
-
-                    search_response = self.search_handler.handle_search_memories(search_req)
                     # for playground, add the query to memory without response
                     self._start_add_to_memory(
                         user_id=chat_req.user_id,
@@ -414,7 +398,6 @@ class ChatHandler(BaseHandler):
                         async_mode="sync",
                     )
 
-                    yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
                     # Use first readable cube ID for scheduler (backward compatibility)
                     scheduler_cube_id = (
                         readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
@@ -425,7 +408,26 @@ class ChatHandler(BaseHandler):
                         query=chat_req.query,
                         label=QUERY_LABEL,
                     )
-                    # Extract memories from search results
+
+                    # ====== first search without parse goal ======
+                    search_req = APISearchRequest(
+                        query=chat_req.query,
+                        user_id=chat_req.user_id,
+                        readable_cube_ids=readable_cube_ids,
+                        mode=chat_req.mode,
+                        internet_search=False,
+                        top_k=chat_req.top_k,
+                        chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=chat_req.include_preference,
+                        pref_top_k=chat_req.pref_top_k,
+                        filter=chat_req.filter,
+                    )
+                    search_response = self.search_handler.handle_search_memories(search_req)
+
+                    yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
+
+                    # Extract memories from search results (first search)
                     memories_list = []
                     if search_response.data and search_response.data.get("text_mem"):
                         text_mem_results = search_response.data["text_mem"]
@@ -433,14 +435,13 @@ class ChatHandler(BaseHandler):
                             memories_list = text_mem_results[0]["memories"]
 
                     # Filter memories by threshold
-                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    first_filtered_memories = self._filter_memories_by_threshold(memories_list)
 
-                    # Prepare reference data
-                    reference = prepare_reference_data(filtered_memories)
-                    # get internet reference
-                    internet_reference = self._get_internet_reference(
-                        search_response.data.get("text_mem")[0]["memories"]
-                    )
+                    # Prepare reference data (first search)
+                    reference = prepare_reference_data(first_filtered_memories)
+                    # get preference string
+                    pref_string = search_response.data.get("pref_string", "")
+
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
                     # Prepare preference markdown string
@@ -450,9 +451,52 @@ class ChatHandler(BaseHandler):
                         pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
                         yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
 
+                    # internet status
+                    yield f"data: {json.dumps({'type': 'status', 'data': 'start_internet_search'})}\n\n"
+
+                    # ====== second search with parse goal ======
+                    search_req = APISearchRequest(
+                        query=chat_req.query,
+                        user_id=chat_req.user_id,
+                        readable_cube_ids=readable_cube_ids,
+                        mode=chat_req.mode,
+                        internet_search=chat_req.internet_search,
+                        top_k=chat_req.top_k,
+                        chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=False,
+                        filter=chat_req.filter,
+                        playground_search_goal_parser=True,
+                    )
+                    search_response = self.search_handler.handle_search_memories(search_req)
+
+                    # Extract memories from search results (second search)
+                    memories_list = []
+                    if search_response.data and search_response.data.get("text_mem"):
+                        text_mem_results = search_response.data["text_mem"]
+                        if text_mem_results and text_mem_results[0].get("memories"):
+                            memories_list = text_mem_results[0]["memories"]
+
+                    # Filter memories by threshold
+                    second_filtered_memories = self._filter_memories_by_threshold(memories_list)
+
+                    # dedup and supplement memories
+                    filtered_memories = self._dedup_and_supplement_memories(
+                        first_filtered_memories, second_filtered_memories
+                    )
+
+                    # Prepare remain reference data (second search)
+                    reference = prepare_reference_data(filtered_memories)
+                    # get internet reference
+                    internet_reference = self._get_internet_reference(
+                        search_response.data.get("text_mem")[0]["memories"]
+                    )
+
+                    yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_enhance_system_prompt(
-                        filtered_memories, search_response.data.get("pref_string", "")
+                        filtered_memories, pref_string
                     )
 
                     # Prepare messages
@@ -587,6 +631,19 @@ class ChatHandler(BaseHandler):
         except Exception as err:
             self.logger.error(f"Failed to start chat stream: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+    def _dedup_and_supplement_memories(
+        self, first_filtered_memories: list, second_filtered_memories: list
+    ) -> list:
+        """Remove memory from second_filtered_memories that already exists in first_filtered_memories, return remaining memories"""
+        # Create a set of IDs from first_filtered_memories for efficient lookup
+        first_memory_ids = {memory["id"] for memory in first_filtered_memories}
+
+        remaining_memories = []
+        for memory in second_filtered_memories:
+            if memory["id"] not in first_memory_ids:
+                remaining_memories.append(memory)
+        return remaining_memories
 
     def _get_internet_reference(
         self, search_response: list[dict[str, any]]
