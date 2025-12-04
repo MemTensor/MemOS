@@ -8,7 +8,7 @@ from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
-from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
@@ -248,6 +248,69 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return aggregated_item
 
+    def _get_llm_response(
+        self, mem_str: str, custom_tags: list[str] | None = None, sources: list | None = None
+    ) -> dict:
+        """
+        Override parent method to improve language detection by using actual text content
+        from sources instead of JSON-structured memory string.
+
+        Args:
+            mem_str: Memory string (may contain JSON structures)
+            custom_tags: Optional custom tags
+            sources: Optional list of SourceMessage objects to extract text content from
+
+        Returns:
+            LLM response dictionary
+        """
+        # Try to extract actual text content from sources for better language detection
+        text_for_lang_detection = mem_str
+        if sources:
+            source_texts = []
+            for source in sources:
+                if hasattr(source, "content") and source.content:
+                    source_texts.append(source.content)
+                elif isinstance(source, dict) and source.get("content"):
+                    source_texts.append(source.get("content"))
+
+            # If we have text content from sources, use it for language detection
+            if source_texts:
+                text_for_lang_detection = " ".join(source_texts)
+
+        # Use the extracted text for language detection
+        lang = detect_lang(text_for_lang_detection)
+        template = PROMPT_DICT["chat"][lang]
+        examples = PROMPT_DICT["chat"][f"{lang}_example"]
+        prompt = template.replace("${conversation}", mem_str)
+
+        custom_tags_prompt = (
+            PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
+            if custom_tags
+            else ""
+        )
+        prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
+
+        if self.config.remove_prompt_example:
+            prompt = prompt.replace(examples, "")
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response_text = self.llm.generate(messages)
+            response_json = self.parse_json_result(response_text)
+        except Exception as e:
+            logger.error(f"[LLM] Exception during chat generation: {e}")
+            response_json = {
+                "memory list": [
+                    {
+                        "key": mem_str[:10],
+                        "memory_type": "UserMemory",
+                        "value": mem_str,
+                        "tags": [],
+                    }
+                ],
+                "summary": mem_str,
+            }
+        return response_json
+
     def _process_string_fine(
         self,
         fast_memory_items: list[TextualMemoryItem],
@@ -271,7 +334,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if not isinstance(sources, list):
                 sources = [sources]
             try:
-                resp = self._get_llm_response(mem_str, custom_tags)
+                resp = self._get_llm_response(mem_str, custom_tags, sources)
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 continue
