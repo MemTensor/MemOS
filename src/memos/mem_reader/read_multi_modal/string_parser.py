@@ -83,8 +83,8 @@ class StringParser(BaseMessageParser):
         if not content:
             return []
 
-        # Create source
-        source = self.create_source(message, info)
+        # Split parsed text into chunks
+        content_chunks = self._split_text(content)
 
         # Extract info fields
         info_ = info.copy()
@@ -92,30 +92,37 @@ class StringParser(BaseMessageParser):
         session_id = info_.pop("session_id", "")
 
         # For string messages, default to LongTermMemory
-        # (since we don't have role information)
         memory_type = "LongTermMemory"
 
-        # Create memory item
-        memory_item = TextualMemoryItem(
-            memory=content,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                status="activated",
-                tags=["mode:fast"],
-                key=_derive_key(content),
-                embedding=self.embedder.embed([content])[0],
-                usage=[],
-                sources=[source],
-                background="",
-                confidence=0.99,
-                type="fact",
-                info=info_,
-            ),
-        )
+        # Create memory items for each chunk
+        memory_items = []
+        for _chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
 
-        return [memory_item]
+            # Create source
+            source = self.create_source(chunk_text, info)
+
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=["mode:fast"],
+                    key=_derive_key(chunk_text),
+                    embedding=self.embedder.embed([chunk_text])[0],
+                    usage=[],
+                    sources=[source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+        return memory_items
 
     def parse_fine(
         self,

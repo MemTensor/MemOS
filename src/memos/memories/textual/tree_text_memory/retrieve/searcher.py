@@ -76,6 +76,8 @@ class Searcher:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
+        search_tool_memory: bool = False,
+        tool_mem_top_k: int = 6,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
         logger.info(
@@ -100,6 +102,8 @@ class Searcher:
             search_filter,
             search_priority,
             user_name,
+            search_tool_memory,
+            tool_mem_top_k,
         )
         return results
 
@@ -109,10 +113,14 @@ class Searcher:
         top_k: int,
         user_name: str | None = None,
         info=None,
+        search_tool_memory: bool = False,
+        tool_mem_top_k: int = 6,
         plugin=False,
     ):
         deduped = self._deduplicate_results(retrieved_results)
-        final_results = self._sort_and_trim(deduped, top_k, plugin)
+        final_results = self._sort_and_trim(
+            deduped, top_k, plugin, search_tool_memory, tool_mem_top_k
+        )
         self._update_usage_history(final_results, info, user_name)
         return final_results
 
@@ -127,6 +135,8 @@ class Searcher:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
+        search_tool_memory: bool = False,
+        tool_mem_top_k: int = 6,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """
@@ -171,6 +181,8 @@ class Searcher:
                 search_filter=search_filter,
                 search_priority=search_priority,
                 user_name=user_name,
+                search_tool_memory=search_tool_memory,
+                tool_mem_top_k=tool_mem_top_k,
             )
 
         full_recall = kwargs.get("full_recall", False)
@@ -183,6 +195,8 @@ class Searcher:
             user_name=user_name,
             info=None,
             plugin=kwargs.get("plugin", False),
+            search_tool_memory=search_tool_memory,
+            tool_mem_top_k=tool_mem_top_k,
         )
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
@@ -276,6 +290,8 @@ class Searcher:
         search_filter: dict | None = None,
         search_priority: dict | None = None,
         user_name: str | None = None,
+        search_tool_memory: bool = False,
+        tool_mem_top_k: int = 6,
     ):
         """Run A/B/C retrieval paths in parallel"""
         tasks = []
@@ -328,6 +344,22 @@ class Searcher:
                     user_name,
                 )
             )
+            if search_tool_memory:
+                tasks.append(
+                    executor.submit(
+                        self._retrieve_from_tool_memory,
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        top_k,
+                        memory_type,
+                        search_filter,
+                        search_priority,
+                        user_name,
+                        id_filter,
+                        mode=mode,
+                    )
+                )
 
             results = []
             for t in tasks:
@@ -502,6 +534,98 @@ class Searcher:
             parsed_goal=parsed_goal,
         )
 
+    # --- Path D
+    @timed
+    def _retrieve_from_tool_memory(
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        memory_type,
+        search_filter: dict | None = None,
+        search_priority: dict | None = None,
+        user_name: str | None = None,
+        id_filter: dict | None = None,
+        mode: str = "fast",
+    ):
+        """Retrieve and rerank from ToolMemory"""
+        results = {
+            "ToolSchemaMemory": [],
+            "ToolTrajectoryMemory": [],
+        }
+        tasks = []
+
+        # chain of thinking
+        cot_embeddings = []
+        if self.vec_cot:
+            queries = self._cot_query(query, mode=mode, context=parsed_goal.context)
+            if len(queries) > 1:
+                cot_embeddings = self.embedder.embed(queries)
+            cot_embeddings.extend(query_embedding)
+        else:
+            cot_embeddings = query_embedding
+
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
+            if memory_type in ["All", "ToolSchemaMemory"]:
+                tasks.append(
+                    executor.submit(
+                        self.graph_retriever.retrieve,
+                        query=query,
+                        parsed_goal=parsed_goal,
+                        query_embedding=cot_embeddings,
+                        top_k=top_k * 2,
+                        memory_scope="ToolSchemaMemory",
+                        search_filter=search_filter,
+                        search_priority=search_priority,
+                        user_name=user_name,
+                        id_filter=id_filter,
+                        use_fast_graph=self.use_fast_graph,
+                    )
+                )
+            if memory_type in ["All", "ToolTrajectoryMemory"]:
+                tasks.append(
+                    executor.submit(
+                        self.graph_retriever.retrieve,
+                        query=query,
+                        parsed_goal=parsed_goal,
+                        query_embedding=cot_embeddings,
+                        top_k=top_k * 2,
+                        memory_scope="ToolTrajectoryMemory",
+                        search_filter=search_filter,
+                        search_priority=search_priority,
+                        user_name=user_name,
+                        id_filter=id_filter,
+                        use_fast_graph=self.use_fast_graph,
+                    )
+                )
+
+            # Collect results from all tasks
+            for task in tasks:
+                rsp = task.result()
+                if rsp and rsp[0].metadata.memory_type == "ToolSchemaMemory":
+                    results["ToolSchemaMemory"].extend(rsp)
+                elif rsp and rsp[0].metadata.memory_type == "ToolTrajectoryMemory":
+                    results["ToolTrajectoryMemory"].extend(rsp)
+
+        schema_reranked = self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=results["ToolSchemaMemory"],
+            top_k=top_k,
+            parsed_goal=parsed_goal,
+            search_filter=search_filter,
+        )
+        trajectory_reranked = self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=results["ToolTrajectoryMemory"],
+            top_k=top_k,
+            parsed_goal=parsed_goal,
+            search_filter=search_filter,
+        )
+        return schema_reranked + trajectory_reranked
+
     @timed
     def _retrieve_simple(
         self,
@@ -558,11 +682,41 @@ class Searcher:
         return list(deduped.values())
 
     @timed
-    def _sort_and_trim(self, results, top_k, plugin=False):
+    def _sort_and_trim(
+        self, results, top_k, plugin=False, search_tool_memory=False, tool_mem_top_k=6
+    ):
         """Sort results by score and trim to top_k"""
+        final_items = []
+        if search_tool_memory:
+            tool_results = [
+                (item, score)
+                for item, score in results
+                if item.metadata.memory_type in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+            ]
+            sorted_tool_results = sorted(tool_results, key=lambda pair: pair[1], reverse=True)[
+                :tool_mem_top_k
+            ]
+            for item, score in sorted_tool_results:
+                if plugin and round(score, 2) == 0.00:
+                    continue
+                meta_data = item.metadata.model_dump()
+                meta_data["relativity"] = score
+                final_items.append(
+                    TextualMemoryItem(
+                        id=item.id,
+                        memory=item.memory,
+                        metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                    )
+                )
+        # separate textual results
+        results = [
+            (item, score)
+            for item, score in results
+            if item.metadata.memory_type not in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+        ]
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
-        final_items = []
+
         for item, score in sorted_results:
             if plugin and round(score, 2) == 0.00:
                 continue

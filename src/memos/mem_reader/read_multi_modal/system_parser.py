@@ -1,5 +1,9 @@
 """Parser for system messages."""
 
+import json
+import re
+import uuid
+
 from typing import Any
 
 from memos.embedders.base import BaseEmbedder
@@ -12,7 +16,7 @@ from memos.memories.textual.item import (
 )
 from memos.types.openai_chat_completion_types import ChatCompletionSystemMessageParam
 
-from .base import BaseMessageParser, _derive_key, _extract_text_from_content
+from .base import BaseMessageParser
 
 
 logger = get_logger(__name__)
@@ -35,63 +39,42 @@ class SystemParser(BaseMessageParser):
         self,
         message: ChatCompletionSystemMessageParam,
         info: dict[str, Any],
-    ) -> SourceMessage | list[SourceMessage]:
-        """
-        Create SourceMessage(s) from system message.
+    ) -> SourceMessage:
+        """Create SourceMessage from system message."""
+        content = message["content"]
+        if isinstance(content, dict):
+            content = content["text"]
 
-        For multimodal messages (content is a list of text parts), creates one SourceMessage per part.
-        For simple messages (content is str), creates a single SourceMessage.
-        """
-        if not isinstance(message, dict):
-            return []
+        content_wo_tool_schema = re.sub(
+            r"<tool_schema>(.*?)</tool_schema>",
+            r"<tool_schema>omitted</tool_schema>",
+            content,
+            flags=re.DOTALL,
+        )
+        tool_schema_match = re.search(r"<tool_schema>(.*?)</tool_schema>", content, re.DOTALL)
+        tool_schema_content = tool_schema_match.group(1) if tool_schema_match else ""
 
-        role = message.get("role", "system")
-        raw_content = message.get("content", "")
-        chat_time = message.get("chat_time")
-        message_id = message.get("message_id")
-
-        sources = []
-
-        if isinstance(raw_content, list):
-            # Multimodal: create one SourceMessage per text part
-            for part in raw_content:
-                if isinstance(part, dict):
-                    part_type = part.get("type", "")
-                    if part_type == "text":
-                        sources.append(
-                            SourceMessage(
-                                type="chat",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=part.get("text", ""),
-                            )
-                        )
-        else:
-            # Simple message: single SourceMessage
-            content = _extract_text_from_content(raw_content)
-            if content:
-                sources.append(
-                    SourceMessage(
-                        type="chat",
-                        role=role,
-                        chat_time=chat_time,
-                        message_id=message_id,
-                        content=content,
-                    )
-                )
-
-        return (
-            sources
-            if len(sources) > 1
-            else (sources[0] if sources else SourceMessage(type="chat", role=role))
+        return SourceMessage(
+            type="chat",
+            role="system",
+            chat_time=message.get("chat_time", None),
+            message_id=message.get("message_id", None),
+            content=content_wo_tool_schema,
+            tool_schema=tool_schema_content,
         )
 
     def rebuild_from_source(
         self,
         source: SourceMessage,
     ) -> ChatCompletionSystemMessageParam:
-        """We only need rebuild from specific multimodal source"""
+        """Rebuild system message from SourceMessage."""
+        # only rebuild tool schema content, content will be used in full chat content by llm
+        return {
+            "role": "system",
+            "content": source.tool_schema or "",
+            "chat_time": source.chat_time,
+            "message_id": source.message_id,
+        }
 
     def parse_fast(
         self,
@@ -99,59 +82,47 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        if not isinstance(message, dict):
-            logger.warning(f"[SystemParser] Expected dict, got {type(message)}")
-            return []
+        content = message["content"]
+        if isinstance(content, dict):
+            content = content["text"]
 
-        role = message.get("role", "")
-        raw_content = message.get("content", "")
-        chat_time = message.get("chat_time", None)
-        content = _extract_text_from_content(raw_content)
-        if role != "system":
-            logger.warning(f"[SystemParser] Expected role is `system`, got {role}")
-            return []
-        parts = [f"{role}: "]
-        if chat_time:
-            parts.append(f"[{chat_time}]: ")
-        prefix = "".join(parts)
-        line = f"{prefix}{content}\n"
-        if not line:
-            return []
-        memory_type = "LongTermMemory"
+        # Replace tool_schema content with "omitted" in remaining content
+        content_wo_tool_schema = re.sub(
+            r"<tool_schema>(.*?)</tool_schema>",
+            r"<tool_schema>omitted</tool_schema>",
+            content,
+            flags=re.DOTALL,
+        )
 
-        # Create source(s) using parser's create_source method
-        sources = self.create_source(message, info)
-        if isinstance(sources, SourceMessage):
-            sources = [sources]
-        elif not sources:
-            return []
+        source = self.create_source(message, info)
 
         # Extract info fields
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
 
-        # Create memory item (equivalent to _make_memory_item)
-        memory_item = TextualMemoryItem(
-            memory=line,
-            metadata=TreeNodeTextualMemoryMetadata(
-                user_id=user_id,
-                session_id=session_id,
-                memory_type=memory_type,
-                status="activated",
-                tags=["mode:fast"],
-                key=_derive_key(line),
-                embedding=self.embedder.embed([line])[0],
-                usage=[],
-                sources=sources,
-                background="",
-                confidence=0.99,
-                type="fact",
-                info=info_,
-            ),
-        )
+        # Split parsed text into chunks
+        content_chunks = self._split_text(content_wo_tool_schema)
 
-        return [memory_item]
+        memory_items = []
+        for _chunk_idx, chunk_text in enumerate(content_chunks):
+            if not chunk_text.strip():
+                continue
+
+            memory_item = TextualMemoryItem(
+                memory=chunk_text,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type="LongTermMemory",  # only choce long term memory for system messages as a placeholder
+                    status="activated",
+                    tags=["mode:fast"],
+                    sources=[source],
+                    info=info_,
+                ),
+            )
+            memory_items.append(memory_item)
+        return memory_items
 
     def parse_fine(
         self,
@@ -159,4 +130,35 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        return []
+        content = message["content"]
+        if isinstance(content, dict):
+            content = content["text"]
+        try:
+            tool_schema = json.loads(content)
+            assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
+        except json.JSONDecodeError:
+            logger.warning(f"[SystemParser] Failed to parse tool schema: {content}")
+            return []
+        except AssertionError:
+            logger.warning(f"[SystemParser] Tool schema must be a list[dict]: {content}")
+            return []
+
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        return [
+            TextualMemoryItem(
+                id=str(uuid.uuid4()),
+                memory=json.dumps(schema),
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type="ToolSchemaMemory",
+                    status="activated",
+                    embedding=self.embedder.embed([json.dumps(schema)])[0],
+                    info=info_,
+                ),
+            )
+            for schema in tool_schema
+        ]
