@@ -87,7 +87,7 @@ class Splitter:
                 # overlap 1 turns (Q + A = 2)
                 context = copy.deepcopy(chunk[-2:]) if i + 1 < len(data) else []
                 chunk = context
-        if chunk and len(chunk) % 2 == 0:
+        if chunk:
             chunks.append(chunk)
 
         return chunks

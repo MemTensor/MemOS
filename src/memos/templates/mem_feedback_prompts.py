@@ -1,3 +1,119 @@
+KEYWORDS_REPLACE = """
+**Instruction:**
+Please analyze the user's input text to determine if it is a "keyword replacement" request. If yes, follow these steps:
+
+1.  **Identify the request type**: Confirm whether the user is asking to replace a specific word or phrase with another **within a specified scope**.
+2.  **Extract the modification scope**: Determine the scope where the modification should apply.
+ - If the user mentions a specific **document, file, or material identifier** (e.g., "in the Q1 operations plan", "in the prospectus numbered BT7868"), extract this description as the document scope.
+ - **If the user does not explicitly specify any scope, mark the scope as "NONE"**.
+3.  **Extract the original term (A)**: Identify the original word or phrase the user wants to be replaced.
+4.  **Extract the target term (B)**: Identify the target word or phrase the user wants to replace it with.
+
+**Output JSON Format**:
+{{
+    "if_keyword_replace": "true" | "false",
+    "doc_scope": "[Extracted specific file or document description]" | "NONE" | null,
+    "original": "[Extracted original word or phrase A]" | null,
+    "target": "[Extracted target word or phrase B]" | null
+}}
+- **If it is NOT a replacement request**, set `if_keyword_replace` to `"false"`, and set the values for `doc_scope`, `original`, and `target` to `null`.
+- **If it IS a replacement request**, set `if_keyword_replace` to `"true"` and fill in the remaining fields. If the user did not specify a scope, set `doc_scope` to `"NONE"`.
+
+**Examples**:
+
+1.  **User Input**: "In the file `User_Agreement.docx`, replace 'Party B' with 'User'."
+    **Output**:
+    {{
+      "if_keyword_replace": "true",
+      "doc_scope": "User_Agreement.docx",
+      "original": "Party B",
+      "target": "User"
+    }}
+
+2.  **User Input**: "Change 'Homepage' to 'Front Page'."
+    **Output**:
+    {{
+      "if_keyword_replace": "true",
+      "doc_scope": "NONE",
+      "original": "Homepage",
+      "target": "Front Page"
+    }}
+
+3.  **User Input**: "Does this sentence need modification?"
+    **Output**:
+    {{
+      "if_keyword_replace": "false",
+      "doc_scope": null,
+      "original": null,
+      "target": null
+    }}
+
+**User Input**
+{user_feedback}
+
+**Output**:
+"""
+
+
+KEYWORDS_REPLACE_ZH = """
+**指令：**
+请分析用户输入的文本，判断是否为“关键词替换”需求。 如果是，请按以下步骤处理：
+
+1.  **识别需求类型**：确认用户是否要求将**特定范围**内的某个词或短语替换为另一个词或短语。
+2.  **提取修改范围**：确定用户指定的修改生效范围。
+ - 如果用户提及了具体的**文档、文件或资料标识**（如“在第一季运营方案”、“编号为BT7868的招股书”），则提取此描述作为文件范围。
+ - **如果用户未明确指定任何范围，则范围标记为 "NONE"**。
+3.  **提取原始词汇（A）**：找出用户希望被替换的原始词或短语。
+4.  **提取目标词汇（B）**：找出用户希望替换成的目标词或短语。
+
+**输出JSON格式**：
+{{
+    "if_keyword_replace": "true" | "false",
+    "doc_scope": "[提取的具体文件或文档描述]" | "NONE" | null,
+    "original": "[提取的原始词或短语A]" | null,
+    "target": "[提取的目标词或短语B]" | null
+}}
+- **如果不是替换需求**，将 `if_keyword_replace` 设为 `"false"`，并将 `doc_scope`、`original`、`target` 三个键的值都设为 `null`。
+- **如果是替换需求**，将 `if_keyword_replace` 设为 `"true"`，并填充其余字段。如果用户未指定范围，`doc_scope` 设为 `"NONE"`。
+
+
+**示例**：
+
+1.  **用户输入**：“在`用户协议.docx`这个文件中，把‘乙方’替换为‘用户’。”
+    **输出**：
+    {{
+      "if_keyword_replace": "true",
+      "doc_scope": "用户协议.docx",
+      "original": "乙方",
+      "target": "用户"
+    }}
+
+2.  **用户输入**：“把‘主页’改成‘首页’。”
+    **输出**：
+    {{
+      "if_keyword_replace": "true",
+      "doc_scope": "NONE",
+      "original": "主页",
+      "target": "首页"
+    }}
+
+3.  **用户输入**：“这个句子需要修改吗？”
+    **输出**：
+    {{
+      "if_keyword_replace": "false",
+      "doc_scope": null,
+      "original": null,
+      "target": null
+    }}
+
+
+**用户输入**
+{user_feedback}
+
+**输出**：
+"""
+
+
 FEEDBACK_JUDGEMENT_PROMPT = """You are a answer quality analysis expert. Please strictly follow the steps and criteria below to analyze the provided "User and Assistant Chat History" and "User Feedback," and fill the final evaluation results into the specified JSON format.
 
 Analysis Steps and Criteria:

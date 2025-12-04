@@ -90,3 +90,37 @@ def post_process_pref_mem(
         memories_result["pref_note"] = pref_note
 
     return memories_result
+
+
+def post_process_textual_mem(
+    memories_result: dict[str, Any],
+    text_formatted_mem: list[dict[str, Any]],
+    mem_cube_id: str,
+) -> dict[str, Any]:
+    """
+    Post-process text and tool memory results.
+    """
+    fact_mem = [
+        mem
+        for mem in text_formatted_mem
+        if mem["metadata"]["memory_type"] not in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+    ]
+    tool_mem = [
+        mem
+        for mem in text_formatted_mem
+        if mem["metadata"]["memory_type"] in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+    ]
+
+    memories_result["text_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": fact_mem,
+        }
+    )
+    memories_result["tool_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": tool_mem,
+        }
+    )
+    return memories_result

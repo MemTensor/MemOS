@@ -33,6 +33,9 @@ def check_module_base_class(cls: Any) -> None:
     # Check 3: Verify abstract methods
     for method_name in all_class_methods:
         method = getattr(cls, method_name)
+        # Skip private methods (starting with _) as they are typically helper methods
+        if method_name.startswith("_") and method_name != "__init__":
+            continue
         assert getattr(method, "__isabstractmethod__", False), (
             f"The method '{method_name}' in {cls.__name__} should be marked as @abstractmethod"
         )

@@ -785,7 +785,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                         if enqueue_epoch is not None:
                             queue_wait_ms = max(0.0, now - enqueue_epoch) * 1000
 
-                        msg.dequeue_ts = now
+                        # Avoid pydantic attribute enforcement
+                        object.__setattr__(msg, "_dequeue_ts", now)
                         emit_monitor_event(
                             "dequeue",
                             msg,
