@@ -6,6 +6,7 @@ waiting for idle state, and streaming progress updates.
 """
 
 import json
+from datetime import datetime, timezone
 import time
 import traceback
 from collections import Counter
@@ -59,18 +60,22 @@ def handle_scheduler_allstatus(
             waiting=counter.get("waiting", 0),
             in_progress=counter.get("in_progress", 0),
             completed=counter.get("completed", 0),
+            pending=counter.get("pending", counter.get("in_progress", 0)),
             failed=counter.get("failed", 0),
             cancelled=counter.get("cancelled", 0),
             total=total,
         )
 
-    def _aggregate_counts_from_redis(tracker: TaskStatusTracker) -> TaskSummary | None:
+    def _aggregate_counts_from_redis(
+        tracker: TaskStatusTracker, max_age_seconds: float = 86400
+    ) -> TaskSummary | None:
         """Stream status counts directly from Redis to avoid loading all task payloads."""
         redis_client = getattr(tracker, "redis", None)
         if not redis_client:
             return None
 
         counter = Counter()
+        now = datetime.now(timezone.utc).timestamp()
 
         # Scan task_meta keys, then hscan each hash in batches
         cursor: int | str = 0
@@ -83,6 +88,16 @@ def handle_scheduler_allstatus(
                     for value in fields.values():
                         try:
                             payload = json.loads(value.decode("utf-8") if isinstance(value, bytes) else value)
+                            # Skip stale entries to reduce noise and load
+                            ts = payload.get("submitted_at") or payload.get("started_at")
+                            if ts:
+                                try:
+                                    ts_dt = datetime.fromisoformat(ts)
+                                    ts_seconds = ts_dt.timestamp()
+                                except Exception:
+                                    ts_seconds = None
+                                if ts_seconds and (now - ts_seconds) > max_age_seconds:
+                                    continue
                             status = payload.get("status")
                             if status:
                                 counter[status] += 1
@@ -101,6 +116,7 @@ def handle_scheduler_allstatus(
             waiting=counter.get("waiting", 0),
             in_progress=counter.get("in_progress", 0),
             completed=counter.get("completed", 0),
+            pending=counter.get("pending", counter.get("in_progress", 0)),
             failed=counter.get("failed", 0),
             cancelled=counter.get("cancelled", 0),
             total=total,
@@ -120,6 +136,7 @@ def handle_scheduler_allstatus(
         # Scheduler view: assume tracker contains scheduler tasks; overlay queue monitor for live queue depth
         sched_waiting = all_tasks_summary.waiting
         sched_in_progress = all_tasks_summary.in_progress
+        sched_pending = all_tasks_summary.pending
         sched_completed = all_tasks_summary.completed
         sched_failed = all_tasks_summary.failed
         sched_cancelled = all_tasks_summary.cancelled
@@ -129,17 +146,21 @@ def handle_scheduler_allstatus(
             queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status() or {}
             scheduler_waiting = 0
             scheduler_in_progress = 0
+            scheduler_pending = 0
             for key, value in queue_status_data.items():
                 if not key.startswith("scheduler:"):
                     continue
                 scheduler_in_progress += int(value.get("running", 0) or 0)
+                scheduler_pending += int(value.get("pending", value.get("running", 0)) or 0)
                 scheduler_waiting += int(value.get("remaining", 0) or 0)
             sched_waiting = scheduler_waiting
             sched_in_progress = scheduler_in_progress
+            sched_pending = scheduler_pending
 
         scheduler_summary = TaskSummary(
             waiting=sched_waiting,
             in_progress=sched_in_progress,
+            pending=sched_pending,
             completed=sched_completed,
             failed=sched_failed,
             cancelled=sched_cancelled,

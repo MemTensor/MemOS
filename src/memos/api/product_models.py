@@ -872,6 +872,7 @@ class TaskSummary(BaseModel):
 
     waiting: int = Field(0, description="Number of tasks waiting to run")
     in_progress: int = Field(0, description="Number of tasks currently running")
+    pending: int = Field(0, description="Number of tasks fetched by workers but not yet acknowledged")
     completed: int = Field(0, description="Number of tasks completed")
     failed: int = Field(0, description="Number of tasks failed")
     cancelled: int = Field(0, description="Number of tasks cancelled")
