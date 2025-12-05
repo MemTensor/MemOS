@@ -2,8 +2,8 @@ import concurrent.futures
 import contextlib
 import json
 import os
-import traceback
 import time
+import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.context.context import ContextThreadPoolExecutor
@@ -1369,7 +1369,9 @@ class GeneralScheduler(BaseScheduler):
             f"[process_session_turn] Processing {len(queries)} queries for user_id={user_id}, mem_cube_id={mem_cube_id}"
         )
 
-        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
+        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory(
+            user_name=mem_cube_id
+        )
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         intent_result = self.monitor.detect_intent(
             q_list=queries, text_working_memory=text_working_memory
