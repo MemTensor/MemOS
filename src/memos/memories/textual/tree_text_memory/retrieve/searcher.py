@@ -227,7 +227,8 @@ class Searcher:
         query_embedding = None
 
         # fine mode will trigger initial embedding search
-        if mode == "fine_old":
+        # TODO: tmp "playground_search_goal_parser" for playground search goal parser, will be removed later
+        if mode == "fine_old" or kwargs.get("playground_search_goal_parser", False):
             logger.info("[SEARCH] Fine mode: embedding search")
             query_embedding = self.embedder.embed([query])[0]
 
