@@ -8,6 +8,7 @@ waiting for idle state, and streaming progress updates.
 import json
 import time
 import traceback
+from collections import Counter
 
 from typing import Any
 
@@ -20,6 +21,7 @@ from memos.api.product_models import (
     AllStatusResponseData,
     StatusResponse,
     StatusResponseItem,
+    TaskSummary,
 )
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
@@ -34,52 +36,73 @@ def handle_scheduler_allstatus(
     status_tracker: TaskStatusTracker,
 ) -> AllStatusResponse:
     """
-    Get detailed scheduler status including running tasks and queue metrics.
-
-    This handler aggregates:
-    1. Currently running tasks from Redis (via TaskStatusTracker) - PERSISTENT.
-    2. Queue status (counts of running/remaining tasks) from the monitor - PERSISTENT.
+    Get aggregated scheduler status metrics (no per-task payload).
 
     Args:
         mem_scheduler: The BaseScheduler instance.
         status_tracker: The TaskStatusTracker instance.
 
     Returns:
-        AllStatusResponse with detailed status data.
+        AllStatusResponse with aggregated status data.
     """
-    try:
-        # 1. Get running tasks from Redis (persistent status)
-        # Flatten the user -> task structure into a single dict for the response
-        # or keep it nested? The AllStatusResponseData expects a dict.
-        # Let's flatten it to task_id -> task_data for now, or update model to support nesting.
-        # Given AllStatusResponseData.running_tasks is dict[str, Any], we can put whatever.
-        # Let's return {user_id: {task_id: ...}} which is structured.
-        
-        global_tasks = status_tracker.get_all_tasks_global()
-        
-        # Filter for 'running' tasks only? Or return all?
-        # The name is "running_tasks", implying active ones.
-        # But "status" endpoint returns all.
-        # Let's return ALL tasks found in Redis, but maybe organized by user.
-        
-        # flatten to task_id -> detail if unique, but task_ids are UUIDs so unique.
-        flattened_tasks = {}
-        for user_id, tasks in global_tasks.items():
-            for task_id, detail in tasks.items():
-                # Inject user_id into detail for clarity
-                detail["user_id"] = user_id
-                flattened_tasks[task_id] = detail
 
-        # 2. Get queue status from the monitor
-        # The monitor has get_tasks_status() which returns queue metrics
-        queue_status_data = {}
+    def _summarize_tasks(task_details: list[dict[str, Any]]) -> TaskSummary:
+        """Aggregate counts by status for the provided task details."""
+        counter = Counter()
+        for detail in task_details:
+            status = detail.get("status")
+            if status:
+                counter[status] += 1
+
+        total = sum(counter.values())
+        return TaskSummary(
+            waiting=counter.get("waiting", 0),
+            in_progress=counter.get("in_progress", 0),
+            completed=counter.get("completed", 0),
+            failed=counter.get("failed", 0),
+            cancelled=counter.get("cancelled", 0),
+            total=total,
+        )
+
+    try:
+        # Get all task details from Redis and aggregate counts
+        global_tasks = status_tracker.get_all_tasks_global()
+        all_task_details: list[dict[str, Any]] = []
+        for user_id, tasks in global_tasks.items():
+            all_task_details.extend(tasks.values())
+
+        all_tasks_summary = _summarize_tasks(all_task_details)
+
+        # Summarize scheduler queue metrics (running/remaining) if available
+        scheduler_waiting = 0
+        scheduler_in_progress = 0
         if mem_scheduler.task_schedule_monitor:
-            queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status()
+            queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status() or {}
+            for key, value in queue_status_data.items():
+                if not key.startswith("scheduler:"):
+                    continue
+                scheduler_in_progress += int(value.get("running", 0) or 0)
+                scheduler_waiting += int(value.get("remaining", 0) or 0)
+
+        scheduler_summary = TaskSummary(
+            waiting=scheduler_waiting,
+            in_progress=scheduler_in_progress,
+            completed=all_tasks_summary.completed,
+            failed=all_tasks_summary.failed,
+            cancelled=all_tasks_summary.cancelled,
+            total=(
+                scheduler_waiting
+                + scheduler_in_progress
+                + all_tasks_summary.completed
+                + all_tasks_summary.failed
+                + all_tasks_summary.cancelled
+            ),
+        )
 
         return AllStatusResponse(
             data=AllStatusResponseData(
-                running_tasks=flattened_tasks,
-                queue_status=queue_status_data,
+                scheduler_summary=scheduler_summary,
+                all_tasks_summary=all_tasks_summary,
             )
         )
     except Exception as err:
