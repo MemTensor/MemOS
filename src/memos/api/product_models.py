@@ -865,3 +865,18 @@ class StatusResponse(BaseResponse[list[StatusResponseItem]]):
     """Response model for scheduler status operations."""
 
     message: str = "Memory get status successfully"
+
+
+class AllStatusResponseData(BaseModel):
+    """Data model for full scheduler status."""
+
+    running_tasks: dict[str, Any] = Field(..., description="Details of currently running tasks")
+    queue_status: dict[str, Any] = Field(
+        ..., description="Status of the task queue (running/remaining counts)"
+    )
+
+
+class AllStatusResponse(BaseResponse[AllStatusResponseData]):
+    """Response model for full scheduler status operations."""
+
+    message: str = "Full scheduler status retrieved successfully"
