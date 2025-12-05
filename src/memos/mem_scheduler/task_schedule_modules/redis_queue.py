@@ -22,6 +22,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
+from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 
 
@@ -104,14 +105,41 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
     def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
         stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}:{task_label}"
+        emit_monitor_event(
+            "MONITOR_EVENT_TEST",
+            None,
+            {
+                "event_type": "get_stream_key_result",
+                "stream_key_prefix": self.stream_key_prefix,
+                "user_id": user_id,
+                "mem_cube_id": mem_cube_id,
+                "task_label": task_label,
+                "generated_stream_key": stream_key,
+            },
+        )
         return stream_key
 
     def task_broker(
         self,
         consume_batch_size: int,
     ) -> list[list[ScheduleMessageItem]]:
+        emit_monitor_event(
+            "MONITOR_EVENT_TEST",
+            None,
+            {
+                "event_type": "task_broker_start",
+                "consume_batch_size": consume_batch_size,
+            },
+        )
         stream_keys = self.get_stream_keys(stream_key_prefix=self.stream_key_prefix)
         if not stream_keys:
+            emit_monitor_event(
+                "MONITOR_EVENT_TEST",
+                None,
+                {
+                    "event_type": "task_broker_no_stream_keys",
+                },
+            )
             return []
 
         stream_quotas = self.orchestrator.get_stream_quotas(
@@ -130,6 +158,17 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         packed: list[list[ScheduleMessageItem]] = []
         for i in range(0, len(cache), consume_batch_size):
             packed.append(cache[i : i + consume_batch_size])
+
+        emit_monitor_event(
+            "MONITOR_EVENT_TEST",
+            None,
+            {
+                "event_type": "task_broker_end",
+                "stream_keys_count": len(stream_keys),
+                "cache_size": len(cache),
+                "packed_size": len(packed),
+            },
+        )
         # return packed list without overwriting existing cache
         return packed
 
