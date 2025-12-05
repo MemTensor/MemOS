@@ -157,9 +157,8 @@ class SingleCubeView(MemCubeView):
                     content=feedback_req_str,
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(
-                    messages=[message_item_feedback]
-                )
+                # Use scheduler submission to ensure tracking and metrics
+                self.mem_scheduler.submit_messages(messages=[message_item_feedback])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted FEEDBACK async")
             except Exception as e:
                 self.logger.error(
