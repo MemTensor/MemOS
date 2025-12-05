@@ -177,11 +177,20 @@ class GeneralScheduler(BaseScheduler):
                     batch = grouped_messages[user_id][mem_cube_id]
                     if not batch:
                         continue
+                    # Select the matching mem_cube for this batch; fall back to current_mem_cube
+                    mem_cube = self.mem_cubes.get(mem_cube_id, self.current_mem_cube)
+                    if mem_cube is None:
+                        logger.warning(
+                            "No mem_cube found for user_id=%s mem_cube_id=%s; skipping batch",
+                            user_id,
+                            mem_cube_id,
+                        )
+                        continue
 
                     # Process each message in the batch
                     for msg in batch:
                         prepared_add_items, prepared_update_items_with_original = (
-                            self.log_add_messages(msg=msg)
+                            self.log_add_messages(msg=msg, mem_cube=mem_cube)
                         )
                         logger.info(
                             f"prepared_add_items: {prepared_add_items};\n prepared_update_items_with_original: {prepared_update_items_with_original}"
@@ -194,11 +203,11 @@ class GeneralScheduler(BaseScheduler):
 
                         if is_cloud_env:
                             self.send_add_log_messages_to_cloud_env(
-                                msg, prepared_add_items, prepared_update_items_with_original
+                                msg, prepared_add_items, prepared_update_items_with_original, mem_cube
                             )
                         else:
                             self.send_add_log_messages_to_local_env(
-                                msg, prepared_add_items, prepared_update_items_with_original
+                                msg, prepared_add_items, prepared_update_items_with_original, mem_cube
                             )
 
         except Exception as e:
@@ -322,7 +331,7 @@ class GeneralScheduler(BaseScheduler):
                 except Exception:
                     logger.exception("Failed to record addMessage log for answer")
 
-    def log_add_messages(self, msg: ScheduleMessageItem):
+    def log_add_messages(self, msg: ScheduleMessageItem, mem_cube: GeneralMemCube):
         try:
             userinput_memory_ids = json.loads(msg.content)
         except Exception as e:
@@ -337,9 +346,7 @@ class GeneralScheduler(BaseScheduler):
         for memory_id in userinput_memory_ids:
             try:
                 # This mem_item represents the NEW content that was just added/processed
-                mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
-                    memory_id=memory_id
-                )
+                mem_item: TextualMemoryItem = mem_cube.text_mem.get(memory_id=memory_id)
                 # Check if a memory with the same key already exists (determining if it's an update)
                 key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
                     name=mem_item.memory
@@ -349,8 +356,8 @@ class GeneralScheduler(BaseScheduler):
                 original_item_id = None
 
                 # Only check graph_store if a key exists and the text_mem has a graph_store
-                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
-                    candidates = self.current_mem_cube.text_mem.graph_store.get_by_metadata(
+                if key and hasattr(mem_cube.text_mem, "graph_store"):
+                    candidates = mem_cube.text_mem.graph_store.get_by_metadata(
                         [
                             {"field": "key", "op": "=", "value": key},
                             {
@@ -365,9 +372,7 @@ class GeneralScheduler(BaseScheduler):
                         original_item_id = candidates[0]
                         # Crucial step: Fetch the original content for updates
                         # This `get` is for the *existing* memory that will be updated
-                        original_mem_item = self.current_mem_cube.text_mem.get(
-                            memory_id=original_item_id
-                        )
+                        original_mem_item = mem_cube.text_mem.get(memory_id=original_item_id)
                         original_content = original_mem_item.memory
 
                 if exists:
@@ -423,7 +428,11 @@ class GeneralScheduler(BaseScheduler):
         return prepared_add_items, prepared_update_items_with_original
 
     def send_add_log_messages_to_local_env(
-        self, msg: ScheduleMessageItem, prepared_add_items, prepared_update_items_with_original
+        self,
+        msg: ScheduleMessageItem,
+        prepared_add_items,
+        prepared_update_items_with_original,
+        mem_cube: GeneralMemCube,
     ):
         # Existing: Playground/Default Logging
         # Reconstruct add_content/add_meta/update_content/update_meta from prepared_items
@@ -478,7 +487,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=mem_cube,
                 memcube_log_content=add_content_legacy,
                 metadata=add_meta_legacy,
                 memory_len=len(add_content_legacy),
@@ -493,7 +502,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=mem_cube,
                 memcube_log_content=update_content_legacy,
                 metadata=update_meta_legacy,
                 memory_len=len(update_content_legacy),
@@ -506,7 +515,11 @@ class GeneralScheduler(BaseScheduler):
             self._submit_web_logs(events, additional_log_info="send_add_log_messages_to_cloud_env")
 
     def send_add_log_messages_to_cloud_env(
-        self, msg: ScheduleMessageItem, prepared_add_items, prepared_update_items_with_original
+        self,
+        msg: ScheduleMessageItem,
+        prepared_add_items,
+        prepared_update_items_with_original,
+        mem_cube: GeneralMemCube,
     ):
         """
         Cloud logging path for add/update events.
@@ -552,7 +565,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=mem_cube,
                 memcube_log_content=kb_log_content,
                 metadata=None,
                 memory_len=len(kb_log_content),
