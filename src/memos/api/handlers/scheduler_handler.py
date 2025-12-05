@@ -47,7 +47,7 @@ def handle_scheduler_allstatus(
     """
 
     def _summarize_tasks(task_details: list[dict[str, Any]]) -> TaskSummary:
-        """Aggregate counts by status for the provided task details."""
+        """Aggregate counts by status for the provided task details (tracker data)."""
         counter = Counter()
         for detail in task_details:
             status = detail.get("status")
@@ -73,30 +73,37 @@ def handle_scheduler_allstatus(
 
         all_tasks_summary = _summarize_tasks(all_task_details)
 
-        # Summarize scheduler queue metrics (running/remaining) if available
-        scheduler_waiting = 0
-        scheduler_in_progress = 0
+        # Scheduler view: assume tracker contains scheduler tasks; overlay queue monitor for live queue depth
+        sched_waiting = all_tasks_summary.waiting
+        sched_in_progress = all_tasks_summary.in_progress
+        sched_completed = all_tasks_summary.completed
+        sched_failed = all_tasks_summary.failed
+        sched_cancelled = all_tasks_summary.cancelled
+
+        # If queue monitor is available, prefer its live waiting/in_progress counts
         if mem_scheduler.task_schedule_monitor:
             queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status() or {}
+            scheduler_waiting = 0
+            scheduler_in_progress = 0
             for key, value in queue_status_data.items():
                 if not key.startswith("scheduler:"):
                     continue
                 scheduler_in_progress += int(value.get("running", 0) or 0)
                 scheduler_waiting += int(value.get("remaining", 0) or 0)
+            sched_waiting = scheduler_waiting
+            sched_in_progress = scheduler_in_progress
 
         scheduler_summary = TaskSummary(
-            waiting=scheduler_waiting,
-            in_progress=scheduler_in_progress,
-            completed=all_tasks_summary.completed,
-            failed=all_tasks_summary.failed,
-            cancelled=all_tasks_summary.cancelled,
-            total=(
-                scheduler_waiting
-                + scheduler_in_progress
-                + all_tasks_summary.completed
-                + all_tasks_summary.failed
-                + all_tasks_summary.cancelled
-            ),
+            waiting=sched_waiting,
+            in_progress=sched_in_progress,
+            completed=sched_completed,
+            failed=sched_failed,
+            cancelled=sched_cancelled,
+            total=sched_waiting
+            + sched_in_progress
+            + sched_completed
+            + sched_failed
+            + sched_cancelled,
         )
 
         return AllStatusResponse(
