@@ -24,11 +24,11 @@ from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
+    AllStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
     APIFeedbackRequest,
     APISearchRequest,
-    AllStatusResponse,
     ChatRequest,
     DeleteMemoryRequest,
     DeleteMemoryResponse,

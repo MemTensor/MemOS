@@ -6,11 +6,11 @@ waiting for idle state, and streaming progress updates.
 """
 
 import json
-from datetime import datetime, timezone
 import time
 import traceback
-from collections import Counter
 
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -60,7 +60,7 @@ def handle_scheduler_allstatus(
             waiting=counter.get("waiting", 0),
             in_progress=counter.get("in_progress", 0),
             completed=counter.get("completed", 0),
-            pending=counter.get("pending", counter.get("in_progress", 0)),
+            pending=counter.get("pending", counter.get("waiting", 0)),
             failed=counter.get("failed", 0),
             cancelled=counter.get("cancelled", 0),
             total=total,
@@ -87,7 +87,9 @@ def handle_scheduler_allstatus(
                     h_cursor, fields = redis_client.hscan(key, cursor=h_cursor, count=500)
                     for value in fields.values():
                         try:
-                            payload = json.loads(value.decode("utf-8") if isinstance(value, bytes) else value)
+                            payload = json.loads(
+                                value.decode("utf-8") if isinstance(value, bytes) else value
+                            )
                             # Skip stale entries to reduce noise and load
                             ts = payload.get("submitted_at") or payload.get("started_at")
                             if ts:
@@ -116,7 +118,7 @@ def handle_scheduler_allstatus(
             waiting=counter.get("waiting", 0),
             in_progress=counter.get("in_progress", 0),
             completed=counter.get("completed", 0),
-            pending=counter.get("pending", counter.get("in_progress", 0)),
+            pending=counter.get("pending", counter.get("waiting", 0)),
             failed=counter.get("failed", 0),
             cancelled=counter.get("cancelled", 0),
             total=total,
@@ -129,7 +131,7 @@ def handle_scheduler_allstatus(
             # Fallback: load all details then aggregate
             global_tasks = status_tracker.get_all_tasks_global()
             all_task_details: list[dict[str, Any]] = []
-            for user_id, tasks in global_tasks.items():
+            for _, tasks in global_tasks.items():
                 all_task_details.extend(tasks.values())
             all_tasks_summary = _summarize_tasks(all_task_details)
 
@@ -151,7 +153,7 @@ def handle_scheduler_allstatus(
                 if not key.startswith("scheduler:"):
                     continue
                 scheduler_in_progress += int(value.get("running", 0) or 0)
-                scheduler_pending += int(value.get("pending", value.get("running", 0)) or 0)
+                scheduler_pending += int(value.get("pending", value.get("remaining", 0)) or 0)
                 scheduler_waiting += int(value.get("remaining", 0) or 0)
             sched_waiting = scheduler_waiting
             sched_in_progress = scheduler_in_progress

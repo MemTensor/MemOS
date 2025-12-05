@@ -154,11 +154,12 @@ class TaskScheduleMonitor:
         try:
             # remaining is the sum of per-stream qsize
             qsize_map = self.queue.qsize()
-            task_status["remaining"] = sum(v for k, v in qsize_map.items() if isinstance(v, int))
+            remaining_total = sum(v for k, v in qsize_map.items() if isinstance(v, int))
+            task_status["remaining"] = remaining_total
+            task_status["pending"] = remaining_total
             # running from dispatcher if available
             if self.dispatcher and hasattr(self.dispatcher, "get_running_task_count"):
                 task_status["running"] = int(self.dispatcher.get_running_task_count())
-                task_status["pending"] = task_status["running"]
         except Exception as e:
             logger.warning(f"Failed to collect local queue status: {e}")
         return task_status
@@ -203,11 +204,13 @@ class TaskScheduleMonitor:
                                     break
                         total_messages = max(0, int(xlen_val or 0))
                         remaining = max(0, total_messages - pending)
+                        # running = in-progress (delivered, not yet acked)
                         local[stream_key]["running"] += pending
-                        local[stream_key]["pending"] += pending
+                        # pending = not yet delivered (remaining)
+                        local[stream_key]["pending"] += remaining
                         local[stream_key]["remaining"] += remaining
                         local["running"] += pending
-                        local["pending"] += pending
+                        local["pending"] += remaining
                         local["remaining"] += remaining
                     return local
 
@@ -238,11 +241,13 @@ class TaskScheduleMonitor:
                     if group.get("name") == self.queue.consumer_group:
                         pending = int(group.get("pending", 0))
                         remaining = max(0, xlen_val - pending)
+                        # running = in-progress (delivered, not yet acked)
                         task_status[stream_key]["running"] += pending
-                        task_status[stream_key]["pending"] += pending
+                        # pending = not yet delivered (remaining)
+                        task_status[stream_key]["pending"] += remaining
                         task_status[stream_key]["remaining"] += remaining
                         task_status["running"] += pending
-                        task_status["pending"] += pending
+                        task_status["pending"] += remaining
                         task_status["remaining"] += remaining
                         break
 
