@@ -15,12 +15,76 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 # Imports for new implementation
-from memos.api.product_models import StatusResponse, StatusResponseItem
+from memos.api.product_models import (
+    AllStatusResponse,
+    AllStatusResponseData,
+    StatusResponse,
+    StatusResponseItem,
+)
 from memos.log import get_logger
+from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
+
+
+def handle_scheduler_allstatus(
+    mem_scheduler: BaseScheduler,
+    status_tracker: TaskStatusTracker,
+) -> AllStatusResponse:
+    """
+    Get detailed scheduler status including running tasks and queue metrics.
+
+    This handler aggregates:
+    1. Currently running tasks from Redis (via TaskStatusTracker) - PERSISTENT.
+    2. Queue status (counts of running/remaining tasks) from the monitor - PERSISTENT.
+
+    Args:
+        mem_scheduler: The BaseScheduler instance.
+        status_tracker: The TaskStatusTracker instance.
+
+    Returns:
+        AllStatusResponse with detailed status data.
+    """
+    try:
+        # 1. Get running tasks from Redis (persistent status)
+        # Flatten the user -> task structure into a single dict for the response
+        # or keep it nested? The AllStatusResponseData expects a dict.
+        # Let's flatten it to task_id -> task_data for now, or update model to support nesting.
+        # Given AllStatusResponseData.running_tasks is dict[str, Any], we can put whatever.
+        # Let's return {user_id: {task_id: ...}} which is structured.
+        
+        global_tasks = status_tracker.get_all_tasks_global()
+        
+        # Filter for 'running' tasks only? Or return all?
+        # The name is "running_tasks", implying active ones.
+        # But "status" endpoint returns all.
+        # Let's return ALL tasks found in Redis, but maybe organized by user.
+        
+        # flatten to task_id -> detail if unique, but task_ids are UUIDs so unique.
+        flattened_tasks = {}
+        for user_id, tasks in global_tasks.items():
+            for task_id, detail in tasks.items():
+                # Inject user_id into detail for clarity
+                detail["user_id"] = user_id
+                flattened_tasks[task_id] = detail
+
+        # 2. Get queue status from the monitor
+        # The monitor has get_tasks_status() which returns queue metrics
+        queue_status_data = {}
+        if mem_scheduler.task_schedule_monitor:
+            queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status()
+
+        return AllStatusResponse(
+            data=AllStatusResponseData(
+                running_tasks=flattened_tasks,
+                queue_status=queue_status_data,
+            )
+        )
+    except Exception as err:
+        logger.error(f"Failed to get full scheduler status: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Failed to get full scheduler status") from err
 
 
 def handle_scheduler_status(
