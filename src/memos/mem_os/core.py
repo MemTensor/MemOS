@@ -960,7 +960,7 @@ class MOSCore:
         assert mem_cube_id in self.mem_cubes, (
             f"MemCube with ID {mem_cube_id} does not exist. please regiester"
         )
-        return self.mem_cubes[mem_cube_id].text_mem.get(memory_id)
+        return self.mem_cubes[mem_cube_id].text_mem.get(memory_id, user_name=mem_cube_id)
 
     def get_all(
         self, mem_cube_id: str | None = None, user_id: str | None = None

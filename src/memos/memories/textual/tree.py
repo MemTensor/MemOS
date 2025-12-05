@@ -295,9 +295,9 @@ class TreeTextMemory(BaseTextMemory):
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         raise NotImplementedError
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
-        result = self.graph_store.get_node(memory_id)
+        result = self.graph_store.get_node(memory_id, user_name=user_name)
         if result is None:
             raise ValueError(f"Memory with ID {memory_id} not found")
         metadata_dict = result.get("metadata", {})
