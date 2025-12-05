@@ -262,15 +262,16 @@ class TreeTextMemory(BaseTextMemory):
             )
 
             if subgraph is None or not subgraph["core_node"]:
-                logger.info(f"Skipping node {core_id} (inactive or not found).")
-                continue
+                node = self.graph_store.get_node(core_id, user_name=user_name)
+                subgraph["neighbors"] = [node]
 
             core_node = subgraph["core_node"]
             neighbors = subgraph["neighbors"]
             edges = subgraph["edges"]
 
             # Collect nodes
-            all_nodes[core_node["id"]] = core_node
+            if core_node:
+                all_nodes[core_node["id"]] = core_node
             for n in neighbors:
                 all_nodes[n["id"]] = n
 
@@ -337,28 +338,6 @@ class TreeTextMemory(BaseTextMemory):
             logger.info("All memories and edges have been deleted from the graph.")
         except Exception as e:
             logger.error(f"An error occurred while deleting all memories: {e}")
-            raise
-
-    def delete_by_filter(
-        self,
-        writable_cube_ids: list[str],
-        memory_ids: list[str] | None = None,
-        file_ids: list[str] | None = None,
-        filter: dict | None = None,
-    ) -> int:
-        """Delete memories by filter.
-        Returns:
-            int: Number of nodes deleted.
-        """
-        try:
-            return self.graph_store.delete_node_by_prams(
-                writable_cube_ids=writable_cube_ids,
-                memory_ids=memory_ids,
-                file_ids=file_ids,
-                filter=filter,
-            )
-        except Exception as e:
-            logger.error(f"An error occurred while deleting memories by filter: {e}")
             raise
 
     def load(self, dir: str) -> None:

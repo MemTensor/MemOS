@@ -151,7 +151,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Create connection pool
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=5,
-            maxconn=2000,
+            maxconn=100,
             host=host,
             port=port,
             user=user,
@@ -1338,6 +1338,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 "edges": [...]
             }
         """
+        logger.info(f"[get_subgraph] center_id: {center_id}")
         if not 1 <= depth <= 5:
             raise ValueError("depth must be 1-5")
 
@@ -1375,6 +1376,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 $$ ) as (centers agtype, neighbors agtype, rels agtype);
             """
         conn = self._get_connection()
+        logger.info(f"[get_subgraph] Query: {query}")
         try:
             with conn.cursor() as cursor:
                 cursor.execute(query)
@@ -1746,6 +1748,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_conditions = self._build_filter_conditions_sql(filter)
+        logger.info(f"[search_by_embedding] filter_conditions: {filter_conditions}")
         where_clauses.extend(filter_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
@@ -1918,7 +1921,7 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self._get_config_value("user_name"),
         )
-        print(f"[111get_by_metadata] user_name_conditions: {user_name_conditions}")
+        logger.info(f"[get_by_metadata] user_name_conditions: {user_name_conditions}")
 
         # Add user_name WHERE clause
         if user_name_conditions:
@@ -1929,6 +1932,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_where_clause = self._build_filter_conditions_cypher(filter)
+        logger.info(f"[get_by_metadata] filter_where_clause: {filter_where_clause}")
 
         where_str = " AND ".join(where_conditions) + filter_where_clause
 
@@ -2393,6 +2397,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_where_clause = self._build_filter_conditions_cypher(filter)
+        logger.info(f"[get_all_memory_items] filter_where_clause: {filter_where_clause}")
 
         # Use cypher query to retrieve memory items
         if include_embedding:
@@ -2426,6 +2431,7 @@ class PolarDBGraphDB(BaseGraphDB):
             nodes = []
             node_ids = set()
             conn = self._get_connection()
+            logger.info(f"[get_all_memory_items] cypher_query: {cypher_query}")
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(cypher_query)
@@ -3456,7 +3462,11 @@ class PolarDBGraphDB(BaseGraphDB):
         id_map = {}
         core_node = data.get("core_node", {})
         if not core_node:
-            return core_node
+            return {
+                "core_node": None,
+                "neighbors": data.get("neighbors", []),
+                "edges": data.get("edges", []),
+            }
         core_meta = core_node.get("metadata", {})
         if "graph_id" in core_meta and "id" in core_node:
             id_map[core_meta["graph_id"]] = core_node["id"]
@@ -3507,7 +3517,6 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
-        print(f"[delete_node_by_prams] effective_user_name: {effective_user_name}")
 
         if effective_user_name:
             escaped_user_name = effective_user_name.replace("'", "''")
