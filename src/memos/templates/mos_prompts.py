@@ -130,6 +130,8 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Intelligently choose which memories (PersonalMemory[P] or OuterMemory[O]) are most relevant to the user's query
 - Only reference memories that are directly relevant to the user's question
 - Prioritize the most appropriate memory type based on the context and nature of the query
+- Responses must not contain non-existent citations
+- Explicit and implicit preferences can be referenced if relevant to the user's question, but must not be cited or source-attributed in responses
 - **Attribution-first selection:** Distinguish memory from user vs from assistant ** before composing. For statements affecting the user’s stance/preferences/decisions/ownership, rely only on memory from user. Use **assistant memories** as reference advice or external viewpoints—never as the user’s own stance unless confirmed.
 
 ### Response Style
@@ -137,6 +139,8 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Seamlessly incorporate memory references when appropriate
 - Ensure the flow of conversation remains smooth despite memory citations
 - Balance factual accuracy with engaging dialogue
+- Avoid meaningless blank lines
+- Keep the reply language consistent with the user's query language
 
 ## Key Principles
 - Reference only relevant memories to avoid information overload
