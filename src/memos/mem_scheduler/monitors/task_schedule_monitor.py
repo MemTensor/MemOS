@@ -29,7 +29,7 @@ class TaskScheduleMonitor:
 
     @staticmethod
     def init_task_status() -> dict:
-        return {"running": 0, "remaining": 0}
+        return {"running": 0, "remaining": 0, "pending": 0}
 
     def get_tasks_status(self) -> dict:
         if isinstance(self.queue, SchedulerRedisQueue):
@@ -158,6 +158,7 @@ class TaskScheduleMonitor:
             # running from dispatcher if available
             if self.dispatcher and hasattr(self.dispatcher, "get_running_task_count"):
                 task_status["running"] = int(self.dispatcher.get_running_task_count())
+                task_status["pending"] = task_status["running"]
         except Exception as e:
             logger.warning(f"Failed to collect local queue status: {e}")
         return task_status
@@ -200,11 +201,13 @@ class TaskScheduleMonitor:
                                 if group.get("name") == self.queue.consumer_group:
                                     pending = int(group.get("pending", 0))
                                     break
-                        # Remaining = total messages (xlen) - pending for our group
-                        remaining = max(0, int(xlen_val or 0))
+                        total_messages = max(0, int(xlen_val or 0))
+                        remaining = max(0, total_messages - pending)
                         local[stream_key]["running"] += pending
+                        local[stream_key]["pending"] += pending
                         local[stream_key]["remaining"] += remaining
                         local["running"] += pending
+                        local["pending"] += pending
                         local["remaining"] += remaining
                     return local
 
@@ -234,10 +237,12 @@ class TaskScheduleMonitor:
                 for group in groups_info:
                     if group.get("name") == self.queue.consumer_group:
                         pending = int(group.get("pending", 0))
-                        remaining = max(0, xlen_val)
+                        remaining = max(0, xlen_val - pending)
                         task_status[stream_key]["running"] += pending
+                        task_status[stream_key]["pending"] += pending
                         task_status[stream_key]["remaining"] += remaining
                         task_status["running"] += pending
+                        task_status["pending"] += pending
                         task_status["remaining"] += remaining
                         break
 
