@@ -64,14 +64,58 @@ def handle_scheduler_allstatus(
             total=total,
         )
 
-    try:
-        # Get all task details from Redis and aggregate counts
-        global_tasks = status_tracker.get_all_tasks_global()
-        all_task_details: list[dict[str, Any]] = []
-        for user_id, tasks in global_tasks.items():
-            all_task_details.extend(tasks.values())
+    def _aggregate_counts_from_redis(tracker: TaskStatusTracker) -> TaskSummary | None:
+        """Stream status counts directly from Redis to avoid loading all task payloads."""
+        redis_client = getattr(tracker, "redis", None)
+        if not redis_client:
+            return None
 
-        all_tasks_summary = _summarize_tasks(all_task_details)
+        counter = Counter()
+
+        # Scan task_meta keys, then hscan each hash in batches
+        cursor: int | str = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor=cursor, match="memos:task_meta:*", count=200)
+            for key in keys:
+                h_cursor: int | str = 0
+                while True:
+                    h_cursor, fields = redis_client.hscan(key, cursor=h_cursor, count=500)
+                    for value in fields.values():
+                        try:
+                            payload = json.loads(value.decode("utf-8") if isinstance(value, bytes) else value)
+                            status = payload.get("status")
+                            if status:
+                                counter[status] += 1
+                        except Exception:
+                            continue
+                    if h_cursor == 0 or h_cursor == "0":
+                        break
+            if cursor == 0 or cursor == "0":
+                break
+
+        if not counter:
+            return TaskSummary()  # Empty summary if nothing found
+
+        total = sum(counter.values())
+        return TaskSummary(
+            waiting=counter.get("waiting", 0),
+            in_progress=counter.get("in_progress", 0),
+            completed=counter.get("completed", 0),
+            failed=counter.get("failed", 0),
+            cancelled=counter.get("cancelled", 0),
+            total=total,
+        )
+
+    try:
+        # Prefer streaming aggregation to avoid pulling all task payloads
+        all_tasks_summary = _aggregate_counts_from_redis(status_tracker)
+        if all_tasks_summary is None:
+            # Fallback: load all details then aggregate
+            global_tasks = status_tracker.get_all_tasks_global()
+            all_task_details: list[dict[str, Any]] = []
+            for user_id, tasks in global_tasks.items():
+                all_task_details.extend(tasks.values())
+            all_tasks_summary = _summarize_tasks(all_task_details)
 
         # Scheduler view: assume tracker contains scheduler tasks; overlay queue monitor for live queue depth
         sched_waiting = all_tasks_summary.waiting
