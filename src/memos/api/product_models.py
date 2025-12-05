@@ -867,16 +867,29 @@ class StatusResponse(BaseResponse[list[StatusResponseItem]]):
     message: str = "Memory get status successfully"
 
 
-class AllStatusResponseData(BaseModel):
-    """Data model for full scheduler status."""
+class TaskSummary(BaseModel):
+    """Aggregated counts of tasks by status."""
 
-    running_tasks: dict[str, Any] = Field(..., description="Details of currently running tasks")
-    queue_status: dict[str, Any] = Field(
-        ..., description="Status of the task queue (running/remaining counts)"
+    waiting: int = Field(0, description="Number of tasks waiting to run")
+    in_progress: int = Field(0, description="Number of tasks currently running")
+    completed: int = Field(0, description="Number of tasks completed")
+    failed: int = Field(0, description="Number of tasks failed")
+    cancelled: int = Field(0, description="Number of tasks cancelled")
+    total: int = Field(0, description="Total number of tasks counted")
+
+
+class AllStatusResponseData(BaseModel):
+    """Aggregated scheduler status metrics."""
+
+    scheduler_summary: TaskSummary = Field(
+        ..., description="Aggregated status for scheduler-managed tasks"
+    )
+    all_tasks_summary: TaskSummary = Field(
+        ..., description="Aggregated status for all tracked tasks"
     )
 
 
 class AllStatusResponse(BaseResponse[AllStatusResponseData]):
     """Response model for full scheduler status operations."""
 
-    message: str = "Full scheduler status retrieved successfully"
+    message: str = "Scheduler status summary retrieved successfully"
