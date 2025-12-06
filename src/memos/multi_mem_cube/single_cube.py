@@ -662,6 +662,13 @@ class SingleCubeView(MemCubeView):
             mode=extract_mode,
         )
         flattened_local = [mm for m in memories_local for mm in m]
+
+        # Explicitly set source_doc_id to metadata if present in info
+        source_doc_id = (add_req.info or {}).get("source_doc_id")
+        if source_doc_id:
+            for memory in flattened_local:
+                memory.metadata.source_doc_id = source_doc_id
+
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
 
         # Add memories to text_mem
