@@ -137,9 +137,12 @@ class TreeTextMemory(BaseTextMemory):
             self.graph_store,
             self.embedder,
             self.reranker,
+            bm25_retriever=self.bm25_retriever,
             internet_retriever=self.internet_retriever,
+            search_strategy=self.search_strategy,
             manual_close_internet=manual_close_internet,
             process_llm=process_llm,
+            tokenizer=self.tokenizer,
         )
         return searcher
 

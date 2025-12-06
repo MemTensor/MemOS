@@ -275,6 +275,10 @@ class Searcher:
             **kwargs,
         )
 
+        # TODO: tmp field playground_search_goal_parser for playground, will be removed later
+        if kwargs.get("playground_search_goal_parser", False):
+            parsed_goal.internet_search = False
+
         query = parsed_goal.rephrased_query or query
         # if goal has extra memories, embed them too
         if parsed_goal.memories:
@@ -527,7 +531,8 @@ class Searcher:
         if self.manual_close_internet and not parsed_goal.internet_search:
             logger.info(f"[PATH-C] '{query}' Skipped (no retriever, fast mode)")
             return []
-        if memory_type not in ["All"]:
+        if memory_type not in ["All", "OuterMemory"]:
+            logger.info(f"[PATH-C] '{query}' Skipped (memory_type does not match)")
             return []
         logger.info(f"[PATH-C] '{query}' Retrieving from internet...")
         items = self.internet_retriever.retrieve_from_internet(
