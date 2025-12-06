@@ -1088,35 +1088,68 @@ def convert_activation_memory_to_serializable(
 
     for item in act_mem_items:
         # Extract basic information that can be serialized
+        # Infer counts/device/dtype compatibly for new/old DynamicCache APIs
+        mem = item.memory
+        key_layers = 0
+        val_layers = 0
+        device_str = "unknown"
+        dtype_str = "unknown"
+
+        if mem:
+            if hasattr(mem, "layers") and mem.layers is not None:
+                key_layers = len(mem.layers)
+                val_layers = len(mem.layers)
+                # find first available tensor to report device/dtype
+                for lyr in mem.layers:
+                    t = getattr(lyr, "keys", None)
+                    if t is None:
+                        t = getattr(lyr, "values", None)
+                    if t is not None:
+                        device_str = str(t.device)
+                        dtype_str = str(t.dtype)
+                        break
+            else:
+                key_layers = len(getattr(mem, "key_cache", []) or [])
+                val_layers = len(getattr(mem, "value_cache", []) or [])
+                if getattr(mem, "key_cache", None):
+                    first = next((t for t in mem.key_cache if t is not None), None)
+                    if first is not None:
+                        device_str = str(first.device)
+                        dtype_str = str(first.dtype)
+
         serializable_item = {
             "id": item.id,
             "metadata": item.metadata,
             "memory_info": {
                 "type": "DynamicCache",
-                "key_cache_layers": len(item.memory.key_cache) if item.memory else 0,
-                "value_cache_layers": len(item.memory.value_cache) if item.memory else 0,
-                "device": str(item.memory.key_cache[0].device)
-                if item.memory and item.memory.key_cache
-                else "unknown",
-                "dtype": str(item.memory.key_cache[0].dtype)
-                if item.memory and item.memory.key_cache
-                else "unknown",
+                "key_cache_layers": key_layers,
+                "value_cache_layers": val_layers,
+                "device": device_str,
+                "dtype": dtype_str,
             },
         }
 
         # Add tensor shape information if available
-        if item.memory and item.memory.key_cache:
+        if item.memory:
             key_shapes = []
             value_shapes = []
-
-            for i, key_tensor in enumerate(item.memory.key_cache):
-                if key_tensor is not None:
-                    key_shapes.append({"layer": i, "shape": list(key_tensor.shape)})
-
-                if i < len(item.memory.value_cache) and item.memory.value_cache[i] is not None:
-                    value_shapes.append(
-                        {"layer": i, "shape": list(item.memory.value_cache[i].shape)}
-                    )
+            mem = item.memory
+            if hasattr(mem, "layers") and mem.layers is not None:
+                for i, layer in enumerate(mem.layers):
+                    if getattr(layer, "keys", None) is not None:
+                        key_shapes.append({"layer": i, "shape": list(layer.keys.shape)})
+                    if getattr(layer, "values", None) is not None:
+                        value_shapes.append({"layer": i, "shape": list(layer.values.shape)})
+            elif getattr(mem, "key_cache", None):
+                for i, key_tensor in enumerate(mem.key_cache):
+                    if key_tensor is not None:
+                        key_shapes.append({"layer": i, "shape": list(key_tensor.shape)})
+                    if (
+                        hasattr(mem, "value_cache")
+                        and i < len(mem.value_cache)
+                        and mem.value_cache[i] is not None
+                    ):
+                        value_shapes.append({"layer": i, "shape": list(mem.value_cache[i].shape)})
 
             serializable_item["memory_info"]["key_shapes"] = key_shapes
             serializable_item["memory_info"]["value_shapes"] = value_shapes
@@ -1144,15 +1177,22 @@ def convert_activation_memory_summary(act_mem_items: list[KVCacheItem]) -> dict[
     total_parameters = 0
 
     for item in act_mem_items:
-        if item.memory and item.memory.key_cache:
-            total_layers += len(item.memory.key_cache)
-
-            # Calculate approximate parameter count
-            for key_tensor in item.memory.key_cache:
+        mem = item.memory
+        if not mem:
+            continue
+        if hasattr(mem, "layers") and mem.layers is not None:
+            total_layers += len(mem.layers)
+            for layer in mem.layers:
+                if getattr(layer, "keys", None) is not None:
+                    total_parameters += layer.keys.numel()
+                if getattr(layer, "values", None) is not None:
+                    total_parameters += layer.values.numel()
+        elif getattr(mem, "key_cache", None):
+            total_layers += len(mem.key_cache)
+            for key_tensor in mem.key_cache:
                 if key_tensor is not None:
                     total_parameters += key_tensor.numel()
-
-            for value_tensor in item.memory.value_cache:
+            for value_tensor in getattr(mem, "value_cache", []) or []:
                 if value_tensor is not None:
                     total_parameters += value_tensor.numel()
 
