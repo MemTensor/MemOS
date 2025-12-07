@@ -16,6 +16,7 @@ from memos.context.context import (
     ContextThread,
     RequestContext,
     get_current_context,
+    get_current_trace_id,
     set_request_context,
 )
 from memos.llms.base import BaseLLM
@@ -664,10 +665,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         if not messages:
             return
 
+        current_trace_id = get_current_trace_id()
+
         immediate_msgs: list[ScheduleMessageItem] = []
         queued_msgs: list[ScheduleMessageItem] = []
 
         for msg in messages:
+            # propagate request trace_id when available so monitor logs align with request logs
+            if current_trace_id:
+                msg.trace_id = current_trace_id
+
             # basic metrics and status tracking
             with suppress(Exception):
                 self.metrics.task_enqueued(user_id=msg.user_id, task_type=msg.label)
