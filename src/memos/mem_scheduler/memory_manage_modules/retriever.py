@@ -134,8 +134,10 @@ class SchedulerRetriever(BaseSchedulerModule):
                         for new_mem in processed_text_memories:
                             enhanced_memories.append(
                                 TextualMemoryItem(
-                                    memory=new_mem, metadata=TextualMemoryMetadata(user_id=user_id,
-                                    memory_type="LongTermMemory") #TODO add memory_type
+                                    memory=new_mem,
+                                    metadata=TextualMemoryMetadata(
+                                        user_id=user_id, memory_type="LongTermMemory"
+                                    ),  # TODO add memory_type
                                 )
                             )
                     elif FINE_STRATEGY == FineStrategy.REWRITE:
