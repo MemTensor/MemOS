@@ -1,3 +1,5 @@
+import os
+
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -42,6 +44,28 @@ DEFAULT_MAX_QUERY_KEY_WORDS = 1000
 LONG_TERM_MEMORY_TYPE = "LongTermMemory"
 USER_INPUT_TYPE = "UserInput"
 NOT_APPLICABLE_TYPE = "NotApplicable"
+
+# pending claim configuration
+# Only claim pending messages whose idle time exceeds this threshold.
+# Unit: milliseconds. Default: 10 minute.
+DEFAULT_PENDING_CLAIM_MIN_IDLE_MS = 600_000
+
+# scheduler daemon defaults
+# Interval in seconds for periodically releasing stale pending messages
+DEFAULT_PENDING_REQUEUE_INTERVAL_SEC = 30.0
+
+# Interval in seconds for refreshing cached Redis stream keys
+DEFAULT_STREAM_KEYS_REFRESH_INTERVAL_SEC = 30.0
+
+# Interval in seconds for batching and cleaning up deletions (xdel)
+DEFAULT_DELETE_CLEANUP_INTERVAL_SEC = 30.0
+
+
+# task queue
+DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v1.7"
+exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME", None)
+if exchange_name is not None:
+    DEFAULT_STREAM_KEY_PREFIX += f":{exchange_name}"
 
 
 # ============== Running Tasks ==============

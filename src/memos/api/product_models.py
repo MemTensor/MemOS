@@ -884,6 +884,34 @@ class StatusResponse(BaseResponse[list[StatusResponseItem]]):
     message: str = "Memory get status successfully"
 
 
+class TaskQueueData(BaseModel):
+    """Queue-level metrics for scheduler tasks."""
+
+    user_id: str = Field(..., description="User ID the query is scoped to")
+    user_name: str | None = Field(None, description="User name if available")
+    mem_cube_id: str | None = Field(
+        None, description="MemCube ID if a single cube is targeted; otherwise None"
+    )
+    stream_keys: list[str] = Field(..., description="Matched Redis stream keys for this user")
+    users_count: int = Field(..., description="Distinct users currently present in queue streams")
+    pending_tasks_count: int = Field(
+        ..., description="Count of pending (delivered, not acked) tasks"
+    )
+    remaining_tasks_count: int = Field(..., description="Count of enqueued tasks (xlen)")
+    pending_tasks_detail: list[str] = Field(
+        ..., description="Per-stream pending counts, formatted as '{stream_key}:{count}'"
+    )
+    remaining_tasks_detail: list[str] = Field(
+        ..., description="Per-stream remaining counts, formatted as '{stream_key}:{count}'"
+    )
+
+
+class TaskQueueResponse(BaseResponse[TaskQueueData]):
+    """Response model for scheduler task queue status."""
+
+    message: str = "Scheduler task queue status retrieved successfully"
+
+
 class TaskSummary(BaseModel):
     """Aggregated counts of tasks by status."""
 

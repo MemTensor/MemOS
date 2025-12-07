@@ -41,6 +41,7 @@ from memos.api.product_models import (
     StatusResponse,
     SuggestionRequest,
     SuggestionResponse,
+    TaskQueueResponse,
 )
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
@@ -140,6 +141,20 @@ def scheduler_status(
         user_id=user_id,
         task_id=task_id,
         status_tracker=status_tracker,
+    )
+
+
+@router.get(  # Changed from post to get
+    "/scheduler/task_queue_status",
+    summary="Get scheduler task queue status",
+    response_model=TaskQueueResponse,
+)
+def scheduler_task_queue_status(
+    user_id: str = Query(..., description="User ID whose queue status is requested"),
+):
+    """Get scheduler task queue backlog/pending status for a user."""
+    return handlers.scheduler_handler.handle_task_queue_status(
+        user_id=user_id, mem_scheduler=mem_scheduler
     )
 
 

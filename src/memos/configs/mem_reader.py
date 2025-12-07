@@ -44,6 +44,7 @@ class BaseMemReaderConfig(BaseConfig):
 class SimpleStructMemReaderConfig(BaseMemReaderConfig):
     """SimpleStruct MemReader configuration class."""
 
+    # Allow passing additional fields without raising validation errors
     model_config = ConfigDict(extra="allow", strict=True)
 
 

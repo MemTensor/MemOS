@@ -377,21 +377,37 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 continue
-            for m in resp.get("memory list", []):
+            if resp.get("memory list", []):
+                for m in resp.get("memory list", []):
+                    try:
+                        # Normalize memory_type (same as simple_struct)
+                        memory_type = (
+                            m.get("memory_type", "LongTermMemory")
+                            .replace("长期记忆", "LongTermMemory")
+                            .replace("用户记忆", "UserMemory")
+                        )
+                        # Create fine mode memory item (same as simple_struct)
+                        node = self._make_memory_item(
+                            value=m.get("value", ""),
+                            info=info,
+                            memory_type=memory_type,
+                            tags=m.get("tags", []),
+                            key=m.get("key", ""),
+                            sources=sources,  # Preserve sources from fast item
+                            background=resp.get("summary", ""),
+                        )
+                        fine_memory_items.append(node)
+                    except Exception as e:
+                        logger.error(f"[MultiModalFine] parse error: {e}")
+            elif resp.get("value") and resp.get("key"):
                 try:
-                    # Normalize memory_type (same as simple_struct)
-                    memory_type = (
-                        m.get("memory_type", "LongTermMemory")
-                        .replace("长期记忆", "LongTermMemory")
-                        .replace("用户记忆", "UserMemory")
-                    )
                     # Create fine mode memory item (same as simple_struct)
                     node = self._make_memory_item(
-                        value=m.get("value", ""),
+                        value=resp.get("value", "").strip(),
                         info=info,
-                        memory_type=memory_type,
-                        tags=m.get("tags", []),
-                        key=m.get("key", ""),
+                        memory_type="LongTermMemory",
+                        tags=resp.get("tags", []),
+                        key=resp.get("key", None),
                         sources=sources,  # Preserve sources from fast item
                         background=resp.get("summary", ""),
                     )

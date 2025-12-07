@@ -2,7 +2,6 @@ import concurrent.futures
 import contextlib
 import json
 import os
-import time
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -339,17 +338,9 @@ class GeneralScheduler(BaseScheduler):
             try:
                 # This mem_item represents the NEW content that was just added/processed
                 mem_item: TextualMemoryItem | None = None
-                for attempt in range(3):
-                    try:
-                        mem_item = self.current_mem_cube.text_mem.get(
-                            memory_id=memory_id, user_name=msg.mem_cube_id
-                        )
-                        break
-                    except Exception:
-                        if attempt < 2:
-                            time.sleep(0.5)
-                        else:
-                            raise
+                mem_item = self.current_mem_cube.text_mem.get(
+                    memory_id=memory_id, user_name=msg.mem_cube_id
+                )
                 if mem_item is None:
                     raise ValueError(f"Memory {memory_id} not found after retries")
                 # Check if a memory with the same key already exists (determining if it's an update)
