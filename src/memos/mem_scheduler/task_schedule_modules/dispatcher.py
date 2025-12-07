@@ -437,7 +437,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         try:
             enq_epoch = None
 
-            if isinstance(enqueue_ts, (int, float)):
+            if isinstance(enqueue_ts, int | float):
                 enq_epoch = float(enqueue_ts)
             elif hasattr(enqueue_ts, "timestamp"):
                 dt = enqueue_ts
