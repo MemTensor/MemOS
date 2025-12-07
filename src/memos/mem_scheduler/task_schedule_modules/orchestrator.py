@@ -19,6 +19,8 @@ from memos.log import get_logger
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
     ANSWER_TASK_LABEL,
+    DEFAULT_PENDING_CLAIM_MIN_IDLE_MS,
+    PREF_ADD_TASK_LABEL,
     QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
@@ -42,15 +44,22 @@ class SchedulerOrchestrator(RedisSchedulerModule):
             ANSWER_TASK_LABEL: TaskPriorityLevel.LEVEL_1,
         }
 
+        # Per-task minimum idle time (ms) before claiming pending messages
+        # Default fallback handled in `get_task_idle_min`.
+        self.tasks_min_idle_ms = {
+            # Preferential add tasks: allow claiming pending sooner (1 minute)
+            PREF_ADD_TASK_LABEL: 60_000,
+        }
+
     def get_stream_priorities(self) -> None | dict:
         return None
 
     def get_task_priority(self, task_label: str):
-        task_priority = TaskPriorityLevel.LEVEL_3
-        if task_label in self.tasks_priorities:
-            task_priority = self.tasks_priorities[task_label]
-        logger.info(f"get_task_priority: {task_priority}")
-        return task_priority
+        return self.tasks_priorities.get(task_label, TaskPriorityLevel.LEVEL_3)
+
+    def get_task_idle_min(self, task_label: str) -> int:
+        idle_min = self.tasks_min_idle_ms.get(task_label, DEFAULT_PENDING_CLAIM_MIN_IDLE_MS)
+        return idle_min
 
     def get_stream_quotas(self, stream_keys, consume_batch_size) -> dict:
         stream_priorities = self.get_stream_priorities()

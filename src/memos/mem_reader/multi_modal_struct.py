@@ -358,13 +358,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if not fast_memory_items:
             return []
 
-        fine_memory_items = []
+        def _process_one_item(fast_item: TextualMemoryItem) -> list[TextualMemoryItem]:
+            """Process a single fast memory item and return a list of fine items."""
+            fine_items: list[TextualMemoryItem] = []
 
-        for fast_item in fast_memory_items:
             # Extract memory text (string content)
             mem_str = fast_item.memory or ""
             if not mem_str.strip():
-                continue
+                return fine_items
+
             sources = fast_item.metadata.sources or []
             if not isinstance(sources, list):
                 sources = [sources]
@@ -376,28 +378,60 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
-                continue
-            for m in resp.get("memory list", []):
+                return fine_items
+
+            if resp.get("memory list", []):
+                for m in resp.get("memory list", []):
+                    try:
+                        # Normalize memory_type (same as simple_struct)
+                        memory_type = (
+                            m.get("memory_type", "LongTermMemory")
+                            .replace("长期记忆", "LongTermMemory")
+                            .replace("用户记忆", "UserMemory")
+                        )
+                        # Create fine mode memory item (same as simple_struct)
+                        node = self._make_memory_item(
+                            value=m.get("value", ""),
+                            info=info,
+                            memory_type=memory_type,
+                            tags=m.get("tags", []),
+                            key=m.get("key", ""),
+                            sources=sources,  # Preserve sources from fast item
+                            background=resp.get("summary", ""),
+                        )
+                        fine_items.append(node)
+                    except Exception as e:
+                        logger.error(f"[MultiModalFine] parse error: {e}")
+            elif resp.get("value") and resp.get("key"):
                 try:
-                    # Normalize memory_type (same as simple_struct)
-                    memory_type = (
-                        m.get("memory_type", "LongTermMemory")
-                        .replace("长期记忆", "LongTermMemory")
-                        .replace("用户记忆", "UserMemory")
-                    )
                     # Create fine mode memory item (same as simple_struct)
                     node = self._make_memory_item(
-                        value=m.get("value", ""),
+                        value=resp.get("value", "").strip(),
                         info=info,
-                        memory_type=memory_type,
-                        tags=m.get("tags", []),
-                        key=m.get("key", ""),
+                        memory_type="LongTermMemory",
+                        tags=resp.get("tags", []),
+                        key=resp.get("key", None),
                         sources=sources,  # Preserve sources from fast item
                         background=resp.get("summary", ""),
                     )
-                    fine_memory_items.append(node)
+                    fine_items.append(node)
                 except Exception as e:
                     logger.error(f"[MultiModalFine] parse error: {e}")
+
+            return fine_items
+
+        fine_memory_items: list[TextualMemoryItem] = []
+
+        with ContextThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(_process_one_item, item) for item in fast_memory_items]
+
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        fine_memory_items.extend(result)
+                except Exception as e:
+                    logger.error(f"[MultiModalFine] worker error: {e}")
 
         return fine_memory_items
 

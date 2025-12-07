@@ -20,7 +20,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_STOP_WAIT,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem, TaskPriorityLevel
+from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
@@ -132,9 +132,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
             start_time = time.time()
             start_iso = datetime.fromtimestamp(start_time, tz=timezone.utc).isoformat()
             if self.status_tracker:
-                self.status_tracker.task_started(
-                    task_id=task_item.item_id, user_id=task_item.user_id
-                )
+                for msg in messages:
+                    self.status_tracker.task_started(task_id=msg.item_id, user_id=msg.user_id)
             try:
                 first_msg = messages[0]
                 trace_id = getattr(first_msg, "trace_id", None) or generate_trace_id()
@@ -197,9 +196,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 duration = finish_time - start_time
                 self.metrics.observe_task_duration(duration, m.user_id, m.label)
                 if self.status_tracker:
-                    self.status_tracker.task_completed(
-                        task_id=task_item.item_id, user_id=task_item.user_id
-                    )
+                    for msg in messages:
+                        self.status_tracker.task_completed(task_id=msg.item_id, user_id=msg.user_id)
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
 
                 emit_monitor_event(
@@ -212,6 +210,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             finish_time, tz=timezone.utc
                         ).isoformat(),
                         "exec_duration_ms": duration * 1000,
+                        "total_duration_ms": self._calc_total_duration_ms(
+                            finish_time, getattr(first_msg, "timestamp", None)
+                        ),
                     },
                 )
                 # Redis ack is handled in finally to cover failure cases
@@ -229,9 +230,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 finish_time = time.time()
                 self.metrics.task_failed(m.user_id, m.label, type(e).__name__)
                 if self.status_tracker:
-                    self.status_tracker.task_failed(
-                        task_id=task_item.item_id, user_id=task_item.user_id, error_message=str(e)
-                    )
+                    for msg in messages:
+                        self.status_tracker.task_failed(
+                            task_id=msg.item_id, user_id=msg.user_id, error_message=str(e)
+                        )
                 emit_monitor_event(
                     "finish",
                     m,
@@ -244,6 +246,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         "exec_duration_ms": (finish_time - start_time) * 1000,
                         "error_type": type(e).__name__,
                         "error_msg": str(e),
+                        "total_duration_ms": self._calc_total_duration_ms(
+                            finish_time, getattr(m, "timestamp", None)
+                        ),
                     },
                 )
                 # Mark task as failed and remove from tracking
@@ -262,7 +267,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 ):
                     try:
                         for msg in messages:
-                            redis_message_id = getattr(msg, "redis_message_id", "")
+                            redis_message_id = msg.redis_message_id
                             self.memos_message_queue.ack_message(
                                 user_id=msg.user_id,
                                 mem_cube_id=msg.mem_cube_id,
@@ -424,6 +429,78 @@ class SchedulerDispatcher(BaseSchedulerModule):
         except Exception as e:
             logger.error(f"Handler execution failed: {e!s}", exc_info=True)
 
+    @staticmethod
+    def _calc_total_duration_ms(finish_epoch: float, enqueue_ts) -> float | None:
+        """
+        Calculate total duration from enqueue timestamp to finish time in milliseconds.
+        """
+        try:
+            enq_epoch = None
+
+            if isinstance(enqueue_ts, int | float):
+                enq_epoch = float(enqueue_ts)
+            elif hasattr(enqueue_ts, "timestamp"):
+                dt = enqueue_ts
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                enq_epoch = dt.timestamp()
+
+            if enq_epoch is None:
+                return None
+
+            total_ms = max(0.0, finish_epoch - enq_epoch) * 1000
+            return total_ms
+        except Exception:
+            return None
+
+    def execute_task(
+        self,
+        user_id: str,
+        mem_cube_id: str,
+        task_label: str,
+        msgs: list[ScheduleMessageItem],
+        handler_call_back: Callable[[list[ScheduleMessageItem]], Any],
+    ):
+        if isinstance(msgs, ScheduleMessageItem):
+            msgs = [msgs]
+        # Create task tracking item for this dispatch
+        task_item = RunningTaskItem(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            task_info=f"Processing {len(msgs)} message(s) with label '{task_label}' for user {user_id} and mem_cube {mem_cube_id}",
+            task_name=f"{task_label}_handler",
+            messages=msgs,
+        )
+
+        # Uniformly register the task before execution
+        with self._task_lock:
+            self._running_tasks[task_item.item_id] = task_item
+
+        # Create wrapped handler for task tracking
+        wrapped_handler = self._create_task_wrapper(handler_call_back, task_item)
+
+        # dispatch to different handler
+        logger.debug(f"Task started: {task_item.get_execution_info()}")
+
+        # If priority is LEVEL_1, force synchronous execution regardless of thread pool availability
+        use_thread_pool = self.enable_parallel_dispatch and self.dispatcher_executor is not None
+
+        if use_thread_pool:
+            # Submit and track the future
+            future = self.dispatcher_executor.submit(wrapped_handler, msgs)
+            with self._task_lock:
+                self._futures.add(future)
+            future.add_done_callback(self._handle_future_result)
+            logger.info(
+                f"Dispatch {len(msgs)} message(s) to {task_label} handler for user {user_id} and mem_cube {mem_cube_id}."
+            )
+        else:
+            # For synchronous execution, the wrapper will run and remove the task upon completion
+            logger.info(
+                f"Execute {len(msgs)} message(s) synchronously for {task_label} for user {user_id} and mem_cube {mem_cube_id}."
+            )
+            wrapped_handler(msgs)
+
     def dispatch(self, msg_list: list[ScheduleMessageItem]):
         """
         Dispatch a list of messages to their respective handlers.
@@ -449,50 +526,13 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 # Process each label group within this user/mem_cube combination
                 for label, msgs in label_groups.items():
                     handler = self.handlers.get(label, self._default_message_handler)
-
-                    # Create task tracking item for this dispatch
-                    task_item = RunningTaskItem(
+                    self.execute_task(
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
-                        task_info=f"Processing {len(msgs)} message(s) with label '{label}' for user {user_id} and mem_cube {mem_cube_id}",
-                        task_name=f"{label}_handler",
-                        messages=msgs,
+                        task_label=label,
+                        msgs=msgs,
+                        handler_call_back=handler,
                     )
-
-                    # Uniformly register the task before execution
-                    with self._task_lock:
-                        self._running_tasks[task_item.item_id] = task_item
-
-                    # Create wrapped handler for task tracking
-                    wrapped_handler = self._create_task_wrapper(handler, task_item)
-
-                    task_priority = self.orchestrator.get_task_priority(task_label=label)
-
-                    # dispatch to different handler
-                    logger.debug(f"Task started: {task_item.get_execution_info()}")
-
-                    # If priority is LEVEL_1, force synchronous execution regardless of thread pool availability
-                    use_thread_pool = (
-                        self.enable_parallel_dispatch
-                        and self.dispatcher_executor is not None
-                        and task_priority != TaskPriorityLevel.LEVEL_1
-                    )
-
-                    if use_thread_pool:
-                        # Submit and track the future
-                        future = self.dispatcher_executor.submit(wrapped_handler, msgs)
-                        with self._task_lock:
-                            self._futures.add(future)
-                        future.add_done_callback(self._handle_future_result)
-                        logger.info(
-                            f"Dispatch {len(msgs)} message(s) to {label} handler for user {user_id} and mem_cube {mem_cube_id}."
-                        )
-                    else:
-                        # For synchronous execution, the wrapper will run and remove the task upon completion
-                        logger.info(
-                            f"Execute {len(msgs)} message(s) synchronously for {label} (priority: {task_priority}) for user {user_id} and mem_cube {mem_cube_id}."
-                        )
-                        wrapped_handler(msgs)
 
     def join(self, timeout: float | None = None) -> bool:
         """Wait for all dispatched tasks to complete.

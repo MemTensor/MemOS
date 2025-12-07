@@ -22,10 +22,13 @@ from memos.api.product_models import (
     AllStatusResponseData,
     StatusResponse,
     StatusResponseItem,
+    TaskQueueData,
+    TaskQueueResponse,
     TaskSummary,
 )
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
+from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
@@ -240,6 +243,100 @@ def handle_scheduler_status(
         raise
     except Exception as err:
         logger.error(f"Failed to get scheduler status for user {user_id}: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Failed to get scheduler status") from err
+
+
+def handle_task_queue_status(
+    user_id: str, mem_scheduler: OptimizedScheduler, task_id: str | None = None
+) -> TaskQueueResponse:
+    try:
+        queue_wrapper = getattr(mem_scheduler, "memos_message_queue", None)
+        if queue_wrapper is None:
+            raise HTTPException(status_code=503, detail="Scheduler queue is not available")
+
+        # Unwrap to the underlying queue if wrapped by ScheduleTaskQueue
+        queue = getattr(queue_wrapper, "memos_message_queue", queue_wrapper)
+
+        # Only support Redis-backed queue for now; try lazy init if not connected
+        redis_conn = getattr(queue, "_redis_conn", None)
+        if redis_conn is None:
+            try:
+                if hasattr(queue, "auto_initialize_redis"):
+                    queue.auto_initialize_redis()
+                    redis_conn = getattr(queue, "_redis_conn", None)
+                if redis_conn and hasattr(queue, "connect"):
+                    queue.connect()
+            except Exception:
+                redis_conn = None
+
+        if redis_conn is None:
+            raise HTTPException(status_code=503, detail="Scheduler queue not connected to Redis")
+
+        # Use wrapper to list stream keys so it can adapt to local/redis queue
+        stream_keys = queue_wrapper.get_stream_keys()
+        # Filter by user_id; stream key format: {prefix}:{user_id}:{mem_cube_id}:{task_label}
+        user_stream_keys = [sk for sk in stream_keys if f":{user_id}:" in sk]
+
+        if not user_stream_keys:
+            raise HTTPException(
+                status_code=404, detail=f"No scheduler streams found for user {user_id}"
+            )
+
+        def _parse_user_id_from_stream(stream_key: str) -> str | None:
+            try:
+                parts = stream_key.split(":")
+                if len(parts) < 3:
+                    return None
+                # prefix may contain multiple segments; user_id is the 2nd segment from the end - 1
+                return parts[-3]
+            except Exception:
+                return None
+
+        user_ids_present = {
+            uid for uid in (_parse_user_id_from_stream(sk) for sk in stream_keys) if uid
+        }
+
+        pending_total = 0
+        pending_detail: list[str] = []
+        remaining_total = 0
+        remaining_detail: list[str] = []
+
+        consumer_group = getattr(queue, "consumer_group", None) or "scheduler_group"
+        for sk in user_stream_keys:
+            try:
+                pending_info = redis_conn.xpending(sk, consumer_group)
+                pending_count = pending_info[0] if pending_info else 0
+            except Exception:
+                pending_count = 0
+            pending_total += pending_count
+            pending_detail.append(f"{sk}:{pending_count}")
+
+            try:
+                remaining_count = redis_conn.xlen(sk)
+            except Exception:
+                remaining_count = 0
+            remaining_total += remaining_count
+            remaining_detail.append(f"{sk}:{remaining_count}")
+
+        data = TaskQueueData(
+            user_id=user_id,
+            user_name=None,
+            mem_cube_id=None,
+            stream_keys=user_stream_keys,
+            users_count=len(user_ids_present),
+            pending_tasks_count=pending_total,
+            remaining_tasks_count=remaining_total,
+            pending_tasks_detail=pending_detail,
+            remaining_tasks_detail=remaining_detail,
+        )
+        return TaskQueueResponse(data=data)
+    except HTTPException:
+        # Re-raise HTTPException directly to preserve its status code (e.g., 404)
+        raise
+    except Exception as err:
+        logger.error(
+            f"Failed to get task queue status for user {user_id}: {traceback.format_exc()}"
+        )
         raise HTTPException(status_code=500, detail="Failed to get scheduler status") from err
 
 

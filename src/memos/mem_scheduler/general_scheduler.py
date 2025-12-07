@@ -2,7 +2,6 @@ import concurrent.futures
 import contextlib
 import json
 import os
-import time
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -339,17 +338,9 @@ class GeneralScheduler(BaseScheduler):
             try:
                 # This mem_item represents the NEW content that was just added/processed
                 mem_item: TextualMemoryItem | None = None
-                for attempt in range(3):
-                    try:
-                        mem_item = self.current_mem_cube.text_mem.get(
-                            memory_id=memory_id, user_name=msg.mem_cube_id
-                        )
-                        break
-                    except Exception:
-                        if attempt < 2:
-                            time.sleep(0.5)
-                        else:
-                            raise
+                mem_item = self.current_mem_cube.text_mem.get(
+                    memory_id=memory_id, user_name=msg.mem_cube_id
+                )
                 if mem_item is None:
                     raise ValueError(f"Memory {memory_id} not found after retries")
                 # Check if a memory with the same key already exists (determining if it's an update)
@@ -525,8 +516,12 @@ class GeneralScheduler(BaseScheduler):
         """
         kb_log_content: list[dict] = []
         info = msg.info or {}
+
         # Process added items
         for item in prepared_add_items:
+            metadata = getattr(item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+            source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
             kb_log_content.append(
                 {
                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -535,13 +530,16 @@ class GeneralScheduler(BaseScheduler):
                     "memory_id": item.id,
                     "content": item.memory,
                     "original_content": None,
-                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                    "source_doc_id": source_doc_id,
                 }
             )
 
         # Process updated items
         for item_data in prepared_update_items_with_original:
             item = item_data["new_item"]
+            metadata = getattr(item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+            source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
             kb_log_content.append(
                 {
                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -550,7 +548,7 @@ class GeneralScheduler(BaseScheduler):
                     "memory_id": item.id,
                     "content": item.memory,
                     "original_content": item_data.get("original_content"),
-                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                    "source_doc_id": source_doc_id,
                 }
             )
 
@@ -897,6 +895,11 @@ class GeneralScheduler(BaseScheduler):
                         # New: Knowledge Base Logging (Cloud Service)
                         kb_log_content = []
                         for item in flattened_memories:
+                            metadata = getattr(item, "metadata", None)
+                            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+                            source_doc_id = (
+                                file_ids[0] if isinstance(file_ids, list) and file_ids else None
+                            )
                             kb_log_content.append(
                                 {
                                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -907,7 +910,7 @@ class GeneralScheduler(BaseScheduler):
                                     "memory_id": item.id,
                                     "content": item.memory,
                                     "original_content": None,
-                                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                                    "source_doc_id": source_doc_id,
                                 }
                             )
                         if kb_log_content:
