@@ -159,6 +159,14 @@ class ChatRequest(BaseRequest):
         return self
 
 
+class ChatPlaygroundRequest(ChatRequest):
+    """Request model for chat operations in playground."""
+
+    beginner_guide_step: str | None = Field(
+        None, description="Whether to use beginner guide, option: [first, second]"
+    )
+
+
 class ChatCompleteRequest(BaseRequest):
     """Request model for chat operations. will (Deprecated), instead use APIChatCompleteRequest."""
 
@@ -373,6 +381,11 @@ class APISearchRequest(BaseRequest):
             "If None, default thresholds will be applied."
         ),
     )
+    # Internal field for search memory type
+    search_memory_type: str = Field(
+        "All",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory",
+    )
 
     # ==== Context ====
     chat_history: MessageList | None = Field(
@@ -443,6 +456,13 @@ class APISearchRequest(BaseRequest):
             )
 
         return self
+
+
+class APISearchPlaygroundRequest(APISearchRequest):
+    """Request model for searching memories in playground."""
+
+    # TODO: tmp field for playground search goal parser, will be removed later
+    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
 
 
 class APIADDRequest(BaseRequest):
@@ -862,3 +882,62 @@ class StatusResponse(BaseResponse[list[StatusResponseItem]]):
     """Response model for scheduler status operations."""
 
     message: str = "Memory get status successfully"
+
+
+class TaskQueueData(BaseModel):
+    """Queue-level metrics for scheduler tasks."""
+
+    user_id: str = Field(..., description="User ID the query is scoped to")
+    user_name: str | None = Field(None, description="User name if available")
+    mem_cube_id: str | None = Field(
+        None, description="MemCube ID if a single cube is targeted; otherwise None"
+    )
+    stream_keys: list[str] = Field(..., description="Matched Redis stream keys for this user")
+    users_count: int = Field(..., description="Distinct users currently present in queue streams")
+    pending_tasks_count: int = Field(
+        ..., description="Count of pending (delivered, not acked) tasks"
+    )
+    remaining_tasks_count: int = Field(..., description="Count of enqueued tasks (xlen)")
+    pending_tasks_detail: list[str] = Field(
+        ..., description="Per-stream pending counts, formatted as '{stream_key}:{count}'"
+    )
+    remaining_tasks_detail: list[str] = Field(
+        ..., description="Per-stream remaining counts, formatted as '{stream_key}:{count}'"
+    )
+
+
+class TaskQueueResponse(BaseResponse[TaskQueueData]):
+    """Response model for scheduler task queue status."""
+
+    message: str = "Scheduler task queue status retrieved successfully"
+
+
+class TaskSummary(BaseModel):
+    """Aggregated counts of tasks by status."""
+
+    waiting: int = Field(0, description="Number of tasks waiting to run")
+    in_progress: int = Field(0, description="Number of tasks currently running")
+    pending: int = Field(
+        0, description="Number of tasks fetched by workers but not yet acknowledged"
+    )
+    completed: int = Field(0, description="Number of tasks completed")
+    failed: int = Field(0, description="Number of tasks failed")
+    cancelled: int = Field(0, description="Number of tasks cancelled")
+    total: int = Field(0, description="Total number of tasks counted")
+
+
+class AllStatusResponseData(BaseModel):
+    """Aggregated scheduler status metrics."""
+
+    scheduler_summary: TaskSummary = Field(
+        ..., description="Aggregated status for scheduler-managed tasks"
+    )
+    all_tasks_summary: TaskSummary = Field(
+        ..., description="Aggregated status for all tracked tasks"
+    )
+
+
+class AllStatusResponse(BaseResponse[AllStatusResponseData]):
+    """Response model for full scheduler status operations."""
+
+    message: str = "Scheduler status summary retrieved successfully"

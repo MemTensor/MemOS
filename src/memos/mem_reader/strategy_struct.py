@@ -5,7 +5,8 @@ from abc import ABC
 from memos import log
 from memos.configs.mem_reader import StrategyStructMemReaderConfig
 from memos.configs.parser import ParserConfigFactory
-from memos.mem_reader.simple_struct import SimpleStructMemReader, detect_lang
+from memos.mem_reader.read_multi_modal import detect_lang
+from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.parsers.factory import ParserFactory
 from memos.templates.mem_reader_prompts import (
     CUSTOM_TAGS_INSTRUCTION,

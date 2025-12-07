@@ -17,12 +17,12 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
+)
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
 )
 from memos.memories.textual.tree import TreeTextMemory
 
@@ -106,8 +106,8 @@ class TestGeneralScheduler(unittest.TestCase):
     def test_initialization(self):
         """Test that scheduler initializes with correct default values and handlers."""
         # Verify handler registration
-        self.assertTrue(QUERY_LABEL in self.scheduler.dispatcher.handlers)
-        self.assertTrue(ANSWER_LABEL in self.scheduler.dispatcher.handlers)
+        self.assertTrue(QUERY_TASK_LABEL in self.scheduler.dispatcher.handlers)
+        self.assertTrue(ANSWER_TASK_LABEL in self.scheduler.dispatcher.handlers)
 
     def test_initialize_modules(self):
         """Test module initialization with proper component assignments."""
@@ -121,7 +121,7 @@ class TestGeneralScheduler(unittest.TestCase):
         log_message = ScheduleLogForWebItem(
             user_id="test_user",
             mem_cube_id="test_cube",
-            label=QUERY_LABEL,
+            label=QUERY_TASK_LABEL,
             from_memory_type="WorkingMemory",  # New field
             to_memory_type="LongTermMemory",  # New field
             log_content="Test Content",
@@ -155,7 +155,7 @@ class TestGeneralScheduler(unittest.TestCase):
         # Verify core fields
         self.assertEqual(actual_message.user_id, "test_user")
         self.assertEqual(actual_message.mem_cube_id, "test_cube")
-        self.assertEqual(actual_message.label, QUERY_LABEL)
+        self.assertEqual(actual_message.label, QUERY_TASK_LABEL)
         self.assertEqual(actual_message.from_memory_type, "WorkingMemory")
         self.assertEqual(actual_message.to_memory_type, "LongTermMemory")
         self.assertEqual(actual_message.log_content, "Test Content")
@@ -225,7 +225,7 @@ class TestGeneralScheduler(unittest.TestCase):
         try:
             self.scheduler.update_activation_memory(
                 new_memories=test_memories,
-                label=QUERY_LABEL,
+                label=QUERY_TASK_LABEL,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=self.mem_cube,

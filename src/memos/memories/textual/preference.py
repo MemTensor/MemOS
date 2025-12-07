@@ -168,7 +168,7 @@ class PreferenceTextMemory(BaseTextMemory):
         """Update a memory by memory_id."""
         raise NotImplementedError
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID.
         Args:
             memory_id (str): The ID of the memory to retrieve.

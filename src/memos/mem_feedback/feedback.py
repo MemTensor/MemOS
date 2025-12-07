@@ -17,7 +17,7 @@ from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.mem_feedback.base import BaseMemFeedback
 from memos.mem_feedback.utils import should_keep_update, split_into_chunks
 from memos.mem_reader.factory import MemReaderFactory
-from memos.mem_reader.simple_struct import detect_lang
+from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import (
     MemoryManager,

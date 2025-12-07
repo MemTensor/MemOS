@@ -50,7 +50,7 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID.
         Args:
             memory_id (str): The ID of the memory to retrieve.
