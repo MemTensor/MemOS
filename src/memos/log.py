@@ -53,6 +53,7 @@ class ContextFilter(logging.Filter):
             record.user_name = get_current_user_name()
             record.api_path = get_current_api_path()
         except Exception:
+            record.api_path = "unknown"
             record.trace_id = "trace-id"
             record.env = "prod"
             record.user_type = "normal"
@@ -196,7 +197,7 @@ LOGGING_CONFIG = {
         },
         "file": {
             "level": "DEBUG",
-            "class": "logging.handlers.TimedRotatingFileHandler",
+            "class": "concurrent_log_handler.ConcurrentTimedRotatingFileHandler",
             "when": "midnight",
             "interval": 1,
             "backupCount": 3,
