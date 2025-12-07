@@ -137,9 +137,12 @@ class TreeTextMemory(BaseTextMemory):
             self.graph_store,
             self.embedder,
             self.reranker,
-            internet_retriever=self.internet_retriever,
+            bm25_retriever=self.bm25_retriever,
+            internet_retriever=None,
+            search_strategy=self.search_strategy,
             manual_close_internet=manual_close_internet,
             process_llm=process_llm,
+            tokenizer=self.tokenizer,
         )
         return searcher
 
@@ -262,15 +265,16 @@ class TreeTextMemory(BaseTextMemory):
             )
 
             if subgraph is None or not subgraph["core_node"]:
-                logger.info(f"Skipping node {core_id} (inactive or not found).")
-                continue
+                node = self.graph_store.get_node(core_id, user_name=user_name)
+                subgraph["neighbors"] = [node]
 
             core_node = subgraph["core_node"]
             neighbors = subgraph["neighbors"]
             edges = subgraph["edges"]
 
             # Collect nodes
-            all_nodes[core_node["id"]] = core_node
+            if core_node:
+                all_nodes[core_node["id"]] = core_node
             for n in neighbors:
                 all_nodes[n["id"]] = n
 
@@ -295,9 +299,9 @@ class TreeTextMemory(BaseTextMemory):
     def update(self, memory_id: str, new_memory: TextualMemoryItem | dict[str, Any]) -> None:
         raise NotImplementedError
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
-        result = self.graph_store.get_node(memory_id)
+        result = self.graph_store.get_node(memory_id, user_name=user_name)
         if result is None:
             raise ValueError(f"Memory with ID {memory_id} not found")
         metadata_dict = result.get("metadata", {})

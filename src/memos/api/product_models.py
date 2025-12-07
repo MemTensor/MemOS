@@ -159,6 +159,14 @@ class ChatRequest(BaseRequest):
         return self
 
 
+class ChatPlaygroundRequest(ChatRequest):
+    """Request model for chat operations in playground."""
+
+    beginner_guide_step: str | None = Field(
+        None, description="Whether to use beginner guide, option: [first, second]"
+    )
+
+
 class ChatCompleteRequest(BaseRequest):
     """Request model for chat operations. will (Deprecated), instead use APIChatCompleteRequest."""
 
@@ -373,9 +381,11 @@ class APISearchRequest(BaseRequest):
             "If None, default thresholds will be applied."
         ),
     )
-
-    # TODO: tmp field for playground search goal parser, will be removed later
-    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
+    # Internal field for search memory type
+    search_memory_type: str = Field(
+        "All",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory",
+    )
 
     # ==== Context ====
     chat_history: MessageList | None = Field(
@@ -446,6 +456,13 @@ class APISearchRequest(BaseRequest):
             )
 
         return self
+
+
+class APISearchPlaygroundRequest(APISearchRequest):
+    """Request model for searching memories in playground."""
+
+    # TODO: tmp field for playground search goal parser, will be removed later
+    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
 
 
 class APIADDRequest(BaseRequest):
@@ -865,3 +882,34 @@ class StatusResponse(BaseResponse[list[StatusResponseItem]]):
     """Response model for scheduler status operations."""
 
     message: str = "Memory get status successfully"
+
+
+class TaskSummary(BaseModel):
+    """Aggregated counts of tasks by status."""
+
+    waiting: int = Field(0, description="Number of tasks waiting to run")
+    in_progress: int = Field(0, description="Number of tasks currently running")
+    pending: int = Field(
+        0, description="Number of tasks fetched by workers but not yet acknowledged"
+    )
+    completed: int = Field(0, description="Number of tasks completed")
+    failed: int = Field(0, description="Number of tasks failed")
+    cancelled: int = Field(0, description="Number of tasks cancelled")
+    total: int = Field(0, description="Total number of tasks counted")
+
+
+class AllStatusResponseData(BaseModel):
+    """Aggregated scheduler status metrics."""
+
+    scheduler_summary: TaskSummary = Field(
+        ..., description="Aggregated status for scheduler-managed tasks"
+    )
+    all_tasks_summary: TaskSummary = Field(
+        ..., description="Aggregated status for all tracked tasks"
+    )
+
+
+class AllStatusResponse(BaseResponse[AllStatusResponseData]):
+    """Response model for full scheduler status operations."""
+
+    message: str = "Scheduler status summary retrieved successfully"

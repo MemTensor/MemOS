@@ -133,6 +133,11 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
         description="background of this node",
     )
 
+    file_ids: list[str] | None = Field(
+        default_factory=list,
+        description="The ids of the files associated with the memory.",
+    )
+
     @field_validator("sources", mode="before")
     @classmethod
     def coerce_sources(cls, v):

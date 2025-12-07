@@ -46,10 +46,10 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX",
             DEFAULT_STREAM_KEY_PREFIX,
         ),
+        orchestrator: SchedulerOrchestrator | None = None,
         consumer_group: str = "scheduler_group",
         consumer_name: str | None = "scheduler_consumer",
-        max_len: int = 10000,
-        maxsize: int = 0,  # For Queue compatibility
+        max_len: int | None = None,
         auto_delete_acked: bool = True,  # Whether to automatically delete acknowledged messages
     ):
         """
@@ -64,17 +64,11 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             auto_delete_acked: Whether to automatically delete acknowledged messages from stream
         """
         super().__init__()
-
-        # If maxsize <= 0, set to None (unlimited queue size)
-        if maxsize <= 0:
-            maxsize = 0
-
         # Stream configuration
         self.stream_key_prefix = stream_key_prefix
         self.consumer_group = consumer_group
         self.consumer_name = consumer_name or f"consumer_{uuid4().hex[:8]}"
         self.max_len = max_len
-        self.maxsize = maxsize  # For Queue compatibility
         self.auto_delete_acked = auto_delete_acked  # Whether to delete acknowledged messages
 
         # Consumer state
@@ -105,7 +99,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         # Task Orchestrator
         self.message_pack_cache = deque()
-        self.orchestrator = SchedulerOrchestrator(queue=self)
+
+        self.orchestrator = SchedulerOrchestrator() if orchestrator is None else orchestrator
 
     def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
         stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}:{task_label}"
@@ -191,11 +186,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         except Exception as e:
             # Check if it's a "consumer group already exists" error
             error_msg = str(e).lower()
-            if "busygroup" in error_msg or "already exists" in error_msg:
-                logger.info(
-                    f"Consumer group '{self.consumer_group}' already exists for stream '{stream_key}'"
-                )
-            else:
+            if not ("busygroup" in error_msg or "already exists" in error_msg):
                 logger.error(f"Error creating consumer group: {e}", exc_info=True)
 
     # Pending lock methods removed as they are unnecessary with idle-threshold claiming
@@ -498,18 +489,9 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         return self.size() == 0
 
     def full(self) -> bool:
-        """
-        Check if the Redis queue is full (Queue-compatible interface).
-
-        For Redis streams, we consider the queue full if it exceeds maxsize.
-        If maxsize is 0 or None, the queue is never considered full.
-
-        Returns:
-            True if the queue is full, False otherwise
-        """
-        if self.maxsize <= 0:
+        if self.max_len is None:
             return False
-        return self.size() >= self.maxsize
+        return self.size() >= self.max_len
 
     def join(self) -> None:
         """

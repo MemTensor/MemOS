@@ -24,10 +24,12 @@ from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
+    AllStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
     APIFeedbackRequest,
     APISearchRequest,
+    ChatPlaygroundRequest,
     ChatRequest,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
@@ -115,6 +117,18 @@ def add_memories(add_req: APIADDRequest):
 
 
 @router.get(  # Changed from post to get
+    "/scheduler/allstatus",
+    summary="Get detailed scheduler status",
+    response_model=AllStatusResponse,
+)
+def scheduler_allstatus():
+    """Get detailed scheduler status including running tasks and queue metrics."""
+    return handlers.scheduler_handler.handle_scheduler_allstatus(
+        mem_scheduler=mem_scheduler, status_tracker=status_tracker
+    )
+
+
+@router.get(  # Changed from post to get
     "/scheduler/status", summary="Get scheduler running status", response_model=StatusResponse
 )
 def scheduler_status(
@@ -187,7 +201,7 @@ def chat_stream(chat_req: ChatRequest):
 
 
 @router.post("/chat/stream/playground", summary="Chat with MemOS playground")
-def chat_stream_playground(chat_req: ChatRequest):
+def chat_stream_playground(chat_req: ChatPlaygroundRequest):
     """
     Chat with MemOS for a specific user. Returns SSE stream.
 

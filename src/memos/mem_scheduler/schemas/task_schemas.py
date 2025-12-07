@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -14,6 +15,33 @@ logger = get_logger(__name__)
 
 FILE_PATH = Path(__file__).absolute()
 BASE_DIR = FILE_PATH.parent.parent.parent.parent.parent
+
+
+# ============== Schedule Task Definitaion ==============
+class TaskPriorityLevel(Enum):
+    # priority top
+    LEVEL_1 = 1
+    LEVEL_2 = 2
+    LEVEL_3 = 3
+    # priority bottom
+
+
+QUERY_TASK_LABEL = "query"
+ANSWER_TASK_LABEL = "answer"
+ADD_TASK_LABEL = "add"
+MEM_READ_TASK_LABEL = "mem_read"
+MEM_ORGANIZE_TASK_LABEL = "mem_organize"
+MEM_UPDATE_TASK_LABEL = "mem_update"
+MEM_ARCHIVE_TASK_LABEL = "mem_archive"
+API_MIX_SEARCH_TASK_LABEL = "api_mix_search"
+PREF_ADD_TASK_LABEL = "pref_add"
+MEM_FEEDBACK_TASK_LABEL = "mem_feedback"
+
+# Additional constants moved from general_schemas
+DEFAULT_MAX_QUERY_KEY_WORDS = 1000
+LONG_TERM_MEMORY_TYPE = "LongTermMemory"
+USER_INPUT_TYPE = "UserInput"
+NOT_APPLICABLE_TYPE = "NotApplicable"
 
 
 # ============== Running Tasks ==============
