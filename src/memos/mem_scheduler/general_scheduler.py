@@ -516,8 +516,22 @@ class GeneralScheduler(BaseScheduler):
         """
         kb_log_content: list[dict] = []
         info = msg.info or {}
+
+        def _get_source_doc_id_from_metadata(metadata):
+            """Prefer explicit source_doc_id; fallback to first file_id if available."""
+            if metadata is None:
+                return None
+            sid = getattr(metadata, "source_doc_id", None)
+            if sid:
+                return sid
+            file_ids = getattr(metadata, "file_ids", None)
+            if isinstance(file_ids, list) and file_ids:
+                return file_ids[0]
+            return None
+
         # Process added items
         for item in prepared_add_items:
+            source_doc_id = _get_source_doc_id_from_metadata(item.metadata)
             kb_log_content.append(
                 {
                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -526,13 +540,14 @@ class GeneralScheduler(BaseScheduler):
                     "memory_id": item.id,
                     "content": item.memory,
                     "original_content": None,
-                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                    "source_doc_id": source_doc_id,
                 }
             )
 
         # Process updated items
         for item_data in prepared_update_items_with_original:
             item = item_data["new_item"]
+            source_doc_id = _get_source_doc_id_from_metadata(item.metadata)
             kb_log_content.append(
                 {
                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -541,7 +556,7 @@ class GeneralScheduler(BaseScheduler):
                     "memory_id": item.id,
                     "content": item.memory,
                     "original_content": item_data.get("original_content"),
-                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                    "source_doc_id": source_doc_id,
                 }
             )
 
