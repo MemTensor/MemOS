@@ -167,6 +167,7 @@ class FileContentParser(BaseMessageParser):
         self,
         message: File,
         info: dict[str, Any],
+        chunk_content: str | None = None,
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
@@ -174,7 +175,7 @@ class FileContentParser(BaseMessageParser):
             return SourceMessage(
                 type="file",
                 doc_path=file_info.get("filename") or file_info.get("file_id", ""),
-                content=file_info.get("file_data", ""),
+                content=chunk_content if chunk_content else file_info.get("file_data", ""),
                 original_part=message,
             )
         return SourceMessage(type="file", doc_path=str(message))
@@ -490,9 +491,6 @@ class FileContentParser(BaseMessageParser):
                         f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
                     )
 
-        # Create source
-        source = self.create_source(message, info)
-
         # Extract info fields
         if not info:
             info = {}
@@ -520,8 +518,10 @@ class FileContentParser(BaseMessageParser):
             mem_type: str = memory_type,
             tags: list[str] | None = None,
             key: str | None = None,
+            chunk_content: str | None = None,
         ) -> TextualMemoryItem:
             """Construct memory item with common fields."""
+            source = self.create_source(message, info, chunk_content)
             return TextualMemoryItem(
                 memory=value,
                 metadata=TreeNodeTextualMemoryMetadata(
@@ -591,6 +591,7 @@ class FileContentParser(BaseMessageParser):
                             mem_type=llm_mem_type,
                             tags=tags,
                             key=response_json.get("key"),
+                            chunk_content=chunk_text,
                         )
             except Exception as e:
                 logger.error(f"[FileContentParser] LLM error for chunk {chunk_idx}: {e}")
