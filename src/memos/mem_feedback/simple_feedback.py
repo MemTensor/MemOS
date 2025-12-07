@@ -29,3 +29,4 @@ class SimpleMemFeedback(MemFeedback):
         self.mem_reader = mem_reader
         self.searcher = searcher
         self.stopword_manager = StopwordManager
+        self.DB_IDX_READY = False

@@ -1,5 +1,3 @@
-import os
-
 from pathlib import Path
 
 
@@ -53,14 +51,3 @@ MONITOR_ACTIVATION_MEMORY_TYPE = "MonitorActivationMemoryType"
 DEFAULT_MAX_QUERY_KEY_WORDS = 1000
 DEFAULT_WEIGHT_VECTOR_FOR_RANKING = [0.9, 0.05, 0.05]
 DEFAULT_MAX_WEB_LOG_QUEUE_SIZE = 50
-
-# task queue
-DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v1.6"
-exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME", None)
-if exchange_name is not None:
-    DEFAULT_STREAM_KEY_PREFIX += f":{exchange_name}"
-
-# pending claim configuration
-# Only claim pending messages whose idle time exceeds this threshold.
-# Unit: milliseconds. Default: 10 minute.
-DEFAULT_PENDING_CLAIM_MIN_IDLE_MS = 600_000
