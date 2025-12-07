@@ -151,7 +151,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Create connection pool
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=5,
-            maxconn=2000,
+            maxconn=100,
             host=host,
             port=port,
             user=user,
@@ -1338,6 +1338,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 "edges": [...]
             }
         """
+        logger.info(f"[get_subgraph] center_id: {center_id}")
         if not 1 <= depth <= 5:
             raise ValueError("depth must be 1-5")
 
@@ -1360,88 +1361,157 @@ class PolarDBGraphDB(BaseGraphDB):
                     r)
                 $$ ) as (centers agtype, neighbors agtype, rels agtype);
             """
-        query = f"""
-            SELECT * FROM cypher('{self.db_name}_graph', $$
-                    MATCH(center: Memory)-[r * 1..{depth}]->(neighbor:Memory)
-                    WHERE
-                    center.id = '{center_id}'
-                    AND center.status = '{center_status}'
-                    AND center.user_name = '{user_name}'
-                    RETURN
-                    collect(DISTINCT
-                    center), collect(DISTINCT
-                    neighbor), collect(DISTINCT
-                    r)
-                $$ ) as (centers agtype, neighbors agtype, rels agtype);
-            """
+        # Use UNION ALL for better performance: separate queries for depth 1 and depth 2
+        if depth == 1:
+            query = f"""
+                SELECT * FROM cypher('{self.db_name}_graph', $$
+                        MATCH(center: Memory)-[r]->(neighbor:Memory)
+                        WHERE
+                        center.id = '{center_id}'
+                        AND center.status = '{center_status}'
+                        AND center.user_name = '{user_name}'
+                        RETURN collect(DISTINCT center), collect(DISTINCT neighbor), collect(DISTINCT r)
+                    $$ ) as (centers agtype, neighbors agtype, rels agtype);
+                """
+        else:
+            # For depth >= 2, use UNION ALL to combine depth 1 and depth 2 queries
+            query = f"""
+                SELECT * FROM cypher('{self.db_name}_graph', $$
+                        MATCH(center: Memory)-[r]->(neighbor:Memory)
+                        WHERE
+                        center.id = '{center_id}'
+                        AND center.status = '{center_status}'
+                        AND center.user_name = '{user_name}'
+                        RETURN collect(DISTINCT center), collect(DISTINCT neighbor), collect(DISTINCT r)
+                UNION ALL
+                        MATCH(center: Memory)-[r]->(n:Memory)-[r1]->(neighbor:Memory)
+                        WHERE
+                       center.id = '{center_id}'
+                        AND center.status = '{center_status}'
+                        AND center.user_name = '{user_name}'
+                        RETURN collect(DISTINCT center), collect(DISTINCT neighbor), collect(DISTINCT r1)
+                    $$ ) as (centers agtype, neighbors agtype, rels agtype);
+                """
         conn = self._get_connection()
+        logger.info(f"[get_subgraph] Query: {query}")
         try:
             with conn.cursor() as cursor:
                 cursor.execute(query)
-                result = cursor.fetchone()
+                results = cursor.fetchall()
 
-                if not result or not result[0]:
+                if not results:
                     return {"core_node": None, "neighbors": [], "edges": []}
 
-                # Parse center node
-                centers_data = result[0] if result[0] else "[]"
-                neighbors_data = result[1] if result[1] else "[]"
-                edges_data = result[2] if result[2] else "[]"
+                # Merge results from all UNION ALL rows
+                all_centers_list = []
+                all_neighbors_list = []
+                all_edges_list = []
 
-                # Parse JSON data
-                try:
-                    # Clean ::vertex and ::edge suffixes in data
-                    if isinstance(centers_data, str):
-                        centers_data = centers_data.replace("::vertex", "")
-                    if isinstance(neighbors_data, str):
-                        neighbors_data = neighbors_data.replace("::vertex", "")
-                    if isinstance(edges_data, str):
-                        edges_data = edges_data.replace("::edge", "")
+                for result in results:
+                    if not result or not result[0]:
+                        continue
 
-                    centers_list = (
-                        json.loads(centers_data) if isinstance(centers_data, str) else centers_data
-                    )
-                    neighbors_list = (
-                        json.loads(neighbors_data)
-                        if isinstance(neighbors_data, str)
-                        else neighbors_data
-                    )
-                    edges_list = (
-                        json.loads(edges_data) if isinstance(edges_data, str) else edges_data
-                    )
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse JSON data: {e}")
-                    return {"core_node": None, "neighbors": [], "edges": []}
+                    centers_data = result[0] if result[0] else "[]"
+                    neighbors_data = result[1] if result[1] else "[]"
+                    edges_data = result[2] if result[2] else "[]"
 
-                # Parse center node
+                    # Parse JSON data
+                    try:
+                        # Clean ::vertex and ::edge suffixes in data
+                        if isinstance(centers_data, str):
+                            centers_data = centers_data.replace("::vertex", "")
+                        if isinstance(neighbors_data, str):
+                            neighbors_data = neighbors_data.replace("::vertex", "")
+                        if isinstance(edges_data, str):
+                            edges_data = edges_data.replace("::edge", "")
+
+                        centers_list = (
+                            json.loads(centers_data)
+                            if isinstance(centers_data, str)
+                            else centers_data
+                        )
+                        neighbors_list = (
+                            json.loads(neighbors_data)
+                            if isinstance(neighbors_data, str)
+                            else neighbors_data
+                        )
+                        edges_list = (
+                            json.loads(edges_data) if isinstance(edges_data, str) else edges_data
+                        )
+
+                        # Collect data from this row
+                        if isinstance(centers_list, list):
+                            all_centers_list.extend(centers_list)
+                        if isinstance(neighbors_list, list):
+                            all_neighbors_list.extend(neighbors_list)
+                        if isinstance(edges_list, list):
+                            all_edges_list.extend(edges_list)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON data: {e}")
+                        continue
+
+                # Deduplicate centers by ID
+                centers_dict = {}
+                for center_data in all_centers_list:
+                    if isinstance(center_data, dict) and "properties" in center_data:
+                        center_id_key = center_data["properties"].get("id")
+                        if center_id_key and center_id_key not in centers_dict:
+                            centers_dict[center_id_key] = center_data
+
+                # Parse center node (use first center)
                 core_node = None
-                if centers_list and len(centers_list) > 0:
-                    center_data = centers_list[0]
+                if centers_dict:
+                    center_data = next(iter(centers_dict.values()))
                     if isinstance(center_data, dict) and "properties" in center_data:
                         core_node = self._parse_node(center_data["properties"])
 
+                # Deduplicate neighbors by ID
+                neighbors_dict = {}
+                for neighbor_data in all_neighbors_list:
+                    if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
+                        neighbor_id = neighbor_data["properties"].get("id")
+                        if neighbor_id and neighbor_id not in neighbors_dict:
+                            neighbors_dict[neighbor_id] = neighbor_data
+
                 # Parse neighbor nodes
                 neighbors = []
-                if isinstance(neighbors_list, list):
-                    for neighbor_data in neighbors_list:
-                        if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
-                            neighbor_parsed = self._parse_node(neighbor_data["properties"])
-                            neighbors.append(neighbor_parsed)
+                for neighbor_data in neighbors_dict.values():
+                    if isinstance(neighbor_data, dict) and "properties" in neighbor_data:
+                        neighbor_parsed = self._parse_node(neighbor_data["properties"])
+                        neighbors.append(neighbor_parsed)
 
-                # Parse edges
-                edges = []
-                if isinstance(edges_list, list):
-                    for edge_group in edges_list:
-                        if isinstance(edge_group, list):
-                            for edge_data in edge_group:
-                                if isinstance(edge_data, dict):
-                                    edges.append(
-                                        {
-                                            "type": edge_data.get("label", ""),
-                                            "source": edge_data.get("start_id", ""),
-                                            "target": edge_data.get("end_id", ""),
-                                        }
-                                    )
+                # Deduplicate edges by (source, target, type)
+                edges_dict = {}
+                for edge_group in all_edges_list:
+                    if isinstance(edge_group, list):
+                        for edge_data in edge_group:
+                            if isinstance(edge_data, dict):
+                                edge_key = (
+                                    edge_data.get("start_id", ""),
+                                    edge_data.get("end_id", ""),
+                                    edge_data.get("label", ""),
+                                )
+                                if edge_key not in edges_dict:
+                                    edges_dict[edge_key] = {
+                                        "type": edge_data.get("label", ""),
+                                        "source": edge_data.get("start_id", ""),
+                                        "target": edge_data.get("end_id", ""),
+                                    }
+                    elif isinstance(edge_group, dict):
+                        # Handle single edge (not in a list)
+                        edge_key = (
+                            edge_group.get("start_id", ""),
+                            edge_group.get("end_id", ""),
+                            edge_group.get("label", ""),
+                        )
+                        if edge_key not in edges_dict:
+                            edges_dict[edge_key] = {
+                                "type": edge_group.get("label", ""),
+                                "source": edge_group.get("start_id", ""),
+                                "target": edge_group.get("end_id", ""),
+                            }
+
+                edges = list(edges_dict.values())
 
                 return self._convert_graph_edges(
                     {"core_node": core_node, "neighbors": neighbors, "edges": edges}
@@ -1746,6 +1816,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_conditions = self._build_filter_conditions_sql(filter)
+        logger.info(f"[search_by_embedding] filter_conditions: {filter_conditions}")
         where_clauses.extend(filter_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
@@ -1918,7 +1989,7 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self._get_config_value("user_name"),
         )
-        print(f"[111get_by_metadata] user_name_conditions: {user_name_conditions}")
+        logger.info(f"[get_by_metadata] user_name_conditions: {user_name_conditions}")
 
         # Add user_name WHERE clause
         if user_name_conditions:
@@ -1929,6 +2000,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_where_clause = self._build_filter_conditions_cypher(filter)
+        logger.info(f"[get_by_metadata] filter_where_clause: {filter_where_clause}")
 
         where_str = " AND ".join(where_conditions) + filter_where_clause
 
@@ -2393,6 +2465,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_where_clause = self._build_filter_conditions_cypher(filter)
+        logger.info(f"[get_all_memory_items] filter_where_clause: {filter_where_clause}")
 
         # Use cypher query to retrieve memory items
         if include_embedding:
@@ -2426,6 +2499,7 @@ class PolarDBGraphDB(BaseGraphDB):
             nodes = []
             node_ids = set()
             conn = self._get_connection()
+            logger.info(f"[get_all_memory_items] cypher_query: {cypher_query}")
             try:
                 with conn.cursor() as cursor:
                     cursor.execute(cypher_query)
@@ -3456,7 +3530,11 @@ class PolarDBGraphDB(BaseGraphDB):
         id_map = {}
         core_node = data.get("core_node", {})
         if not core_node:
-            return core_node
+            return {
+                "core_node": None,
+                "neighbors": data.get("neighbors", []),
+                "edges": data.get("edges", []),
+            }
         core_meta = core_node.get("metadata", {})
         if "graph_id" in core_meta and "id" in core_node:
             id_map[core_meta["graph_id"]] = core_node["id"]
@@ -3507,7 +3585,6 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
-        print(f"[delete_node_by_prams] effective_user_name: {effective_user_name}")
 
         if effective_user_name:
             escaped_user_name = effective_user_name.replace("'", "''")
@@ -4113,6 +4190,7 @@ class PolarDBGraphDB(BaseGraphDB):
             "memory_type",
             "node_type",
             "info",
+            "source",
         }
 
         def process_condition(condition):
@@ -4216,7 +4294,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 file_id_and_conditions.append(f"'{escaped_id}' IN n.file_ids")
             if file_id_and_conditions:
                 # Use AND to require all file_ids to be present
-                where_conditions.append(f"({' AND '.join(file_id_and_conditions)})")
+                where_conditions.append(f"({' OR '.join(file_id_and_conditions)})")
 
         # Query nodes by filter if provided
         filter_ids = set()

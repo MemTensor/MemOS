@@ -9,6 +9,7 @@ from memos.context.context import get_current_trace_id
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
+from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
@@ -24,12 +25,21 @@ class ScheduleTaskQueue:
         use_redis_queue: bool,
         maxsize: int,
         disabled_handlers: list | None = None,
+        orchestrator: SchedulerOrchestrator | None = None,
     ):
         self.use_redis_queue = use_redis_queue
         self.maxsize = maxsize
+        self.orchestrator = SchedulerOrchestrator() if orchestrator is None else orchestrator
 
         if self.use_redis_queue:
-            self.memos_message_queue = SchedulerRedisQueue(maxsize=self.maxsize)
+            if maxsize is None or not isinstance(maxsize, int) or maxsize <= 0:
+                maxsize = None
+            self.memos_message_queue = SchedulerRedisQueue(
+                max_len=maxsize,
+                consumer_group="scheduler_group",
+                consumer_name="scheduler_consumer",
+                orchestrator=self.orchestrator,
+            )
         else:
             self.memos_message_queue = SchedulerLocalQueue(maxsize=self.maxsize)
 

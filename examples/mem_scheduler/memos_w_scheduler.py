@@ -13,15 +13,15 @@ from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.schemas.general_schemas import (
-    ADD_LABEL,
-    ANSWER_LABEL,
-    MEM_ARCHIVE_LABEL,
-    MEM_ORGANIZE_LABEL,
-    MEM_UPDATE_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    ANSWER_TASK_LABEL,
+    MEM_ARCHIVE_TASK_LABEL,
+    MEM_ORGANIZE_TASK_LABEL,
+    MEM_UPDATE_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
 
 
@@ -118,24 +118,24 @@ def _format_entry(item: ScheduleLogForWebItem) -> tuple[str, str]:
             return memcube_content[0].get("content", "") or content
         return content
 
-    if label in ("addMessage", QUERY_LABEL, ANSWER_LABEL):
+    if label in ("addMessage", QUERY_TASK_LABEL, ANSWER_TASK_LABEL):
         target_cube = cube_display.replace("MemCube", "")
         title = _format_title(item.timestamp, f"addMessages to {target_cube} MemCube")
         return title, _truncate_with_rules(_first_content())
 
-    if label in ("addMemory", ADD_LABEL):
+    if label in ("addMemory", ADD_TASK_LABEL):
         title = _format_title(item.timestamp, f"{cube_display} added {memory_len} memories")
         return title, _truncate_with_rules(_first_content())
 
-    if label in ("updateMemory", MEM_UPDATE_LABEL):
+    if label in ("updateMemory", MEM_UPDATE_TASK_LABEL):
         title = _format_title(item.timestamp, f"{cube_display} updated {memory_len} memories")
         return title, _truncate_with_rules(_first_content())
 
-    if label in ("archiveMemory", MEM_ARCHIVE_LABEL):
+    if label in ("archiveMemory", MEM_ARCHIVE_TASK_LABEL):
         title = _format_title(item.timestamp, f"{cube_display} archived {memory_len} memories")
         return title, _truncate_with_rules(_first_content())
 
-    if label in ("mergeMemory", MEM_ORGANIZE_LABEL):
+    if label in ("mergeMemory", MEM_ORGANIZE_TASK_LABEL):
         title = _format_title(item.timestamp, f"{cube_display} merged {memory_len} memories")
         merged = [c for c in memcube_content if c.get("type") == "merged"]
         post = [c for c in memcube_content if c.get("type") == "postMerge"]

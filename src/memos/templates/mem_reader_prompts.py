@@ -359,3 +359,61 @@ You can choose tags from the above list that are relevant to the memory. Additio
 CUSTOM_TAGS_INSTRUCTION_ZH = """输出tags可以参考下列标签：
 {custom_tags}
 你可以选择与memory相关的在上述列表中可以加入tags，同时你可以根据memory的内容自由添加tags。"""
+
+
+IMAGE_ANALYSIS_PROMPT_EN = """You are an intelligent memory assistant. Analyze the provided image and extract meaningful information that should be remembered.
+
+Please extract:
+1. **Visual Content**: What objects, people, scenes, or text are visible in the image?
+2. **Context**: What is the context or situation depicted?
+3. **Key Information**: What important details, facts, or information can be extracted?
+4. **User Relevance**: What aspects of this image might be relevant to the user's memory?
+
+Return a valid JSON object with the following structure:
+{
+  "memory list": [
+    {
+      "key": <string, a unique and concise memory title>,
+      "memory_type": <string, "LongTermMemory" or "UserMemory">,
+      "value": <a detailed, self-contained description of what should be remembered from the image>,
+      "tags": <a list of relevant keywords (e.g., ["image", "visual", "scene", "object"])>
+    },
+    ...
+  ],
+  "summary": <a natural paragraph summarizing the image content, 120–200 words>
+}
+
+Language rules:
+- The `key`, `value`, `tags`, `summary` and `memory_type` fields should match the language of the user's context if available, otherwise use English.
+- Keep `memory_type` in English.
+
+Focus on extracting factual, observable information from the image. Avoid speculation unless clearly relevant to user memory."""
+
+
+IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供的图像并提取应该被记住的有意义信息。
+
+请提取：
+1. **视觉内容**：图像中可见的物体、人物、场景或文字是什么？
+2. **上下文**：图像描绘了什么情境或情况？
+3. **关键信息**：可以提取哪些重要的细节、事实或信息？
+4. **用户相关性**：图像的哪些方面可能与用户的记忆相关？
+
+返回一个有效的 JSON 对象，格式如下：
+{
+  "memory list": [
+    {
+      "key": <字符串，一个唯一且简洁的记忆标题>,
+      "memory_type": <字符串，"LongTermMemory" 或 "UserMemory">,
+      "value": <一个详细、自包含的描述，说明应该从图像中记住什么>,
+      "tags": <相关关键词列表（例如：["图像", "视觉", "场景", "物体"]）>
+    },
+    ...
+  ],
+  "summary": <一个自然段落，总结图像内容，120-200字>
+}
+
+语言规则：
+- `key`、`value`、`tags`、`summary` 和 `memory_type` 字段应该与用户上下文的语言匹配（如果可用），否则使用中文。
+- `memory_type` 保持英文。
+
+专注于从图像中提取事实性、可观察的信息。除非与用户记忆明显相关，否则避免推测。"""
