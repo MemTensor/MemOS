@@ -79,7 +79,7 @@ class BaseEmbedder(ABC):
         """Initialize the embedding model with the given configuration."""
         self.config = config
 
-    def _truncate_texts(self, texts: list[str], approx_char_per_token=1.1) -> (list)[str]:
+    def _truncate_texts(self, texts: list[str], approx_char_per_token=1.0) -> (list)[str]:
         """
         Truncate texts to fit within max_tokens limit if configured.
 
@@ -98,7 +98,7 @@ class BaseEmbedder(ABC):
             if len(t) < max_tokens * approx_char_per_token:
                 truncated.append(t)
             else:
-                truncated.append(_truncate_text_to_tokens(t, max_tokens))
+                truncated.append(t[:max_tokens])
         return truncated
 
     @abstractmethod

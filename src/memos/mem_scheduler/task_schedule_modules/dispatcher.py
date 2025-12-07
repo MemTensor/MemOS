@@ -210,6 +210,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             finish_time, tz=timezone.utc
                         ).isoformat(),
                         "exec_duration_ms": duration * 1000,
+                        "total_duration_ms": self._calc_total_duration_ms(
+                            finish_time, getattr(first_msg, "timestamp", None)
+                        ),
                     },
                 )
                 # Redis ack is handled in finally to cover failure cases
@@ -243,6 +246,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         "exec_duration_ms": (finish_time - start_time) * 1000,
                         "error_type": type(e).__name__,
                         "error_msg": str(e),
+                        "total_duration_ms": self._calc_total_duration_ms(
+                            finish_time, getattr(m, "timestamp", None)
+                        ),
                     },
                 )
                 # Mark task as failed and remove from tracking
@@ -422,6 +428,30 @@ class SchedulerDispatcher(BaseSchedulerModule):
             future.result()  # this will throw exception
         except Exception as e:
             logger.error(f"Handler execution failed: {e!s}", exc_info=True)
+
+    @staticmethod
+    def _calc_total_duration_ms(finish_epoch: float, enqueue_ts) -> float | None:
+        """
+        Calculate total duration from enqueue timestamp to finish time in milliseconds.
+        """
+        try:
+            enq_epoch = None
+
+            if isinstance(enqueue_ts, int | float):
+                enq_epoch = float(enqueue_ts)
+            elif hasattr(enqueue_ts, "timestamp"):
+                dt = enqueue_ts
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                enq_epoch = dt.timestamp()
+
+            if enq_epoch is None:
+                return None
+
+            total_ms = max(0.0, finish_epoch - enq_epoch) * 1000
+            return total_ms
+        except Exception:
+            return None
 
     def execute_task(
         self,
