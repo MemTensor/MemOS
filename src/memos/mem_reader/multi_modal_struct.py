@@ -399,7 +399,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         fine_memory_items.append(node)
                     except Exception as e:
                         logger.error(f"[MultiModalFine] parse error: {e}")
-            elif isinstance(resp, dict):
+            elif resp.get("value") and resp.get("key"):
                 try:
                     # Create fine mode memory item (same as simple_struct)
                     node = self._make_memory_item(
