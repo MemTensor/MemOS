@@ -437,7 +437,7 @@ class SingleCubeView(MemCubeView):
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
             # TODO: tmp field for playground search goal parser, will be removed later
-            playground_search_goal_parser=search_req.playground_search_goal_parser,
+            playground_search_goal_parser=search_req.get("playground_search_goal_parser", None),
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]
