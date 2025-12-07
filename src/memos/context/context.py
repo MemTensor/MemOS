@@ -119,8 +119,8 @@ def get_current_api_path() -> str | None:
     """
     context = _request_context.get()
     if context:
-        return context.get("api_path") or ""
-    return ""
+        return context.get("api_path")
+    return None
 
 
 def get_current_env() -> str | None:
@@ -129,7 +129,7 @@ def get_current_env() -> str | None:
     """
     context = _request_context.get()
     if context:
-        return context.get("env") or "prod"
+        return context.get("env")
     return "prod"
 
 
@@ -139,7 +139,7 @@ def get_current_user_type() -> str | None:
     """
     context = _request_context.get()
     if context:
-        return context.get("user_type") or "opensource"
+        return context.get("user_type")
     return "opensource"
 
 
@@ -149,7 +149,7 @@ def get_current_user_name() -> str | None:
     """
     context = _request_context.get()
     if context:
-        return context.get("user_name") or "memos"
+        return context.get("user_name")
     return "memos"
 
 
