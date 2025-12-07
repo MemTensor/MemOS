@@ -78,6 +78,7 @@ class MemFeedback(BaseMemFeedback):
             is_reorganize=self.is_reorganize,
         )
         self.searcher: Searcher = self.memory_manager.searcher
+        self.DB_IDX_READY = False
 
     def _batch_embed(self, texts: list[str], embed_bs: int = 5):
         embed_bs = 5
@@ -569,15 +570,24 @@ class MemFeedback(BaseMemFeedback):
         original_word = kwp_judge.get("original")
         target_word = kwp_judge.get("target")
 
-        # retrieve
-        lang = detect_lang(original_word)
-        queries = self._tokenize_chinese(original_word) if lang == "zh" else original_word.split()
+        if self.DB_IDX_READY:
+            # retrieve
+            lang = detect_lang(original_word)
+            queries = (
+                self._tokenize_chinese(original_word) if lang == "zh" else original_word.split()
+            )
 
-        must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
-        retrieved_ids = self.graph_store.seach_by_keywords([must_part], user_name=user_name)
-        if len(retrieved_ids) < 1:
-            retrieved_ids = self.graph_store.search_by_fulltext(
-                queries, top_k=100, user_name=user_name
+            must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
+            retrieved_ids = self.graph_store.seach_by_keywords_tfidf(
+                [must_part], user_name=user_name
+            )
+            if len(retrieved_ids) < 1:
+                retrieved_ids = self.graph_store.search_by_fulltext(
+                    queries, top_k=100, user_name=user_name
+                )
+        else:
+            retrieved_ids = self.graph_store.seach_by_keywords_like(
+                f"%{original_word}%", user_name=user_name
             )
 
         # filter by doc scope
