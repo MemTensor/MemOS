@@ -588,9 +588,9 @@ class MilvusVecDB(BaseVecDB):
 
             # Prepare entity data
             entity = {
-                "id": item.id,
-                "memory": item.memory,
-                "original_text": item.original_text,
+                "id": item.id[:65000],
+                "memory": item.memory[:65000],
+                "original_text": item.original_text[:65000],
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }
