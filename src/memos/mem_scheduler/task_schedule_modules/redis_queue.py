@@ -473,6 +473,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                     try:
                         # Convert Redis message back to SchedulerMessageItem
                         message = ScheduleMessageItem.from_dict(fields)
+                        # Preserve stream key and redis message id for monitoring/ack
+                        message.stream_key = _stream
                         message.redis_message_id = message_id
 
                         result_messages.append(message)
