@@ -138,7 +138,7 @@ class TreeTextMemory(BaseTextMemory):
             self.embedder,
             self.reranker,
             bm25_retriever=self.bm25_retriever,
-            internet_retriever=self.internet_retriever,
+            internet_retriever=None,
             search_strategy=self.search_strategy,
             manual_close_internet=manual_close_internet,
             process_llm=process_llm,
