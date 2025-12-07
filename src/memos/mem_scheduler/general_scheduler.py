@@ -2,6 +2,7 @@ import concurrent.futures
 import contextlib
 import json
 import os
+import time
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -337,9 +338,20 @@ class GeneralScheduler(BaseScheduler):
         for memory_id in userinput_memory_ids:
             try:
                 # This mem_item represents the NEW content that was just added/processed
-                mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
-                    memory_id=memory_id
-                )
+                mem_item: TextualMemoryItem | None = None
+                for attempt in range(3):
+                    try:
+                        mem_item = self.current_mem_cube.text_mem.get(
+                            memory_id=memory_id, user_name=msg.mem_cube_id
+                        )
+                        break
+                    except Exception:
+                        if attempt < 2:
+                            time.sleep(0.5)
+                        else:
+                            raise
+                if mem_item is None:
+                    raise ValueError(f"Memory {memory_id} not found after retries")
                 # Check if a memory with the same key already exists (determining if it's an update)
                 key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
                     name=mem_item.memory
@@ -366,7 +378,7 @@ class GeneralScheduler(BaseScheduler):
                         # Crucial step: Fetch the original content for updates
                         # This `get` is for the *existing* memory that will be updated
                         original_mem_item = self.current_mem_cube.text_mem.get(
-                            memory_id=original_item_id
+                            memory_id=original_item_id, user_name=msg.mem_cube_id
                         )
                         original_content = original_mem_item.memory
 
@@ -825,7 +837,7 @@ class GeneralScheduler(BaseScheduler):
             memory_items = []
             for mem_id in mem_ids:
                 try:
-                    memory_item = text_mem.get(mem_id)
+                    memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
                     logger.warning(f"Failed to get memory {mem_id}: {e}")
@@ -1077,7 +1089,7 @@ class GeneralScheduler(BaseScheduler):
                     mem_items: list[TextualMemoryItem] = []
                     for mid in mem_ids:
                         with contextlib.suppress(Exception):
-                            mem_items.append(text_mem.get(mid))
+                            mem_items.append(text_mem.get(mid, user_name=user_name))
                     if len(mem_items) > 1:
                         keys: list[str] = []
                         memcube_content: list[dict] = []
@@ -1133,7 +1145,7 @@ class GeneralScheduler(BaseScheduler):
                         if merged_target_ids:
                             post_ref_id = next(iter(merged_target_ids))
                             with contextlib.suppress(Exception):
-                                merged_item = text_mem.get(post_ref_id)
+                                merged_item = text_mem.get(post_ref_id, user_name=user_name)
                                 combined_key = (
                                     getattr(getattr(merged_item, "metadata", {}), "key", None)
                                     or combined_key
@@ -1242,7 +1254,7 @@ class GeneralScheduler(BaseScheduler):
             memory_items = []
             for mem_id in mem_ids:
                 try:
-                    memory_item = text_mem.get(mem_id)
+                    memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
                     logger.warning(f"Failed to get memory {mem_id}: {e}|{traceback.format_exc()}")
@@ -1357,7 +1369,9 @@ class GeneralScheduler(BaseScheduler):
             f"[process_session_turn] Processing {len(queries)} queries for user_id={user_id}, mem_cube_id={mem_cube_id}"
         )
 
-        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
+        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory(
+            user_name=mem_cube_id
+        )
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         intent_result = self.monitor.detect_intent(
             q_list=queries, text_working_memory=text_working_memory

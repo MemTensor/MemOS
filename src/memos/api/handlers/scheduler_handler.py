@@ -9,18 +9,179 @@ import json
 import time
 import traceback
 
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 # Imports for new implementation
-from memos.api.product_models import StatusResponse, StatusResponseItem
+from memos.api.product_models import (
+    AllStatusResponse,
+    AllStatusResponseData,
+    StatusResponse,
+    StatusResponseItem,
+    TaskSummary,
+)
 from memos.log import get_logger
+from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
+
+
+def handle_scheduler_allstatus(
+    mem_scheduler: BaseScheduler,
+    status_tracker: TaskStatusTracker,
+) -> AllStatusResponse:
+    """
+    Get aggregated scheduler status metrics (no per-task payload).
+
+    Args:
+        mem_scheduler: The BaseScheduler instance.
+        status_tracker: The TaskStatusTracker instance.
+
+    Returns:
+        AllStatusResponse with aggregated status data.
+    """
+
+    def _summarize_tasks(task_details: list[dict[str, Any]]) -> TaskSummary:
+        """Aggregate counts by status for the provided task details (tracker data)."""
+        counter = Counter()
+        for detail in task_details:
+            status = detail.get("status")
+            if status:
+                counter[status] += 1
+
+        total = sum(counter.values())
+        return TaskSummary(
+            waiting=counter.get("waiting", 0),
+            in_progress=counter.get("in_progress", 0),
+            completed=counter.get("completed", 0),
+            pending=counter.get("pending", counter.get("waiting", 0)),
+            failed=counter.get("failed", 0),
+            cancelled=counter.get("cancelled", 0),
+            total=total,
+        )
+
+    def _aggregate_counts_from_redis(
+        tracker: TaskStatusTracker, max_age_seconds: float = 86400
+    ) -> TaskSummary | None:
+        """Stream status counts directly from Redis to avoid loading all task payloads."""
+        redis_client = getattr(tracker, "redis", None)
+        if not redis_client:
+            return None
+
+        counter = Counter()
+        now = datetime.now(timezone.utc).timestamp()
+
+        # Scan task_meta keys, then hscan each hash in batches
+        cursor: int | str = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor=cursor, match="memos:task_meta:*", count=200)
+            for key in keys:
+                h_cursor: int | str = 0
+                while True:
+                    h_cursor, fields = redis_client.hscan(key, cursor=h_cursor, count=500)
+                    for value in fields.values():
+                        try:
+                            payload = json.loads(
+                                value.decode("utf-8") if isinstance(value, bytes) else value
+                            )
+                            # Skip stale entries to reduce noise and load
+                            ts = payload.get("submitted_at") or payload.get("started_at")
+                            if ts:
+                                try:
+                                    ts_dt = datetime.fromisoformat(ts)
+                                    ts_seconds = ts_dt.timestamp()
+                                except Exception:
+                                    ts_seconds = None
+                                if ts_seconds and (now - ts_seconds) > max_age_seconds:
+                                    continue
+                            status = payload.get("status")
+                            if status:
+                                counter[status] += 1
+                        except Exception:
+                            continue
+                    if h_cursor == 0 or h_cursor == "0":
+                        break
+            if cursor == 0 or cursor == "0":
+                break
+
+        if not counter:
+            return TaskSummary()  # Empty summary if nothing found
+
+        total = sum(counter.values())
+        return TaskSummary(
+            waiting=counter.get("waiting", 0),
+            in_progress=counter.get("in_progress", 0),
+            completed=counter.get("completed", 0),
+            pending=counter.get("pending", counter.get("waiting", 0)),
+            failed=counter.get("failed", 0),
+            cancelled=counter.get("cancelled", 0),
+            total=total,
+        )
+
+    try:
+        # Prefer streaming aggregation to avoid pulling all task payloads
+        all_tasks_summary = _aggregate_counts_from_redis(status_tracker)
+        if all_tasks_summary is None:
+            # Fallback: load all details then aggregate
+            global_tasks = status_tracker.get_all_tasks_global()
+            all_task_details: list[dict[str, Any]] = []
+            for _, tasks in global_tasks.items():
+                all_task_details.extend(tasks.values())
+            all_tasks_summary = _summarize_tasks(all_task_details)
+
+        # Scheduler view: assume tracker contains scheduler tasks; overlay queue monitor for live queue depth
+        sched_waiting = all_tasks_summary.waiting
+        sched_in_progress = all_tasks_summary.in_progress
+        sched_pending = all_tasks_summary.pending
+        sched_completed = all_tasks_summary.completed
+        sched_failed = all_tasks_summary.failed
+        sched_cancelled = all_tasks_summary.cancelled
+
+        # If queue monitor is available, prefer its live waiting/in_progress counts
+        if mem_scheduler.task_schedule_monitor:
+            queue_status_data = mem_scheduler.task_schedule_monitor.get_tasks_status() or {}
+            scheduler_waiting = 0
+            scheduler_in_progress = 0
+            scheduler_pending = 0
+            for key, value in queue_status_data.items():
+                if not key.startswith("scheduler:"):
+                    continue
+                scheduler_in_progress += int(value.get("running", 0) or 0)
+                scheduler_pending += int(value.get("pending", value.get("remaining", 0)) or 0)
+                scheduler_waiting += int(value.get("remaining", 0) or 0)
+            sched_waiting = scheduler_waiting
+            sched_in_progress = scheduler_in_progress
+            sched_pending = scheduler_pending
+
+        scheduler_summary = TaskSummary(
+            waiting=sched_waiting,
+            in_progress=sched_in_progress,
+            pending=sched_pending,
+            completed=sched_completed,
+            failed=sched_failed,
+            cancelled=sched_cancelled,
+            total=sched_waiting
+            + sched_in_progress
+            + sched_completed
+            + sched_failed
+            + sched_cancelled,
+        )
+
+        return AllStatusResponse(
+            data=AllStatusResponseData(
+                scheduler_summary=scheduler_summary,
+                all_tasks_summary=all_tasks_summary,
+            )
+        )
+    except Exception as err:
+        logger.error(f"Failed to get full scheduler status: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Failed to get full scheduler status") from err
 
 
 def handle_scheduler_status(

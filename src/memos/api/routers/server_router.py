@@ -24,6 +24,7 @@ from memos.api.handlers.chat_handler import ChatHandler
 from memos.api.handlers.feedback_handler import FeedbackHandler
 from memos.api.handlers.search_handler import SearchHandler
 from memos.api.product_models import (
+    AllStatusResponse,
     APIADDRequest,
     APIChatCompleteRequest,
     APIFeedbackRequest,
@@ -113,6 +114,18 @@ def add_memories(add_req: APIADDRequest):
 # =============================================================================
 # Scheduler API Endpoints
 # =============================================================================
+
+
+@router.get(  # Changed from post to get
+    "/scheduler/allstatus",
+    summary="Get detailed scheduler status",
+    response_model=AllStatusResponse,
+)
+def scheduler_allstatus():
+    """Get detailed scheduler status including running tasks and queue metrics."""
+    return handlers.scheduler_handler.handle_scheduler_allstatus(
+        mem_scheduler=mem_scheduler, status_tracker=status_tracker
+    )
 
 
 @router.get(  # Changed from post to get

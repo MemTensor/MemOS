@@ -157,9 +157,8 @@ class SingleCubeView(MemCubeView):
                     content=feedback_req_str,
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(
-                    messages=[message_item_feedback]
-                )
+                # Use scheduler submission to ensure tracking and metrics
+                self.mem_scheduler.submit_messages(messages=[message_item_feedback])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted FEEDBACK async")
             except Exception as e:
                 self.logger.error(
@@ -664,6 +663,13 @@ class SingleCubeView(MemCubeView):
             mode=extract_mode,
         )
         flattened_local = [mm for m in memories_local for mm in m]
+
+        # Explicitly set source_doc_id to metadata if present in info
+        source_doc_id = (add_req.info or {}).get("source_doc_id")
+        if source_doc_id:
+            for memory in flattened_local:
+                memory.metadata.source_doc_id = source_doc_id
+
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
 
         # Add memories to text_mem
