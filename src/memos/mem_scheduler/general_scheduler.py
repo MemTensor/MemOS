@@ -519,7 +519,8 @@ class GeneralScheduler(BaseScheduler):
 
         # Process added items
         for item in prepared_add_items:
-            file_ids = getattr(item.metadata, "file_ids", None)
+            metadata = getattr(item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata else None
             source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
             kb_log_content.append(
                 {
@@ -536,7 +537,8 @@ class GeneralScheduler(BaseScheduler):
         # Process updated items
         for item_data in prepared_update_items_with_original:
             item = item_data["new_item"]
-            file_ids = getattr(item.metadata, "file_ids", None)
+            metadata = getattr(item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata else None
             source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
             kb_log_content.append(
                 {
@@ -893,8 +895,11 @@ class GeneralScheduler(BaseScheduler):
                         # New: Knowledge Base Logging (Cloud Service)
                         kb_log_content = []
                         for item in flattened_memories:
-                            file_ids = getattr(item.metadata, "file_ids", None)
-                            source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
+                            metadata = getattr(item, "metadata", None)
+                            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+                            source_doc_id = (
+                                file_ids[0] if isinstance(file_ids, list) and file_ids else None
+                            )
                             kb_log_content.append(
                                 {
                                     "log_source": "KNOWLEDGE_BASE_LOG",
