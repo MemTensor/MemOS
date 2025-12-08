@@ -328,7 +328,12 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             raise
 
     def ack_message(
-        self, user_id: str, mem_cube_id: str, task_label: str, redis_message_id
+        self,
+        user_id: str,
+        mem_cube_id: str,
+        task_label: str,
+        redis_message_id,
+        message: ScheduleMessageItem | None,
     ) -> None:
         stream_key = self.get_stream_key(
             user_id=user_id, mem_cube_id=mem_cube_id, task_label=task_label
@@ -347,6 +352,12 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         try:
             self._redis_conn.xack(stream_key, self.consumer_group, redis_message_id)
+
+            if message:
+                self.status_tracker.task_completed(task_id=message.item_id, user_id=message.user_id)
+                logger.info(
+                    f"Message {message.item_id} | {message.label} | {message.content} has been acknowledged."
+                )
         except Exception as e:
             logger.warning(
                 f"xack failed for stream '{stream_key}', msg_id='{redis_message_id}': {e}"
@@ -364,7 +375,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         stream_key: str,
         block: bool = True,
         timeout: float | None = None,
-        batch_size: int | None = None,
+        batch_size: int | None = 1,
     ) -> list[ScheduleMessageItem]:
         if not self._redis_conn:
             raise ConnectionError("Not connected to Redis. Redis connection not available.")
@@ -385,7 +396,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                     self.consumer_group,
                     self.consumer_name,
                     {stream_key: ">"},
-                    count=(batch_size if batch_size is not None else None),
+                    count=batch_size,
                     block=redis_timeout,
                 )
             except Exception as read_err:
@@ -400,7 +411,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                         self.consumer_group,
                         self.consumer_name,
                         {stream_key: ">"},
-                        count=(batch_size if batch_size is not None else None),
+                        count=batch_size,
                         block=redis_timeout,
                     )
                 else:
@@ -492,7 +503,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
                     raise Empty("No messages available in Redis queue")
 
-            return result_messages if batch_size is not None else result_messages[0]
+            return result_messages
 
         except Exception as e:
             if "Empty" in str(type(e).__name__):
@@ -630,7 +641,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
         try:
             while self._is_listening:
-                messages = self.get(timeout=poll_interval, count=batch_size)
+                messages = self.get_messages(batch_size=1)
 
                 for message in messages:
                     try:

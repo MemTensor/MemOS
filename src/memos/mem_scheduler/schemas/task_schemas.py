@@ -62,10 +62,9 @@ DEFAULT_DELETE_CLEANUP_INTERVAL_SEC = 30.0
 
 
 # task queue
-DEFAULT_STREAM_KEY_PREFIX = "scheduler:messages:stream:v1.7"
-exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME", None)
-if exchange_name is not None:
-    DEFAULT_STREAM_KEY_PREFIX += f":{exchange_name}"
+DEFAULT_STREAM_KEY_PREFIX = os.getenv(
+    "MEMSCHEDULER_STREAM_KEY_PREFIX", "scheduler:messages:stream:v2.0"
+)
 
 
 # ============== Running Tasks ==============
