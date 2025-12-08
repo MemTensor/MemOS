@@ -527,7 +527,18 @@ class FileContentParser(BaseMessageParser):
         session_id = info_.pop("session_id", "")
         if file_id:
             info_["file_id"] = file_id
-        file_ids = [file_id] if file_id else []
+        
+        file_ids = []
+        if file_id:
+            file_ids = [file_id]
+        elif info.get("file_id"):
+            file_ids = [info.get("file_id")]
+            info_["file_id"] = info.get("file_id")
+        elif info.get("file_ids"):
+             # Support retrieve from file_ids list
+             file_ids = info.get("file_ids")
+             if len(file_ids) > 0:
+                 info_["file_id"] = file_ids[0]
         # For file content parts, default to LongTermMemory
         memory_type = "LongTermMemory"
 
