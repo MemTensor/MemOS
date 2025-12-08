@@ -93,6 +93,8 @@ class ScheduleTaskQueue:
         if len(messages) < 1:
             logger.error("Submit empty")
         elif len(messages) == 1:
+            if getattr(messages[0], "timestamp", None) is None:
+                messages[0].timestamp = get_utc_now()
             enqueue_ts = to_iso(getattr(messages[0], "timestamp", None))
             emit_monitor_event(
                 "enqueue",

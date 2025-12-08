@@ -186,7 +186,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             else None
                         ),
                         "event_duration_ms": start_delay_ms,
-                        "total_duration_ms": wait_sec * 1000,
+                        "total_duration_ms": self._calc_total_duration_ms(start_time, enq_ts),
                     },
                 )
 
