@@ -92,7 +92,7 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ContextThreadPoolExecutor(max_workers=50) as executor:
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(self._process_memory, m, user_name): m for m in memories}
             for future in as_completed(futures, timeout=500):
                 try:
