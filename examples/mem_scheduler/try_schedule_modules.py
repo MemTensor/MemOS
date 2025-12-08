@@ -1,4 +1,3 @@
-import shutil
 import sys
 
 from pathlib import Path
@@ -7,16 +6,15 @@ from typing import TYPE_CHECKING
 
 from tqdm import tqdm
 
-from memos.configs.mem_cube import GeneralMemCubeConfig
-from memos.configs.mem_os import MOSConfig
-from memos.configs.mem_scheduler import AuthConfig
-from memos.log import get_logger
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.analyzer.mos_for_test_scheduler import MOSForTestScheduler
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.schemas.task_schemas import (
-    NOT_APPLICABLE_TYPE,
+from memos.api.routers.server_router import (
+    mem_scheduler,
 )
+from memos.log import get_logger
+from memos.mem_scheduler.analyzer.api_analyzer import DirectSearchMemoriesAnalyzer
+from memos.mem_scheduler.base_scheduler import BaseScheduler
+from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import MEM_UPDATE_TASK_LABEL
 
 
 if TYPE_CHECKING:
@@ -95,7 +93,7 @@ def init_task():
     return conversations, questions
 
 
-def show_web_logs(mem_scheduler: GeneralScheduler):
+def show_web_logs(mem_scheduler: BaseScheduler):
     """Display all web log entries from the scheduler's log queue.
 
     Args:
@@ -130,78 +128,77 @@ def show_web_logs(mem_scheduler: GeneralScheduler):
     print("=" * 110 + "\n")
 
 
+class ScheduleModulesRunner(DirectSearchMemoriesAnalyzer):
+    def __init__(self):
+        super().__init__()
+
+    def start_conversation(self, user_id="test_user", mem_cube_id="test_cube", session_id=None):
+        self.current_user_id = user_id
+        self.current_mem_cube_id = mem_cube_id
+        self.current_session_id = (
+            session_id or f"session_{hash(user_id + mem_cube_id)}_{len(self.conversation_history)}"
+        )
+        self.conversation_history = []
+
+        logger.info(f"Started conversation session: {self.current_session_id}")
+        print(f"🚀 Started new conversation session: {self.current_session_id}")
+        print(f"   User ID: {self.current_user_id}")
+        print(f"   Mem Cube ID: {self.current_mem_cube_id}")
+
+    def add_msgs(self, messages: list[dict]):
+        # Create add request
+        add_req = self.create_test_add_request(
+            user_id=self.current_user_id,
+            mem_cube_id=self.current_mem_cube_id,
+            messages=messages,
+            session_id=self.current_session_id,
+        )
+
+        # Add to memory
+        result = self.add_memories(add_req)
+        print(f"   ✅ Added to memory successfully: \n{messages}")
+
+        return result
+
+
 if __name__ == "__main__":
     # set up data
     conversations, questions = init_task()
 
-    # set configs
-    mos_config = MOSConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml"
+    trying_modules = ScheduleModulesRunner()
+
+    trying_modules.start_conversation(
+        user_id="try_scheduler_modules",
+        mem_cube_id="try_scheduler_modules",
     )
 
-    mem_cube_config = GeneralMemCubeConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config_neo4j.yaml"
+    trying_modules.add_msgs(
+        messages=conversations,
     )
 
-    # default local graphdb uri
-    if AuthConfig.default_config_exists():
-        auth_config = AuthConfig.from_local_config()
+    mem_scheduler: OptimizedScheduler = mem_scheduler
+    # Force retrieval to trigger every turn for the example to be deterministic
+    try:
+        mem_scheduler.monitor.query_trigger_interval = 0.0
+    except Exception:
+        logger.exception("Failed to set query_trigger_interval; continuing with defaults.")
 
-        mos_config.mem_reader.config.llm.config.api_key = auth_config.openai.api_key
-        mos_config.mem_reader.config.llm.config.api_base = auth_config.openai.base_url
-
-        mem_cube_config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
-        mem_cube_config.text_mem.config.graph_db.config.user = auth_config.graph_db.user
-        mem_cube_config.text_mem.config.graph_db.config.password = auth_config.graph_db.password
-        mem_cube_config.text_mem.config.graph_db.config.db_name = auth_config.graph_db.db_name
-        mem_cube_config.text_mem.config.graph_db.config.auto_create = (
-            auth_config.graph_db.auto_create
-        )
-
-    # Initialization
-    mos = MOSForTestScheduler(mos_config)
-
-    user_id = "user_1"
-    mos.create_user(user_id)
-
-    mem_cube_id = "mem_cube_5"
-    mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
-
-    if Path(mem_cube_name_or_path).exists():
-        shutil.rmtree(mem_cube_name_or_path)
-        print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
-
-    mem_cube = GeneralMemCube(mem_cube_config)
-    mem_cube.dump(mem_cube_name_or_path)
-    mos.register_mem_cube(
-        mem_cube_name_or_path=mem_cube_name_or_path, mem_cube_id=mem_cube_id, user_id=user_id
-    )
-    mos.mem_scheduler.current_mem_cube = mem_cube
-
-    mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
-
-    for item in tqdm(questions, desc="processing queries"):
+    for item_idx, item in enumerate(tqdm(questions, desc="processing queries")):
         query = item["question"]
+        messages_to_send = [
+            ScheduleMessageItem(
+                item_id=f"test_item_{item_idx}",
+                user_id=trying_modules.current_user_id,
+                mem_cube_id=trying_modules.current_mem_cube_id,
+                label=MEM_UPDATE_TASK_LABEL,
+                content=query,
+            )
+        ]
 
-        # test process_session_turn
-        working_memory, new_candidates = mos.mem_scheduler.process_session_turn(
-            queries=[query],
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
-            top_k=10,
-        )
-        print(f"\nnew_candidates: {[one.memory for one in new_candidates]}")
-
-        # test activation memory update
-        mos.mem_scheduler.update_activation_memory_periodically(
-            interval_seconds=0,
-            label=NOT_APPLICABLE_TYPE,
-            user_id=user_id,
-            mem_cube_id=mem_cube_id,
-            mem_cube=mem_cube,
+        # Run one session turn manually to get search candidates
+        mem_scheduler._memory_update_consumer(
+            messages=messages_to_send,
         )
 
-    show_web_logs(mos.mem_scheduler)
-
-    mos.mem_scheduler.stop()
+    # Show accumulated web logs
+    show_web_logs(mem_scheduler)
