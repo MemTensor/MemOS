@@ -42,12 +42,24 @@ def init_task():
             "content": "Max needs joint supplements. Actually, we're moving to Chicago next month.",
         },
         {
+            "role": "assistant",
+            "content": "Got it — Max is on joint supplements, and you’re relocating to Chicago soon. That’s a big move! Have you looked into how the change in climate or vet access might affect his needs?",
+        },
+        {
             "role": "user",
             "content": "Correction: Bella is 6, not 5. And she's allergic to chicken.",
         },
         {
+            "role": "assistant",
+            "content": "Thanks for the update! So Bella is 6 years old and has a chicken allergy — good to know. You’ll want to double-check her food and treats, especially during the move. Has she had any reactions recently?",
+        },
+        {
             "role": "user",
             "content": "My partner's cat Whiskers visits weekends. Bella chases her sometimes.",
+        },
+        {
+            "role": "assistant",
+            "content": "Ah, the classic dog-and-cat dynamic! Since Bella chases Whiskers, it might help to give them gradual supervised interactions or create safe zones for the cat—especially important as you settle into a new home in Chicago. Keeping Bella’s routine stable during the move could also reduce her urge to chase. How do they usually get along when Whiskers visits?",
         },
     ]
 
@@ -145,18 +157,25 @@ class ScheduleModulesRunner(DirectSearchMemoriesAnalyzer):
         print(f"   User ID: {self.current_user_id}")
         print(f"   Mem Cube ID: {self.current_mem_cube_id}")
 
-    def add_msgs(self, messages: list[dict]):
+    def add_msgs(
+        self,
+        messages: list[dict],
+        extract_mode: str = "fine",
+        async_mode: str = "sync",
+    ):
         # Create add request
         add_req = self.create_test_add_request(
             user_id=self.current_user_id,
             mem_cube_id=self.current_mem_cube_id,
             messages=messages,
             session_id=self.current_session_id,
+            extract_mode=extract_mode,
+            async_mode=async_mode,
         )
 
         # Add to memory
         result = self.add_memories(add_req)
-        print(f"   ✅ Added to memory successfully: \n{messages}")
+        print(f"   ✅ Added to memory successfully: \n{result}")
 
         return result
 

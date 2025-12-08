@@ -259,6 +259,7 @@ class FileContentParser(BaseMessageParser):
         chunk_index: int | None = None,
         chunk_total: int | None = None,
         chunk_content: str | None = None,
+        file_url_flag: bool = False,
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
@@ -267,6 +268,7 @@ class FileContentParser(BaseMessageParser):
                 "type": "file",
                 "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
                 "content": chunk_content if chunk_content else file_info.get("file_data", ""),
+                "file_info": file_info if file_url_flag else {},
             }
             # Add chunk ordering information if provided
             if chunk_index is not None:
@@ -291,10 +293,7 @@ class FileContentParser(BaseMessageParser):
         # Rebuild from source fields
         return {
             "type": "file",
-            "file": {
-                "filename": source.doc_path or "",
-                "file_data": source.content or "",
-            },
+            "file": source.file_info,
         }
 
     def _parse_file(self, file_info: dict[str, Any]) -> str:
@@ -367,7 +366,7 @@ class FileContentParser(BaseMessageParser):
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
-
+        file_url_flag = False
         # Build content string based on available information
         content_parts = []
 
@@ -386,6 +385,7 @@ class FileContentParser(BaseMessageParser):
                     content_parts.append(f"[File Data (base64/encoded): {len(file_data)} chars]")
                 # Check if it looks like a URL
                 elif file_data.startswith(("http://", "https://", "file://")):
+                    file_url_flag = True
                     content_parts.append(f"[File URL: {file_data}]")
                 else:
                     # TODO: split into multiple memory items
@@ -437,6 +437,7 @@ class FileContentParser(BaseMessageParser):
                 chunk_index=chunk_idx,
                 chunk_total=total_chunks,
                 chunk_content=chunk_text,
+                file_url_flag=file_url_flag,
             )
 
             memory_item = TextualMemoryItem(
@@ -473,6 +474,7 @@ class FileContentParser(BaseMessageParser):
                 chunk_index=None,
                 chunk_total=0,
                 chunk_content=content,
+                file_url_flag=file_url_flag,
             )
             memory_item = TextualMemoryItem(
                 memory=content,
