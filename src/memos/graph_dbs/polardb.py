@@ -3747,7 +3747,7 @@ class PolarDBGraphDB(BaseGraphDB):
         if filter:
 
             def escape_cypher_string(value: str) -> str:
-                return value.replace("'", "\\'")
+                return value.replace("'", "''")
 
             def build_cypher_filter_condition(condition_dict: dict) -> str:
                 """Build a Cypher WHERE condition for a single filter item."""
@@ -4286,6 +4286,7 @@ class PolarDBGraphDB(BaseGraphDB):
             "node_type",
             "info",
             "source",
+            "file_ids",
         }
 
         def process_condition(condition):
