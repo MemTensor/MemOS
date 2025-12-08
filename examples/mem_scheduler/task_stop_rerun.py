@@ -1,7 +1,6 @@
 from pathlib import Path
 from time import sleep
 
-# Note: we skip API handler status/wait utilities in this demo
 from memos.api.routers.server_router import mem_scheduler
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 

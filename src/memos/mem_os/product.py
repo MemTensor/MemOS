@@ -641,7 +641,7 @@ class MOSProduct(MOSCore):
                 content=query,
                 timestamp=datetime.utcnow(),
             )
-            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+            self.mem_scheduler.submit_messages(messages=[message_item])
 
     async def _post_chat_processing(
         self,
