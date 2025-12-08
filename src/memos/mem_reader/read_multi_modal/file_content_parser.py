@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import os
+import re
 import tempfile
 
 from typing import Any
@@ -13,6 +14,7 @@ from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal.base import BaseMessageParser, _derive_key
+from memos.mem_reader.read_multi_modal.image_parser import ImageParser
 from memos.mem_reader.read_multi_modal.utils import (
     detect_lang,
     get_parser,
@@ -129,6 +131,91 @@ class FileContentParser(BaseMessageParser):
         logger.info("[FileContentParser] Local file paths are not supported in fine mode.")
         return ""
 
+    def _extract_and_process_images(self, text: str, info: dict[str, Any], **kwargs) -> str:
+        """
+        Extract all images from markdown text and process them using ImageParser.
+        Replaces image references with extracted text content.
+
+        Args:
+            text: Markdown text containing image references
+            info: Dictionary containing user_id and session_id
+            **kwargs: Additional parameters for ImageParser
+
+        Returns:
+            Text with image references replaced by extracted content
+        """
+        if not text or not self.image_parser:
+            return text
+
+        # Pattern to match markdown images: ![](url) or ![alt](url)
+        image_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+
+        # Find all image matches first
+        image_matches = list(re.finditer(image_pattern, text))
+        if not image_matches:
+            return text
+
+        logger.info(f"[FileContentParser] Found {len(image_matches)} images to process")
+
+        # Process images and build replacement map
+        replacements = {}
+        for idx, match in enumerate(image_matches, 1):
+            image_url = match.group(2)
+
+            try:
+                # Construct image message format for ImageParser
+                image_message = {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_url,
+                        "detail": "auto",
+                    },
+                }
+
+                # Process image using ImageParser
+                logger.info(
+                    f"[FileContentParser] Processing image {idx}/{len(image_matches)}: {image_url}"
+                )
+                memory_items = self.image_parser.parse_fine(image_message, info, **kwargs)
+
+                # Extract text content from memory items (only strings as requested)
+                extracted_texts = []
+                for item in memory_items:
+                    if hasattr(item, "memory") and item.memory:
+                        extracted_texts.append(str(item.memory))
+
+                if extracted_texts:
+                    # Combine all extracted texts
+                    extracted_content = "\n".join(extracted_texts)
+                    # Replace image with extracted content
+                    replacements[match.group(0)] = (
+                        f"\n[Image Content from {image_url}]:\n{extracted_content}\n"
+                    )
+                else:
+                    # If no content extracted, keep original with a note
+                    logger.warning(
+                        f"[FileContentParser] No content extracted from image: {image_url}"
+                    )
+                    replacements[match.group(0)] = (
+                        f"\n[Image: {image_url} - No content extracted]\n"
+                    )
+
+            except Exception as e:
+                logger.error(f"[FileContentParser] Error processing image {image_url}: {e}")
+                # On error, keep original image reference
+                replacements[match.group(0)] = match.group(0)
+
+        # Replace all images in the text
+        processed_text = text
+        for original, replacement in replacements.items():
+            processed_text = processed_text.replace(original, replacement, 1)
+
+        logger.info(
+            f"[FileContentParser] Processed {len(image_matches)} images, "
+            f"extracted content for {sum(1 for r in replacements.values() if 'Image Content' in r)} images"
+        )
+        return processed_text
+
     def __init__(
         self,
         embedder: BaseEmbedder,
@@ -149,6 +236,8 @@ class FileContentParser(BaseMessageParser):
         """
         super().__init__(embedder, llm)
         self.parser = parser
+        # Initialize ImageParser for processing images in markdown
+        self.image_parser = ImageParser(embedder, llm) if llm else None
 
         # Get inner markdown hostnames from config or environment
         if direct_markdown_hostnames is not None:
@@ -518,6 +607,10 @@ class FileContentParser(BaseMessageParser):
                     logger.warning(
                         f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
                     )
+
+        # Extract and process images from parsed_text
+        if is_markdown and parsed_text and self.image_parser:
+            parsed_text = self._extract_and_process_images(parsed_text, info, **kwargs)
 
         # Extract info fields
         if not info:
