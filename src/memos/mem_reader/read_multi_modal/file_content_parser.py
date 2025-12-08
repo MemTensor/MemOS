@@ -547,6 +547,7 @@ class FileContentParser(BaseMessageParser):
             tags: list[str] | None = None,
             key: str | None = None,
             chunk_idx: int | None = None,
+            chunk_content: str | None = None,
         ) -> TextualMemoryItem:
             """Construct memory item with common fields.
 
@@ -563,7 +564,7 @@ class FileContentParser(BaseMessageParser):
                 info,
                 chunk_index=chunk_idx,
                 chunk_total=total_chunks,
-                chunk_content=value,
+                chunk_content=chunk_content,
             )
             return TextualMemoryItem(
                 memory=value,
@@ -599,6 +600,7 @@ class FileContentParser(BaseMessageParser):
                     f"chunk:{chunk_idx + 1}/{total_chunks}",
                 ],
                 chunk_idx=chunk_idx,
+                chunk_content=chunk_text,
             )
 
         # Handle empty chunks case
@@ -637,6 +639,7 @@ class FileContentParser(BaseMessageParser):
                             tags=tags,
                             key=response_json.get("key"),
                             chunk_idx=chunk_idx,
+                            chunk_content=chunk_text,
                         )
             except Exception as e:
                 logger.error(f"[FileContentParser] LLM error for chunk {chunk_idx}: {e}")
