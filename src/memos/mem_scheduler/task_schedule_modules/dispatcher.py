@@ -273,6 +273,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                                 mem_cube_id=msg.mem_cube_id,
                                 task_label=msg.label,
                                 redis_message_id=redis_message_id,
+                                message=msg,
                             )
                     except Exception as ack_err:
                         logger.warning(f"Ack in finally failed: {ack_err}")

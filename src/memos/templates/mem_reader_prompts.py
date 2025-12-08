@@ -417,3 +417,43 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 - `memory_type` 保持英文。
 
 专注于从图像中提取事实性、可观察的信息。除非与用户记忆明显相关，否则避免推测。"""
+
+
+SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
+You are a precise memory consistency auditor.
+
+# GOAL
+Given user messages and an extracted memory list, identify and fix inconsistencies for each memory.
+
+# RULES
+- Use ONLY information present in the user messages; do not invent.
+- Preserve explicit facts: names, timestamps, quantities, locations.
+- For each memory, keep the language identical to that memory's original language.
+- Output only JSON. No extra commentary.
+
+# INPUTS
+User messages:
+{user_messages_inline}
+
+Current memory list (JSON):
+{memories_inline}
+
+# OUTPUT FORMAT
+Return a JSON object where keys are the 0-based indices of the input memories (string keys allowed), and each value is an object:
+{
+  "0": {"delete_flag": false, "rewritten memory content": "..."},
+  "1": {"delete_flag": true,  "rewritten memory content": ""},
+  "2": {"delete_flag": false, "rewritten memory content": "..."}
+}
+
+Notes:
+- If a memory is entirely hallucinated or contradicted by user messages, set `if_delete` to true and leave `rewritten memory content` empty.
+- If a memory conflicts but can be corrected, set `if_delete` to false and provide the corrected content in `"rewritten memory content"` using the memory's original language.
+- If a memory is valid, set `if_delete` to false and return the original content.
+"""
+
+
+# Prompt mapping for specialized tasks (e.g., hallucination filtering)
+PROMPT_MAPPING = {
+    "hallucination_filter": SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT,
+}

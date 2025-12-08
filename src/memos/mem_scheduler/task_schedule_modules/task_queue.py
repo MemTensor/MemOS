@@ -14,6 +14,7 @@ from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedis
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to_iso
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
 
 logger = get_logger(__name__)
@@ -26,10 +27,12 @@ class ScheduleTaskQueue:
         maxsize: int,
         disabled_handlers: list | None = None,
         orchestrator: SchedulerOrchestrator | None = None,
+        status_tracker: TaskStatusTracker | None = None,
     ):
         self.use_redis_queue = use_redis_queue
         self.maxsize = maxsize
         self.orchestrator = SchedulerOrchestrator() if orchestrator is None else orchestrator
+        self.status_tracker = status_tracker
 
         if self.use_redis_queue:
             if maxsize is None or not isinstance(maxsize, int) or maxsize <= 0:
@@ -51,6 +54,7 @@ class ScheduleTaskQueue:
         mem_cube_id: str,
         task_label: str,
         redis_message_id,
+        message: ScheduleMessageItem | None,
     ) -> None:
         if not isinstance(self.memos_message_queue, SchedulerRedisQueue):
             logger.warning("ack_message is only supported for Redis queues")
@@ -61,6 +65,7 @@ class ScheduleTaskQueue:
             mem_cube_id=mem_cube_id,
             task_label=task_label,
             redis_message_id=redis_message_id,
+            message=message,
         )
 
     def get_stream_keys(self) -> list[str]:
