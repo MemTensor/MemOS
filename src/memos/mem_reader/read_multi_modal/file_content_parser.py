@@ -167,27 +167,40 @@ class FileContentParser(BaseMessageParser):
         self,
         message: File,
         info: dict[str, Any],
+        chunk_index: int | None = None,
+        chunk_total: int | None = None,
+        chunk_content: str | None = None,
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
             file_info = message.get("file", {})
-            return SourceMessage(
-                type="file",
-                doc_path=file_info.get("filename") or file_info.get("file_id", ""),
-                content=file_info.get("file_data", ""),
-                original_part=message,
-            )
-        return SourceMessage(type="file", doc_path=str(message))
+            source_dict = {
+                "type": "file",
+                "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
+                "content": chunk_content
+                if chunk_content is not None
+                else file_info.get("file_data", ""),
+            }
+            # Add chunk ordering information if provided
+            if chunk_index is not None:
+                source_dict["chunk_index"] = chunk_index
+            if chunk_total is not None:
+                source_dict["chunk_total"] = chunk_total
+            return SourceMessage(**source_dict)
+        source_dict = {"type": "file", "doc_path": str(message)}
+        if chunk_index is not None:
+            source_dict["chunk_index"] = chunk_index
+        if chunk_total is not None:
+            source_dict["chunk_total"] = chunk_total
+        if chunk_content is not None:
+            source_dict["content"] = chunk_content
+        return SourceMessage(**source_dict)
 
     def rebuild_from_source(
         self,
         source: SourceMessage,
     ) -> File:
         """Rebuild file content part from SourceMessage."""
-        # Use original_part if available
-        if hasattr(source, "original_part") and source.original_part:
-            return source.original_part
-
         # Rebuild from source fields
         return {
             "type": "file",
@@ -311,9 +324,6 @@ class FileContentParser(BaseMessageParser):
         # Split content into chunks
         content_chunks = self._split_text(content)
 
-        # Create source
-        source = self.create_source(message, info)
-
         # Extract info fields
         info_ = info.copy()
         if file_id:
@@ -325,11 +335,22 @@ class FileContentParser(BaseMessageParser):
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
         file_ids = [file_id] if file_id else []
+        total_chunks = len(content_chunks)
+
         # Create memory items for each chunk
         memory_items = []
         for chunk_idx, chunk_text in enumerate(content_chunks):
             if not chunk_text.strip():
                 continue
+
+            # Create source for this specific chunk with its index and content
+            source = self.create_source(
+                message,
+                info,
+                chunk_index=chunk_idx,
+                chunk_total=total_chunks,
+                chunk_content=chunk_text,
+            )
 
             memory_item = TextualMemoryItem(
                 memory=chunk_text,
@@ -341,7 +362,7 @@ class FileContentParser(BaseMessageParser):
                     tags=[
                         "mode:fast",
                         "multimodal:file",
-                        f"chunk:{chunk_idx + 1}/{len(content_chunks)}",
+                        f"chunk:{chunk_idx + 1}/{total_chunks}",
                     ],
                     key=_derive_key(chunk_text),
                     embedding=self.embedder.embed([chunk_text])[0],
@@ -358,6 +379,14 @@ class FileContentParser(BaseMessageParser):
 
         # If no chunks were created, create a placeholder
         if not memory_items:
+            # Create source for placeholder (no chunk index since there are no chunks)
+            placeholder_source = self.create_source(
+                message,
+                info,
+                chunk_index=None,
+                chunk_total=0,
+                chunk_content=content,
+            )
             memory_item = TextualMemoryItem(
                 memory=content,
                 metadata=TreeNodeTextualMemoryMetadata(
@@ -369,7 +398,7 @@ class FileContentParser(BaseMessageParser):
                     key=_derive_key(content),
                     embedding=self.embedder.embed([content])[0],
                     usage=[],
-                    sources=[source],
+                    sources=[placeholder_source],
                     background="",
                     confidence=0.99,
                     type="fact",
@@ -462,7 +491,9 @@ class FileContentParser(BaseMessageParser):
                         parsed_text = self._handle_base64(file_data)
 
                     else:
-                        parsed_text = file_data
+                        # TODO: discuss the proper place for processing
+                        #  string file-data
+                        return []
             # Priority 2: If file_id is provided but no file_data, try to use file_id as path
             elif file_id:
                 logger.warning(f"[FileContentParser] File data not provided for file_id: {file_id}")
@@ -489,9 +520,6 @@ class FileContentParser(BaseMessageParser):
                     logger.warning(
                         f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
                     )
-
-        # Create source
-        source = self.create_source(message, info)
 
         # Extract info fields
         if not info:
@@ -520,8 +548,25 @@ class FileContentParser(BaseMessageParser):
             mem_type: str = memory_type,
             tags: list[str] | None = None,
             key: str | None = None,
+            chunk_idx: int | None = None,
         ) -> TextualMemoryItem:
-            """Construct memory item with common fields."""
+            """Construct memory item with common fields.
+
+            Args:
+                value: Memory content (chunk text)
+                mem_type: Memory type
+                tags: Tags for the memory item
+                key: Key for the memory item
+                chunk_idx: Index of the chunk in the document (0-based)
+            """
+            # Create source for this specific chunk with its index and content
+            chunk_source = self.create_source(
+                message,
+                info,
+                chunk_index=chunk_idx,
+                chunk_total=total_chunks,
+                chunk_content=value,
+            )
             return TextualMemoryItem(
                 memory=value,
                 metadata=TreeNodeTextualMemoryMetadata(
@@ -533,7 +578,7 @@ class FileContentParser(BaseMessageParser):
                     key=key if key is not None else _derive_key(value),
                     embedding=self.embedder.embed([value])[0],
                     usage=[],
-                    sources=[source],
+                    sources=[chunk_source],
                     background="",
                     confidence=0.99,
                     type="fact",
@@ -555,6 +600,7 @@ class FileContentParser(BaseMessageParser):
                     f"fallback:{reason}",
                     f"chunk:{chunk_idx + 1}/{total_chunks}",
                 ],
+                chunk_idx=chunk_idx,
             )
 
         # Handle empty chunks case
@@ -563,6 +609,7 @@ class FileContentParser(BaseMessageParser):
                 _make_memory_item(
                     value=parsed_text or "[File: empty content]",
                     tags=["mode:fine", "multimodal:file"],
+                    chunk_idx=None,
                 )
             ]
 
@@ -591,6 +638,7 @@ class FileContentParser(BaseMessageParser):
                             mem_type=llm_mem_type,
                             tags=tags,
                             key=response_json.get("key"),
+                            chunk_idx=chunk_idx,
                         )
             except Exception as e:
                 logger.error(f"[FileContentParser] LLM error for chunk {chunk_idx}: {e}")
@@ -637,6 +685,8 @@ class FileContentParser(BaseMessageParser):
 
         return memory_items or [
             _make_memory_item(
-                value=parsed_text or "[File: empty content]", tags=["mode:fine", "multimodal:file"]
+                value=parsed_text or "[File: empty content]",
+                tags=["mode:fine", "multimodal:file"],
+                chunk_idx=None,
             )
         ]

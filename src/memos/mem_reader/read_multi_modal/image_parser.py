@@ -53,7 +53,6 @@ class ImageParser(BaseMessageParser):
             return SourceMessage(
                 type="image",
                 content=url,
-                original_part=message,
                 url=url,
                 detail=detail,
             )
@@ -64,10 +63,6 @@ class ImageParser(BaseMessageParser):
         source: SourceMessage,
     ) -> ChatCompletionContentPartImageParam:
         """Rebuild image_url content part from SourceMessage."""
-        # Use original_part if available
-        if hasattr(source, "original_part") and source.original_part:
-            return source.original_part
-
         # Rebuild from source fields
         url = getattr(source, "url", "") or (source.content or "").replace("[image_url]: ", "")
         detail = getattr(source, "detail", "auto")

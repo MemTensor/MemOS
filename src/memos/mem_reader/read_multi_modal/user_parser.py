@@ -68,8 +68,6 @@ class UserParser(BaseMessageParser):
                                 chat_time=chat_time,
                                 message_id=message_id,
                                 content=part.get("text", ""),
-                                # Save original part for reconstruction
-                                original_part=part,
                             )
                         )
                     elif part_type == "file":
@@ -82,7 +80,6 @@ class UserParser(BaseMessageParser):
                                 message_id=message_id,
                                 doc_path=file_info.get("filename") or file_info.get("file_id", ""),
                                 content=file_info.get("file_data", ""),
-                                original_part=part,
                             )
                         )
                     elif part_type == "image_url":
@@ -94,7 +91,6 @@ class UserParser(BaseMessageParser):
                                 chat_time=chat_time,
                                 message_id=message_id,
                                 image_path=image_info.get("url"),
-                                original_part=part,
                             )
                         )
                     else:
@@ -106,7 +102,6 @@ class UserParser(BaseMessageParser):
                                 chat_time=chat_time,
                                 message_id=message_id,
                                 content=f"[{part_type}]",
-                                original_part=part,
                             )
                         )
         else:
