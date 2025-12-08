@@ -177,9 +177,7 @@ class FileContentParser(BaseMessageParser):
             source_dict = {
                 "type": "file",
                 "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
-                "content": chunk_content
-                if chunk_content is not None
-                else file_info.get("file_data", ""),
+                "content": chunk_content if chunk_content else file_info.get("file_data", ""),
             }
             # Add chunk ordering information if provided
             if chunk_index is not None:
