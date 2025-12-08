@@ -572,7 +572,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         }
         # Explicitly pass file_ids to preserve file association during transfer
         if hasattr(raw_node.metadata, "file_ids") and raw_node.metadata.file_ids:
-             info["file_ids"] = raw_node.metadata.file_ids
+            info["file_ids"] = raw_node.metadata.file_ids
 
         fine_memory_items = []
         # Part A: call llm

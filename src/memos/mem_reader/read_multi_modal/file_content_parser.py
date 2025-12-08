@@ -179,6 +179,11 @@ class FileContentParser(BaseMessageParser):
                 "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
                 "content": chunk_content if chunk_content else file_info.get("file_data", ""),
             }
+            # Persist file_id in source_dict if available
+            file_id = file_info.get("file_id")
+            if file_id:
+                source_dict["file_id"] = file_id
+            
             # Add chunk ordering information if provided
             if chunk_index is not None:
                 source_dict["chunk_index"] = chunk_index
@@ -199,13 +204,18 @@ class FileContentParser(BaseMessageParser):
         source: SourceMessage,
     ) -> File:
         """Rebuild file content part from SourceMessage."""
+        file_data = {
+            "filename": source.doc_path or "",
+            "file_data": source.content or "",
+        }
+        # Restore file_id if present in source
+        if hasattr(source, "file_id") and source.file_id:
+            file_data["file_id"] = source.file_id
+
         # Rebuild from source fields
         return {
             "type": "file",
-            "file": {
-                "filename": source.doc_path or "",
-                "file_data": source.content or "",
-            },
+            "file": file_data,
         }
 
     def _parse_file(self, file_info: dict[str, Any]) -> str:
