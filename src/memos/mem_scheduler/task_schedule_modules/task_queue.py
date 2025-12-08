@@ -94,7 +94,11 @@ class ScheduleTaskQueue:
             logger.error("Submit empty")
         elif len(messages) == 1:
             enqueue_ts = to_iso(getattr(messages[0], "timestamp", None))
-            emit_monitor_event("enqueue", messages[0], {"enqueue_ts": enqueue_ts})
+            emit_monitor_event(
+                "enqueue",
+                messages[0],
+                {"enqueue_ts": enqueue_ts, "event_duration_ms": 0, "total_duration_ms": 0},
+            )
             self.memos_message_queue.put(messages[0])
         else:
             user_cube_groups = group_messages_by_user_and_mem_cube(messages)
@@ -118,7 +122,15 @@ class ScheduleTaskQueue:
                             continue
 
                         enqueue_ts = to_iso(getattr(message, "timestamp", None))
-                        emit_monitor_event("enqueue", message, {"enqueue_ts": enqueue_ts})
+                        emit_monitor_event(
+                            "enqueue",
+                            message,
+                            {
+                                "enqueue_ts": enqueue_ts,
+                                "event_duration_ms": 0,
+                                "total_duration_ms": 0,
+                            },
+                        )
                         self.memos_message_queue.put(message)
                         logger.info(
                             f"Submitted message to local queue: {message.label} - {message.content}"

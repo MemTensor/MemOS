@@ -185,6 +185,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             if isinstance(dequeue_ts, int | float)
                             else None
                         ),
+                        "event_duration_ms": start_delay_ms,
+                        "total_duration_ms": wait_sec * 1000,
                     },
                 )
 
@@ -210,6 +212,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             finish_time, tz=timezone.utc
                         ).isoformat(),
                         "exec_duration_ms": duration * 1000,
+                        "event_duration_ms": duration * 1000,
                         "total_duration_ms": self._calc_total_duration_ms(
                             finish_time, getattr(first_msg, "timestamp", None)
                         ),
@@ -244,6 +247,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             finish_time, tz=timezone.utc
                         ).isoformat(),
                         "exec_duration_ms": (finish_time - start_time) * 1000,
+                        "event_duration_ms": (finish_time - start_time) * 1000,
                         "error_type": type(e).__name__,
                         "error_msg": str(e),
                         "total_duration_ms": self._calc_total_duration_ms(
