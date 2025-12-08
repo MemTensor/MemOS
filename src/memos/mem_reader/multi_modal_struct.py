@@ -422,7 +422,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         fine_memory_items: list[TextualMemoryItem] = []
 
-        with ContextThreadPoolExecutor(max_workers=8) as executor:
+        with ContextThreadPoolExecutor(max_workers=30) as executor:
             futures = [executor.submit(_process_one_item, item) for item in fast_memory_items]
 
             for future in concurrent.futures.as_completed(futures):

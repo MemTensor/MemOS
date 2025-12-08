@@ -158,7 +158,10 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         new_text_memories = [m.memory for m in new_memory]
         original_set = set(original_text_memories)
         new_set = set(new_text_memories)
-        added_texts = list(new_set - original_set)
+        added_texts = []
+        for new_mem in new_set:
+            if new_mem not in original_set:
+                added_texts.append(new_mem)
         memcube_content = []
         meta = []
         by_text = {m.memory: m for m in new_memory}

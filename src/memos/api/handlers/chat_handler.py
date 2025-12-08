@@ -429,7 +429,7 @@ class ChatHandler(BaseHandler):
                         include_preference=chat_req.include_preference,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
-                        playground_search_goal_parser=True,
+                        playground_search_goal_parser=False,
                     )
                     search_response = self.search_handler.handle_search_memories(search_req)
 
@@ -481,46 +481,47 @@ class ChatHandler(BaseHandler):
                         # internet status
                         yield f"data: {json.dumps({'type': 'status', 'data': 'start_internet_search'})}\n\n"
 
-                        # ======  internet search with parse goal ======
-                        search_req = APISearchPlaygroundRequest(
-                            query=chat_req.query
-                            + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
-                            user_id=chat_req.user_id,
-                            readable_cube_ids=readable_cube_ids,
-                            mode=chat_req.mode,
-                            internet_search=True,
-                            top_k=chat_req.top_k,
-                            chat_history=chat_req.history,
-                            session_id=chat_req.session_id,
-                            include_preference=False,
-                            filter=chat_req.filter,
-                            search_memory_type="OuterMemory",
-                        )
-                        search_response = self.search_handler.handle_search_memories(search_req)
+                    # ======  internet search with parse goal ======
+                    search_req = APISearchPlaygroundRequest(
+                        query=parsed_goal.rephrased_query
+                        or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
+                        user_id=chat_req.user_id,
+                        readable_cube_ids=readable_cube_ids,
+                        mode=chat_req.mode,
+                        internet_search=chat_req.internet_search,
+                        top_k=chat_req.top_k,
+                        chat_history=chat_req.history,
+                        session_id=chat_req.session_id,
+                        include_preference=False,
+                        filter=chat_req.filter,
+                        search_memory_type="All",
+                        playground_search_goal_parser=False,
+                    )
+                    search_response = self.search_handler.handle_search_memories(search_req)
 
-                        # Extract memories from search results (second search)
-                        memories_list = []
-                        if search_response.data and search_response.data.get("text_mem"):
-                            text_mem_results = search_response.data["text_mem"]
-                            if text_mem_results and text_mem_results[0].get("memories"):
-                                memories_list = text_mem_results[0]["memories"]
+                    # Extract memories from search results (second search)
+                    memories_list = []
+                    if search_response.data and search_response.data.get("text_mem"):
+                        text_mem_results = search_response.data["text_mem"]
+                        if text_mem_results and text_mem_results[0].get("memories"):
+                            memories_list = text_mem_results[0]["memories"]
 
-                        # Filter memories by threshold
-                        second_filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    # Filter memories by threshold
+                    second_filtered_memories = self._filter_memories_by_threshold(memories_list)
 
-                        # dedup and supplement memories
-                        filtered_memories = self._dedup_and_supplement_memories(
-                            filtered_memories, second_filtered_memories
-                        )
+                    # dedup and supplement memories
+                    filtered_memories = self._dedup_and_supplement_memories(
+                        filtered_memories, second_filtered_memories
+                    )
 
-                        # Prepare remain reference data (second search)
-                        reference = prepare_reference_data(filtered_memories)
-                        # get internet reference
-                        internet_reference = self._get_internet_reference(
-                            search_response.data.get("text_mem")[0]["memories"]
-                        )
+                    # Prepare remain reference data (second search)
+                    reference = prepare_reference_data(filtered_memories)
+                    # get internet reference
+                    internet_reference = self._get_internet_reference(
+                        search_response.data.get("text_mem")[0]["memories"]
+                    )
 
-                        yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+                    yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_enhance_system_prompt(
@@ -541,16 +542,7 @@ class ChatHandler(BaseHandler):
                     )
 
                     # Step 3: Generate streaming response from LLM
-                    if (
-                        chat_req.model_name_or_path
-                        and chat_req.model_name_or_path not in self.chat_llms
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}",
-                        )
-
-                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    model = next(iter(self.chat_llms.keys()))
                     response_stream = self.chat_llms[model].generate_stream(
                         current_messages, model_name_or_path=model
                     )

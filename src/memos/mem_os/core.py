@@ -287,7 +287,7 @@ class MOSCore:
                         content=query,
                         timestamp=datetime.utcnow(),
                     )
-                    self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                    self.mem_scheduler.submit_messages(messages=[message_item])
 
                 memories = mem_cube.text_mem.search(
                     query,
@@ -347,7 +347,7 @@ class MOSCore:
                     content=response,
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                self.mem_scheduler.submit_messages(messages=[message_item])
 
         return response
 
@@ -776,9 +776,7 @@ class MOSCore:
                                 timestamp=datetime.utcnow(),
                                 task_id=task_id,
                             )
-                            self.mem_scheduler.memos_message_queue.submit_messages(
-                                messages=[message_item]
-                            )
+                            self.mem_scheduler.submit_messages(messages=[message_item])
                         else:
                             message_item = ScheduleMessageItem(
                                 user_id=target_user_id,
@@ -791,9 +789,7 @@ class MOSCore:
                             logger.info(
                                 f"[DIAGNOSTIC] core.add: Submitting message to scheduler: {message_item.model_dump_json(indent=2)}"
                             )
-                            self.mem_scheduler.memos_message_queue.submit_messages(
-                                messages=[message_item]
-                            )
+                            self.mem_scheduler.submit_messages(messages=[message_item])
 
         def process_preference_memory():
             if (
@@ -828,7 +824,7 @@ class MOSCore:
                         content=json.dumps(messages_list),
                         timestamp=datetime.utcnow(),
                     )
-                    self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                    self.mem_scheduler.submit_messages(messages=[message_item])
 
         # Execute both memory processing functions in parallel
         with ContextThreadPoolExecutor(max_workers=2) as executor:
@@ -882,9 +878,7 @@ class MOSCore:
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
-                        self.mem_scheduler.memos_message_queue.submit_messages(
-                            messages=[message_item]
-                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
                     else:
                         message_item = ScheduleMessageItem(
                             user_id=target_user_id,
@@ -893,9 +887,7 @@ class MOSCore:
                             content=json.dumps(mem_ids),
                             timestamp=datetime.utcnow(),
                         )
-                        self.mem_scheduler.memos_message_queue.submit_messages(
-                            messages=[message_item]
-                        )
+                        self.mem_scheduler.submit_messages(messages=[message_item])
 
         # user doc input
         if (
@@ -924,7 +916,7 @@ class MOSCore:
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                self.mem_scheduler.submit_messages(messages=[message_item])
 
         logger.info(f"Add memory to {mem_cube_id} successfully")
 
