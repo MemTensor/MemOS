@@ -303,9 +303,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         mem_cube_id = first.mem_cube_id
 
         try:
-            is_cloud_env = (
-                os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
-            )
+            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
             if not is_cloud_env:
                 return
 
