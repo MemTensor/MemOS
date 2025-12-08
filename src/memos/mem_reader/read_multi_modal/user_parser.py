@@ -80,6 +80,7 @@ class UserParser(BaseMessageParser):
                                 message_id=message_id,
                                 doc_path=file_info.get("filename") or file_info.get("file_id", ""),
                                 content=file_info.get("file_data", ""),
+                                file_info=file_info,
                             )
                         )
                     elif part_type == "image_url":
