@@ -541,16 +541,7 @@ class ChatHandler(BaseHandler):
                     )
 
                     # Step 3: Generate streaming response from LLM
-                    if (
-                        chat_req.model_name_or_path
-                        and chat_req.model_name_or_path not in self.chat_llms
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}",
-                        )
-
-                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    model = next(iter(self.chat_llms.keys()))
                     response_stream = self.chat_llms[model].generate_stream(
                         current_messages, model_name_or_path=model
                     )
