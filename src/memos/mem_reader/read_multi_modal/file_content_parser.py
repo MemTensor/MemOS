@@ -183,7 +183,7 @@ class FileContentParser(BaseMessageParser):
             file_id = file_info.get("file_id")
             if file_id:
                 source_dict["file_id"] = file_id
-            
+
             # Add chunk ordering information if provided
             if chunk_index is not None:
                 source_dict["chunk_index"] = chunk_index
@@ -537,7 +537,7 @@ class FileContentParser(BaseMessageParser):
         session_id = info_.pop("session_id", "")
         if file_id:
             info_["file_id"] = file_id
-        
+
         file_ids = []
         if file_id:
             file_ids = [file_id]
@@ -545,10 +545,10 @@ class FileContentParser(BaseMessageParser):
             file_ids = [info.get("file_id")]
             info_["file_id"] = info.get("file_id")
         elif info.get("file_ids"):
-             # Support retrieve from file_ids list
-             file_ids = info.get("file_ids")
-             if len(file_ids) > 0:
-                 info_["file_id"] = file_ids[0]
+            # Support retrieve from file_ids list
+            file_ids = info.get("file_ids")
+            if len(file_ids) > 0:
+                info_["file_id"] = file_ids[0]
         # For file content parts, default to LongTermMemory
         memory_type = "LongTermMemory"
 
