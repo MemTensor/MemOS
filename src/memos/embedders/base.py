@@ -23,7 +23,7 @@ def _count_tokens_for_embedding(text: str) -> int:
             enc = tiktoken.encoding_for_model("gpt-4o-mini")
         except Exception:
             enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text or ""))
+        return len(enc.encode(text or "", disallowed_special=()))
     except Exception:
         # Heuristic fallback: zh chars ~1 token, others ~1 token per ~4 chars
         if not text:

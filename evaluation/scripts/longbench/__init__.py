@@ -1,1 +1,0 @@
-# LongBench evaluation scripts
