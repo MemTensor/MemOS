@@ -1,6 +1,7 @@
 import json
 import random
 import textwrap
+import time
 
 from contextlib import suppress
 from datetime import datetime
@@ -152,7 +153,7 @@ class PolarDBGraphDB(BaseGraphDB):
         # Create connection pool
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
             minconn=5,
-            maxconn=2000,
+            maxconn=100,
             host=host,
             port=port,
             user=user,
@@ -277,6 +278,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 if attempt >= max_retries - 1:
                     raise RuntimeError(f"Failed to get a valid connection from pool: {e}") from e
+                else:
+                    time.sleep(0.1)
                 continue
 
     def _return_connection(self, connection):
