@@ -421,7 +421,7 @@ class ChatHandler(BaseHandler):
                         query=chat_req.query,
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
-                        mode=chat_req.mode,
+                        mode="fast",
                         internet_search=False,
                         top_k=chat_req.top_k,
                         chat_history=chat_req.history,
@@ -431,7 +431,10 @@ class ChatHandler(BaseHandler):
                         filter=chat_req.filter,
                         playground_search_goal_parser=False,
                     )
+                    start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
+                    end_time = time.time()
+                    self.logger.info(f"first search time: {end_time - start_time}")
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
 
@@ -497,7 +500,10 @@ class ChatHandler(BaseHandler):
                         search_memory_type="All",
                         playground_search_goal_parser=False,
                     )
+                    start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
+                    end_time = time.time()
+                    self.logger.info(f"second search time: {end_time - start_time}")
 
                     # Extract memories from search results (second search)
                     memories_list = []
