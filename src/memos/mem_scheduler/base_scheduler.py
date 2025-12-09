@@ -180,13 +180,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
         self.current_mem_cube: BaseMemCube | None = None
-        try:
-            self.components = init_components()
-            self.current_mem_cube: BaseMemCube = self.components["naive_mem_cube"]
-        except Exception:
-            logger.info(
-                "No environment available to initialize mem cube. Using fallback naive_mem_cube."
-            )
 
         self._mem_cubes: dict[str, BaseMemCube] = {}
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
@@ -716,7 +709,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             # emit enqueue events for consistency
             for m in immediate_msgs:
                 emit_monitor_event(
-                    "enqueue", m, {"enqueue_ts": to_iso(getattr(m, "timestamp", None))}
+                    "enqueue",
+                    m,
+                    {
+                        "enqueue_ts": to_iso(getattr(m, "timestamp", None)),
+                        "event_duration_ms": 0,
+                        "total_duration_ms": 0,
+                    },
                 )
 
             # simulate dequeue for immediately dispatched messages so monitor logs stay complete
@@ -745,6 +744,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                             "enqueue_ts": to_iso(enqueue_ts_obj),
                             "dequeue_ts": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
                             "queue_wait_ms": queue_wait_ms,
+                            "event_duration_ms": queue_wait_ms,
+                            "total_duration_ms": queue_wait_ms,
                         },
                     )
                     self.metrics.task_dequeued(user_id=m.user_id, task_type=m.label)
@@ -923,6 +924,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                                         now, tz=timezone.utc
                                     ).isoformat(),
                                     "queue_wait_ms": queue_wait_ms,
+                                    "event_duration_ms": queue_wait_ms,
+                                    "total_duration_ms": queue_wait_ms,
                                 },
                             )
                             self.metrics.task_dequeued(user_id=msg.user_id, task_type=msg.label)
