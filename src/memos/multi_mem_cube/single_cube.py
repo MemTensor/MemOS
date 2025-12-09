@@ -30,6 +30,7 @@ from memos.types.general_types import (
     SearchMode,
     UserContext,
 )
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -93,7 +94,11 @@ class SingleCubeView(MemCubeView):
         for item in pref_results:
             item["cube_id"] = self.cube_id
 
-        return text_results + pref_results
+        all_memories = text_results + pref_results
+
+        # TODO: search existing memories and compare
+
+        return all_memories
 
     def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
         # Create UserContext object
@@ -194,6 +199,7 @@ class SingleCubeView(MemCubeView):
         """
         return mode
 
+    @timed
     def _search_text(
         self,
         search_req: APISearchRequest,
@@ -359,6 +365,7 @@ class SingleCubeView(MemCubeView):
 
         return formatted_memories
 
+    @timed
     def _search_pref(
         self,
         search_req: APISearchRequest,
@@ -425,7 +432,7 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
-            momory_type=search_req.search_memory_type,
+            memory_type=search_req.search_memory_type,
             search_filter=search_filter,
             search_priority=search_priority,
             info={
@@ -692,7 +699,7 @@ class SingleCubeView(MemCubeView):
             sync_mode=sync_mode,
         )
 
-        return [
+        text_memories = [
             {
                 "memory": memory.memory,
                 "memory_id": memory_id,
@@ -700,3 +707,5 @@ class SingleCubeView(MemCubeView):
             }
             for memory_id, memory in zip(mem_ids_local, flattened_local, strict=False)
         ]
+
+        return text_memories

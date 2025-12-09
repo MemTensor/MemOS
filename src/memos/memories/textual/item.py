@@ -28,6 +28,7 @@ class SourceMessage(BaseModel):
             source is a chat turn.
         - content: Minimal reproducible snippet from the source. If omitted,
             upstream may fall back to `doc_path` / `url` / `message_id`.
+        - file_info: File information for file source.
         - chat_time / message_id / doc_path: Locators for precisely pointing back
             to the original record (timestamp, message id, document path).
         - Extra fields: Allowed (`model_config.extra="allow"`) to carry arbitrary
@@ -40,7 +41,7 @@ class SourceMessage(BaseModel):
     message_id: str | None = None
     content: str | None = None
     doc_path: str | None = None
-
+    file_info: dict | None = None
     model_config = ConfigDict(extra="allow")
 
 

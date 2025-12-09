@@ -92,9 +92,9 @@ class MemoryManager:
         """
         added_ids: list[str] = []
 
-        with ContextThreadPoolExecutor(max_workers=200) as executor:
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(self._process_memory, m, user_name): m for m in memories}
-            for future in as_completed(futures, timeout=60):
+            for future in as_completed(futures, timeout=500):
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
@@ -102,7 +102,7 @@ class MemoryManager:
                     logger.exception("Memory processing error: ", exc_info=e)
 
         if mode == "sync":
-            for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
+            for mem_type in ["WorkingMemory"]:
                 try:
                     self.graph_store.remove_oldest_memory(
                         memory_type="WorkingMemory",

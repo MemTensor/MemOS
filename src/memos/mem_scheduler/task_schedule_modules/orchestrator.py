@@ -47,8 +47,8 @@ class SchedulerOrchestrator(RedisSchedulerModule):
         # Per-task minimum idle time (ms) before claiming pending messages
         # Default fallback handled in `get_task_idle_min`.
         self.tasks_min_idle_ms = {
-            # Preferential add tasks: allow claiming pending sooner (1 minute)
-            PREF_ADD_TASK_LABEL: 60_000,
+            # Preferential add tasks: allow claiming pending sooner (10 minute)
+            PREF_ADD_TASK_LABEL: 600_000,
         }
 
     def get_stream_priorities(self) -> None | dict:

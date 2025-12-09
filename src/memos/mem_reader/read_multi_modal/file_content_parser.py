@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import os
+import re
 import tempfile
 
 from typing import Any
@@ -13,6 +14,7 @@ from memos.embedders.base import BaseEmbedder
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_reader.read_multi_modal.base import BaseMessageParser, _derive_key
+from memos.mem_reader.read_multi_modal.image_parser import ImageParser
 from memos.mem_reader.read_multi_modal.utils import (
     detect_lang,
     get_parser,
@@ -129,6 +131,137 @@ class FileContentParser(BaseMessageParser):
         logger.info("[FileContentParser] Local file paths are not supported in fine mode.")
         return ""
 
+    def _process_single_image(
+        self, image_url: str, original_ref: str, info: dict[str, Any], **kwargs
+    ) -> tuple[str, str]:
+        """
+        Process a single image and return (original_ref, replacement_text).
+
+        Args:
+            image_url: URL of the image to process
+            original_ref: Original markdown image reference to replace
+            info: Dictionary containing user_id and session_id
+            **kwargs: Additional parameters for ImageParser
+
+        Returns:
+            Tuple of (original_ref, replacement_text)
+        """
+        try:
+            # Construct image message format for ImageParser
+            image_message = {
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url,
+                    "detail": "auto",
+                },
+            }
+
+            # Process image using ImageParser
+            logger.debug(f"[FileContentParser] Processing image: {image_url}")
+            memory_items = self.image_parser.parse_fine(image_message, info, **kwargs)
+
+            # Extract text content from memory items (only strings as requested)
+            extracted_texts = []
+            for item in memory_items:
+                if hasattr(item, "memory") and item.memory:
+                    extracted_texts.append(str(item.memory))
+
+            if extracted_texts:
+                # Combine all extracted texts
+                extracted_content = "\n".join(extracted_texts)
+                # Replace image with extracted content
+                return (
+                    original_ref,
+                    f"\n[Image Content from {image_url}]:\n{extracted_content}\n",
+                )
+            else:
+                # If no content extracted, keep original with a note
+                logger.warning(f"[FileContentParser] No content extracted from image: {image_url}")
+                return (
+                    original_ref,
+                    f"\n[Image: {image_url} - No content extracted]\n",
+                )
+
+        except Exception as e:
+            logger.error(f"[FileContentParser] Error processing image {image_url}: {e}")
+            # On error, keep original image reference
+            return (original_ref, original_ref)
+
+    def _extract_and_process_images(self, text: str, info: dict[str, Any], **kwargs) -> str:
+        """
+        Extract all images from markdown text and process them using ImageParser in parallel.
+        Replaces image references with extracted text content.
+
+        Args:
+            text: Markdown text containing image references
+            info: Dictionary containing user_id and session_id
+            **kwargs: Additional parameters for ImageParser
+
+        Returns:
+            Text with image references replaced by extracted content
+        """
+        if not text or not self.image_parser:
+            return text
+
+        # Pattern to match markdown images: ![](url) or ![alt](url)
+        image_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
+
+        # Find all image matches first
+        image_matches = list(re.finditer(image_pattern, text))
+        if not image_matches:
+            return text
+
+        logger.info(f"[FileContentParser] Found {len(image_matches)} images to process in parallel")
+
+        # Prepare tasks for parallel processing
+        tasks = []
+        for match in image_matches:
+            image_url = match.group(2)
+            original_ref = match.group(0)
+            tasks.append((image_url, original_ref))
+
+        # Process images in parallel
+        replacements = {}
+        max_workers = min(len(tasks), 10)  # Limit concurrent image processing
+
+        with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._process_single_image, image_url, original_ref, info, **kwargs
+                ): (image_url, original_ref)
+                for image_url, original_ref in tasks
+            }
+
+            # Collect results with progress tracking
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(futures),
+                desc="[FileContentParser] Processing images",
+            ):
+                try:
+                    original_ref, replacement = future.result()
+                    replacements[original_ref] = replacement
+                except Exception as e:
+                    image_url, original_ref = futures[future]
+                    logger.error(f"[FileContentParser] Future failed for image {image_url}: {e}")
+                    # On error, keep original image reference
+                    replacements[original_ref] = original_ref
+
+        # Replace all images in the text
+        processed_text = text
+        for original, replacement in replacements.items():
+            processed_text = processed_text.replace(original, replacement, 1)
+
+        # Count successfully extracted images
+        success_count = sum(
+            1 for replacement in replacements.values() if "Image Content from" in replacement
+        )
+        logger.info(
+            f"[FileContentParser] Processed {len(image_matches)} images in parallel, "
+            f"extracted content for {success_count} images"
+        )
+        return processed_text
+
     def __init__(
         self,
         embedder: BaseEmbedder,
@@ -149,6 +282,8 @@ class FileContentParser(BaseMessageParser):
         """
         super().__init__(embedder, llm)
         self.parser = parser
+        # Initialize ImageParser for processing images in markdown
+        self.image_parser = ImageParser(embedder, llm) if llm else None
 
         # Get inner markdown hostnames from config or environment
         if direct_markdown_hostnames is not None:
@@ -167,34 +302,44 @@ class FileContentParser(BaseMessageParser):
         self,
         message: File,
         info: dict[str, Any],
+        chunk_index: int | None = None,
+        chunk_total: int | None = None,
+        chunk_content: str | None = None,
+        file_url_flag: bool = False,
     ) -> SourceMessage:
         """Create SourceMessage from file content part."""
         if isinstance(message, dict):
             file_info = message.get("file", {})
-            return SourceMessage(
-                type="file",
-                doc_path=file_info.get("filename") or file_info.get("file_id", ""),
-                content=file_info.get("file_data", ""),
-                original_part=message,
-            )
-        return SourceMessage(type="file", doc_path=str(message))
+            source_dict = {
+                "type": "file",
+                "doc_path": file_info.get("filename") or file_info.get("file_id", ""),
+                "content": chunk_content if chunk_content else file_info.get("file_data", ""),
+                "file_info": file_info if file_url_flag else {},
+            }
+            # Add chunk ordering information if provided
+            if chunk_index is not None:
+                source_dict["chunk_index"] = chunk_index
+            if chunk_total is not None:
+                source_dict["chunk_total"] = chunk_total
+            return SourceMessage(**source_dict)
+        source_dict = {"type": "file", "doc_path": str(message)}
+        if chunk_index is not None:
+            source_dict["chunk_index"] = chunk_index
+        if chunk_total is not None:
+            source_dict["chunk_total"] = chunk_total
+        if chunk_content is not None:
+            source_dict["content"] = chunk_content
+        return SourceMessage(**source_dict)
 
     def rebuild_from_source(
         self,
         source: SourceMessage,
     ) -> File:
         """Rebuild file content part from SourceMessage."""
-        # Use original_part if available
-        if hasattr(source, "original_part") and source.original_part:
-            return source.original_part
-
         # Rebuild from source fields
         return {
             "type": "file",
-            "file": {
-                "filename": source.doc_path or "",
-                "file_data": source.content or "",
-            },
+            "file": source.file_info,
         }
 
     def _parse_file(self, file_info: dict[str, Any]) -> str:
@@ -267,7 +412,7 @@ class FileContentParser(BaseMessageParser):
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
         filename = file_info.get("filename", "")
-
+        file_url_flag = False
         # Build content string based on available information
         content_parts = []
 
@@ -286,6 +431,7 @@ class FileContentParser(BaseMessageParser):
                     content_parts.append(f"[File Data (base64/encoded): {len(file_data)} chars]")
                 # Check if it looks like a URL
                 elif file_data.startswith(("http://", "https://", "file://")):
+                    file_url_flag = True
                     content_parts.append(f"[File URL: {file_data}]")
                 else:
                     # TODO: split into multiple memory items
@@ -311,9 +457,6 @@ class FileContentParser(BaseMessageParser):
         # Split content into chunks
         content_chunks = self._split_text(content)
 
-        # Create source
-        source = self.create_source(message, info)
-
         # Extract info fields
         info_ = info.copy()
         if file_id:
@@ -325,11 +468,24 @@ class FileContentParser(BaseMessageParser):
         # (since we don't have role information at this level)
         memory_type = "LongTermMemory"
         file_ids = [file_id] if file_id else []
+        total_chunks = len(content_chunks)
+
         # Create memory items for each chunk
+        content_chunk_embeddings = self.embedder.embed(content_chunks)
         memory_items = []
         for chunk_idx, chunk_text in enumerate(content_chunks):
             if not chunk_text.strip():
                 continue
+
+            # Create source for this specific chunk with its index and content
+            source = self.create_source(
+                message,
+                info,
+                chunk_index=chunk_idx,
+                chunk_total=total_chunks,
+                chunk_content=chunk_text,
+                file_url_flag=file_url_flag,
+            )
 
             memory_item = TextualMemoryItem(
                 memory=chunk_text,
@@ -341,10 +497,10 @@ class FileContentParser(BaseMessageParser):
                     tags=[
                         "mode:fast",
                         "multimodal:file",
-                        f"chunk:{chunk_idx + 1}/{len(content_chunks)}",
+                        f"chunk:{chunk_idx + 1}/{total_chunks}",
                     ],
                     key=_derive_key(chunk_text),
-                    embedding=self.embedder.embed([chunk_text])[0],
+                    embedding=content_chunk_embeddings[chunk_idx],
                     usage=[],
                     sources=[source],
                     background="",
@@ -358,6 +514,15 @@ class FileContentParser(BaseMessageParser):
 
         # If no chunks were created, create a placeholder
         if not memory_items:
+            # Create source for placeholder (no chunk index since there are no chunks)
+            placeholder_source = self.create_source(
+                message,
+                info,
+                chunk_index=None,
+                chunk_total=0,
+                chunk_content=content,
+                file_url_flag=file_url_flag,
+            )
             memory_item = TextualMemoryItem(
                 memory=content,
                 metadata=TreeNodeTextualMemoryMetadata(
@@ -369,7 +534,7 @@ class FileContentParser(BaseMessageParser):
                     key=_derive_key(content),
                     embedding=self.embedder.embed([content])[0],
                     usage=[],
-                    sources=[source],
+                    sources=[placeholder_source],
                     background="",
                     confidence=0.99,
                     type="fact",
@@ -462,7 +627,9 @@ class FileContentParser(BaseMessageParser):
                         parsed_text = self._handle_base64(file_data)
 
                     else:
-                        parsed_text = file_data
+                        # TODO: discuss the proper place for processing
+                        #  string file-data
+                        return []
             # Priority 2: If file_id is provided but no file_data, try to use file_id as path
             elif file_id:
                 logger.warning(f"[FileContentParser] File data not provided for file_id: {file_id}")
@@ -490,8 +657,9 @@ class FileContentParser(BaseMessageParser):
                         f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
                     )
 
-        # Create source
-        source = self.create_source(message, info)
+        # Extract and process images from parsed_text
+        if is_markdown and parsed_text and self.image_parser:
+            parsed_text = self._extract_and_process_images(parsed_text, info, **kwargs)
 
         # Extract info fields
         if not info:
@@ -520,8 +688,26 @@ class FileContentParser(BaseMessageParser):
             mem_type: str = memory_type,
             tags: list[str] | None = None,
             key: str | None = None,
+            chunk_idx: int | None = None,
+            chunk_content: str | None = None,
         ) -> TextualMemoryItem:
-            """Construct memory item with common fields."""
+            """Construct memory item with common fields.
+
+            Args:
+                value: Memory content (chunk text)
+                mem_type: Memory type
+                tags: Tags for the memory item
+                key: Key for the memory item
+                chunk_idx: Index of the chunk in the document (0-based)
+            """
+            # Create source for this specific chunk with its index and content
+            chunk_source = self.create_source(
+                message,
+                info,
+                chunk_index=chunk_idx,
+                chunk_total=total_chunks,
+                chunk_content=chunk_content,
+            )
             return TextualMemoryItem(
                 memory=value,
                 metadata=TreeNodeTextualMemoryMetadata(
@@ -533,7 +719,7 @@ class FileContentParser(BaseMessageParser):
                     key=key if key is not None else _derive_key(value),
                     embedding=self.embedder.embed([value])[0],
                     usage=[],
-                    sources=[source],
+                    sources=[chunk_source],
                     background="",
                     confidence=0.99,
                     type="fact",
@@ -555,6 +741,8 @@ class FileContentParser(BaseMessageParser):
                     f"fallback:{reason}",
                     f"chunk:{chunk_idx + 1}/{total_chunks}",
                 ],
+                chunk_idx=chunk_idx,
+                chunk_content=chunk_text,
             )
 
         # Handle empty chunks case
@@ -563,6 +751,7 @@ class FileContentParser(BaseMessageParser):
                 _make_memory_item(
                     value=parsed_text or "[File: empty content]",
                     tags=["mode:fine", "multimodal:file"],
+                    chunk_idx=None,
                 )
             ]
 
@@ -591,6 +780,8 @@ class FileContentParser(BaseMessageParser):
                             mem_type=llm_mem_type,
                             tags=tags,
                             key=response_json.get("key"),
+                            chunk_idx=chunk_idx,
+                            chunk_content=chunk_text,
                         )
             except Exception as e:
                 logger.error(f"[FileContentParser] LLM error for chunk {chunk_idx}: {e}")
@@ -637,6 +828,8 @@ class FileContentParser(BaseMessageParser):
 
         return memory_items or [
             _make_memory_item(
-                value=parsed_text or "[File: empty content]", tags=["mode:fine", "multimodal:file"]
+                value=parsed_text or "[File: empty content]",
+                tags=["mode:fine", "multimodal:file"],
+                chunk_idx=None,
             )
         ]

@@ -523,7 +523,7 @@ class MOSForTestScheduler(MOS):
                     content=response,
                     timestamp=datetime.now(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                self.mem_scheduler.submit_messages(messages=[message_item])
 
         return response
 
