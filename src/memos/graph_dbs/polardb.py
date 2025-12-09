@@ -1597,9 +1597,7 @@ class PolarDBGraphDB(BaseGraphDB):
             """
 
         params = (query_word,)
-        logger.info(
-            f"[seach_by_keywords_LIKE start:]  user_name: {user_name}, query: {query}, params: {params}"
-        )
+        logger.info(f"[seach_by_keywords_LIKE start:]  user_name: {user_name}, params: {params}")
         conn = self._get_connection()
         try:
             with conn.cursor() as cursor:
@@ -1611,7 +1609,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     id_val = str(oldid)
                     output.append({"id": id_val})
                 logger.info(
-                    f"[seach_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
+                    f"[seach_by_keywords_LIKE end:] user_name: {user_name}, params: {params} recalled: {output}"
                 )
                 return output
         finally:

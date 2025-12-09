@@ -15,10 +15,10 @@ from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.mem_feedback.base import BaseMemFeedback
-from memos.mem_feedback.utils import should_keep_update, split_into_chunks
+from memos.mem_feedback.utils import make_mem_item, should_keep_update, split_into_chunks
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.read_multi_modal import detect_lang
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.organize.manager import (
     MemoryManager,
     extract_working_binding_ids,
@@ -77,7 +77,8 @@ class MemFeedback(BaseMemFeedback):
             },
             is_reorganize=self.is_reorganize,
         )
-        self.searcher: Searcher = self.memory_manager.searcher
+        self.searcher: Searcher = None
+        self.reranker = None
         self.DB_IDX_READY = False
 
     def _batch_embed(self, texts: list[str], embed_bs: int = 5):
@@ -562,6 +563,35 @@ class MemFeedback(BaseMemFeedback):
 
         return self._get_llm_response(prompt, dsl=False)
 
+    def _doc_filter(self, doc_scope: str, memories: list[TextualMemoryItem]):
+        """
+        Filter the memory based on filename
+        """
+        filename2_memid = {}
+        filename_mems = []
+
+        for item in memories:
+            for file_info in item.metadata.sources:
+                if file_info.type == "file":
+                    file_dict = file_info.original_part
+                    filename = file_dict["file"]["filename"]
+                    if filename not in filename2_memid:
+                        filename2_memid[filename] = []
+                        filename_mems.append(make_mem_item(filename))
+                    filename2_memid[filename].append(item.id)
+
+        rerank_res = self.reranker.rerank(doc_scope, filename_mems, top_k=100)
+        inscope_docs = [item[0].memory for item in rerank_res if item[1] > 0.95]
+
+        inscope_ids = [
+            memid for inscope_file in inscope_docs for memid in filename2_memid[inscope_file]
+        ]
+        logger.info(
+            f"[Feedback Core: process_keyword_replace] These docs are in scope : {inscope_docs}, relared memids: {inscope_ids}"
+        )
+        filter_memories = [mem for mem in memories if mem.id in inscope_ids]
+        return filter_memories
+
     def process_keyword_replace(self, user_id: str, user_name: str, kwp_judge: dict | None = None):
         """
         memory keyword replace process
@@ -597,11 +627,7 @@ class MemFeedback(BaseMemFeedback):
         retrieved_memories = [TextualMemoryItem(**item) for item in mem_data]
 
         if doc_scope != "NONE":
-            retrieved_memories = [
-                item
-                for item in retrieved_memories
-                if doc_scope in item.metadata.sources  # TODO
-            ]
+            retrieved_memories = self._doc_filter(doc_scope, retrieved_memories)
 
         if not retrieved_memories:
             return {"record": {"add": [], "update": []}}
@@ -728,29 +754,25 @@ class MemFeedback(BaseMemFeedback):
                     value = item["corrected_info"]
                     key = item["key"]
                     tags = item["tags"]
-                    feedback_memories.append(
-                        TextualMemoryItem(
-                            memory=value,
-                            metadata=TreeNodeTextualMemoryMetadata(
-                                user_id=info.get("user_id", ""),
-                                session_id=info.get("session_id", ""),
-                                memory_type="LongTermMemory",
-                                status="activated",
-                                tags=tags,
-                                key=key,
-                                embedding=embedding,
-                                usage=[],
-                                sources=[{"type": "chat"}],
-                                user_name=user_name,
-                                background="[Feedback update background]: "
-                                + str(chat_history)
-                                + "\nUser feedback: "
-                                + str(feedback_content),
-                                confidence=0.99,
-                                type="fine",
-                            ),
-                        )
+                    background = (
+                        "[Feedback update background]: "
+                        + str(chat_history)
+                        + "\nUser feedback: "
+                        + str(feedback_content)
                     )
+                    mem_item = make_mem_item(
+                        value,
+                        user_id=user_id,
+                        user_name=user_name,
+                        session_id=session_id,
+                        tags=tags,
+                        key=key,
+                        embedding=embedding,
+                        sources=[{"type": "chat"}],
+                        background=background,
+                        type="fine",
+                    )
+                    feedback_memories.append(mem_item)
 
                 mem_record = self._feedback_memory(
                     user_id,

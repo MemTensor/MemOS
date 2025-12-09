@@ -1,4 +1,4 @@
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 
 
 def estimate_tokens(text: str) -> int:
@@ -84,3 +84,25 @@ def split_into_chunks(memories: list[TextualMemoryItem], max_tokens_per_chunk=50
         chunks.append(current_chunk)
 
     return chunks
+
+
+def make_mem_item(text: str, **kwargs) -> TextualMemoryItem:
+    """Build a minimal TextualMemoryItem."""
+    return TextualMemoryItem(
+        memory=text,
+        metadata=TreeNodeTextualMemoryMetadata(
+            user_id=kwargs.get("user_id", ""),
+            session_id=kwargs.get("session_id", ""),
+            memory_type="LongTermMemory",
+            status="activated",
+            tags=kwargs.get("tags", []),
+            key=kwargs.get("key", ""),
+            embedding=kwargs.get("embedding", []),
+            usage=[],
+            sources=kwargs.get("sources", []),
+            user_name=kwargs.get("user_name", ""),
+            background=kwargs.get("background", ""),
+            confidence=0.99,
+            type=kwargs.get("type", ""),
+        ),
+    )
