@@ -343,6 +343,17 @@ class TreeTextMemory(BaseTextMemory):
             logger.error(f"An error occurred while deleting all memories: {e}")
             raise
 
+    def delete_by_filter(
+        self,
+        writable_cube_ids: list[str],
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> None:
+        """Delete memories by filter."""
+        self.graph_store.delete_node_by_prams(
+            writable_cube_ids=writable_cube_ids, file_ids=file_ids, filter=filter
+        )
+
     def load(self, dir: str) -> None:
         try:
             memory_file = os.path.join(dir, self.config.memory_filename)
