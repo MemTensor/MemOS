@@ -25,6 +25,46 @@ def memos_api_search(client, query, user_id, top_k, frame):
     start = time()
     search_results = client.search(query=query, user_id=user_id, top_k=top_k)
 
+    def _reorder_memories_by_sources(sr: dict) -> list:
+        """
+        Reorder text_mem[0].memories using sources' chunk_index (ascending).
+        Falls back to original order if no chunk_index is found.
+        """
+        if not isinstance(sr, dict):
+            return []
+        text_mem = sr.get("text_mem") or []
+        if not text_mem or not text_mem[0].get("memories"):
+            return []
+        memories = list(text_mem[0]["memories"])
+
+        def _first_source(mem: dict):
+            if not isinstance(mem, dict):
+                return None
+            # Prefer top-level sources, else metadata.sources
+            return (mem.get("sources") or mem.get("metadata", {}).get("sources") or []) or None
+
+        def _chunk_index(mem: dict):
+            srcs = _first_source(mem)
+            if not srcs or not isinstance(srcs, list):
+                return None
+            for s in srcs:
+                if isinstance(s, dict) and s.get("chunk_index") is not None:
+                    return s.get("chunk_index")
+            return None
+
+        # Collect keys
+        keyed = []
+        for i, mem in enumerate(memories):
+            ci = _chunk_index(mem)
+            keyed.append((ci, i, mem))  # keep original order as tie-breaker
+
+        # If no chunk_index present at all, return original
+        if all(ci is None for ci, _, _ in keyed):
+            return memories
+
+        keyed.sort(key=lambda x: (float("inf") if x[0] is None else x[0], x[1]))
+        return [k[2] for k in keyed]
+
     # Format context from search results based on frame type for backward compatibility
     context = ""
     if (
@@ -32,7 +72,11 @@ def memos_api_search(client, query, user_id, top_k, frame):
         and isinstance(search_results, dict)
         and "text_mem" in search_results
     ):
-        context = "\n".join([i["memory"] for i in search_results["text_mem"][0]["memories"]])
+        ordered_memories = _reorder_memories_by_sources(search_results)
+        if not ordered_memories and search_results["text_mem"][0].get("memories"):
+            ordered_memories = search_results["text_mem"][0]["memories"]
+
+        context = "\n".join([i.get("memory", "") for i in ordered_memories])
         if "pref_string" in search_results:
             context += f"\n{search_results.get('pref_string', '')}"
 
@@ -129,7 +173,7 @@ def main(frame, version="default", num_workers=10, top_k=20, max_samples=None):
 
     # Initialize checkpoint file for resume functionality
     checkpoint_dir = os.path.join(
-        ROOT_DIR, "evaluation", "results", "long_bench-v2", f"{frame}-{version}"
+        ROOT_DIR, "evaluation", "results", "long_bench_v2", f"{frame}-{version}"
     )
     os.makedirs(checkpoint_dir, exist_ok=True)
     record_file = os.path.join(checkpoint_dir, "search_success_records.txt")

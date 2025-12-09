@@ -158,7 +158,7 @@ def main(frame, version="default", num_workers=10):
 
     # Initialize checkpoint file for resume functionality
     checkpoint_dir = os.path.join(
-        ROOT_DIR, "evaluation", "results", "long_bench-v2", f"{frame}-{version}"
+        ROOT_DIR, "evaluation", "results", "long_bench_v2", f"{frame}-{version}"
     )
     os.makedirs(checkpoint_dir, exist_ok=True)
     record_file = os.path.join(checkpoint_dir, "response_success_records.txt")
