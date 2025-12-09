@@ -483,7 +483,7 @@ class ChatHandler(BaseHandler):
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
-                        internet_search=chat_req.internet_search,
+                        internet_search=chat_req.internet_search or parsed_goal.internet_search,
                         top_k=chat_req.top_k,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
