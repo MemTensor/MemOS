@@ -42,6 +42,7 @@ class ScheduleTaskQueue:
                 consumer_group="scheduler_group",
                 consumer_name="scheduler_consumer",
                 orchestrator=self.orchestrator,
+                status_tracker=self.status_tracker,  # Propagate status_tracker
             )
         else:
             self.memos_message_queue = SchedulerLocalQueue(maxsize=self.maxsize)
