@@ -206,6 +206,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         memory_texts = []
         all_sources = []
         roles = set()
+        aggregated_file_ids: list[str] = []
 
         for item in items:
             if item.memory:
@@ -226,6 +227,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 elif isinstance(source, dict) and source.get("role"):
                     roles.add(source.get("role"))
 
+            # Aggregate file_ids from metadata
+            metadata = getattr(item, "metadata", None)
+            if metadata is not None:
+                item_file_ids = getattr(metadata, "file_ids", None)
+                if isinstance(item_file_ids, list):
+                    for fid in item_file_ids:
+                        if fid and fid not in aggregated_file_ids:
+                            aggregated_file_ids.append(fid)
+
         # Determine memory_type based on roles (same logic as simple_struct)
         # UserMemory if only user role, else LongTermMemory
         memory_type = "UserMemory" if roles == {"user"} else "LongTermMemory"
@@ -238,12 +248,16 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             return None
 
         # Create aggregated memory item (similar to _build_fast_node in simple_struct)
+        extra_kwargs: dict[str, Any] = {}
+        if aggregated_file_ids:
+            extra_kwargs["file_ids"] = aggregated_file_ids
         aggregated_item = self._make_memory_item(
             value=merged_text,
             info=info,
             memory_type=memory_type,
             tags=["mode:fast"],
             sources=all_sources,
+            **extra_kwargs,
         )
 
         return aggregated_item
@@ -371,6 +385,19 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if not isinstance(sources, list):
                 sources = [sources]
 
+            # Extract file_ids from fast item metadata for propagation
+            metadata = getattr(fast_item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata is not None else None
+            file_ids = [fid for fid in file_ids if fid] if isinstance(file_ids, list) else []
+
+            # Build per-item info copy and kwargs for _make_memory_item
+            info_per_item = info.copy()
+            if file_ids and "file_id" not in info_per_item:
+                info_per_item["file_id"] = file_ids[0]
+            extra_kwargs: dict[str, Any] = {}
+            if file_ids:
+                extra_kwargs["file_ids"] = file_ids
+
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
@@ -392,12 +419,13 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         # Create fine mode memory item (same as simple_struct)
                         node = self._make_memory_item(
                             value=m.get("value", ""),
-                            info=info,
+                            info=info_per_item,
                             memory_type=memory_type,
                             tags=m.get("tags", []),
                             key=m.get("key", ""),
                             sources=sources,  # Preserve sources from fast item
                             background=resp.get("summary", ""),
+                            **extra_kwargs,
                         )
                         fine_items.append(node)
                     except Exception as e:
@@ -407,12 +435,13 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     # Create fine mode memory item (same as simple_struct)
                     node = self._make_memory_item(
                         value=resp.get("value", "").strip(),
-                        info=info,
+                        info=info_per_item,
                         memory_type="LongTermMemory",
                         tags=resp.get("tags", []),
                         key=resp.get("key", None),
                         sources=sources,  # Preserve sources from fast item
                         background=resp.get("summary", ""),
+                        **extra_kwargs,
                     )
                     fine_items.append(node)
                 except Exception as e:

@@ -210,8 +210,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
-        file_id = info_.pop("file_id", "")
-        file_ids = [file_id] if file_id else []
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
@@ -228,7 +226,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 confidence=confidence,
                 type=type_,
                 info=info_,
-                file_ids=file_ids,
                 **kwargs,
             ),
         )
