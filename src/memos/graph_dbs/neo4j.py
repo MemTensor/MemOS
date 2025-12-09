@@ -544,7 +544,14 @@ class Neo4jGraphDB(BaseGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [self._parse_node(dict(record["n"])) for record in results]
+            nodes = []
+            for record in results:
+                try:
+                    nodes.append(self._parse_node(dict(record["n"])))
+                except Exception as e:
+                    logger.warning(f"Failed to parse node in get_nodes: {e}")
+                    continue
+            return nodes
 
     def get_edges(
         self, id: str, type: str = "ANY", direction: str = "ANY", user_name: str | None = None

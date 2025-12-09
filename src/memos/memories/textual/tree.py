@@ -311,6 +311,30 @@ class TreeTextMemory(BaseTextMemory):
             metadata=TreeNodeTextualMemoryMetadata(**metadata_dict),
         )
 
+    def get_batch(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
+        """Batch get memories by IDs."""
+        results = self.graph_store.get_nodes(memory_ids, user_name=user_name)
+
+        items = []
+        for result in results:
+            if result:
+                try:
+                    metadata_dict = result.get("metadata", {})
+                    items.append(
+                        TextualMemoryItem(
+                            id=result["id"],
+                            memory=result["memory"],
+                            metadata=TreeNodeTextualMemoryMetadata(**metadata_dict),
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to create TextualMemoryItem for id {result.get('id')}: {e}"
+                    )
+        return items
+
     def get_by_ids(
         self, memory_ids: list[str], user_name: str | None = None
     ) -> list[TextualMemoryItem]:

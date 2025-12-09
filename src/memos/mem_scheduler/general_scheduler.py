@@ -334,60 +334,86 @@ class GeneralScheduler(BaseScheduler):
         prepared_update_items_with_original = []
         missing_ids: list[str] = []
 
-        for memory_id in userinput_memory_ids:
+        if not userinput_memory_ids:
+            return prepared_add_items, prepared_update_items_with_original
+
+        # Batch fetch new items
+        try:
+            new_mem_items = self.mem_cube.text_mem.get_batch(
+                memory_ids=userinput_memory_ids, user_name=msg.mem_cube_id
+            )
+        except Exception as e:
+            logger.error(f"Failed to batch get memories: {e}", exc_info=True)
+            new_mem_items = []
+
+        # Create a map for quick lookup and identify missing IDs
+        new_items_map = {item.id: item for item in new_mem_items}
+        for mid in userinput_memory_ids:
+            if mid not in new_items_map:
+                missing_ids.append(mid)
+
+        # Collect keys to check existence
+        keys_to_check = []
+        # Store items that have keys for quick access
+        items_with_keys = []
+
+        for item in new_mem_items:
+            key = getattr(item.metadata, "key", None) or transform_name_to_key(name=item.memory)
+            if key:
+                keys_to_check.append(key)
+                items_with_keys.append((key, item))
+
+        existing_candidates_map = {}  # Map (key, memory_type) -> original_item
+
+        # Batch check existence if there are keys to check
+        if keys_to_check and hasattr(self.mem_cube.text_mem, "graph_store"):
             try:
-                # This mem_item represents the NEW content that was just added/processed
-                mem_item: TextualMemoryItem | None = None
-                mem_item = self.current_mem_cube.text_mem.get(
-                    memory_id=memory_id, user_name=msg.mem_cube_id
+                # Use "in" operator to batch query candidate IDs by key
+                candidate_ids = self.mem_cube.text_mem.graph_store.get_by_metadata(
+                    [
+                        {"field": "key", "op": "in", "value": list(set(keys_to_check))},
+                    ],
+                    user_name=msg.mem_cube_id,
                 )
-                if mem_item is None:
-                    raise ValueError(f"Memory {memory_id} not found after retries")
-                # Check if a memory with the same key already exists (determining if it's an update)
-                key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
-                    name=mem_item.memory
-                )
-                exists = False
-                original_content = None
-                original_item_id = None
 
-                # Only check graph_store if a key exists and the text_mem has a graph_store
-                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
-                    candidates = self.current_mem_cube.text_mem.graph_store.get_by_metadata(
-                        [
-                            {"field": "key", "op": "=", "value": key},
-                            {
-                                "field": "memory_type",
-                                "op": "=",
-                                "value": mem_item.metadata.memory_type,
-                            },
-                        ]
+                if candidate_ids:
+                    # Batch fetch candidate memory details
+                    candidate_items = self.mem_cube.text_mem.get_batch(
+                        memory_ids=candidate_ids, user_name=msg.mem_cube_id
                     )
-                    if candidates:
-                        exists = True
-                        original_item_id = candidates[0]
-                        # Crucial step: Fetch the original content for updates
-                        # This `get` is for the *existing* memory that will be updated
-                        original_mem_item = self.current_mem_cube.text_mem.get(
-                            memory_id=original_item_id, user_name=msg.mem_cube_id
-                        )
-                        original_content = original_mem_item.memory
 
-                if exists:
+                    # Map candidates by (key, memory_type)
+                    for cand in candidate_items:
+                        cand_key = getattr(cand.metadata, "key", None)
+                        cand_type = getattr(cand.metadata, "memory_type", None)
+                        if cand_key:
+                            existing_candidates_map[(cand_key, cand_type)] = cand
+            except Exception as e:
+                logger.error(f"Failed to batch check existing keys: {e}", exc_info=True)
+
+        # Process results
+        for item in new_mem_items:
+            try:
+                key = getattr(item.metadata, "key", None) or transform_name_to_key(name=item.memory)
+                mem_type = getattr(item.metadata, "memory_type", None)
+
+                original_item = existing_candidates_map.get((key, mem_type))
+
+                if original_item:
                     prepared_update_items_with_original.append(
                         {
-                            "new_item": mem_item,
-                            "original_content": original_content,
-                            "original_item_id": original_item_id,
+                            "new_item": item,
+                            "original_content": original_item.memory,
+                            "original_item_id": original_item.id,
                         }
                     )
                 else:
-                    prepared_add_items.append(mem_item)
+                    prepared_add_items.append(item)
 
             except Exception:
-                missing_ids.append(memory_id)
+                missing_ids.append(item.id)
                 logger.debug(
-                    f"This MemoryItem {memory_id} has already been deleted or an error occurred during preparation."
+                    f"Error processing item {item.id} during preparation.", exc_info=True
                 )
 
         if missing_ids:
@@ -832,14 +858,11 @@ class GeneralScheduler(BaseScheduler):
                 return
 
             # Get the original memory items
-            memory_items = []
-            for mem_id in mem_ids:
-                try:
-                    memory_item = text_mem.get(mem_id, user_name=user_name)
-                    memory_items.append(memory_item)
-                except Exception as e:
-                    logger.warning(f"Failed to get memory {mem_id}: {e}")
-                    continue
+            try:
+                memory_items = text_mem.get_batch(mem_ids, user_name=user_name)
+            except Exception as e:
+                logger.warning(f"Failed to batch get memories: {e}")
+                memory_items = []
 
             if not memory_items:
                 logger.warning("No valid memory items found for processing")
@@ -1089,10 +1112,10 @@ class GeneralScheduler(BaseScheduler):
                 )
 
                 with contextlib.suppress(Exception):
-                    mem_items: list[TextualMemoryItem] = []
-                    for mid in mem_ids:
-                        with contextlib.suppress(Exception):
-                            mem_items.append(text_mem.get(mid, user_name=user_name))
+                    try:
+                        mem_items = text_mem.get_batch(mem_ids, user_name=user_name)
+                    except Exception:
+                        mem_items = []
                     if len(mem_items) > 1:
                         keys: list[str] = []
                         memcube_content: list[dict] = []
