@@ -64,7 +64,11 @@ class ImageParser(BaseMessageParser):
     ) -> ChatCompletionContentPartImageParam:
         """Rebuild image_url content part from SourceMessage."""
         # Rebuild from source fields
-        url = getattr(source, "url", "") or (source.content or "").replace("[image_url]: ", "")
+        url = (
+            getattr(source, "url", "")
+            or getattr(source, "image_path", "")
+            or (source.content or "").replace("[image_url]: ", "")
+        )
         detail = getattr(source, "detail", "auto")
         return {
             "type": "image_url",

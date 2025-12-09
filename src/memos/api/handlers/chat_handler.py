@@ -405,33 +405,26 @@ class ChatHandler(BaseHandler):
                         async_mode="sync",
                     )
 
-                    # Use first readable cube ID for scheduler (backward compatibility)
-                    scheduler_cube_id = (
-                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
-                    )
-                    self._send_message_to_scheduler(
-                        user_id=chat_req.user_id,
-                        mem_cube_id=scheduler_cube_id,
-                        query=chat_req.query,
-                        label=QUERY_TASK_LABEL,
-                    )
-
                     # ====== first search text mem with parse goal ======
                     search_req = APISearchPlaygroundRequest(
                         query=chat_req.query,
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
-                        mode=chat_req.mode,
+                        mode="fast",
                         internet_search=False,
-                        top_k=chat_req.top_k,
+                        top_k=5,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
-                        include_preference=chat_req.include_preference,
+                        include_preference=True,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
+                        search_tool_memory=False,
                         playground_search_goal_parser=False,
                     )
+                    start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
+                    end_time = time.time()
+                    self.logger.info(f"first search time: {end_time - start_time}")
 
                     yield f"data: {json.dumps({'type': 'status', 'data': '1'})}\n\n"
 
@@ -459,6 +452,17 @@ class ChatHandler(BaseHandler):
                         pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
                         yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
 
+                    # Use first readable cube ID for scheduler (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
+                    self._send_message_to_scheduler(
+                        user_id=chat_req.user_id,
+                        mem_cube_id=scheduler_cube_id,
+                        query=chat_req.query,
+                        label=QUERY_TASK_LABEL,
+                    )
+
                     # parse goal for internet search
                     searcher = self.dependencies.searcher
                     parsed_goal = searcher.task_goal_parser.parse(
@@ -481,23 +485,28 @@ class ChatHandler(BaseHandler):
                         # internet status
                         yield f"data: {json.dumps({'type': 'status', 'data': 'start_internet_search'})}\n\n"
 
-                    # ======  internet search with parse goal ======
+                    # ======  second deep search  ======
                     search_req = APISearchPlaygroundRequest(
                         query=parsed_goal.rephrased_query
                         or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
-                        mode=chat_req.mode,
-                        internet_search=chat_req.internet_search,
+                        mode="fast",
+                        internet_search=chat_req.internet_search or parsed_goal.internet_search,
                         top_k=chat_req.top_k,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=False,
+                        pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
                         search_memory_type="All",
+                        search_tool_memory=False,
                         playground_search_goal_parser=False,
                     )
+                    start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
+                    end_time = time.time()
+                    self.logger.info(f"second search time: {end_time - start_time}")
 
                     # Extract memories from search results (second search)
                     memories_list = []
@@ -520,7 +529,6 @@ class ChatHandler(BaseHandler):
                     internet_reference = self._get_internet_reference(
                         search_response.data.get("text_mem")[0]["memories"]
                     )
-
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
                     # Step 2: Build system prompt with memories

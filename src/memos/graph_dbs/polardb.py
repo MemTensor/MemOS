@@ -3226,6 +3226,252 @@ class PolarDBGraphDB(BaseGraphDB):
                 logger.info(f"In add node polardb: id-{id} memory-{memory} query-{insert_query}")
             self._return_connection(conn)
 
+    @timed
+    def add_nodes_batch(
+        self,
+        nodes: list[dict[str, Any]],
+        user_name: str | None = None,
+    ) -> None:
+        """
+        Batch add multiple memory nodes to the graph.
+
+        Args:
+            nodes: List of node dictionaries, each containing:
+                - id: str - Node ID
+                - memory: str - Memory content
+                - metadata: dict[str, Any] - Node metadata
+            user_name: Optional user name (will use config default if not provided)
+        """
+        if not nodes:
+            logger.warning("[add_nodes_batch] Empty nodes list, skipping")
+            return
+
+        logger.info(f"[add_nodes_batch] Adding {len(nodes)} nodes")
+
+        # user_name comes from parameter; fallback to config if missing
+        effective_user_name = user_name if user_name else self.config.user_name
+
+        # Prepare all nodes
+        prepared_nodes = []
+        for node_data in nodes:
+            try:
+                id = node_data["id"]
+                memory = node_data["memory"]
+                metadata = node_data.get("metadata", {})
+
+                logger.debug(f"[add_nodes_batch] Processing node id: {id}")
+
+                # Set user_name in metadata
+                metadata["user_name"] = effective_user_name
+
+                metadata = _prepare_node_metadata(metadata)
+
+                # Merge node and set metadata
+                created_at = metadata.pop("created_at", datetime.utcnow().isoformat())
+                updated_at = metadata.pop("updated_at", datetime.utcnow().isoformat())
+
+                # Prepare properties
+                properties = {
+                    "id": id,
+                    "memory": memory,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    **metadata,
+                }
+
+                # Generate embedding if not provided
+                if "embedding" not in properties or not properties["embedding"]:
+                    properties["embedding"] = generate_vector(
+                        self._get_config_value("embedding_dimension", 1024)
+                    )
+
+                # Serialization - JSON-serialize sources and usage fields
+                for field_name in ["sources", "usage"]:
+                    if properties.get(field_name):
+                        if isinstance(properties[field_name], list):
+                            for idx in range(len(properties[field_name])):
+                                # Serialize only when element is not a string
+                                if not isinstance(properties[field_name][idx], str):
+                                    properties[field_name][idx] = json.dumps(
+                                        properties[field_name][idx]
+                                    )
+                        elif isinstance(properties[field_name], str):
+                            # If already a string, leave as-is
+                            pass
+
+                # Extract embedding for separate column
+                embedding_vector = properties.pop("embedding", [])
+                if not isinstance(embedding_vector, list):
+                    embedding_vector = []
+
+                # Select column name based on embedding dimension
+                embedding_column = "embedding"  # default column
+                if len(embedding_vector) == 3072:
+                    embedding_column = "embedding_3072"
+                elif len(embedding_vector) == 1024:
+                    embedding_column = "embedding"
+                elif len(embedding_vector) == 768:
+                    embedding_column = "embedding_768"
+
+                prepared_nodes.append(
+                    {
+                        "id": id,
+                        "memory": memory,
+                        "properties": properties,
+                        "embedding_vector": embedding_vector,
+                        "embedding_column": embedding_column,
+                    }
+                )
+            except Exception as e:
+                logger.error(
+                    f"[add_nodes_batch] Failed to prepare node {node_data.get('id', 'unknown')}: {e}",
+                    exc_info=True,
+                )
+                # Continue with other nodes
+                continue
+
+        if not prepared_nodes:
+            logger.warning("[add_nodes_batch] No valid nodes to insert after preparation")
+            return
+
+        # Group nodes by embedding column to optimize batch inserts
+        nodes_by_embedding_column = {}
+        for node in prepared_nodes:
+            col = node["embedding_column"]
+            if col not in nodes_by_embedding_column:
+                nodes_by_embedding_column[col] = []
+            nodes_by_embedding_column[col].append(node)
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn.cursor() as cursor:
+                # Process each group separately
+                for embedding_column, nodes_group in nodes_by_embedding_column.items():
+                    # Batch delete existing records using IN clause
+                    ids_to_delete = [node["id"] for node in nodes_group]
+                    if ids_to_delete:
+                        delete_query = f"""
+                            DELETE FROM {self.db_name}_graph."Memory"
+                            WHERE id IN (
+                                SELECT ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, unnest(%s::text[])::cstring)
+                            )
+                        """
+                        cursor.execute(delete_query, (ids_to_delete,))
+
+                    # Batch get graph_ids for all nodes
+                    get_graph_ids_query = f"""
+                        SELECT
+                            id_val,
+                            ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, id_val::text::cstring) as graph_id
+                        FROM unnest(%s::text[]) as id_val
+                    """
+                    cursor.execute(get_graph_ids_query, (ids_to_delete,))
+                    graph_id_map = {row[0]: row[1] for row in cursor.fetchall()}
+
+                    # Add graph_id to properties
+                    for node in nodes_group:
+                        graph_id = graph_id_map.get(node["id"])
+                        if graph_id:
+                            node["properties"]["graph_id"] = str(graph_id)
+
+                    # Batch insert using VALUES with multiple rows
+                    # Use psycopg2.extras.execute_values for efficient batch insert
+                    from psycopg2.extras import execute_values
+
+                    if embedding_column and any(node["embedding_vector"] for node in nodes_group):
+                        # Prepare data tuples for batch insert with embedding
+                        data_tuples = []
+                        for node in nodes_group:
+                            # Each tuple: (id, properties_json, embedding_json)
+                            data_tuples.append(
+                                (
+                                    node["id"],
+                                    json.dumps(node["properties"]),
+                                    json.dumps(node["embedding_vector"])
+                                    if node["embedding_vector"]
+                                    else None,
+                                )
+                            )
+
+                        # Build the INSERT query template
+                        insert_query = f"""
+                            INSERT INTO {self.db_name}_graph."Memory"(id, properties, {embedding_column})
+                            VALUES %s
+                        """
+
+                        # Build the VALUES template for execute_values
+                        # Each row: (graph_id_function, agtype, vector)
+                        # Note: properties column is agtype, not jsonb
+                        template = f"""
+                            (
+                                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, %s::text::cstring),
+                                %s::text::agtype,
+                                %s::vector
+                            )
+                        """
+                        logger.info(
+                            f"[add_nodes_batch] embedding_column Inserting insert_query:{insert_query}"
+                        )
+                        logger.info(
+                            f"[add_nodes_batch] embedding_column Inserting data_tuples:{data_tuples}"
+                        )
+
+                        # Execute batch insert
+                        execute_values(
+                            cursor,
+                            insert_query,
+                            data_tuples,
+                            template=template,
+                            page_size=100,  # Insert in batches of 100
+                        )
+                    else:
+                        # Prepare data tuples for batch insert without embedding
+                        data_tuples = []
+                        for node in nodes_group:
+                            # Each tuple: (id, properties_json)
+                            data_tuples.append(
+                                (
+                                    node["id"],
+                                    json.dumps(node["properties"]),
+                                )
+                            )
+
+                        # Build the INSERT query template
+                        insert_query = f"""
+                            INSERT INTO {self.db_name}_graph."Memory"(id, properties)
+                            VALUES %s
+                        """
+
+                        # Build the VALUES template for execute_values
+                        # Note: properties column is agtype, not jsonb
+                        template = f"""
+                            (
+                                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, %s::text::cstring),
+                                %s::text::agtype
+                            )
+                        """
+                        logger.info(f"[add_nodes_batch] Inserting insert_query:{insert_query}")
+                        logger.info(f"[add_nodes_batch] Inserting data_tuples:{data_tuples}")
+                        # Execute batch insert
+                        execute_values(
+                            cursor,
+                            insert_query,
+                            data_tuples,
+                            template=template,
+                            page_size=100,  # Insert in batches of 100
+                        )
+
+                    logger.info(
+                        f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
+                    )
+
+        except Exception as e:
+            logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
+            raise
+        finally:
+            self._return_connection(conn)
+
     def _build_node_from_agtype(self, node_agtype, embedding=None):
         """
         Parse the cypher-returned column `n` (agtype or JSON string)
@@ -3810,7 +4056,7 @@ class PolarDBGraphDB(BaseGraphDB):
         if filter:
 
             def escape_cypher_string(value: str) -> str:
-                return value.replace("'", "''")
+                return value.replace("'", "\\'")
 
             def build_cypher_filter_condition(condition_dict: dict) -> str:
                 """Build a Cypher WHERE condition for a single filter item."""
@@ -4498,7 +4744,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
         user_name_where = " OR ".join(user_name_conditions)
-        ids_where = f"({user_name_where}) AND ({data_conditions})"
+        ids_where = f"{user_name_where} AND ({data_conditions})"
 
         # Use Cypher DELETE query
         # First count matching nodes to get accurate count

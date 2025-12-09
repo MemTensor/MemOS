@@ -79,6 +79,7 @@ class ToolParser(BaseMessageParser):
                                 filename=file_info.get("filename", ""),
                                 file_id=file_info.get("file_id", ""),
                                 tool_call_id=tool_call_id,
+                                file_info=file_info,
                             )
                         )
                     elif part_type == "image_url":
