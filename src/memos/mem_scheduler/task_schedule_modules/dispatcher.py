@@ -239,6 +239,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         self.status_tracker.task_failed(
                             task_id=msg.item_id, user_id=msg.user_id, error_message=str(e)
                         )
+                    self._maybe_emit_task_completion(messages, error=e)
                 emit_monitor_event(
                     "finish",
                     m,
@@ -286,7 +287,9 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
         return wrapped_handler
 
-    def _maybe_emit_task_completion(self, messages: list[ScheduleMessageItem]) -> None:
+    def _maybe_emit_task_completion(
+        self, messages: list[ScheduleMessageItem], error: Exception | None = None
+    ) -> None:
         """If all item_ids under a business task are completed, emit a single completion log."""
         if not self.submit_web_logs or not self.status_tracker:
             return
@@ -311,20 +314,35 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 status_data = self.status_tracker.get_task_status_by_business_id(
                     business_task_id=task_id, user_id=user_id
                 )
-                if not status_data or status_data.get("status") != "completed":
+                if not status_data:
                     continue
 
-                event = ScheduleLogForWebItem(
-                    task_id=task_id,
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    label="taskStatus",
-                    from_memory_type="status",
-                    to_memory_type="status",
-                    log_content=f"Task {task_id} completed",
-                    status="completed",
-                )
-                self.submit_web_logs(event)
+                status = status_data.get("status")
+
+                if status == "completed" and error is None:
+                    event = ScheduleLogForWebItem(
+                        task_id=task_id,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        label="taskStatus",
+                        from_memory_type="status",
+                        to_memory_type="status",
+                        log_content=f"Task {task_id} completed",
+                        status="completed",
+                    )
+                    self.submit_web_logs(event)
+                elif status == "failed" and error is not None:
+                    event = ScheduleLogForWebItem(
+                        task_id=task_id,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        label="taskStatus",
+                        from_memory_type="status",
+                        to_memory_type="status",
+                        log_content=f"Task {task_id} failed: {error!s}",
+                        status="failed",
+                    )
+                    self.submit_web_logs(event)
         except Exception:
             logger.warning(
                 "Failed to emit task completion log. user_id=%s mem_cube_id=%s task_ids=%s",
