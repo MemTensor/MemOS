@@ -23,6 +23,7 @@ from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
@@ -185,12 +186,13 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
+        self.feedback_server = None
 
     def init_mem_cube(
         self,
         mem_cube: BaseMemCube,
         searcher: Searcher | None = None,
-        feedback_server: Searcher | None = None,
+        feedback_server: SimpleMemFeedback | None = None,
     ):
         if mem_cube is None:
             logger.error("mem_cube is None, cannot initialize", stack_info=True)
@@ -290,6 +292,24 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     "No environment available to initialize mem cube. Using fallback naive_mem_cube."
                 )
         return self.current_mem_cube
+
+    @property
+    def feedback_server(self) -> SimpleMemFeedback:
+        """The memory cube associated with this MemChat."""
+        if self._feedback_server is None:
+            logger.error("feedback_server is None when accessed", stack_info=True)
+            try:
+                self.components = init_components()
+                self._feedback_server: SimpleMemFeedback = self.components["feedback_server"]
+            except Exception:
+                logger.info(
+                    "No environment available to initialize feedback_server. Using fallback feedback_server."
+                )
+        return self._feedback_server
+
+    @feedback_server.setter
+    def feedback_server(self, value: SimpleMemFeedback) -> None:
+        self._feedback_server = value
 
     @mem_cube.setter
     def mem_cube(self, value: BaseMemCube) -> None:
