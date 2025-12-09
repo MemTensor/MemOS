@@ -4056,7 +4056,7 @@ class PolarDBGraphDB(BaseGraphDB):
         if filter:
 
             def escape_cypher_string(value: str) -> str:
-                return value.replace("'", "''")
+                return value.replace("'", "\\'")
 
             def build_cypher_filter_condition(condition_dict: dict) -> str:
                 """Build a Cypher WHERE condition for a single filter item."""
@@ -4744,7 +4744,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
         user_name_where = " OR ".join(user_name_conditions)
-        ids_where = f"({user_name_where}) AND ({data_conditions})"
+        ids_where = f"{user_name_where} AND ({data_conditions})"
 
         # Use Cypher DELETE query
         # First count matching nodes to get accurate count

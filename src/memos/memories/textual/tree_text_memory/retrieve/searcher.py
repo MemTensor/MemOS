@@ -536,7 +536,7 @@ class Searcher:
             return []
         logger.info(f"[PATH-C] '{query}' Retrieving from internet...")
         items = self.internet_retriever.retrieve_from_internet(
-            query=query, top_k=top_k, parsed_goal=parsed_goal, info=info
+            query=query, top_k=top_k, parsed_goal=parsed_goal, info=info, mode=mode
         )
         logger.info(f"[PATH-C] '{query}' Retrieved from internet {len(items)} items: {items}")
         return self.reranker.rerank(
