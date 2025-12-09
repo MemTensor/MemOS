@@ -338,13 +338,23 @@ class GeneralScheduler(BaseScheduler):
             return prepared_add_items, prepared_update_items_with_original
 
         # Batch fetch new items
+        new_mem_items = []
         try:
             new_mem_items = self.mem_cube.text_mem.get_batch(
                 memory_ids=userinput_memory_ids, user_name=msg.mem_cube_id
             )
         except Exception as e:
-            logger.error(f"Failed to batch get memories: {e}", exc_info=True)
-            new_mem_items = []
+            logger.warning(
+                f"Failed to batch get memories in log_add_messages: {e}. Fallback to iterative fetching."
+            )
+            # Fallback to iterative fetching
+            for mid in userinput_memory_ids:
+                try:
+                    item = self.mem_cube.text_mem.get(memory_id=mid, user_name=msg.mem_cube_id)
+                    if item:
+                        new_mem_items.append(item)
+                except Exception as inner_e:
+                    logger.warning(f"Failed to get memory {mid}: {inner_e}")
 
         # Create a map for quick lookup and identify missing IDs
         new_items_map = {item.id: item for item in new_mem_items}
@@ -377,17 +387,36 @@ class GeneralScheduler(BaseScheduler):
                 )
 
                 if candidate_ids:
-                    # Batch fetch candidate memory details
-                    candidate_items = self.mem_cube.text_mem.get_batch(
-                        memory_ids=candidate_ids, user_name=msg.mem_cube_id
-                    )
+                    # Filter out current items from candidates to avoid self-match
+                    filtered_candidate_ids = [
+                        cid for cid in candidate_ids if cid not in new_items_map
+                    ]
 
-                    # Map candidates by (key, memory_type)
-                    for cand in candidate_items:
-                        cand_key = getattr(cand.metadata, "key", None)
-                        cand_type = getattr(cand.metadata, "memory_type", None)
-                        if cand_key:
-                            existing_candidates_map[(cand_key, cand_type)] = cand
+                    if filtered_candidate_ids:
+                        # Batch fetch candidate memory details
+                        try:
+                            candidate_items = self.mem_cube.text_mem.get_batch(
+                                memory_ids=filtered_candidate_ids, user_name=msg.mem_cube_id
+                            )
+                        except Exception:
+                            # Fallback if batch fetch fails for candidates
+                            candidate_items = []
+                            for cid in filtered_candidate_ids:
+                                try:
+                                    c_item = self.mem_cube.text_mem.get(
+                                        memory_id=cid, user_name=msg.mem_cube_id
+                                    )
+                                    if c_item:
+                                        candidate_items.append(c_item)
+                                except Exception:
+                                    pass
+
+                        # Map candidates by (key, memory_type)
+                        for cand in candidate_items:
+                            cand_key = getattr(cand.metadata, "key", None)
+                            cand_type = getattr(cand.metadata, "memory_type", None)
+                            if cand_key:
+                                existing_candidates_map[(cand_key, cand_type)] = cand
             except Exception as e:
                 logger.error(f"Failed to batch check existing keys: {e}", exc_info=True)
 
@@ -399,7 +428,8 @@ class GeneralScheduler(BaseScheduler):
 
                 original_item = existing_candidates_map.get((key, mem_type))
 
-                if original_item:
+                # Ensure we are not comparing the item with itself
+                if original_item and original_item.id != item.id:
                     prepared_update_items_with_original.append(
                         {
                             "new_item": item,
@@ -858,11 +888,20 @@ class GeneralScheduler(BaseScheduler):
                 return
 
             # Get the original memory items
+            memory_items = []
             try:
                 memory_items = text_mem.get_batch(mem_ids, user_name=user_name)
             except Exception as e:
-                logger.warning(f"Failed to batch get memories: {e}")
-                memory_items = []
+                logger.warning(
+                    f"Failed to batch get memories in _process_memories_with_reader: {e}. Fallback to iterative fetching."
+                )
+                for mid in mem_ids:
+                    try:
+                        item = text_mem.get(mid, user_name=user_name)
+                        if item:
+                            memory_items.append(item)
+                    except Exception:
+                        pass
 
             if not memory_items:
                 logger.warning("No valid memory items found for processing")
@@ -1116,6 +1155,14 @@ class GeneralScheduler(BaseScheduler):
                         mem_items = text_mem.get_batch(mem_ids, user_name=user_name)
                     except Exception:
                         mem_items = []
+                        # Fallback to iterative fetching
+                        for mid in mem_ids:
+                            try:
+                                item = text_mem.get(mid, user_name=user_name)
+                                if item:
+                                    mem_items.append(item)
+                            except Exception:
+                                pass
                     if len(mem_items) > 1:
                         keys: list[str] = []
                         memcube_content: list[dict] = []

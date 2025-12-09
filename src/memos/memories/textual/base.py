@@ -58,6 +58,18 @@ class BaseTextMemory(BaseMemory):
             TextualMemoryItem: The memory with the given ID.
         """
 
+    def get_batch(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
+        """Batch get memories by IDs.
+        Args:
+            memory_ids (list[str]): List of memory IDs to retrieve.
+            user_name (str | None): Optional user name for multi-tenant retrieval.
+        Returns:
+            list[TextualMemoryItem]: List of memories with the specified IDs.
+        """
+        return [self.get(mid, user_name=user_name) for mid in memory_ids]
+
     @abstractmethod
     def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
