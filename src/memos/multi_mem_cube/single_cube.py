@@ -30,6 +30,7 @@ from memos.types.general_types import (
     SearchMode,
     UserContext,
 )
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -198,6 +199,7 @@ class SingleCubeView(MemCubeView):
         """
         return mode
 
+    @timed
     def _search_text(
         self,
         search_req: APISearchRequest,
@@ -363,6 +365,7 @@ class SingleCubeView(MemCubeView):
 
         return formatted_memories
 
+    @timed
     def _search_pref(
         self,
         search_req: APISearchRequest,
