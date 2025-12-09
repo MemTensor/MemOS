@@ -224,7 +224,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 if self.dispatcher:
                     self.dispatcher.status_tracker = self.status_tracker
                 if self.memos_message_queue:
-                    self.memos_message_queue.status_tracker = self.status_tracker
+                    # Use the setter to propagate to the inner queue (e.g. SchedulerRedisQueue)
+                    self.memos_message_queue.set_status_tracker(self.status_tracker)
             # initialize submodules
             self.chat_llm = chat_llm
             self.process_llm = process_llm

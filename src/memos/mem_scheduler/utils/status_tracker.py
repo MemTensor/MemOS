@@ -142,11 +142,14 @@ class TaskStatusTracker:
         # Get statuses for all items
         key = self._get_key(user_id)
         item_statuses = []
+        errors = []
         for item_id in item_ids:
             item_data_json = self.redis.hget(key, item_id)
             if item_data_json:
                 item_data = json.loads(item_data_json)
                 item_statuses.append(item_data["status"])
+                if item_data.get("status") == "failed" and "error" in item_data:
+                    errors.append(item_data["error"])
 
         if not item_statuses:
             return None
@@ -167,6 +170,7 @@ class TaskStatusTracker:
             "business_task_id": business_task_id,
             "item_count": len(item_ids),
             "item_statuses": item_statuses,
+            "errors": errors,
         }
 
     def get_all_tasks_global(self) -> dict[str, dict[str, dict]]:
