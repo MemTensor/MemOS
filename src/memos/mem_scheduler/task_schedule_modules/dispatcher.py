@@ -1,4 +1,5 @@
 import concurrent
+import os
 import threading
 import time
 
@@ -19,7 +20,7 @@ from memos.mem_scheduler.general_modules.task_threads import ThreadManager
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_STOP_WAIT,
 )
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem, ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
@@ -200,6 +201,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 if self.status_tracker:
                     for msg in messages:
                         self.status_tracker.task_completed(task_id=msg.item_id, user_id=msg.user_id)
+                    self._maybe_emit_task_completion(messages)
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
 
                 emit_monitor_event(
@@ -237,6 +239,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         self.status_tracker.task_failed(
                             task_id=msg.item_id, user_id=msg.user_id, error_message=str(e)
                         )
+                    self._maybe_emit_task_completion(messages, error=e)
                 emit_monitor_event(
                     "finish",
                     m,
@@ -283,6 +286,85 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         logger.warning(f"Ack in finally failed: {ack_err}")
 
         return wrapped_handler
+
+    def _maybe_emit_task_completion(
+        self, messages: list[ScheduleMessageItem], error: Exception | None = None
+    ) -> None:
+        """If all item_ids under a business task are completed, emit a single completion log."""
+        if not self.submit_web_logs or not self.status_tracker:
+            return
+
+        # messages in one batch can belong to different business task_ids; check each
+        task_ids = {getattr(msg, "task_id", None) for msg in messages}
+        task_ids.discard(None)
+        if not task_ids:
+            return
+
+        # Use the first message only for shared fields; mem_cube_id is same within a batch
+        first = messages[0]
+        user_id = first.user_id
+        mem_cube_id = first.mem_cube_id
+
+        try:
+            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
+            if not is_cloud_env:
+                return
+
+            for task_id in task_ids:
+                status_data = self.status_tracker.get_task_status_by_business_id(
+                    business_task_id=task_id, user_id=user_id
+                )
+                if not status_data:
+                    continue
+
+                status = status_data.get("status")
+
+                if status == "completed":
+                    # Only emit success log if we didn't just catch an exception locally
+                    # (Although if status is 'completed', local error shouldn't happen theoretically,
+                    # unless status update lags or is inconsistent. We trust status_tracker here.)
+                    event = ScheduleLogForWebItem(
+                        task_id=task_id,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        label="taskStatus",
+                        from_memory_type="status",
+                        to_memory_type="status",
+                        log_content=f"Task {task_id} completed",
+                        status="completed",
+                    )
+                    self.submit_web_logs(event)
+
+                elif status == "failed":
+                    # Construct error message
+                    error_msg = str(error) if error else None
+                    if not error_msg:
+                        # Try to get errors from status_tracker aggregation
+                        errors = status_data.get("errors", [])
+                        if errors:
+                            error_msg = "; ".join(errors)
+                        else:
+                            error_msg = "Unknown error (check system logs)"
+
+                    event = ScheduleLogForWebItem(
+                        task_id=task_id,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        label="taskStatus",
+                        from_memory_type="status",
+                        to_memory_type="status",
+                        log_content=f"Task {task_id} failed: {error_msg}",
+                        status="failed",
+                    )
+                    self.submit_web_logs(event)
+        except Exception:
+            logger.warning(
+                "Failed to emit task completion log. user_id=%s mem_cube_id=%s task_ids=%s",
+                user_id,
+                mem_cube_id,
+                list(task_ids),
+                exc_info=True,
+            )
 
     def get_running_tasks(
         self, filter_func: Callable[[RunningTaskItem], bool] | None = None

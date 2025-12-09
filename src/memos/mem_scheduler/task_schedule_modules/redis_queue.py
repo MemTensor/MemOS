@@ -22,6 +22,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     DEFAULT_STREAM_KEYS_REFRESH_INTERVAL_SEC,
 )
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 
 
@@ -51,6 +52,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         consumer_name: str | None = "scheduler_consumer",
         max_len: int | None = None,
         auto_delete_acked: bool = True,  # Whether to automatically delete acknowledged messages
+        status_tracker: TaskStatusTracker | None = None,
     ):
         """
         Initialize the Redis queue.
@@ -62,6 +64,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             max_len: Maximum length of the stream (for memory management)
             maxsize: Maximum size of the queue (for Queue compatibility, ignored)
             auto_delete_acked: Whether to automatically delete acknowledged messages from stream
+            status_tracker: TaskStatusTracker instance for tracking task status
         """
         super().__init__()
         # Stream configuration
@@ -101,6 +104,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         self.message_pack_cache = deque()
 
         self.orchestrator = SchedulerOrchestrator() if orchestrator is None else orchestrator
+        self.status_tracker = status_tracker
 
         # Cached stream keys and refresh control
         self._stream_keys_cache: list[str] = []
@@ -354,7 +358,6 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             self._redis_conn.xack(stream_key, self.consumer_group, redis_message_id)
 
             if message:
-                self.status_tracker.task_completed(task_id=message.item_id, user_id=message.user_id)
                 logger.info(
                     f"Message {message.item_id} | {message.label} | {message.content} has been acknowledged."
                 )

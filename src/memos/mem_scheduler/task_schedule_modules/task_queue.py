@@ -42,11 +42,25 @@ class ScheduleTaskQueue:
                 consumer_group="scheduler_group",
                 consumer_name="scheduler_consumer",
                 orchestrator=self.orchestrator,
+                status_tracker=self.status_tracker,  # Propagate status_tracker
             )
         else:
             self.memos_message_queue = SchedulerLocalQueue(maxsize=self.maxsize)
 
         self.disabled_handlers = disabled_handlers
+
+    def set_status_tracker(self, status_tracker: TaskStatusTracker) -> None:
+        """
+        Set the status tracker for this queue and propagate it to the underlying queue implementation.
+
+        This allows the tracker to be injected after initialization (e.g., when Redis connection becomes available).
+        """
+        self.status_tracker = status_tracker
+        if self.memos_message_queue and hasattr(self.memos_message_queue, "status_tracker"):
+            # SchedulerRedisQueue has status_tracker attribute (from our previous fix)
+            # SchedulerLocalQueue can also accept it dynamically if it doesn't use __slots__
+            self.memos_message_queue.status_tracker = status_tracker
+            logger.info("Propagated status_tracker to underlying message queue")
 
     def ack_message(
         self,
