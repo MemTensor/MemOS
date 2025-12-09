@@ -83,7 +83,7 @@ def main(frame, version="default"):
     print("=" * 80 + "\n")
 
     # Load responses
-    responses_path = f"results/long_bench-v2/{frame}-{version}/{frame}_longbench_v2_responses.json"
+    responses_path = f"results/long_bench_v2/{frame}-{version}/{frame}_longbench_v2_responses.json"
     if not os.path.exists(responses_path):
         print(f"❌ Responses not found: {responses_path}")
         print("Please run longbench_v2_responses.py first")
@@ -92,11 +92,14 @@ def main(frame, version="default"):
     with open(responses_path, encoding="utf-8") as f:
         responses = json.load(f)
 
+    # Only keep entries with non-empty context (search_context) to align with response generation
+    filtered = [r for r in responses if str(r.get("search_context", "")).strip() != ""]
+
     # Calculate metrics
-    metrics = calculate_accuracy(responses)
+    metrics = calculate_accuracy(filtered)
 
     # Save metrics
-    output_path = f"results/long_bench-v2/{frame}-{version}/{frame}_longbench_v2_metrics.json"
+    output_path = f"results/long_bench_v2/{frame}-{version}/{frame}_longbench_v2_metrics.json"
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     with open(output_path, "w", encoding="utf-8") as f:

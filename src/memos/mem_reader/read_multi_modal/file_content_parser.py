@@ -471,6 +471,7 @@ class FileContentParser(BaseMessageParser):
         total_chunks = len(content_chunks)
 
         # Create memory items for each chunk
+        content_chunk_embeddings = self.embedder.embed(content_chunks)
         memory_items = []
         for chunk_idx, chunk_text in enumerate(content_chunks):
             if not chunk_text.strip():
@@ -499,7 +500,7 @@ class FileContentParser(BaseMessageParser):
                         f"chunk:{chunk_idx + 1}/{total_chunks}",
                     ],
                     key=_derive_key(chunk_text),
-                    embedding=self.embedder.embed([chunk_text])[0],
+                    embedding=content_chunk_embeddings[chunk_idx],
                     usage=[],
                     sources=[source],
                     background="",

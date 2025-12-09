@@ -106,7 +106,7 @@ def main(frame, version="default", num_workers=10, max_samples=None):
 
     # Initialize checkpoint file for resume functionality
     checkpoint_dir = os.path.join(
-        ROOT_DIR, "evaluation", "results", "longbench_v2", f"{frame}-{version}"
+        ROOT_DIR, "evaluation", "results", "long_bench_v2", f"{frame}-{version}"
     )
     os.makedirs(checkpoint_dir, exist_ok=True)
     record_file = os.path.join(checkpoint_dir, "success_records.txt")
@@ -179,13 +179,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="long-bench-v2-1208-1556",
+        default="default",
         help="Version identifier for saving results",
     )
     parser.add_argument(
         "--workers",
         type=int,
-        default=20,
+        default=3,
         help="Number of parallel workers",
     )
     parser.add_argument(

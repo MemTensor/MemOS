@@ -210,7 +210,7 @@ class TreeTextMemory(BaseTextMemory):
     def get_relevant_subgraph(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 20,
         depth: int = 2,
         center_status: str = "activated",
         user_name: str | None = None,
