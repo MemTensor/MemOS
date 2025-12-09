@@ -48,13 +48,13 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
     similarity = calculate_similarity(old_text, new_text)
     change_ratio = 1 - similarity
 
-    if old_len < 50:
+    if old_len < 200:
         return change_ratio < 0.5
     else:
-        return change_ratio < 0.15
+        return change_ratio < 0.2
 
 
-def split_into_chunks(memories: list[TextualMemoryItem], max_tokens_per_chunk=500):
+def split_into_chunks(memories: list[TextualMemoryItem], max_tokens_per_chunk: int = 500):
     chunks = []
     current_chunk = []
     current_tokens = 0

@@ -277,14 +277,29 @@ class MemFeedback(BaseMemFeedback):
         user_name: str,
         memory_item: TextualMemoryItem,
         current_memories: list[TextualMemoryItem],
-        fact_history: str,
+        history_str: str,
+        chat_history_list: list,
     ):
+        """Modify memory at the semantic level"""
         lang = detect_lang("".join(memory_item.memory))
         template = FEEDBACK_PROMPT_DICT["compare"][lang]
         if current_memories == []:
-            current_memories = self._retrieve(
+            # retrieve feedback
+            feedback_retrieved = self._retrieve(
                 memory_item.memory, info={"user_id": user_id}, user_name=user_name
             )
+
+            # retrieve question
+            last_user_index = max(i for i, d in enumerate(chat_history_list) if d["role"] == "user")
+            last_qa = " ".join([item["content"] for item in chat_history_list[last_user_index:]])
+            supplementary_retrieved = self._retrieve(
+                last_qa, info={"user_id": user_id}, user_name=user_name
+            )
+            ids = []
+            for item in feedback_retrieved + supplementary_retrieved:
+                if item.id not in ids:
+                    ids.append(item.id)
+                    current_memories.append(item)
 
         if not current_memories:
             operations = [{"operation": "ADD"}]
@@ -301,7 +316,7 @@ class MemFeedback(BaseMemFeedback):
                     prompt = template.format(
                         current_memories=current_memories_str,
                         new_facts=memory_item.memory,
-                        chat_history=fact_history,
+                        chat_history=history_str,
                     )
 
                     future = executor.submit(self._get_llm_response, prompt)
@@ -381,7 +396,7 @@ class MemFeedback(BaseMemFeedback):
         feedback_content = kwargs.get("feedback_content", "")
 
         chat_history_lis = [f"""{msg["role"]}: {msg["content"]}""" for msg in chat_history[-4:]]
-        fact_history = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
+        history_str = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
 
         retrieved_memories = [
             self.graph_store.get_node(_id, user_name=user_name) for _id in retrieved_memory_ids
@@ -403,7 +418,13 @@ class MemFeedback(BaseMemFeedback):
         with ContextThreadPoolExecutor(max_workers=3) as ex:
             futures = {
                 ex.submit(
-                    self.semantics_feedback, user_id, user_name, mem, current_memories, fact_history
+                    self.semantics_feedback,
+                    user_id,
+                    user_name,
+                    mem,
+                    current_memories,
+                    history_str,
+                    chat_history,
                 ): i
                 for i, mem in enumerate(feedback_memories)
             }
@@ -543,7 +564,17 @@ class MemFeedback(BaseMemFeedback):
             return None
 
         dehallu_res = [correct_item(item) for item in operations]
-        return [item for item in dehallu_res if item]
+        llm_operations = [item for item in dehallu_res if item]
+
+        # Update takes precedence over add
+        has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
+        if has_update:
+            filtered_items = [
+                item for item in llm_operations if item.get("operation").lower() != "add"
+            ]
+            return filtered_items
+        else:
+            return llm_operations
 
     def _generate_answer(
         self, chat_history: list[MessageDict], feedback_content: str, corrected_answer: bool
