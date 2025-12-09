@@ -12,7 +12,11 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
-from memos.memories.textual.item import SourceMessage, TextualMemoryItem
+from memos.memories.textual.item import (
+    SearchedTreeNodeTextualMemoryMetadata,
+    SourceMessage,
+    TextualMemoryItem,
+)
 
 
 logger = get_logger(__name__)
@@ -138,7 +142,7 @@ class BochaAISearchRetriever:
         self.reader = reader
 
     def retrieve_from_internet(
-        self, query: str, top_k: int = 10, parsed_goal=None, info=None
+        self, query: str, top_k: int = 10, parsed_goal=None, info=None, mode="fast"
     ) -> list[TextualMemoryItem]:
         """
         Default internet retrieval (Web Search).
@@ -155,24 +159,24 @@ class BochaAISearchRetriever:
         """
         search_results = self.bocha_api.search_ai(query)  # ✅ default to
         # web-search
-        return self._convert_to_mem_items(search_results, query, parsed_goal, info)
+        return self._convert_to_mem_items(search_results, query, parsed_goal, info, mode=mode)
 
     def retrieve_from_web(
-        self, query: str, top_k: int = 10, parsed_goal=None, info=None
+        self, query: str, top_k: int = 10, parsed_goal=None, info=None, mode="fast"
     ) -> list[TextualMemoryItem]:
         """Explicitly retrieve using Bocha Web Search."""
         search_results = self.bocha_api.search_web(query)
-        return self._convert_to_mem_items(search_results, query, parsed_goal, info)
+        return self._convert_to_mem_items(search_results, query, parsed_goal, info, mode=mode)
 
     def retrieve_from_ai(
-        self, query: str, top_k: int = 10, parsed_goal=None, info=None
+        self, query: str, top_k: int = 10, parsed_goal=None, info=None, mode="fast"
     ) -> list[TextualMemoryItem]:
         """Explicitly retrieve using Bocha AI Search."""
         search_results = self.bocha_api.search_ai(query)
-        return self._convert_to_mem_items(search_results, query, parsed_goal, info)
+        return self._convert_to_mem_items(search_results, query, parsed_goal, info, mode=mode)
 
     def _convert_to_mem_items(
-        self, search_results: list[dict], query: str, parsed_goal=None, info=None
+        self, search_results: list[dict], query: str, parsed_goal=None, info=None, mode="fast"
     ):
         """Convert API search results into TextualMemoryItem objects."""
         memory_items = []
@@ -181,7 +185,7 @@ class BochaAISearchRetriever:
 
         with ContextThreadPoolExecutor(max_workers=8) as executor:
             futures = [
-                executor.submit(self._process_result, r, query, parsed_goal, info)
+                executor.submit(self._process_result, r, query, parsed_goal, info, mode=mode)
                 for r in search_results
             ]
             for future in as_completed(futures):
@@ -195,7 +199,7 @@ class BochaAISearchRetriever:
         return list(unique_memory_items.values())
 
     def _process_result(
-        self, result: dict, query: str, parsed_goal: str, info: dict[str, Any]
+        self, result: dict, query: str, parsed_goal: str, info: dict[str, Any], mode="fast"
     ) -> list[TextualMemoryItem]:
         """Process one Bocha search result into TextualMemoryItem."""
         title = result.get("name", "")
@@ -216,27 +220,63 @@ class BochaAISearchRetriever:
         else:
             publish_time = datetime.now().strftime("%Y-%m-%d")
 
-        # Use reader to split and process the content into chunks
-        read_items = self.reader.get_memory([content], type="doc", info=info)
+        if mode == "fast":
+            info_ = info.copy()
+            user_id = info_.pop("user_id", "")
+            session_id = info_.pop("session_id", "")
+            return [
+                TextualMemoryItem(
+                    memory=(
+                        f"[Outer internet view] Title: {title}\nNewsTime:"
+                        f" {publish_time}\nSummary:"
+                        f" {summary}\n"
+                    ),
+                    metadata=SearchedTreeNodeTextualMemoryMetadata(
+                        user_id=user_id,
+                        session_id=session_id,
+                        memory_type="OuterMemory",
+                        status="activated",
+                        type="fact",
+                        source="web",
+                        sources=[SourceMessage(type="web", url=url)] if url else [],
+                        visibility="public",
+                        info=info_,
+                        background="",
+                        confidence=0.99,
+                        usage=[],
+                        embedding=self.embedder.embed([content])[0],
+                        internet_info={
+                            "title": title,
+                            "url": url,
+                            "site_name": site_name,
+                            "site_icon": site_icon,
+                            "summary": summary,
+                        },
+                    ),
+                )
+            ]
+        else:
+            # Use reader to split and process the content into chunks
+            read_items = self.reader.get_memory([content], type="doc", info=info)
 
-        memory_items = []
-        for read_item_i in read_items[0]:
-            read_item_i.memory = (
-                f"[Outer internet view] Title: {title}\nNewsTime:"
-                f" {publish_time}\nSummary:"
-                f" {summary}\n"
-                f"Content: {read_item_i.memory}"
-            )
-            read_item_i.metadata.source = "web"
-            read_item_i.metadata.memory_type = "OuterMemory"
-            read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
-            read_item_i.metadata.visibility = "public"
-            read_item_i.metadata.internet_info = {
-                "title": title,
-                "url": url,
-                "site_name": site_name,
-                "site_icon": site_icon,
-                "summary": summary,
-            }
-            memory_items.append(read_item_i)
-        return memory_items
+            memory_items = []
+            for read_item_i in read_items[0]:
+                read_item_i.memory = (
+                    f"[Outer internet view] Title: {title}\nNewsTime:"
+                    f" {publish_time}\nSummary:"
+                    f" {summary}\n"
+                    f"Content: {read_item_i.memory}"
+                )
+                read_item_i.metadata.source = "web"
+                read_item_i.metadata.memory_type = "OuterMemory"
+                read_item_i.metadata.sources = [SourceMessage(type="web", url=url)] if url else []
+                read_item_i.metadata.visibility = "public"
+                read_item_i.metadata.internet_info = {
+                    "title": title,
+                    "url": url,
+                    "site_name": site_name,
+                    "site_icon": site_icon,
+                    "summary": summary,
+                }
+                memory_items.append(read_item_i)
+            return memory_items
