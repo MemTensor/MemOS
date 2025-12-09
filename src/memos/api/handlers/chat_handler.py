@@ -405,17 +405,6 @@ class ChatHandler(BaseHandler):
                         async_mode="sync",
                     )
 
-                    # Use first readable cube ID for scheduler (backward compatibility)
-                    scheduler_cube_id = (
-                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
-                    )
-                    self._send_message_to_scheduler(
-                        user_id=chat_req.user_id,
-                        mem_cube_id=scheduler_cube_id,
-                        query=chat_req.query,
-                        label=QUERY_TASK_LABEL,
-                    )
-
                     # ====== first search text mem with parse goal ======
                     search_req = APISearchPlaygroundRequest(
                         query=chat_req.query,
@@ -453,6 +442,17 @@ class ChatHandler(BaseHandler):
                     reference = prepare_reference_data(filtered_memories)
 
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+
+                    # Use first readable cube ID for scheduler (backward compatibility)
+                    scheduler_cube_id = (
+                        readable_cube_ids[0] if readable_cube_ids else chat_req.user_id
+                    )
+                    self._send_message_to_scheduler(
+                        user_id=chat_req.user_id,
+                        mem_cube_id=scheduler_cube_id,
+                        query=chat_req.query,
+                        label=QUERY_TASK_LABEL,
+                    )
 
                     # parse goal for internet search
                     searcher = self.dependencies.searcher
