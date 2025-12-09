@@ -295,8 +295,20 @@ class SchedulerDispatcher(BaseSchedulerModule):
             return
 
         # messages in one batch can belong to different business task_ids; check each
-        task_ids = {getattr(msg, "task_id", None) for msg in messages}
-        task_ids.discard(None)
+        task_ids = set()
+        task_id_to_doc_id = {}
+
+        for msg in messages:
+            tid = getattr(msg, "task_id", None)
+            if tid:
+                task_ids.add(tid)
+                # Try to capture source_doc_id for this task if we haven't already
+                if tid not in task_id_to_doc_id:
+                    info = msg.info or {}
+                    sid = info.get("source_doc_id")
+                    if sid:
+                        task_id_to_doc_id[tid] = sid
+
         if not task_ids:
             return
 
@@ -311,6 +323,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 return
 
             for task_id in task_ids:
+                source_doc_id = task_id_to_doc_id.get(task_id)
                 status_data = self.status_tracker.get_task_status_by_business_id(
                     business_task_id=task_id, user_id=user_id
                 )
@@ -332,6 +345,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         to_memory_type="status",
                         log_content=f"Task {task_id} completed",
                         status="completed",
+                        source_doc_id=source_doc_id,
                     )
                     self.submit_web_logs(event)
 
@@ -355,6 +369,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         to_memory_type="status",
                         log_content=f"Task {task_id} failed: {error_msg}",
                         status="failed",
+                        source_doc_id=source_doc_id,
                     )
                     self.submit_web_logs(event)
         except Exception:
