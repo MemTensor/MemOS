@@ -319,7 +319,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
                 status = status_data.get("status")
 
-                if status == "completed" and error is None:
+                if status == "completed":
+                    # Only emit success log if we didn't just catch an exception locally
+                    # (Although if status is 'completed', local error shouldn't happen theoretically,
+                    # unless status update lags or is inconsistent. We trust status_tracker here.)
                     event = ScheduleLogForWebItem(
                         task_id=task_id,
                         user_id=user_id,
@@ -331,7 +334,18 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         status="completed",
                     )
                     self.submit_web_logs(event)
-                elif status == "failed" and error is not None:
+
+                elif status == "failed":
+                    # Construct error message
+                    error_msg = str(error) if error else None
+                    if not error_msg:
+                        # Try to get errors from status_tracker aggregation
+                        errors = status_data.get("errors", [])
+                        if errors:
+                            error_msg = "; ".join(errors)
+                        else:
+                            error_msg = "Unknown error (check system logs)"
+
                     event = ScheduleLogForWebItem(
                         task_id=task_id,
                         user_id=user_id,
@@ -339,7 +353,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         label="taskStatus",
                         from_memory_type="status",
                         to_memory_type="status",
-                        log_content=f"Task {task_id} failed: {error!s}",
+                        log_content=f"Task {task_id} failed: {error_msg}",
                         status="failed",
                     )
                     self.submit_web_logs(event)
