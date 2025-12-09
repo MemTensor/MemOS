@@ -210,7 +210,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
-
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
