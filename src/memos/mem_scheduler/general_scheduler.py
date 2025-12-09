@@ -442,9 +442,7 @@ class GeneralScheduler(BaseScheduler):
 
             except Exception:
                 missing_ids.append(item.id)
-                logger.debug(
-                    f"Error processing item {item.id} during preparation.", exc_info=True
-                )
+                logger.debug(f"Error processing item {item.id} during preparation.", exc_info=True)
 
         if missing_ids:
             content_preview = (
