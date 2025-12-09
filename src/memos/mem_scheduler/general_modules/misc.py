@@ -233,7 +233,7 @@ class AutoDroppingQueue(Queue[T]):
 
     def get(
         self, block: bool = True, timeout: float | None = None, batch_size: int | None = None
-    ) -> list[T] | T:
+    ) -> list[T]:
         """Get items from the queue.
 
         Args:

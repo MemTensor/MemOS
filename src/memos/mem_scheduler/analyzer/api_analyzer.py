@@ -599,6 +599,8 @@ class DirectSearchMemoriesAnalyzer:
         messages=None,
         memory_content=None,
         session_id=None,
+        extract_mode=None,
+        async_mode="sync",
     ):
         """
         Create a test APIADDRequest object with the given parameters.
@@ -637,6 +639,8 @@ class DirectSearchMemoriesAnalyzer:
             source="api_analyzer_test",
             chat_history=None,
             operation=None,
+            mode=extract_mode,
+            async_mode=async_mode,
         )
 
     def run_all_tests(self, mode=SearchMode.MIXTURE):

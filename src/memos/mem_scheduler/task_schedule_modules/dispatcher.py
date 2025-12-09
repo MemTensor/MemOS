@@ -1,4 +1,5 @@
 import concurrent
+import os
 import threading
 import time
 
@@ -19,7 +20,7 @@ from memos.mem_scheduler.general_modules.task_threads import ThreadManager
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_STOP_WAIT,
 )
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem, ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
@@ -185,6 +186,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             if isinstance(dequeue_ts, int | float)
                             else None
                         ),
+                        "event_duration_ms": start_delay_ms,
+                        "total_duration_ms": self._calc_total_duration_ms(start_time, enq_ts),
                     },
                 )
 
@@ -198,6 +201,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                 if self.status_tracker:
                     for msg in messages:
                         self.status_tracker.task_completed(task_id=msg.item_id, user_id=msg.user_id)
+                    self._maybe_emit_task_completion(messages)
                 self.metrics.task_completed(user_id=m.user_id, task_type=m.label)
 
                 emit_monitor_event(
@@ -210,6 +214,10 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             finish_time, tz=timezone.utc
                         ).isoformat(),
                         "exec_duration_ms": duration * 1000,
+                        "event_duration_ms": duration * 1000,
+                        "total_duration_ms": self._calc_total_duration_ms(
+                            finish_time, getattr(first_msg, "timestamp", None)
+                        ),
                     },
                 )
                 # Redis ack is handled in finally to cover failure cases
@@ -231,6 +239,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                         self.status_tracker.task_failed(
                             task_id=msg.item_id, user_id=msg.user_id, error_message=str(e)
                         )
+                    self._maybe_emit_task_completion(messages, error=e)
                 emit_monitor_event(
                     "finish",
                     m,
@@ -241,8 +250,12 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             finish_time, tz=timezone.utc
                         ).isoformat(),
                         "exec_duration_ms": (finish_time - start_time) * 1000,
+                        "event_duration_ms": (finish_time - start_time) * 1000,
                         "error_type": type(e).__name__,
                         "error_msg": str(e),
+                        "total_duration_ms": self._calc_total_duration_ms(
+                            finish_time, getattr(m, "timestamp", None)
+                        ),
                     },
                 )
                 # Mark task as failed and remove from tracking
@@ -267,11 +280,106 @@ class SchedulerDispatcher(BaseSchedulerModule):
                                 mem_cube_id=msg.mem_cube_id,
                                 task_label=msg.label,
                                 redis_message_id=redis_message_id,
+                                message=msg,
                             )
                     except Exception as ack_err:
                         logger.warning(f"Ack in finally failed: {ack_err}")
 
         return wrapped_handler
+
+    def _maybe_emit_task_completion(
+        self, messages: list[ScheduleMessageItem], error: Exception | None = None
+    ) -> None:
+        """If all item_ids under a business task are completed, emit a single completion log."""
+        if not self.submit_web_logs or not self.status_tracker:
+            return
+
+        # messages in one batch can belong to different business task_ids; check each
+        task_ids = set()
+        task_id_to_doc_id = {}
+
+        for msg in messages:
+            tid = getattr(msg, "task_id", None)
+            if tid:
+                task_ids.add(tid)
+                # Try to capture source_doc_id for this task if we haven't already
+                if tid not in task_id_to_doc_id:
+                    info = msg.info or {}
+                    sid = info.get("source_doc_id")
+                    if sid:
+                        task_id_to_doc_id[tid] = sid
+
+        if not task_ids:
+            return
+
+        # Use the first message only for shared fields; mem_cube_id is same within a batch
+        first = messages[0]
+        user_id = first.user_id
+        mem_cube_id = first.mem_cube_id
+
+        try:
+            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
+            if not is_cloud_env:
+                return
+
+            for task_id in task_ids:
+                source_doc_id = task_id_to_doc_id.get(task_id)
+                status_data = self.status_tracker.get_task_status_by_business_id(
+                    business_task_id=task_id, user_id=user_id
+                )
+                if not status_data:
+                    continue
+
+                status = status_data.get("status")
+
+                if status == "completed":
+                    # Only emit success log if we didn't just catch an exception locally
+                    # (Although if status is 'completed', local error shouldn't happen theoretically,
+                    # unless status update lags or is inconsistent. We trust status_tracker here.)
+                    event = ScheduleLogForWebItem(
+                        task_id=task_id,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        label="taskStatus",
+                        from_memory_type="status",
+                        to_memory_type="status",
+                        log_content=f"Task {task_id} completed",
+                        status="completed",
+                        source_doc_id=source_doc_id,
+                    )
+                    self.submit_web_logs(event)
+
+                elif status == "failed":
+                    # Construct error message
+                    error_msg = str(error) if error else None
+                    if not error_msg:
+                        # Try to get errors from status_tracker aggregation
+                        errors = status_data.get("errors", [])
+                        if errors:
+                            error_msg = "; ".join(errors)
+                        else:
+                            error_msg = "Unknown error (check system logs)"
+
+                    event = ScheduleLogForWebItem(
+                        task_id=task_id,
+                        user_id=user_id,
+                        mem_cube_id=mem_cube_id,
+                        label="taskStatus",
+                        from_memory_type="status",
+                        to_memory_type="status",
+                        log_content=f"Task {task_id} failed: {error_msg}",
+                        status="failed",
+                        source_doc_id=source_doc_id,
+                    )
+                    self.submit_web_logs(event)
+        except Exception:
+            logger.warning(
+                "Failed to emit task completion log. user_id=%s mem_cube_id=%s task_ids=%s",
+                user_id,
+                mem_cube_id,
+                list(task_ids),
+                exc_info=True,
+            )
 
     def get_running_tasks(
         self, filter_func: Callable[[RunningTaskItem], bool] | None = None
@@ -422,6 +530,30 @@ class SchedulerDispatcher(BaseSchedulerModule):
             future.result()  # this will throw exception
         except Exception as e:
             logger.error(f"Handler execution failed: {e!s}", exc_info=True)
+
+    @staticmethod
+    def _calc_total_duration_ms(finish_epoch: float, enqueue_ts) -> float | None:
+        """
+        Calculate total duration from enqueue timestamp to finish time in milliseconds.
+        """
+        try:
+            enq_epoch = None
+
+            if isinstance(enqueue_ts, int | float):
+                enq_epoch = float(enqueue_ts)
+            elif hasattr(enqueue_ts, "timestamp"):
+                dt = enqueue_ts
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                enq_epoch = dt.timestamp()
+
+            if enq_epoch is None:
+                return None
+
+            total_ms = max(0.0, finish_epoch - enq_epoch) * 1000
+            return total_ms
+        except Exception:
+            return None
 
     def execute_task(
         self,

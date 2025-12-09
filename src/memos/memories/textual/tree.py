@@ -210,7 +210,7 @@ class TreeTextMemory(BaseTextMemory):
     def get_relevant_subgraph(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 20,
         depth: int = 2,
         center_status: str = "activated",
         user_name: str | None = None,
@@ -342,6 +342,17 @@ class TreeTextMemory(BaseTextMemory):
         except Exception as e:
             logger.error(f"An error occurred while deleting all memories: {e}")
             raise
+
+    def delete_by_filter(
+        self,
+        writable_cube_ids: list[str],
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+    ) -> None:
+        """Delete memories by filter."""
+        self.graph_store.delete_node_by_prams(
+            writable_cube_ids=writable_cube_ids, file_ids=file_ids, filter=filter
+        )
 
     def load(self, dir: str) -> None:
         try:

@@ -283,18 +283,28 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
         exchange_name = self.rabbitmq_exchange_name
         routing_key = self.rabbit_queue_name
+        label = message.get("label")
 
-        if message.get("label") == "knowledgeBaseUpdate":
-            kb_specific_exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+        # Special handling for knowledgeBaseUpdate in local environment: always empty routing key
+        if label == "knowledgeBaseUpdate":
+            routing_key = ""
 
-            if kb_specific_exchange_name:
-                exchange_name = kb_specific_exchange_name
+        # Cloud environment override: applies to specific message types if MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME is set
+        env_exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+        if env_exchange_name and label in ["taskStatus", "knowledgeBaseUpdate"]:
+            exchange_name = env_exchange_name
+            routing_key = ""  # Routing key is always empty in cloud environment for these types
 
-            routing_key = ""  # User specified empty routing key for KB updates
-
+            # Specific diagnostic logging for messages affected by cloud environment settings
             logger.info(
-                f"[DIAGNOSTIC] Publishing KB Update message. "
-                f"ENV_EXCHANGE_NAME_USED: {kb_specific_exchange_name is not None}. "
+                f"[DIAGNOSTIC] Publishing {label} message in Cloud Env. "
+                f"Exchange: {exchange_name}, Routing Key: '{routing_key}'."
+            )
+            logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")
+        elif label == "knowledgeBaseUpdate":
+            # Original diagnostic logging for knowledgeBaseUpdate if NOT in cloud env
+            logger.info(
+                f"[DIAGNOSTIC] Publishing knowledgeBaseUpdate message (Local Env). "
                 f"Current configured Exchange: {exchange_name}, Routing Key: '{routing_key}'."
             )
             logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")

@@ -51,7 +51,6 @@ class TextContentParser(BaseMessageParser):
             return SourceMessage(
                 type="text",
                 content=text,
-                original_part=message,
             )
         return SourceMessage(type="text", content=str(message))
 

@@ -157,6 +157,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     status: str | None = Field(
         default=None, description="Completion status of the task (e.g., 'completed', 'failed')"
     )
+    source_doc_id: str | None = Field(default=None, description="Source document ID")
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""

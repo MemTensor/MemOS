@@ -338,19 +338,25 @@ class OptimizedScheduler(GeneralScheduler):
                 for one in new_working_memory_monitors:
                     one.sorting_score = 0
 
-            logger.info(
-                f"[optimized replace_working_memory] update {len(new_working_memory_monitors)} working_memory_monitors"
-            )
             self.monitor.update_working_memory_monitors(
                 new_working_memory_monitors=new_working_memory_monitors,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
             )
-
-            # Use the filtered and reranked memories directly
-            text_mem_base.replace_working_memory(memories=memories_with_new_order)
-
+            logger.info(
+                f"[optimized replace_working_memory] update {len(new_working_memory_monitors)} working_memory_monitors"
+            )
+            try:
+                # Use the filtered and reranked memories directly
+                text_mem_base.replace_working_memory(
+                    memories=memories_with_new_order, user_name=mem_cube_id
+                )
+            except Exception:
+                logger.error(
+                    "[optimized replace_working_memory] text_mem_base.replace_working_memory failed!",
+                    stack_info=True,
+                )
             # Update monitor after replacing working memory
             mem_monitors: list[MemoryMonitorItem] = self.monitor.working_memory_monitors[user_id][
                 mem_cube_id
