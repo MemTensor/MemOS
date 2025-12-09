@@ -358,7 +358,6 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             self._redis_conn.xack(stream_key, self.consumer_group, redis_message_id)
 
             if message:
-                self.status_tracker.task_completed(task_id=message.item_id, user_id=message.user_id)
                 logger.info(
                     f"Message {message.item_id} | {message.label} | {message.content} has been acknowledged."
                 )
