@@ -476,7 +476,7 @@ class ChatHandler(BaseHandler):
                         # internet status
                         yield f"data: {json.dumps({'type': 'status', 'data': 'start_internet_search'})}\n\n"
 
-                    # ======  internet search with parse goal ======
+                    # ======  second deep search  ======
                     search_req = APISearchPlaygroundRequest(
                         query=parsed_goal.rephrased_query
                         or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
