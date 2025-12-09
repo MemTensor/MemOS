@@ -701,15 +701,35 @@ class Searcher:
         """Sort results by score and trim to top_k"""
         final_items = []
         if search_tool_memory:
-            tool_results = [
+            tool_schema_results = [
                 (item, score)
                 for item, score in results
-                if item.metadata.memory_type in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+                if item.metadata.memory_type == "ToolSchemaMemory"
             ]
-            sorted_tool_results = sorted(tool_results, key=lambda pair: pair[1], reverse=True)[
-                :tool_mem_top_k
+            sorted_tool_schema_results = sorted(
+                tool_schema_results, key=lambda pair: pair[1], reverse=True
+            )[:tool_mem_top_k]
+            for item, score in sorted_tool_schema_results:
+                if plugin and round(score, 2) == 0.00:
+                    continue
+                meta_data = item.metadata.model_dump()
+                meta_data["relativity"] = score
+                final_items.append(
+                    TextualMemoryItem(
+                        id=item.id,
+                        memory=item.memory,
+                        metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                    )
+                )
+            tool_trajectory_results = [
+                (item, score)
+                for item, score in results
+                if item.metadata.memory_type == "ToolTrajectoryMemory"
             ]
-            for item, score in sorted_tool_results:
+            sorted_tool_trajectory_results = sorted(
+                tool_trajectory_results, key=lambda pair: pair[1], reverse=True
+            )[:tool_mem_top_k]
+            for item, score in sorted_tool_trajectory_results:
                 if plugin and round(score, 2) == 0.00:
                     continue
                 meta_data = item.metadata.model_dump()
