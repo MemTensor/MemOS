@@ -110,7 +110,17 @@ class MemFeedback(BaseMemFeedback):
         return {
             "record": {
                 "add": [
-                    {"id": _id, "text": added_mem.memory}
+                    {
+                        "id": _id,
+                        "text": added_mem.memory,
+                        "source_doc_id": (
+                            added_mem.metadata.file_ids[0]
+                            if hasattr(added_mem.metadata, "file_ids")
+                            and isinstance(added_mem.metadata.file_ids, list)
+                            and added_mem.metadata.file_ids
+                            else None
+                        ),
+                    }
                     for _id, added_mem in zip(added_ids, to_add_memories, strict=False)
                 ],
                 "update": [],
@@ -197,7 +207,17 @@ class MemFeedback(BaseMemFeedback):
         )
 
         logger.info(f"[Memory Feedback ADD] {added_ids[0]}")
-        return {"id": added_ids[0], "text": to_add_memory.memory}
+        return {
+            "id": added_ids[0],
+            "text": to_add_memory.memory,
+            "source_doc_id": (
+                to_add_memory.metadata.file_ids[0]
+                if hasattr(to_add_memory.metadata, "file_ids")
+                and isinstance(to_add_memory.metadata.file_ids, list)
+                and to_add_memory.metadata.file_ids
+                else None
+            ),
+        }
 
     def _single_update_operation(
         self,
@@ -243,6 +263,13 @@ class MemFeedback(BaseMemFeedback):
             "text": new_memory_item.memory,
             "archived_id": old_memory_item.id,
             "origin_memory": old_memory_item.memory,
+            "source_doc_id": (
+                old_memory_item.metadata.file_ids[0]
+                if hasattr(old_memory_item.metadata, "file_ids")
+                and isinstance(old_memory_item.metadata.file_ids, list)
+                and old_memory_item.metadata.file_ids
+                else None
+            ),
         }
 
     def _del_working_binding(self, user_name, mem_items: list[TextualMemoryItem]) -> set[str]:
