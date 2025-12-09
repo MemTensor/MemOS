@@ -179,13 +179,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="long-bench-v2-1208-1556",
+        default="default",
         help="Version identifier for saving results",
     )
     parser.add_argument(
         "--workers",
         type=int,
-        default=20,
+        default=3,
         help="Number of parallel workers",
     )
     parser.add_argument(

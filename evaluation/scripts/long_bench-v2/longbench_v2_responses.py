@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import threading
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time
@@ -85,8 +86,13 @@ def generate_response(llm_client, context, question, choice_a, choice_b, choice_
         return ""
 
 
-def process_sample(search_result, llm_client):
+def process_sample(search_result, llm_client, success_records, record_file, file_lock):
     """Process a single sample: generate answer."""
+    sample_idx = search_result.get("sample_idx")
+    # Skip if already processed
+    if sample_idx is not None and str(sample_idx) in success_records:
+        return None
+
     start = time()
 
     context = search_result.get("context", "")
@@ -95,6 +101,10 @@ def process_sample(search_result, llm_client):
     choice_b = search_result.get("choice_B", "")
     choice_c = search_result.get("choice_C", "")
     choice_d = search_result.get("choice_D", "")
+
+    # Skip empty/placeholder contexts (e.g., "\n" or whitespace-only)
+    if not context or context.strip() == "":
+        return None
 
     # Generate answer
     response = generate_response(
@@ -106,7 +116,7 @@ def process_sample(search_result, llm_client):
 
     response_duration_ms = (time() - start) * 1000
 
-    return {
+    result = {
         "sample_idx": search_result.get("sample_idx"),
         "_id": search_result.get("_id"),
         "domain": search_result.get("domain"),
@@ -123,9 +133,19 @@ def process_sample(search_result, llm_client):
         "response": response,
         "judge": pred == search_result.get("answer") if pred else False,
         "search_context": context,
+        # Preserve full search results payload (e.g., list of memories)
+        "search_results": search_result.get("search_results"),
         "response_duration_ms": response_duration_ms,
         "search_duration_ms": search_result.get("search_duration_ms", 0),
     }
+
+    # Record successful processing (thread-safe)
+    if sample_idx is not None:
+        with file_lock, open(record_file, "a") as f:
+            f.write(f"{sample_idx}\n")
+            f.flush()
+
+    return result
 
 
 def main(frame, version="default", num_workers=10):
@@ -136,10 +156,16 @@ def main(frame, version="default", num_workers=10):
     print(f"🚀 LONGBENCH V2 RESPONSE GENERATION - {frame.upper()} v{version}".center(80))
     print("=" * 80 + "\n")
 
-    # Load search results
-    search_path = (
-        f"results/long_bench-v2/{frame}-{version}/{frame}_longbench_v2_search_results.json"
+    # Initialize checkpoint file for resume functionality
+    checkpoint_dir = os.path.join(
+        ROOT_DIR, "evaluation", "results", "long_bench-v2", f"{frame}-{version}"
     )
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    record_file = os.path.join(checkpoint_dir, "response_success_records.txt")
+    search_path = os.path.join(checkpoint_dir, f"{frame}_longbench_v2_search_results.json")
+    output_path = os.path.join(checkpoint_dir, f"{frame}_longbench_v2_responses.json")
+
+    # Load search results
     if not os.path.exists(search_path):
         print(f"❌ Search results not found: {search_path}")
         print("Please run longbench_v2_search.py first")
@@ -147,6 +173,30 @@ def main(frame, version="default", num_workers=10):
 
     with open(search_path, encoding="utf-8") as f:
         search_results = json.load(f)
+
+    # Load existing results and success records for resume
+    existing_results = {}
+    success_records = set()
+    if os.path.exists(output_path):
+        with open(output_path, encoding="utf-8") as f:
+            existing_results_list = json.load(f)
+            for result in existing_results_list:
+                sample_idx = result.get("sample_idx")
+                if sample_idx is not None:
+                    existing_results[sample_idx] = result
+                    success_records.add(str(sample_idx))
+        print(f"📋 Found {len(existing_results)} existing responses (resume mode)")
+    else:
+        print("📋 Starting fresh response generation (no checkpoint found)")
+
+    # Load additional success records from checkpoint file
+    if os.path.exists(record_file):
+        with open(record_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and line not in success_records:
+                    success_records.add(line)
+        print(f"📋 Total {len(success_records)} samples already processed")
 
     # Initialize LLM client
     llm_client = OpenAI(
@@ -156,9 +206,15 @@ def main(frame, version="default", num_workers=10):
     print(f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}")
 
     # Process all samples
-    all_responses = []
+    new_results = []
+    file_lock = threading.Lock()  # Lock for thread-safe file writing
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = [executor.submit(process_sample, sample, llm_client) for sample in search_results]
+        futures = [
+            executor.submit(
+                process_sample, sample, llm_client, success_records, record_file, file_lock
+            )
+            for sample in search_results
+        ]
 
         for future in tqdm(
             as_completed(futures),
@@ -167,11 +223,16 @@ def main(frame, version="default", num_workers=10):
         ):
             result = future.result()
             if result:
-                all_responses.append(result)
+                new_results.append(result)
+                # Update existing results with new result
+                sample_idx = result.get("sample_idx")
+                if sample_idx is not None:
+                    existing_results[sample_idx] = result
 
-    # Save responses
-    output_path = f"results/long_bench-v2/{frame}-{version}/{frame}_longbench_v2_responses.json"
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # Merge and save all results
+    all_responses = list(existing_results.values())
+    # Sort by sample_idx to maintain order
+    all_responses.sort(key=lambda x: x.get("sample_idx", 0))
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_responses, f, ensure_ascii=False, indent=2)

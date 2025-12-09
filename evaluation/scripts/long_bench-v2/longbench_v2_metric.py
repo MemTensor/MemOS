@@ -92,8 +92,11 @@ def main(frame, version="default"):
     with open(responses_path, encoding="utf-8") as f:
         responses = json.load(f)
 
+    # Only keep entries with non-empty context (search_context) to align with response generation
+    filtered = [r for r in responses if str(r.get("search_context", "")).strip() != ""]
+
     # Calculate metrics
-    metrics = calculate_accuracy(responses)
+    metrics = calculate_accuracy(filtered)
 
     # Save metrics
     output_path = f"results/long_bench-v2/{frame}-{version}/{frame}_longbench_v2_metrics.json"

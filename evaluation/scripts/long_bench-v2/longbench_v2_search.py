@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time
@@ -24,7 +25,7 @@ def memos_api_search(client, query, user_id, top_k, frame):
     start = time()
     search_results = client.search(query=query, user_id=user_id, top_k=top_k)
 
-    # Format context from search results based on frame type
+    # Format context from search results based on frame type for backward compatibility
     context = ""
     if (
         (frame == "memos-api" or frame == "memos-api-online")
@@ -36,20 +37,26 @@ def memos_api_search(client, query, user_id, top_k, frame):
             context += f"\n{search_results.get('pref_string', '')}"
 
     duration_ms = (time() - start) * 1000
-    return context, duration_ms
+    return context, duration_ms, search_results
 
 
-def process_sample(client, sample, sample_idx, frame, version, top_k):
+def process_sample(
+    client, sample, sample_idx, frame, version, top_k, success_records, record_file, file_lock
+):
     """Process a single sample: search for relevant memories."""
+    # Skip if already processed
+    if str(sample_idx) in success_records:
+        return None
+
     user_id = f"longbench_v2_{sample_idx}_{version}"
     query = sample.get("question", "")
 
     if not query:
         return None
 
-    context, duration_ms = memos_api_search(client, query, user_id, top_k, frame)
+    context, duration_ms, search_results = memos_api_search(client, query, user_id, top_k, frame)
 
-    return {
+    result = {
         "sample_idx": sample_idx,
         "_id": sample.get("_id"),
         "domain": sample.get("domain"),
@@ -63,8 +70,17 @@ def process_sample(client, sample, sample_idx, frame, version, top_k):
         "choice_D": sample.get("choice_D"),
         "answer": sample.get("answer"),
         "context": context,
+        # Preserve full search results instead of only the concatenated context
+        "search_results": search_results,
         "search_duration_ms": duration_ms,
     }
+
+    # Record successful processing (thread-safe)
+    with file_lock, open(record_file, "a") as f:
+        f.write(f"{sample_idx}\n")
+        f.flush()
+
+    return result
 
 
 def load_dataset_from_local():
@@ -111,6 +127,38 @@ def main(frame, version="default", num_workers=10, top_k=20, max_samples=None):
         dataset = dataset[:max_samples]
         print(f"Limited to {len(dataset)} samples")
 
+    # Initialize checkpoint file for resume functionality
+    checkpoint_dir = os.path.join(
+        ROOT_DIR, "evaluation", "results", "long_bench-v2", f"{frame}-{version}"
+    )
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    record_file = os.path.join(checkpoint_dir, "search_success_records.txt")
+    output_path = os.path.join(checkpoint_dir, f"{frame}_longbench_v2_search_results.json")
+
+    # Load existing results and success records for resume
+    existing_results = {}
+    success_records = set()
+    if os.path.exists(output_path):
+        with open(output_path, encoding="utf-8") as f:
+            existing_results_list = json.load(f)
+            for result in existing_results_list:
+                sample_idx = result.get("sample_idx")
+                if sample_idx is not None:
+                    existing_results[sample_idx] = result
+                    success_records.add(str(sample_idx))
+        print(f"📋 Found {len(existing_results)} existing search results (resume mode)")
+    else:
+        print("📋 Starting fresh search (no checkpoint found)")
+
+    # Load additional success records from checkpoint file
+    if os.path.exists(record_file):
+        with open(record_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and line not in success_records:
+                    success_records.add(line)
+        print(f"📋 Total {len(success_records)} samples already processed")
+
     # Initialize client
     client = None
     if frame == "memos-api":
@@ -126,11 +174,23 @@ def main(frame, version="default", num_workers=10, top_k=20, max_samples=None):
         return
 
     # Process samples
-    search_results = []
+    new_results = []
+    file_lock = threading.Lock()  # Lock for thread-safe file writing
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = []
         for idx, sample in enumerate(dataset):
-            future = executor.submit(process_sample, client, sample, idx, frame, version, top_k)
+            future = executor.submit(
+                process_sample,
+                client,
+                sample,
+                idx,
+                frame,
+                version,
+                top_k,
+                success_records,
+                record_file,
+                file_lock,
+            )
             futures.append(future)
 
         for future in tqdm(
@@ -140,13 +200,17 @@ def main(frame, version="default", num_workers=10, top_k=20, max_samples=None):
         ):
             result = future.result()
             if result:
-                search_results.append(result)
+                new_results.append(result)
+                # Update existing results with new result
+                sample_idx = result.get("sample_idx")
+                if sample_idx is not None:
+                    existing_results[sample_idx] = result
 
-    # Save results
-    os.makedirs(f"results/long_bench-v2/{frame}-{version}/", exist_ok=True)
-    output_path = (
-        f"results/long_bench-v2/{frame}-{version}/{frame}_longbench_v2_search_results.json"
-    )
+    # Merge and save all results
+    search_results = list(existing_results.values())
+    # Sort by sample_idx to maintain order
+    search_results.sort(key=lambda x: x.get("sample_idx", 0))
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(search_results, f, ensure_ascii=False, indent=2)
 
@@ -172,7 +236,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--workers",
         type=int,
-        default=10,
+        default=1,
         help="Number of parallel workers",
     )
     parser.add_argument(
