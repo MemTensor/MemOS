@@ -490,7 +490,7 @@ class ChatHandler(BaseHandler):
                         or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
-                        mode=chat_req.mode,
+                        mode="fast",
                         internet_search=chat_req.internet_search,
                         top_k=chat_req.top_k,
                         chat_history=chat_req.history,
