@@ -426,7 +426,7 @@ class ChatHandler(BaseHandler):
                         top_k=5,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
-                        include_preference=chat_req.include_preference,
+                        include_preference=False,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
                         search_tool_memory=False,
@@ -451,17 +451,8 @@ class ChatHandler(BaseHandler):
 
                     # Prepare reference data (first search)
                     reference = prepare_reference_data(filtered_memories)
-                    # get preference string
-                    pref_string = search_response.data.get("pref_string", "")
 
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
-
-                    # Prepare preference markdown string
-                    if chat_req.include_preference:
-                        pref_list = search_response.data.get("pref_mem") or []
-                        pref_memories = pref_list[0].get("memories", []) if pref_list else []
-                        pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
-                        yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
 
                     # parse goal for internet search
                     searcher = self.dependencies.searcher
@@ -496,7 +487,8 @@ class ChatHandler(BaseHandler):
                         top_k=chat_req.top_k,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
-                        include_preference=False,
+                        include_preference=chat_req.include_preference,
+                        pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
                         search_memory_type="All",
                         search_tool_memory=False,
@@ -524,12 +516,19 @@ class ChatHandler(BaseHandler):
 
                     # Prepare remain reference data (second search)
                     reference = prepare_reference_data(filtered_memories)
+                    # get preference string
+                    pref_string = search_response.data.get("pref_string", "")
                     # get internet reference
                     internet_reference = self._get_internet_reference(
                         search_response.data.get("text_mem")[0]["memories"]
                     )
-
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+                    # Prepare preference markdown string
+                    if chat_req.include_preference:
+                        pref_list = search_response.data.get("pref_mem") or []
+                        pref_memories = pref_list[0].get("memories", []) if pref_list else []
+                        pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
+                        yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
 
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_enhance_system_prompt(
