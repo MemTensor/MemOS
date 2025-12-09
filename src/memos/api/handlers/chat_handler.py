@@ -423,12 +423,13 @@ class ChatHandler(BaseHandler):
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
                         internet_search=False,
-                        top_k=chat_req.top_k,
+                        top_k=5,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=chat_req.include_preference,
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
+                        search_tool_memory=False,
                         playground_search_goal_parser=False,
                     )
                     start_time = time.time()
@@ -498,6 +499,7 @@ class ChatHandler(BaseHandler):
                         include_preference=False,
                         filter=chat_req.filter,
                         search_memory_type="All",
+                        search_tool_memory=False,
                         playground_search_goal_parser=False,
                     )
                     start_time = time.time()
