@@ -612,8 +612,6 @@ class FileContentParser(BaseMessageParser):
                                 # Use parser from utils
                                 if parser:
                                     parsed_text = parser.parse(temp_file_path)
-                                else:
-                                    parsed_text = "[File parsing error: Parser not available]"
                             except Exception as e:
                                 logger.error(
                                     f"[FileContentParser] Error parsing downloaded file: {e}"
@@ -633,18 +631,9 @@ class FileContentParser(BaseMessageParser):
             # Priority 2: If file_id is provided but no file_data, try to use file_id as path
             elif file_id:
                 logger.warning(f"[FileContentParser] File data not provided for file_id: {file_id}")
-                parsed_text = f"[File ID: {file_id}]: File data not provided"
-
-            # If no content could be parsed, create a placeholder
-            if not parsed_text:
-                if filename:
-                    parsed_text = f"[File: {filename}] File data not provided"
-                else:
-                    parsed_text = "[File: unknown] File data not provided"
 
         except Exception as e:
             logger.error(f"[FileContentParser] Error in parse_fine: {e}")
-            parsed_text = f"[File parsing error: {e!s}]"
 
         finally:
             # Clean up temporary file
@@ -656,7 +645,8 @@ class FileContentParser(BaseMessageParser):
                     logger.warning(
                         f"[FileContentParser] Failed to delete temp file {temp_file_path}: {e}"
                     )
-
+        if not parsed_text:
+            return []
         # Extract and process images from parsed_text
         if is_markdown and parsed_text and self.image_parser:
             parsed_text = self._extract_and_process_images(parsed_text, info, **kwargs)
