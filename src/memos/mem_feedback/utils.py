@@ -88,11 +88,16 @@ def split_into_chunks(memories: list[TextualMemoryItem], max_tokens_per_chunk: i
 
 def make_mem_item(text: str, **kwargs) -> TextualMemoryItem:
     """Build a minimal TextualMemoryItem."""
+    info = kwargs.get("info", {})
+    info_ = info.copy()
+    user_id = info_.pop("user_id", "")
+    session_id = info_.pop("session_id", "")
+
     return TextualMemoryItem(
         memory=text,
         metadata=TreeNodeTextualMemoryMetadata(
-            user_id=kwargs.get("user_id", ""),
-            session_id=kwargs.get("session_id", ""),
+            user_id=user_id,
+            session_id=session_id,
             memory_type="LongTermMemory",
             status="activated",
             tags=kwargs.get("tags", []),
@@ -104,5 +109,6 @@ def make_mem_item(text: str, **kwargs) -> TextualMemoryItem:
             background=kwargs.get("background", ""),
             confidence=0.99,
             type=kwargs.get("type", ""),
+            info=info_,
         ),
     )

@@ -3,7 +3,7 @@ import difflib
 import json
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -280,27 +280,28 @@ class MemFeedback(BaseMemFeedback):
         current_memories: list[TextualMemoryItem],
         history_str: str,
         chat_history_list: list,
+        info: dict,
     ):
         """Modify memory at the semantic level"""
         lang = detect_lang("".join(memory_item.memory))
         template = FEEDBACK_PROMPT_DICT["compare"][lang]
         if current_memories == []:
             # retrieve feedback
-            feedback_retrieved = self._retrieve(
-                memory_item.memory, info={"user_id": user_id}, user_name=user_name
-            )
+            feedback_retrieved = self._retrieve(memory_item.memory, info=info, user_name=user_name)
 
             # retrieve question
             last_user_index = max(i for i, d in enumerate(chat_history_list) if d["role"] == "user")
             last_qa = " ".join([item["content"] for item in chat_history_list[last_user_index:]])
-            supplementary_retrieved = self._retrieve(
-                last_qa, info={"user_id": user_id}, user_name=user_name
-            )
+            supplementary_retrieved = self._retrieve(last_qa, info=info, user_name=user_name)
             ids = []
             for item in feedback_retrieved + supplementary_retrieved:
                 if item.id not in ids:
                     ids.append(item.id)
                     current_memories.append(item)
+            include_keys = ["agent_id", "app_id"]
+            current_memories = [
+                item for item in current_memories if self._info_comparison(item, info, include_keys)
+            ]
 
         if not current_memories:
             operations = [{"operation": "ADD"}]
@@ -336,7 +337,6 @@ class MemFeedback(BaseMemFeedback):
 
             operations = self.standard_operations(all_operations, current_memories)
 
-        # TODO based on the operation, change memory_item memory info ; change source info
         logger.info(f"[Feedback memory operations]: {operations!s}")
 
         if not operations:
@@ -395,6 +395,7 @@ class MemFeedback(BaseMemFeedback):
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
         chat_history = kwargs.get("chat_history", [])
         feedback_content = kwargs.get("feedback_content", "")
+        info = kwargs.get("info", {})
 
         chat_history_lis = [f"""{msg["role"]}: {msg["content"]}""" for msg in chat_history[-4:]]
         history_str = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
@@ -426,6 +427,7 @@ class MemFeedback(BaseMemFeedback):
                     current_memories,
                     history_str,
                     chat_history,
+                    info,
                 ): i
                 for i, mem in enumerate(feedback_memories)
             }
@@ -449,6 +451,17 @@ class MemFeedback(BaseMemFeedback):
                 "update": [element for item in mem_res for element in item["record"]["update"]],
             }
         }
+
+    def _info_comparison(self, memory: TextualMemoryItem, _info: dict, include_keys: list) -> bool:
+        if not _info and not memory.metadata.info:
+            return True
+
+        record = []
+        for key in include_keys:
+            info_v = _info.get(key)
+            mem_v = memory.metadata.info.get(key, None)
+            record.append(info_v == mem_v)
+        return all(record)
 
     def _retrieve(self, query: str, info=None, user_name=None):
         """Retrieve memory items"""
@@ -622,13 +635,20 @@ class MemFeedback(BaseMemFeedback):
         filter_memories = [mem for mem in memories if mem.id in inscope_ids]
         return filter_memories
 
-    def process_keyword_replace(self, user_id: str, user_name: str, kwp_judge: dict | None = None):
+    def process_keyword_replace(
+        self, user_id: str, user_name: str, kwp_judge: dict | None = None, info: dict | None = None
+    ):
         """
-        memory keyword replace process
+        Memory keyword replace process
         """
+        info = info or {}
         doc_scope = kwp_judge.get("doc_scope", "NONE")
         original_word = kwp_judge.get("original")
         target_word = kwp_judge.get("target")
+        include_keys = ["agent_id", "app_id"]
+
+        mem_info = {key: info[key] for key in info if key in include_keys}
+        filter_dict = {f"info.{key}": info[key] for key in mem_info}
 
         if self.DB_IDX_READY:
             # retrieve
@@ -639,22 +659,26 @@ class MemFeedback(BaseMemFeedback):
 
             must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
             retrieved_ids = self.graph_store.seach_by_keywords_tfidf(
-                [must_part], user_name=user_name
+                [must_part], user_name=user_name, filter=filter_dict
             )
             if len(retrieved_ids) < 1:
                 retrieved_ids = self.graph_store.search_by_fulltext(
-                    queries, top_k=100, user_name=user_name
+                    queries, top_k=100, user_name=user_name, filter=filter_dict
                 )
         else:
             retrieved_ids = self.graph_store.seach_by_keywords_like(
-                f"%{original_word}%", user_name=user_name
+                f"%{original_word}%", user_name=user_name, filter=filter_dict
             )
 
-        # filter by doc scope
         mem_data = [
             self.graph_store.get_node(item["id"], user_name=user_name) for item in retrieved_ids
         ]
         retrieved_memories = [TextualMemoryItem(**item) for item in mem_data]
+        retrieved_memories = [
+            item
+            for item in retrieved_memories
+            if self._info_comparison(item, mem_info, include_keys)
+        ]
 
         if doc_scope != "NONE":
             retrieved_memories = self._doc_filter(doc_scope, retrieved_memories)
@@ -701,7 +725,7 @@ class MemFeedback(BaseMemFeedback):
                     update_results.append(result)
                 except Exception as e:
                     mem_id = future_to_info[future][0]
-                    self.logger.error(
+                    logger.error(
                         f"[Feedback Core DB] Exception during update operation for memory {mem_id}: {e}"
                     )
 
@@ -713,6 +737,7 @@ class MemFeedback(BaseMemFeedback):
         user_name: str,
         chat_history: list[MessageDict],
         feedback_content: str,
+        info: dict | None = None,
         **kwargs,
     ) -> dict:
         """
@@ -734,7 +759,11 @@ class MemFeedback(BaseMemFeedback):
         try:
             feedback_time = kwargs.get("feedback_time") or datetime.now().isoformat()
             session_id = kwargs.get("session_id")
-            info = {"user_id": user_id, "user_name": user_name, "session_id": session_id}
+            if not info:
+                info = {"user_id": user_id, "user_name": user_name, "session_id": session_id}
+            else:
+                info.update({"user_id": user_id, "user_name": user_name, "session_id": session_id})
+
             logger.info(
                 f"[Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
             )
@@ -746,7 +775,9 @@ class MemFeedback(BaseMemFeedback):
                 and kwp_judge.get("original", "NONE") != "NONE"
                 and kwp_judge.get("target", "NONE") != "NONE"
             ):
-                return self.process_keyword_replace(user_id, user_name, kwp_judge=kwp_judge)
+                return self.process_keyword_replace(
+                    user_id, user_name, kwp_judge=kwp_judge, info=info
+                )
 
             # llm update memory
             if not chat_history:
@@ -801,6 +832,7 @@ class MemFeedback(BaseMemFeedback):
                         sources=[{"type": "chat"}],
                         background=background,
                         type="fine",
+                        info=info,
                     )
                     feedback_memories.append(mem_item)
 
@@ -810,6 +842,7 @@ class MemFeedback(BaseMemFeedback):
                     feedback_memories,
                     chat_history=chat_history,
                     feedback_content=feedback_content,
+                    info=info,
                     **kwargs,
                 )
                 logger.info(
@@ -827,6 +860,7 @@ class MemFeedback(BaseMemFeedback):
         user_name: str,
         chat_history: list[MessageDict],
         feedback_content: str,
+        info: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -856,6 +890,7 @@ class MemFeedback(BaseMemFeedback):
                 user_name,
                 chat_history,
                 feedback_content,
+                info,
                 **kwargs,
             )
             done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
