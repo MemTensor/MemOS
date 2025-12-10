@@ -23,6 +23,7 @@ from memos.memories.textual.tree_text_memory.organize.manager import (
     MemoryManager,
     extract_working_binding_ids,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 
 
 if TYPE_CHECKING:
@@ -77,6 +78,7 @@ class MemFeedback(BaseMemFeedback):
             },
             is_reorganize=self.is_reorganize,
         )
+        self.stopword_manager = StopwordManager
         self.searcher: Searcher = None
         self.reranker = None
         self.DB_IDX_READY = False
@@ -260,7 +262,6 @@ class MemFeedback(BaseMemFeedback):
 
         for mid in delete_ids:
             try:
-                print("del", mid)
                 self.graph_store.delete_node(mid, user_name=user_name)
 
                 logger.info(
@@ -482,8 +483,6 @@ class MemFeedback(BaseMemFeedback):
             self.graph_store.get_node(item["id"], user_name=user_name) for item in retrieved_ids
         ]
 
-        for item in current_memories:
-            print(item["id"], item["metadata"]["memory_type"], item["metadata"]["status"])
         if not retrieved_ids:
             logger.info(
                 f"[Feedback Core: _vec_query] No similar memories found for embedding query for user {user_name}."
