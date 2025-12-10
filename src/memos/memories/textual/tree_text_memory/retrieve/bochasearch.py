@@ -9,9 +9,11 @@ from typing import Any
 import requests
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
+from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import (
     SearchedTreeNodeTextualMemoryMetadata,
     SourceMessage,
@@ -121,6 +123,21 @@ class BochaAISearchAPI:
 class BochaAISearchRetriever:
     """BochaAI retriever that converts search results into TextualMemoryItem objects"""
 
+    @require_python_package(
+        import_name="rake_nltk",
+        install_command="pip install rake_nltk",
+        install_link="https://pypi.org/project/rake-nltk/",
+    )
+    @require_python_package(
+        import_name="nltk",
+        install_command="pip install nltk",
+        install_link="https://www.nltk.org/install.html",
+    )
+    @require_python_package(
+        import_name="jieba",
+        install_command="pip install jieba",
+        install_link="https://github.com/fxsjy/jieba",
+    )
     def __init__(
         self,
         access_key: str,
@@ -137,9 +154,25 @@ class BochaAISearchRetriever:
             reader: MemReader instance for processing internet content
             max_results: Maximum number of search results to retrieve
         """
+        import nltk
+
+        try:
+            nltk.download("averaged_perceptron_tagger_eng")
+        except Exception as err:
+            raise Exception("Failed to download nltk averaged_perceptron_tagger_eng") from err
+        try:
+            nltk.download("stopwords")
+        except Exception as err:
+            raise Exception("Failed to download nltk stopwords") from err
+
+        from jieba.analyse import TextRank
+        from rake_nltk import Rake
+
         self.bocha_api = BochaAISearchAPI(access_key, max_results=max_results)
         self.embedder = embedder
         self.reader = reader
+        self.en_fast_keywords_extractor = Rake()
+        self.zh_fast_keywords_extractor = TextRank()
 
     def retrieve_from_internet(
         self, query: str, top_k: int = 10, parsed_goal=None, info=None, mode="fast"
@@ -224,6 +257,13 @@ class BochaAISearchRetriever:
             info_ = info.copy()
             user_id = info_.pop("user_id", "")
             session_id = info_.pop("session_id", "")
+            lang = detect_lang(summary)
+            tags = (
+                self.zh_fast_keywords_extractor.textrank(summary)[:3]
+                if lang == "zh"
+                else self.en_fast_keywords_extractor.extract_keywords_from_text(summary)[:3]
+            )
+
             return [
                 TextualMemoryItem(
                     memory=(
@@ -244,6 +284,7 @@ class BochaAISearchRetriever:
                         background="",
                         confidence=0.99,
                         usage=[],
+                        tags=tags,
                         embedding=self.embedder.embed([content])[0],
                         internet_info={
                             "title": title,
