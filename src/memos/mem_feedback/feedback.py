@@ -77,7 +77,7 @@ class MemFeedback(BaseMemFeedback):
             },
             is_reorganize=self.is_reorganize,
         )
-        self.searcher: Searcher = self.memory_manager.searcher
+        self.searcher: Searcher = None
         self.DB_IDX_READY = False
 
     def _batch_embed(self, texts: list[str], embed_bs: int = 5):

@@ -25,9 +25,9 @@ def my_test_handler(messages: list[ScheduleMessageItem]):
         task_id = str(msg.item_id)
         file_path = tmp_dir / f"{task_id}.txt"
         try:
-            print(f"writing {file_path}...")
+            sleep(1)
             file_path.write_text(f"Task {task_id} processed.\n")
-            sleep(5)
+            print(f"writing {file_path} done")
         except Exception as e:
             print(f"Failed to write {file_path}: {e}")
 
@@ -89,4 +89,5 @@ print(f"[Result] Final files in tmp: {len(list(tmp_dir.glob('*.txt')))})")
 
 # 7. Stop the scheduler
 print("Stopping the scheduler...")
+sleep(5)
 mem_scheduler.stop()

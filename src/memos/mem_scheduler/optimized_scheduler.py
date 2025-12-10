@@ -230,7 +230,7 @@ class OptimizedScheduler(GeneralScheduler):
                 memories: list[TextualMemoryItem] = self.search_memories(
                     search_req=APISearchRequest(**content_dict["search_req"]),
                     user_context=UserContext(**content_dict["user_context"]),
-                    mem_cube=self.current_mem_cube,
+                    mem_cube=self.mem_cube,
                     mode=SearchMode.FAST,
                 )
                 formatted_memories = [format_textual_memory_item(data) for data in memories]
