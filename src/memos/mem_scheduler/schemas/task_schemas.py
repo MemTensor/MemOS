@@ -60,6 +60,16 @@ DEFAULT_STREAM_KEYS_REFRESH_INTERVAL_SEC = 30.0
 # Interval in seconds for batching and cleaning up deletions (xdel)
 DEFAULT_DELETE_CLEANUP_INTERVAL_SEC = 30.0
 
+# Inactivity threshold for stream deletion
+# Delete streams whose last message ID timestamp is older than this threshold.
+# Unit: seconds. Default: 1 day.
+DEFAULT_STREAM_INACTIVITY_DELETE_SECONDS = 86_400.0
+
+# Recency threshold for active streams
+# Consider a stream "active" if its last message is within this window.
+# Unit: seconds. Default: 30 minutes.
+DEFAULT_STREAM_RECENT_ACTIVE_SECONDS = 1_800.0
+
 
 # task queue
 DEFAULT_STREAM_KEY_PREFIX = os.getenv(
