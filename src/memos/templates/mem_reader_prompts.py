@@ -420,36 +420,41 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 
 
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
-You are a precise memory consistency auditor.
+You are a strict memory validator.
 
-# GOAL
-Given user messages and an extracted memory list, identify and fix inconsistencies for each memory.
+# TASK
+Validate each memory entry against the user's current messages (ground truth).
+Memories that hallucinate unsupported facts or contradict the user must be corrected or marked for deletion.
 
 # RULES
-- Use ONLY information present in the user messages; do not invent.
-- Preserve explicit facts: names, timestamps, quantities, locations.
-- For each memory, keep the language identical to that memory's original language.
-- Output only JSON. No extra commentary.
+- Use ONLY facts explicitly stated in the user messages.
+- Do NOT invent, assume, or retain unsupported specifics.
+- Preserve the original language of each memory when rewriting.
+- Output ONLY a JSON object with no extra text.
 
 # INPUTS
-User messages:
+User messages (ground truth):
 {user_messages_inline}
 
-Current memory list (JSON):
+Memory list (to validate, in indexed JSON format):
 {memories_inline}
 
 # OUTPUT FORMAT
-Return a JSON object where keys are the 0-based indices of the input memories (string keys allowed), and each value is an object:
-{
-  "0": {"delete_flag": false, "rewritten memory content": "..."},
-  "1": {"delete_flag": true,  "rewritten memory content": ""},
-  "2": {"delete_flag": false, "rewritten memory content": "..."}
-}
+Return a JSON object where:
+- Keys are the same stringified indices as in the input memory list (e.g., "0", "1").
+- Each value is: {{"delete": boolean, "rewritten": string, "reason": string}}
+- If "delete" is true, "rewritten" must be an empty string.
+- "reason" must briefly explain the decision (delete or rewrite) based on user messages.
+- The number of output entries MUST exactly match the number of input memories.
 
-Notes:
-- If a memory is entirely hallucinated or contradicted by user messages, set `if_delete` to true and leave `rewritten memory content` empty.
-- If a memory conflicts but can be corrected, set `if_delete` to false and provide the corrected content in `"rewritten memory content"` using the memory's original language.
-- If a memory is valid, set `if_delete` to false and return the original content.
+# DECISION GUIDE
+- Contradicted? → rewrite to match user message, "delete"=false, "rewritten"=corrected memory content.
+- Hallucinated (specific fact not in user messages)? → "delete"=true, "rewritten"=dehallucinated rewritten memory.
+- Consistent or non-factual (opinion, emotion)? → keep as-is, "delete"=false.
+
+Additionally, include a concise "reason" for each item explaining your decision.
+
+Final Output:
 """
 
 

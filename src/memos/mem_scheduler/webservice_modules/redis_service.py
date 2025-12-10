@@ -46,6 +46,8 @@ class RedisSchedulerModule(BaseSchedulerModule):
 
     @property
     def redis(self) -> Any:
+        if self._redis_conn is None:
+            self.auto_initialize_redis()
         return self._redis_conn
 
     @redis.setter
