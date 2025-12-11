@@ -124,16 +124,6 @@ class BochaAISearchRetriever:
     """BochaAI retriever that converts search results into TextualMemoryItem objects"""
 
     @require_python_package(
-        import_name="rake_nltk",
-        install_command="pip install rake_nltk",
-        install_link="https://pypi.org/project/rake-nltk/",
-    )
-    @require_python_package(
-        import_name="nltk",
-        install_command="pip install nltk",
-        install_link="https://www.nltk.org/install.html",
-    )
-    @require_python_package(
         import_name="jieba",
         install_command="pip install jieba",
         install_link="https://github.com/fxsjy/jieba",

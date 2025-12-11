@@ -32,6 +32,7 @@ from memos.mem_os.utils.reference_utils import (
     prepare_reference_data,
     process_streaming_references_complete,
 )
+from memos.mem_reader.read_multi_modal.utils import detect_lang
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ANSWER_TASK_LABEL,
@@ -532,9 +533,12 @@ class ChatHandler(BaseHandler):
                     )
 
                     # Step 2: Build system prompt with memories
+                    lang = detect_lang(chat_req.query)
                     system_prompt = self._build_enhance_system_prompt(
-                        filtered_memories, pref_string
+                        filtered_memories, pref_string, lang=lang
                     )
+
+                    print(f"system_prompt: \n{system_prompt}")
 
                     # Prepare messages
                     history_info = chat_req.history[-20:] if chat_req.history else []
@@ -550,50 +554,62 @@ class ChatHandler(BaseHandler):
                     )
 
                     # Step 3: Generate streaming response from LLM
-                    model = next(iter(self.chat_llms.keys()))
-                    response_stream = self.chat_llms[model].generate_stream(
-                        current_messages, model_name_or_path=model
-                    )
-
-                    # Stream the response
-                    buffer = ""
-                    full_response = ""
-                    in_think = False
-
-                    for chunk in response_stream:
-                        if chunk == "<think>":
-                            in_think = True
-                            yield f"data: {json.dumps({'type': 'status', 'data': 'reasoning'})}\n\n"
-                            continue
-                        if chunk == "</think>":
-                            in_think = False
-                            yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
-                            continue
-
-                        if in_think:
-                            chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
-                            yield chunk_data
-                            continue
-
-                        buffer += chunk
-                        full_response += chunk
-
-                        # Process buffer to ensure complete reference tags
-                        processed_chunk, remaining_buffer = process_streaming_references_complete(
-                            buffer
+                    try:
+                        model = next(iter(self.chat_llms.keys()))
+                        response_stream = self.chat_llms[model].generate_stream(
+                            current_messages, model_name_or_path=model
                         )
 
-                        if processed_chunk:
-                            chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
-                            yield chunk_data
-                            buffer = remaining_buffer
+                        # Stream the response
+                        buffer = ""
+                        full_response = ""
+                        in_think = False
 
-                    # Process any remaining buffer
-                    if buffer:
-                        processed_chunk, _ = process_streaming_references_complete(buffer)
-                        if processed_chunk:
-                            chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
-                            yield chunk_data
+                        for chunk in response_stream:
+                            if chunk == "<think>":
+                                in_think = True
+                                yield f"data: {json.dumps({'type': 'status', 'data': 'reasoning'})}\n\n"
+                                continue
+                            if chunk == "</think>":
+                                in_think = False
+                                yield f"data: {json.dumps({'type': 'status', 'data': '2'})}\n\n"
+                                continue
+
+                            if in_think:
+                                chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
+                                yield chunk_data
+                                continue
+
+                            buffer += chunk
+                            full_response += chunk
+
+                            # Process buffer to ensure complete reference tags
+                            processed_chunk, remaining_buffer = (
+                                process_streaming_references_complete(buffer)
+                            )
+
+                            if processed_chunk:
+                                chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
+                                yield chunk_data
+                                buffer = remaining_buffer
+
+                        # Process any remaining buffer
+                        if buffer:
+                            processed_chunk, _ = process_streaming_references_complete(buffer)
+                            if processed_chunk:
+                                chunk_data = f"data: {json.dumps({'type': 'text', 'data': processed_chunk}, ensure_ascii=False)}\n\n"
+                                yield chunk_data
+
+                    except Exception as llm_error:
+                        # Log the error
+                        self.logger.error(
+                            f"Error during LLM generation: {llm_error}", exc_info=True
+                        )
+                        # Send error message to client
+                        error_msg = f"模型生成错误: {llm_error!s}"
+                        yield f"data: {json.dumps({'type': 'error', 'data': error_msg}, ensure_ascii=False)}\n\n"
+                        # Re-raise to let outer exception handler process it
+                        raise
 
                     if chat_req.internet_search or parsed_goal.internet_search:
                         # Yield internet reference after text response
@@ -766,6 +782,7 @@ class ChatHandler(BaseHandler):
         self,
         memories_list: list,
         pref_string: str = "",
+        lang: str = "en",
         tone: str = "friendly",
         verbosity: str = "mid",
     ) -> str:
@@ -782,9 +799,9 @@ class ChatHandler(BaseHandler):
             System prompt string
         """
         now = datetime.now()
-        formatted_date = now.strftime("%Y-%m-%d (%A)")
+        formatted_date = now.strftime("%Y-%m-%d %H:%M (%A)")
         sys_body = get_memos_prompt(
-            date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance"
+            date=formatted_date, tone=tone, verbosity=verbosity, mode="enhance", lang=lang
         )
 
         # Format memories
