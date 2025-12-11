@@ -458,10 +458,6 @@ class APISearchRequest(BaseRequest):
         return self
 
 
-class APISearchPlaygroundRequest(APISearchRequest):
-    """Request model for searching memories in playground."""
-
-
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 

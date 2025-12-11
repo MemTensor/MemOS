@@ -21,7 +21,6 @@ from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
 from memos.api.product_models import (
     APIADDRequest,
     APIChatCompleteRequest,
-    APISearchPlaygroundRequest,
     APISearchRequest,
     ChatPlaygroundRequest,
     ChatRequest,
@@ -397,7 +396,7 @@ class ChatHandler(BaseHandler):
                     )
 
                     # ====== first search text mem with parse goal ======
-                    search_req = APISearchPlaygroundRequest(
+                    search_req = APISearchRequest(
                         query=chat_req.query,
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
@@ -476,14 +475,14 @@ class ChatHandler(BaseHandler):
                         yield f"data: {json.dumps({'type': 'status', 'data': 'start_internet_search'})}\n\n"
 
                     # ======  second deep search  ======
-                    search_req = APISearchPlaygroundRequest(
+                    search_req = APISearchRequest(
                         query=parsed_goal.rephrased_query
                         or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
                         internet_search=chat_req.internet_search or parsed_goal.internet_search,
-                        top_k=chat_req.top_k,
+                        top_k=100,  # for playground, we need to search more memories
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=False,
@@ -504,12 +503,14 @@ class ChatHandler(BaseHandler):
                         if text_mem_results and text_mem_results[0].get("memories"):
                             memories_list = text_mem_results[0]["memories"]
 
-                    # Filter memories by threshold
-                    second_filtered_memories = self._filter_memories_by_threshold(memories_list, 15)
+                    # Filter memories by threshold, min_num is the min number of memories for playground
+                    second_filtered_memories = self._filter_memories_by_threshold(
+                        memories_list, min_num=15
+                    )
 
                     # dedup and supplement memories
                     fast_length = len(filtered_memories)
-                    supplement_length = max(0, chat_req.top_k - fast_length)
+                    supplement_length = max(0, 25 - fast_length)  # 25 is the max mem for playground
                     filtered_memories = self._dedup_and_supplement_memories(
                         filtered_memories, second_filtered_memories
                     )[:supplement_length]
