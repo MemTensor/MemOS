@@ -531,14 +531,14 @@ class Searcher:
             return []
         logger.info(f"[PATH-C] '{query}' Retrieving from internet...")
         items = self.internet_retriever.retrieve_from_internet(
-            query=query, top_k=top_k, parsed_goal=parsed_goal, info=info, mode=mode
+            query=query, top_k=2 * top_k, parsed_goal=parsed_goal, info=info, mode=mode
         )
         logger.info(f"[PATH-C] '{query}' Retrieved from internet {len(items)} items: {items}")
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embedding[0],
             graph_results=items,
-            top_k=min(top_k, 5),
+            top_k=top_k,
             parsed_goal=parsed_goal,
         )
 
