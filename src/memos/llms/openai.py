@@ -31,6 +31,9 @@ class OpenAILLM(BaseLLM):
     @timed_with_status(log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM, optionally overriding generation params."""
+        logger.info(
+            f"LLM Model: {self.config.model_name_or_path} {kwargs.get('model_name_or_path')}"
+        )
         response = self.client.chat.completions.create(
             model=kwargs.get("model_name_or_path", self.config.model_name_or_path),
             messages=messages,
