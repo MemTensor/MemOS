@@ -840,6 +840,15 @@ class ChatHandler(BaseHandler):
             memory_content = m.get("memory", "")
             metadata = m.get("metadata", {})
             memory_type = metadata.get("memory_type", "")
+            created_time = metadata.get("updated_at", "") or metadata.get("created_at", "")
+
+            # format time to YYYY-MM-DD HH:MM (ISO 8601 -> YYYY-MM-DD HH:MM)
+            if created_time and isinstance(created_time, str):
+                try:
+                    dt = datetime.fromisoformat(created_time)
+                    created_time = dt.strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    pass  # keep original value
 
             tag = "O" if "Outer" in str(memory_type) else "P"
             txt = memory_content.replace("\n", " ").strip()
@@ -850,6 +859,7 @@ class ChatHandler(BaseHandler):
             if tag == "O":
                 lines_o.append(f"[{idx}:{mid}] :: [{tag}] {txt}\n")
             elif tag == "P":
+                txt = f"(CreatedTime: {created_time}) {txt}"
                 lines_p.append(f"[{idx}:{mid}] :: [{tag}] {txt}")
 
         return "\n".join(lines_o), "\n".join(lines_p)

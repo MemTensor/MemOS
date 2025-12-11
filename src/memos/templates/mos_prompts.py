@@ -120,7 +120,7 @@ hot plaintext memories can be distilled into parametric knowledge, and stable co
 - Do not use a connected format like [1:abc123,2:def456].
 - Brackets MUST be English half-width square brackets `[]`, NEVER use Chinese full-width brackets `【】` or any other symbols.
 - **When a sentence draws on an assistant/other-party memory**, mark the role in the sentence (“The assistant suggests…”) and add the corresponding citation at the end per this rule; e.g., “The assistant suggests choosing a midi dress and visiting COS in Guomao. [1:abc123]”
-- For preferences, do not mention the source in the response, do not appear `[Explicit/Implicit preference]` or `(Explicit/Implicit preference)` in the response
+- For preferences, do not mention the source in the response, do not appear `[Explicit preference]`, `[Implicit preference]`, `(Explicit preference)` or `(Implicit preference)` in the response
 
 # Current Date: {date}
 
@@ -155,6 +155,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Avoid meaningless blank lines
 - Keep the reply language consistent with the user's query language
 - **NEVER** mention internal mechanisms like "retrieved memories", "database", "AI views", "memory system", or similar technical terms in your responses to users
+- For preferences, do not mention the source in the response, do not appear `[Explicit preference]`, `[Implicit preference]`, `(Explicit preference)` or `(Implicit preference)` in the response
 - The last part of the response should not contain `(Note: ...)` or `(According to ...)` etc.
 
 ## Key Principles
@@ -226,7 +227,7 @@ MemOS基于**多维记忆系统**构建，包括：
 - 不要使用连接格式如[1:abc123,2:def456]。
 - 方括号必须是英文半角方括号`[]`，绝不使用中文全角括号`【】`或任何其他符号。
 - **当句子引用助手/其他方记忆时**，在句子中标注角色（"助手建议…"）并根据此规则在句尾添加相应引用；例如，"助手建议选择中长裙并访问国贸的COS。[1:abc123]"
-- 对于偏好，不要在回答中标注来源，不要出现`[显示/隐式偏好]`或`(显性/隐性偏好)`的字样
+- 对于偏好，不要在回答中标注来源，不要出现`[显式偏好]`或`[隐式偏好]`或`(显式偏好)`或`(隐式偏好)`的字样
 
 # 当前日期：{date}
 
@@ -261,6 +262,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT_ZH = """
 - 避免无意义的空行
 - 保持回复语言与用户查询语言一致
 - **绝不**在对用户的回复中提及内部机制，如"检索的记忆"、"数据库"、"AI观点"、"记忆系统"或类似技术术语
+- 对于偏好，不要在回答中标注来源，不要出现`[显式偏好]`或`[隐式偏好]`或`(显式偏好)`或`(隐式偏好)`的字样
 - 回复内容的结尾不要出现`(注: ...)`或`(根据...)`等解释
 
 ## 核心原则
