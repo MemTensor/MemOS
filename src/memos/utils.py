@@ -87,15 +87,8 @@ def timed_with_status(
                     f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
                     f"took {elapsed_ms:.0f} ms{status_info}, args: {ctx_str}"
                 )
-                threshold_ms = DEFAULT_TIME_BAR * 1000.0
-                if log_extra_args and "time_threshold" in log_extra_args:
-                    try:
-                        threshold_ms = float(log_extra_args["time_threshold"]) * 1000.0
-                    except Exception:
-                        threshold_ms = DEFAULT_TIME_BAR * 1000.0
 
-                if elapsed_ms >= threshold_ms:
-                    logger.info(msg)
+                logger.info(msg)
 
         return wrapper
 
