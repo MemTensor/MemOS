@@ -28,12 +28,14 @@ class OpenAILLM(BaseLLM):
         )
         logger.info("OpenAI LLM instance initialized")
 
-    @timed_with_status(log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
+    @timed_with_status(
+        log_prefix="OpenAI LLM",
+        log_extra_args=lambda self, messages, **kwargs: {
+            "model_name_or_path": kwargs.get("model_name_or_path", self.config.model_name_or_path)
+        },
+    )
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM, optionally overriding generation params."""
-        logger.info(
-            f"LLM Model: {self.config.model_name_or_path} {kwargs.get('model_name_or_path')}"
-        )
         response = self.client.chat.completions.create(
             model=kwargs.get("model_name_or_path", self.config.model_name_or_path),
             messages=messages,
@@ -58,7 +60,12 @@ class OpenAILLM(BaseLLM):
             return reasoning_content + response_content
         return response_content
 
-    @timed_with_status(log_prefix="OpenAI LLM", log_args=["model_name_or_path"])
+    @timed_with_status(
+        log_prefix="OpenAI LLM",
+        log_extra_args=lambda self, messages, **kwargs: {
+            "model_name_or_path": self.config.model_name_or_path
+        },
+    )
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from OpenAI LLM with optional reasoning support."""
         if kwargs.get("tools"):
