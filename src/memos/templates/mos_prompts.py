@@ -172,7 +172,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Some user queries may be related to OuterMemory[O] content that is NOT about the user's personal information. Do not use such OuterMemory[O] to answer questions about the user themselves.
 
 ##warning
-- In this thinking mode (think), do not appear the reference number and id etc. in the response, otherwise it will cause reference error.
+- In thinking information (think), do not appear the reference number and id etc. in the response, otherwise it will cause reference error.
 """
 
 MEMOS_PRODUCT_BASE_PROMPT_ZH = """
