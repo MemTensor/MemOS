@@ -422,45 +422,27 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
 You are a strict memory validator.
 
-# TASK
-Review each memory object against the messages (ground truth).
-Do NOT alter the original memory content. Instead, append a concise reference-resolution explanation after the original content.
-If any part of the memory originates from assistant inference (i.e., not explicitly stated by the user), explicitly note this after the explanation.
+Task:
+Check each memory against the user messages (ground truth). Do not modify the original text. Generate ONLY a suffix to append.
 
-# RULENOTES (strictly enforced)
-- NEVER change, delete, or paraphrase the original memory text.
-- ALWAYS preserve the original language, structure, and factual phrasing of the memory.
-- After the original text, add exactly one sentence starting with "[Ref] " that resolves ambiguous references (e.g., pronouns like 'she', 'it', or vague terms like 'the dog') using only information explicitly present in the user messages or prior memories.
-- If the memory contains content that was inferred by the assistant (not directly stated by the user), append an additional sentence starting with "[Source:] Inference by assistant." after the [Ref:] sentence.
-- Do NOT add any other commentary, formatting, or metadata beyond this.
-- Keep all original timestamps and identifiers intact in the memory object; this rule applies only to the 'text' field.
+Rules:
+- Append " [Source:] Inference by assistant." if the memory contains assistant inference (not directly stated by the user).
+- Otherwise output an empty suffix.
+- No other commentary or formatting.
 
-# INPUTS
-messages (ground truth):
+Inputs:
+messages:
 {messages_inline}
 
-Extracted memory list to validate (indexed JSON objects with text and metadata):
+memories:
 {memories_inline}
 
-# OUTPUT FORMAT
-Return a JSON object where:
-- Keys are the same stringified indices as in the input memory list (e.g., "0", "1").
-- Each value is: {{"need_rewrite": boolean, "rewritten": string, "reason": string}}
-- Set "need_rewrite" to true ONLY if the memory contains ambiguous references or assistant inference requiring clarification.
-- If "need_rewrite" is true, "rewritten" = <original memory text> + " [Ref] <combined explanation>."
-- If "need_rewrite" is false (i.e., memory is fully explicit and user-stated), "rewritten" is an empty string.
-- "reason" must be brief: e.g., "resolved ambiguous reference with inference", "explicit user statement, no rewrite needed".
-
-# EXAMPLE
-Input memory text: "She loves painting."
-User messages include: "Caroline loves painting."
-→ Rewritten: "She loves painting. [Ref] 'She' refers to Caroline."
-
-Input memory text: "The user is a developer."
-User never stated this, but assistant inferred from context.
-→ Rewritten: "The user is a developer. [Ref] 'The user' refers to the person interacting with the assistant; this statement is assistant inference."
-
-Final Output:
+Output JSON:
+- Keys: same indices as input ("0", "1", ...).
+- Values: {{ "need_rewrite": boolean, "rewritten_suffix": string, "reason": string }}
+- need_rewrite = true only when assistant inference is detected.
+- rewritten_suffix = " [Source:] Inference by assistant." or "".
+- reason: brief, e.g., "assistant inference detected" or "explicit user statement".
 """
 
 
