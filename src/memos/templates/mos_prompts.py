@@ -120,6 +120,7 @@ hot plaintext memories can be distilled into parametric knowledge, and stable co
 - Do not use a connected format like [1:abc123,2:def456].
 - Brackets MUST be English half-width square brackets `[]`, NEVER use Chinese full-width brackets `【】` or any other symbols.
 - **When a sentence draws on an assistant/other-party memory**, mark the role in the sentence (“The assistant suggests…”) and add the corresponding citation at the end per this rule; e.g., “The assistant suggests choosing a midi dress and visiting COS in Guomao. [1:abc123]”
+- For preferences, do not mention the source in the response, do not appear `[Explicit/Implicit preference]` or `(Explicit/Implicit preference)` in the response
 
 # Current Date: {date}
 
@@ -144,7 +145,6 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Only reference memories that are directly relevant to the user's question
 - Prioritize the most appropriate memory type based on the context and nature of the query
 - Responses must not contain non-existent citations
-- Explicit and implicit preferences can be referenced if relevant to the user's question, but must not be cited or source-attributed in responses
 - **Attribution-first selection:** Distinguish memory from user vs from assistant vs third party before composing. For statements affecting the user's stance/preferences/decisions/ownership, rely only on memory from user. Use **assistant memories** as reference advice or external viewpoints—never as the user's own stance unless confirmed. Never attribute third-party information to the user.
 
 ### Response Style
@@ -155,6 +155,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - Avoid meaningless blank lines
 - Keep the reply language consistent with the user's query language
 - **NEVER** mention internal mechanisms like "retrieved memories", "database", "AI views", "memory system", or similar technical terms in your responses to users
+- The last part of the response should not contain `(Note: ...)` or `(According to ...)` etc.
 
 ## Key Principles
 - Reference only relevant memories to avoid information overload
@@ -225,6 +226,7 @@ MemOS基于**多维记忆系统**构建，包括：
 - 不要使用连接格式如[1:abc123,2:def456]。
 - 方括号必须是英文半角方括号`[]`，绝不使用中文全角括号`【】`或任何其他符号。
 - **当句子引用助手/其他方记忆时**，在句子中标注角色（"助手建议…"）并根据此规则在句尾添加相应引用；例如，"助手建议选择中长裙并访问国贸的COS。[1:abc123]"
+- 对于偏好，不要在回答中标注来源，不要出现`[显示/隐式偏好]`或`(显性/隐性偏好)`的字样
 
 # 当前日期：{date}
 
@@ -249,7 +251,6 @@ MEMOS_PRODUCT_ENHANCE_PROMPT_ZH = """
 - 仅引用与用户问题直接相关的记忆
 - 根据上下文和查询性质优先选择最合适的记忆类型
 - 回复中不得包含不存在的引用
-- 如与用户问题相关，可以引用显式和隐式偏好，但不得在回复中引用或标注来源
 - **归属优先选择：** 在组织回复前，区分记忆来自用户、助手还是第三方。对于影响用户立场/偏好/决定/所有权的陈述，仅依赖来自用户的记忆。将**助手记忆**作为参考建议或外部观点使用——除非经确认，否则绝不作为用户自己的立场。绝不将第三方信息归因于用户。
 
 ### 回复风格
@@ -260,6 +261,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT_ZH = """
 - 避免无意义的空行
 - 保持回复语言与用户查询语言一致
 - **绝不**在对用户的回复中提及内部机制，如"检索的记忆"、"数据库"、"AI观点"、"记忆系统"或类似技术术语
+- 回复内容的最后不要出现`(注: ...)`或`(根据...)`等解释
 
 ## 核心原则
 - 仅引用相关记忆以避免信息过载

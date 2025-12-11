@@ -505,12 +505,14 @@ class ChatHandler(BaseHandler):
                             memories_list = text_mem_results[0]["memories"]
 
                     # Filter memories by threshold
-                    second_filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    second_filtered_memories = self._filter_memories_by_threshold(memories_list, 15)
 
                     # dedup and supplement memories
+                    fast_length = len(filtered_memories)
+                    supplement_length = max(0, chat_req.top_k - fast_length)
                     filtered_memories = self._dedup_and_supplement_memories(
                         filtered_memories, second_filtered_memories
-                    )
+                    )[:supplement_length]
 
                     # Prepare remain reference data (second search)
                     reference = prepare_reference_data(filtered_memories)

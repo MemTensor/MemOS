@@ -371,6 +371,7 @@ class BochaAISearchRetriever:
                         confidence=0.99,
                         usage=[],
                         tags=tags,
+                        key=title,
                         embedding=self.embedder.embed([content])[0],
                         internet_info={
                             "title": title,
