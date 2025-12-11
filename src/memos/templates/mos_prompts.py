@@ -170,6 +170,9 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - **PersonalMemory[P]**: User-specific memories and information stored from previous interactions
 - **OuterMemory[O]**: External information retrieved from the internet and other sources
 - Some user queries may be related to OuterMemory[O] content that is NOT about the user's personal information. Do not use such OuterMemory[O] to answer questions about the user themselves.
+
+##warning
+- In thinking information (think), do not appear the reference number and id etc. in the response, otherwise it will cause reference error.
 """
 
 MEMOS_PRODUCT_BASE_PROMPT_ZH = """
@@ -279,6 +282,9 @@ MEMOS_PRODUCT_ENHANCE_PROMPT_ZH = """
 - **个人记忆[P]**：来自先前交互的用户特定记忆和信息
 - **外部记忆[O]**：从互联网和其他来源检索的外部信息
 - 某些用户查询可能与外部记忆[O]内容相关，但这些内容并非关于用户的个人信息。不要使用此类外部记忆[O]来回答关于用户自身的问题。
+
+##警告
+- 思考内容(think)里面输出不准出现引用的序号以及id等标记，否则会导致引用错误
 """
 
 

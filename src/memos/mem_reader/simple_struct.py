@@ -453,7 +453,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     @staticmethod
     def _parse_hallucination_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
         """Parse index-keyed JSON from hallucination filter response.
-        Expected shape: { "0": {"need_rewrite": bool, "rewritten": str, "reason": str}, ... }
+        Expected shape: { "0": {"need_rewrite": bool, "rewritten_suffix": str, "reason": str}, ... }
         Returns (success, parsed_dict) with int keys.
         """
         try:
@@ -477,16 +477,16 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             if not isinstance(v, dict):
                 continue
             need_rewrite = v.get("need_rewrite")
-            rewritten = v.get("rewritten", "")
+            rewritten_suffix = v.get("rewritten_suffix", "")
             reason = v.get("reason", "")
             if (
                 isinstance(need_rewrite, bool)
-                and isinstance(rewritten, str)
+                and isinstance(rewritten_suffix, str)
                 and isinstance(reason, str)
             ):
                 result[idx] = {
                     "need_rewrite": need_rewrite,
-                    "rewritten": rewritten,
+                    "rewritten_suffix": rewritten_suffix,
                     "reason": reason,
                 }
 
@@ -522,20 +522,26 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 assert len(parsed) == len(memory_list)
                 for mem_idx, content in parsed.items():
                     need_rewrite = content.get("need_rewrite", False)
-                    rewritten = content.get("rewritten", "")
+                    rewritten_suffix = content.get("rewritten_suffix", "")
                     reason = content.get("reason", "")
 
-                    # Apply rewriting if requested
+                    # Append a new memory item instead of replacing the original
                     if (
                         need_rewrite
-                        and isinstance(rewritten, str)
-                        and len(rewritten) > len(memory_list[mem_idx].memory)
+                        and isinstance(rewritten_suffix, str)
+                        and len(rewritten_suffix.strip()) > 0
                     ):
-                        memory_list[mem_idx].memory = rewritten
+                        original_text = memory_list[mem_idx].memory
+
                         logger.info(
-                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten='{rewritten}', reason='{reason}', original memory='{memory_list[mem_idx].memory}'"
+                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten_suffix='{rewritten_suffix}', reason='{reason}', original memory='{original_text}', action='append_suffix'"
                         )
-                    new_mem_list.append(memory_list[mem_idx])
+
+                        # Append only the suffix to the original memory text
+                        memory_list[mem_idx].memory = original_text + rewritten_suffix
+                        new_mem_list.append(memory_list[mem_idx])
+                    else:
+                        new_mem_list.append(memory_list[mem_idx])
                 return new_mem_list
             else:
                 logger.warning("Hallucination filter parsing failed or returned empty result.")

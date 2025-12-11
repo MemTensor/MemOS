@@ -27,7 +27,6 @@ from memos.mem_scheduler.schemas.task_schemas import (
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
-from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -251,14 +250,6 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         except Exception as e:
             logger.debug(f"Stopping stream keys refresh thread encountered: {e}")
 
-    @timed_with_status(
-        log_prefix="task_broker",
-        log_extra_args={
-            "stream_prefix": os.getenv(
-                "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX", DEFAULT_STREAM_KEY_PREFIX
-            )
-        },
-    )
     def task_broker(
         self,
         consume_batch_size: int,
