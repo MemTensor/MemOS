@@ -6,6 +6,9 @@ from memos.log import get_logger
 
 logger = get_logger(__name__)
 
+# Global threshold (seconds) for timing logs
+DEFAULT_TIME_BAR = 10.0
+
 
 def timed_with_status(
     func=None,
@@ -84,8 +87,15 @@ def timed_with_status(
                     f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
                     f"took {elapsed_ms:.0f} ms{status_info}, args: {ctx_str}"
                 )
+                threshold_ms = DEFAULT_TIME_BAR * 1000.0
+                if log_extra_args and "time_threshold" in log_extra_args:
+                    try:
+                        threshold_ms = float(log_extra_args["time_threshold"]) * 1000.0
+                    except Exception:
+                        threshold_ms = DEFAULT_TIME_BAR * 1000.0
 
-                logger.info(msg)
+                if elapsed_ms >= threshold_ms:
+                    logger.info(msg)
 
         return wrapper
 
@@ -104,7 +114,8 @@ def timed(func=None, *, log=False, log_prefix=""):
             if log is not True:
                 return result
 
-            logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
+            if elapsed_ms >= (DEFAULT_TIME_BAR * 1000.0):
+                logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
 
             return result
 

@@ -423,36 +423,42 @@ SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
 You are a strict memory validator.
 
 # TASK
-Validate each memory entry against the user's current messages (ground truth).
-Memories that hallucinate unsupported facts or contradict the user must be corrected or marked for deletion.
+Review each memory object against the messages (ground truth).
+Do NOT alter the original memory content. Instead, append a concise reference-resolution explanation after the original content.
+If any part of the memory originates from assistant inference (i.e., not explicitly stated by the user), explicitly note this after the explanation.
 
-# RULES
-- Use ONLY facts explicitly stated in the user messages.
-- Do NOT invent, assume, or retain unsupported specifics.
-- Preserve the original language of each memory when rewriting.
-- Output ONLY a JSON object with no extra text.
+# RULENOTES (strictly enforced)
+- NEVER change, delete, or paraphrase the original memory text.
+- ALWAYS preserve the original language, structure, and factual phrasing of the memory.
+- After the original text, add exactly one sentence starting with "[Ref] " that resolves ambiguous references (e.g., pronouns like 'she', 'it', or vague terms like 'the dog') using only information explicitly present in the user messages or prior memories.
+- If the memory contains content that was inferred by the assistant (not directly stated by the user), append an additional sentence starting with "[Source:] Inference by assistant." after the [Ref:] sentence.
+- Do NOT add any other commentary, formatting, or metadata beyond this.
+- Keep all original timestamps and identifiers intact in the memory object; this rule applies only to the 'text' field.
 
 # INPUTS
-User messages (ground truth):
-{user_messages_inline}
+messages (ground truth):
+{messages_inline}
 
-Memory list (to validate, in indexed JSON format):
+Extracted memory list to validate (indexed JSON objects with text and metadata):
 {memories_inline}
 
 # OUTPUT FORMAT
 Return a JSON object where:
 - Keys are the same stringified indices as in the input memory list (e.g., "0", "1").
-- Each value is: {{"delete": boolean, "rewritten": string, "reason": string}}
-- If "delete" is true, "rewritten" must be an empty string.
-- "reason" must briefly explain the decision (delete or rewrite) based on user messages.
-- The number of output entries MUST exactly match the number of input memories.
+- Each value is: {{"need_rewrite": boolean, "rewritten": string, "reason": string}}
+- Set "need_rewrite" to true ONLY if the memory contains ambiguous references or assistant inference requiring clarification.
+- If "need_rewrite" is true, "rewritten" = <original memory text> + " [Ref] <combined explanation>."
+- If "need_rewrite" is false (i.e., memory is fully explicit and user-stated), "rewritten" is an empty string.
+- "reason" must be brief: e.g., "resolved ambiguous reference with inference", "explicit user statement, no rewrite needed".
 
-# DECISION GUIDE
-- Contradicted? → rewrite to match user message, "delete"=false, "rewritten"=corrected memory content.
-- Hallucinated (specific fact not in user messages)? → "delete"=true, "rewritten"=dehallucinated rewritten memory.
-- Consistent or non-factual (opinion, emotion)? → keep as-is, "delete"=false.
+# EXAMPLE
+Input memory text: "She loves painting."
+User messages include: "Caroline loves painting."
+→ Rewritten: "She loves painting. [Ref] 'She' refers to Caroline."
 
-Additionally, include a concise "reason" for each item explaining your decision.
+Input memory text: "The user is a developer."
+User never stated this, but assistant inferred from context.
+→ Rewritten: "The user is a developer. [Ref] 'The user' refers to the person interacting with the assistant; this statement is assistant inference."
 
 Final Output:
 """

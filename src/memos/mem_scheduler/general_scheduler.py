@@ -144,7 +144,7 @@ class GeneralScheduler(BaseScheduler):
         old_memory_texts = [mem.memory for mem in cur_working_memory]
         new_memory_texts = [mem.memory for mem in new_order_working_memory]
 
-        logger.debug(
+        logger.info(
             f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
             f"Scheduler replaced working memory based on query history {queries}. "
             f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
@@ -604,6 +604,7 @@ class GeneralScheduler(BaseScheduler):
                 feedback_content=feedback_data.get("feedback_content"),
                 feedback_time=feedback_data.get("feedback_time"),
                 task_id=task_id,
+                info=feedback_data.get("info", None),
             )
 
             logger.info(
@@ -1412,17 +1413,16 @@ class GeneralScheduler(BaseScheduler):
             logger.info(
                 f"[process_session_turn] Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
             )
-            info = {
-                "user_id": user_id,
-                "session_id": "",
-            }
 
+            search_args = {}
             results: list[TextualMemoryItem] = self.retriever.search(
                 query=item,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
                 top_k=k_per_evidence,
                 method=self.search_method,
-                info=info,
+                search_args=search_args,
             )
             logger.info(
                 f"[process_session_turn] Search results for missing evidence '{item}': {[one.memory for one in results]}"

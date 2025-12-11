@@ -5,6 +5,7 @@ This module provides a Redis-based queue implementation that can replace
 the local memos_message_queue functionality in BaseScheduler.
 """
 
+import contextlib
 import os
 import re
 import threading
@@ -26,6 +27,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
+from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -249,6 +251,14 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         except Exception as e:
             logger.debug(f"Stopping stream keys refresh thread encountered: {e}")
 
+    @timed_with_status(
+        log_prefix="task_broker",
+        log_extra_args={
+            "stream_prefix": os.getenv(
+                "MEMSCHEDULER_REDIS_STREAM_KEY_PREFIX", DEFAULT_STREAM_KEY_PREFIX
+            )
+        },
+    )
     def task_broker(
         self,
         consume_batch_size: int,
@@ -257,17 +267,44 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         if not stream_keys:
             return []
 
+        # Determine per-stream quotas for this cycle
         stream_quotas = self.orchestrator.get_stream_quotas(
             stream_keys=stream_keys, consume_batch_size=consume_batch_size
         )
-        cache: list[ScheduleMessageItem] = []
+
+        # Step A: batch-read new messages across streams (non-blocking)
+        new_messages_map: dict[str, list[tuple[str, list[tuple[str, dict]]]]] = (
+            self._read_new_messages_batch(stream_keys=stream_keys, stream_quotas=stream_quotas)
+        )
+
+        # Step B: compute pending needs per stream
+        claims_spec: list[tuple[str, int, str]] = []
         for stream_key in stream_keys:
-            messages = self.get(
-                stream_key=stream_key,
-                block=False,
+            need_pending_count = self._compute_pending_need(
+                new_messages=new_messages_map.get(stream_key),
                 batch_size=stream_quotas[stream_key],
             )
-            cache.extend(messages)
+            if need_pending_count:
+                # Derive task label from stream key suffix
+                task_label = stream_key.rsplit(":", 1)[1]
+                claims_spec.append((stream_key, need_pending_count, task_label))
+
+        # Step C: batch claim pending messages across streams
+        claimed_messages: list[tuple[str, list[tuple[str, dict]]]] = []
+        if claims_spec:
+            claimed_messages = self._batch_claim_pending_messages(claims_spec=claims_spec)
+
+        # Step D: assemble and convert to ScheduleMessageItem
+        messages: list[tuple[str, list[tuple[str, dict]]]] = []
+        for stream_key in stream_keys:
+            nm = new_messages_map.get(stream_key)
+            if nm:
+                messages.extend(nm)
+
+        if claimed_messages:
+            messages.extend(claimed_messages)
+
+        cache: list[ScheduleMessageItem] = self._convert_messages(messages)
 
         # pack messages
         packed: list[list[ScheduleMessageItem]] = []
@@ -360,12 +397,12 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 user_id=message.user_id, mem_cube_id=message.mem_cube_id, task_label=message.label
             )
 
-            if stream_key not in self.seen_streams:
-                self.seen_streams.add(stream_key)
-                self._ensure_consumer_group(stream_key=stream_key)
-
             # Update stream keys cache with newly observed stream key
             with self._stream_keys_lock:
+                if stream_key not in self.seen_streams:
+                    self.seen_streams.add(stream_key)
+                    self._ensure_consumer_group(stream_key=stream_key)
+
                 if stream_key not in self._stream_keys_cache:
                     self._stream_keys_cache.append(stream_key)
                     self._stream_keys_last_refresh = time.time()
@@ -511,6 +548,77 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             logger.error(f"{read_err}", stack_info=True)
             raise
 
+    def _read_new_messages_batch(
+        self, stream_keys: list[str], stream_quotas: dict[str, int]
+    ) -> dict[str, list[tuple[str, list[tuple[str, dict]]]]]:
+        """Batch-read new messages (non-blocking) across multiple streams.
+
+        Uses a Redis pipeline to reduce round trips while honoring per-stream quotas.
+
+        Args:
+            stream_keys: List of stream keys to read from.
+            stream_quotas: Per-stream message upper bounds.
+
+        Returns:
+            Mapping from stream key to xreadgroup-style result list.
+        """
+        if not self._redis_conn or not stream_keys:
+            return {}
+
+        # Pre-ensure consumer groups to avoid NOGROUP during batch reads
+        for stream_key in stream_keys:
+            with contextlib.suppress(Exception):
+                self._ensure_consumer_group(stream_key=stream_key)
+
+        pipe = self._redis_conn.pipeline(transaction=False)
+        for stream_key in stream_keys:
+            pipe.xreadgroup(
+                self.consumer_group,
+                self.consumer_name,
+                {stream_key: ">"},
+                count=stream_quotas.get(stream_key),
+                block=None,
+            )
+
+        try:
+            res_list = pipe.execute()
+        except Exception as e:
+            logger.error(f"Pipeline xreadgroup failed: {e}")
+            # Fallback to sequential non-blocking reads
+            res_list = []
+            for stream_key in stream_keys:
+                try:
+                    res = self._redis_conn.xreadgroup(
+                        self.consumer_group,
+                        self.consumer_name,
+                        {stream_key: ">"},
+                        count=stream_quotas.get(stream_key),
+                        block=None,
+                    )
+                except Exception as read_err:
+                    err_msg = str(read_err).lower()
+                    if "nogroup" in err_msg or "no such key" in err_msg:
+                        self._ensure_consumer_group(stream_key=stream_key)
+                        try:
+                            res = self._redis_conn.xreadgroup(
+                                self.consumer_group,
+                                self.consumer_name,
+                                {stream_key: ">"},
+                                count=stream_quotas.get(stream_key),
+                                block=None,
+                            )
+                        except Exception:
+                            res = []
+                    else:
+                        logger.error(f"{read_err}", stack_info=True)
+                        res = []
+                res_list.append(res)
+
+        out: dict[str, list[tuple[str, list[tuple[str, dict]]]]] = {}
+        for stream_key, res in zip(stream_keys, res_list, strict=False):
+            out[stream_key] = res or []
+        return out
+
     def _compute_pending_need(
         self, new_messages: list[tuple[str, list[tuple[str, dict]]]] | None, batch_size: int | None
     ) -> int:
@@ -573,6 +681,82 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 return [(stream_key, claimed)] if claimed else []
             return []
 
+    def _batch_claim_pending_messages(
+        self, claims_spec: list[tuple[str, int, str]]
+    ) -> list[tuple[str, list[tuple[str, dict]]]]:
+        """Batch-claim pending messages across multiple streams.
+
+        Args:
+            claims_spec: List of tuples (stream_key, need_pending_count, task_label)
+
+        Returns:
+            A list of (stream_key, claimed_entries) pairs for all successful claims.
+        """
+        if not self._redis_conn or not claims_spec:
+            return []
+
+        # Ensure consumer groups exist to avoid NOGROUP errors during batch claim
+        for stream_key, _need_count, _label in claims_spec:
+            with contextlib.suppress(Exception):
+                self._ensure_consumer_group(stream_key=stream_key)
+
+        pipe = self._redis_conn.pipeline(transaction=False)
+        for stream_key, need_count, label in claims_spec:
+            pipe.xautoclaim(
+                name=stream_key,
+                groupname=self.consumer_group,
+                consumername=self.consumer_name,
+                min_idle_time=self.orchestrator.get_task_idle_min(task_label=label),
+                start_id="0-0",
+                count=need_count,
+                justid=False,
+            )
+
+        results = []
+        try:
+            results = pipe.execute()
+        except Exception as e:
+            logger.error(f"Pipeline xautoclaim failed: {e}")
+            # Fallback: attempt sequential xautoclaim for robustness
+            results = []
+            for stream_key, need_count, label in claims_spec:
+                try:
+                    res = self._redis_conn.xautoclaim(
+                        name=stream_key,
+                        groupname=self.consumer_group,
+                        consumername=self.consumer_name,
+                        min_idle_time=self.orchestrator.get_task_idle_min(task_label=label),
+                        start_id="0-0",
+                        count=need_count,
+                        justid=False,
+                    )
+                    results.append(res)
+                except Exception as se:
+                    logger.warning(f"Sequential xautoclaim failed for '{stream_key}': {se}")
+                    results.append(None)
+
+        claimed_pairs: list[tuple[str, list[tuple[str, dict]]]] = []
+        for (stream_key, _need_count, _label), claimed_result in zip(
+            claims_spec, results, strict=False
+        ):
+            try:
+                if not claimed_result:
+                    continue
+                if len(claimed_result) == 2:
+                    _next_id, claimed = claimed_result
+                elif len(claimed_result) == 3:
+                    _next_id, claimed, _deleted_ids = claimed_result
+                else:
+                    raise ValueError(
+                        f"Unexpected xautoclaim response length: {len(claimed_result)} for '{stream_key}'"
+                    )
+                if claimed:
+                    claimed_pairs.append((stream_key, claimed))
+            except Exception as parse_err:
+                logger.warning(f"Failed to parse xautoclaim result for '{stream_key}': {parse_err}")
+
+        return claimed_pairs
+
     def _convert_messages(
         self, messages: list[tuple[str, list[tuple[str, dict]]]]
     ) -> list[ScheduleMessageItem]:
@@ -616,6 +800,62 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         except Exception as e:
             logger.error(f"Failed to get Redis queue size: {e}", stack_info=True)
             return {}
+
+    def show_task_status(self) -> dict[str, dict[str, int]]:
+        stream_keys = self.get_stream_keys(stream_key_prefix=self.stream_key_prefix)
+        if not stream_keys:
+            logger.info("No Redis streams found for the configured prefix")
+            return {}
+
+        consumer_group = self.consumer_group or "scheduler_group"
+
+        grouped: dict[str, dict[str, int]] = {}
+
+        for sk in stream_keys:
+            uid = sk
+            if uid not in grouped:
+                grouped[uid] = {"pending": 0, "remaining": 0}
+
+            # Pending count via XPENDING
+            pending_count = 0
+            try:
+                pending_info = self._redis_conn.xpending(sk, consumer_group)
+                # redis-py may return a tuple-like [count, ...]
+                if pending_info:
+                    try:
+                        pending_count = int(pending_info[0])
+                    except Exception:
+                        # Fallback if structure differs
+                        pending_count = int(getattr(pending_info, "count", 0) or 0)
+            except Exception as e:
+                logger.debug(f"XPENDING failed for '{sk}': {e}")
+
+            # Remaining count via XLEN
+            remaining_count = 0
+            try:
+                remaining_count = int(self._redis_conn.xlen(sk))
+            except Exception as e:
+                logger.debug(f"XLEN failed for '{sk}': {e}")
+
+            grouped[uid]["pending"] += pending_count
+            grouped[uid]["remaining"] += remaining_count
+
+        # Pretty-print summary
+        try:
+            total_pending = sum(v.get("pending", 0) for v in grouped.values())
+            total_remaining = sum(v.get("remaining", 0) for v in grouped.values())
+            header = f"Task Queue Status by user_id | pending={total_pending}, remaining={total_remaining}"
+            print(header)
+            for uid in sorted(grouped.keys()):
+                counts = grouped[uid]
+                print(
+                    f"- {uid}: pending={counts.get('pending', 0)}, remaining={counts.get('remaining', 0)}"
+                )
+        except Exception:
+            # Printing is best-effort; return grouped regardless
+            pass
+
+        return grouped
 
     def get_stream_keys(self, stream_key_prefix: str | None = None) -> list[str]:
         """

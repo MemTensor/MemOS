@@ -453,7 +453,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     @staticmethod
     def _parse_hallucination_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
         """Parse index-keyed JSON from hallucination filter response.
-        Expected shape: { "0": {"delete": bool, "rewritten": str, "reason": str}, ... }
+        Expected shape: { "0": {"need_rewrite": bool, "rewritten": str, "reason": str}, ... }
         Returns (success, parsed_dict) with int keys.
         """
         try:
@@ -476,27 +476,33 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     continue
             if not isinstance(v, dict):
                 continue
-            delete_flag = v.get("delete")
+            need_rewrite = v.get("need_rewrite")
             rewritten = v.get("rewritten", "")
             reason = v.get("reason", "")
             if (
-                isinstance(delete_flag, bool)
+                isinstance(need_rewrite, bool)
                 and isinstance(rewritten, str)
                 and isinstance(reason, str)
             ):
-                result[idx] = {"delete": delete_flag, "rewritten": rewritten, "reason": reason}
+                result[idx] = {
+                    "need_rewrite": need_rewrite,
+                    "rewritten": rewritten,
+                    "reason": reason,
+                }
 
         return (len(result) > 0), result
 
     def filter_hallucination_in_memories(
-        self, user_messages: list[str], memory_list: list[TextualMemoryItem]
+        self, messages: list[dict], memory_list: list[TextualMemoryItem]
     ) -> list[TextualMemoryItem]:
-        flat_memories = [one.memory for one in memory_list]
+        # Build input objects with memory text and metadata (timestamps, sources, etc.)
         template = PROMPT_MAPPING["hallucination_filter"]
         prompt_args = {
-            "user_messages_inline": "\n".join([f"- {memory}" for memory in user_messages]),
+            "messages_inline": "\n".join(
+                [f"- [{message['role']}]: {message['content']}" for message in messages]
+            ),
             "memories_inline": json.dumps(
-                {str(i): memory for i, memory in enumerate(flat_memories)},
+                {idx: mem.memory for idx, mem in enumerate(memory_list)},
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -511,40 +517,25 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}"
             )
             if success:
+                new_mem_list = []
                 logger.info(f"Hallucination filter result: {parsed}")
-                total = len(memory_list)
-                keep_flags = [True] * total
+                assert len(parsed) == len(memory_list)
                 for mem_idx, content in parsed.items():
-                    # Validate index bounds
-                    if not isinstance(mem_idx, int) or mem_idx < 0 or mem_idx >= total:
-                        logger.warning(
-                            f"[filter_hallucination_in_memories] Ignoring out-of-range index: {mem_idx}"
-                        )
-                        continue
-
-                    delete_flag = content.get("delete", False)
-                    rewritten = content.get("rewritten", None)
+                    need_rewrite = content.get("need_rewrite", False)
+                    rewritten = content.get("rewritten", "")
                     reason = content.get("reason", "")
 
-                    logger.info(
-                        f"[filter_hallucination_in_memories] index={mem_idx}, delete={delete_flag}, rewritten='{(rewritten or '')[:100]}', reason='{reason[:120]}'"
-                    )
-
-                    if delete_flag is True and rewritten is not None:
-                        # Mark for deletion
-                        keep_flags[mem_idx] = False
-                    else:
-                        # Apply rewrite if provided (safe-by-default: keep item when not mentioned or delete=False)
-                        try:
-                            if isinstance(rewritten, str):
-                                memory_list[mem_idx].memory = rewritten
-                        except Exception as e:
-                            logger.warning(
-                                f"[filter_hallucination_in_memories] Failed to apply rewrite for index {mem_idx}: {e}"
-                            )
-
-                # Build result, preserving original order; keep items not mentioned by LLM by default
-                new_mem_list = [memory_list[i] for i in range(total) if keep_flags[i]]
+                    # Apply rewriting if requested
+                    if (
+                        need_rewrite
+                        and isinstance(rewritten, str)
+                        and len(rewritten) > len(memory_list[mem_idx].memory)
+                    ):
+                        memory_list[mem_idx].memory = rewritten
+                        logger.info(
+                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten='{rewritten}', reason='{reason}', original memory='{memory_list[mem_idx].memory}'"
+                        )
+                    new_mem_list.append(memory_list[mem_idx])
                 return new_mem_list
             else:
                 logger.warning("Hallucination filter parsing failed or returned empty result.")
@@ -602,11 +593,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             # Build inputs
             new_memory_list = []
             for unit_messages, unit_memory_list in zip(messages, memory_list, strict=False):
-                unit_user_messages = [
-                    msg["content"] for msg in unit_messages if msg["role"] == "user"
-                ]
                 unit_memory_list = self.filter_hallucination_in_memories(
-                    user_messages=unit_user_messages, memory_list=unit_memory_list
+                    messages=unit_messages, memory_list=unit_memory_list
                 )
                 new_memory_list.append(unit_memory_list)
             memory_list = new_memory_list

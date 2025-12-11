@@ -121,6 +121,8 @@ all = [
     "sentence-transformers (>=4.1.0,<5.0.0)",
     "qdrant-client (>=1.14.2,<2.0.0)",
     "volcengine-python-sdk (>=4.0.4,<5.0.0)",
+    "nltk (>=3.9.1,<4.0.0)",
+    "rake-nltk (>=1.0.6,<1.1.0)",
 
     # Uncategorized dependencies
 ]
