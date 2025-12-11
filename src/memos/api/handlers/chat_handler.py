@@ -410,7 +410,6 @@ class ChatHandler(BaseHandler):
                         pref_top_k=chat_req.pref_top_k,
                         filter=chat_req.filter,
                         search_tool_memory=False,
-                        playground_search_goal_parser=False,
                     )
                     start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
@@ -492,7 +491,6 @@ class ChatHandler(BaseHandler):
                         filter=chat_req.filter,
                         search_memory_type="All",
                         search_tool_memory=False,
-                        playground_search_goal_parser=False,
                     )
                     start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
@@ -537,8 +535,6 @@ class ChatHandler(BaseHandler):
                     system_prompt = self._build_enhance_system_prompt(
                         filtered_memories, pref_string, lang=lang
                     )
-
-                    print(f"system_prompt: \n{system_prompt}")
 
                     # Prepare messages
                     history_info = chat_req.history[-20:] if chat_req.history else []

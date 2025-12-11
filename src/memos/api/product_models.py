@@ -461,9 +461,6 @@ class APISearchRequest(BaseRequest):
 class APISearchPlaygroundRequest(APISearchRequest):
     """Request model for searching memories in playground."""
 
-    # TODO: tmp field for playground search goal parser, will be removed later
-    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
-
 
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
