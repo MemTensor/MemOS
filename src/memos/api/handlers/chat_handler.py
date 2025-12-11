@@ -395,16 +395,6 @@ class ChatHandler(BaseHandler):
                         [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                     )
 
-                    # for playground, add the query to memory without response
-                    self._start_add_to_memory(
-                        user_id=chat_req.user_id,
-                        writable_cube_ids=writable_cube_ids,
-                        session_id=chat_req.session_id or "default_session",
-                        query=chat_req.query,
-                        full_response=None,
-                        async_mode="sync",
-                    )
-
                     # ====== first search text mem with parse goal ======
                     search_req = APISearchPlaygroundRequest(
                         query=chat_req.query,
@@ -450,7 +440,7 @@ class ChatHandler(BaseHandler):
                         pref_list = search_response.data.get("pref_mem") or []
                         pref_memories = pref_list[0].get("memories", []) if pref_list else []
                         pref_md_string = self._build_pref_md_string_for_playground(pref_memories)
-                        yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string})}\n\n"
+                        yield f"data: {json.dumps({'type': 'pref_md_string', 'data': pref_md_string}, ensure_ascii=False)}\n\n"
 
                     # Use first readable cube ID for scheduler (backward compatibility)
                     scheduler_cube_id = (
@@ -530,6 +520,16 @@ class ChatHandler(BaseHandler):
                         search_response.data.get("text_mem")[0]["memories"]
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+
+                    # for playground, add the query to memory without response
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        writable_cube_ids=writable_cube_ids,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=None,
+                        async_mode="sync",
+                    )
 
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_enhance_system_prompt(
@@ -794,7 +794,7 @@ class ChatHandler(BaseHandler):
             sys_body
             + "\n\n# Memories\n## PersonalMemory (ordered)\n"
             + mem_block_p
-            + "\n## OuterMemory (ordered)\n"
+            + "\n## OuterMemory (from Internet Search, ordered)\n"
             + mem_block_o
             + f"\n\n{pref_string}"
         )
