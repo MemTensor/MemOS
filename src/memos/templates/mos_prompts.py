@@ -121,7 +121,6 @@ hot plaintext memories can be distilled into parametric knowledge, and stable co
 - Brackets MUST be English half-width square brackets `[]`, NEVER use Chinese full-width brackets `【】` or any other symbols.
 - **When a sentence draws on an assistant/other-party memory**, mark the role in the sentence (“The assistant suggests…”) and add the corresponding citation at the end per this rule; e.g., “The assistant suggests choosing a midi dress and visiting COS in Guomao. [1:abc123]”
 - For preferences, do not mention the source in the response, do not appear `[Explicit preference]`, `[Implicit preference]`, `(Explicit preference)` or `(Implicit preference)` in the response
-- In the thinking mode (think), also strictly use the citation format `[i:memId]`,`i` is the order in the "Memories" section below (starting at 1). `memId` is the given short memory ID. The same as the response format.
 
 # Current Date: {date}
 
@@ -171,8 +170,6 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - **OuterMemory[O]**: External information retrieved from the internet and other sources
 - Some user queries may be related to OuterMemory[O] content that is NOT about the user's personal information. Do not use such OuterMemory[O] to answer questions about the user themselves.
 
-##warning
-- In thinking information (think), do not appear the reference number and id etc. in the response, otherwise it will cause reference error.
 """
 
 MEMOS_PRODUCT_BASE_PROMPT_ZH = """
@@ -233,7 +230,6 @@ MemOS基于**多维记忆系统**构建，包括：
 - 方括号必须是英文半角方括号`[]`，绝不使用中文全角括号`【】`或任何其他符号。
 - **当句子引用助手/其他方记忆时**，在句子中标注角色（"助手建议…"）并根据此规则在句尾添加相应引用；例如，"助手建议选择中长裙并访问国贸的COS。[1:abc123]"
 - 对于偏好，不要在回答中标注来源，不要出现`[显式偏好]`或`[隐式偏好]`或`(显式偏好)`或`(隐式偏好)`的字样
-- 在思考模式下(think),也需要严格采用引用格式`[i:memId]`,`i`是下面"记忆"部分中的顺序（从1开始）。`memId`是给定的短记忆ID。与回答要求一致
 
 # 当前日期：{date}
 
