@@ -604,6 +604,7 @@ class GeneralScheduler(BaseScheduler):
                 feedback_content=feedback_data.get("feedback_content"),
                 feedback_time=feedback_data.get("feedback_time"),
                 task_id=task_id,
+                info=feedback_data.get("info", None),
             )
 
             logger.info(

@@ -39,9 +39,6 @@ class TaskGoalParser:
         - mode == 'fast': use jieba to split words only
         - mode == 'fine': use LLM to parse structured topic/keys/tags
         """
-        # TODO: tmp mode for playground search goal parser, will be removed later
-        if kwargs.get("playground_search_goal_parser", False):
-            mode = "fine"
 
         if mode == "fast":
             return self._parse_fast(task_description, context=context, **kwargs)
