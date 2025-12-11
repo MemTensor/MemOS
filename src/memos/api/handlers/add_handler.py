@@ -89,6 +89,7 @@ class AddHandler(BaseHandler):
                     feedback_content=feedback_content,
                     writable_cube_ids=add_req.writable_cube_ids,
                     async_mode=add_req.async_mode,
+                    info=add_req.info,
                 )
                 process_record = cube_view.feedback_memories(feedback_req)
 

@@ -183,6 +183,7 @@ class SingleCubeView(MemCubeView):
                 async_mode=feedback_req.async_mode,
                 corrected_answer=feedback_req.corrected_answer,
                 task_id=feedback_req.task_id,
+                info=feedback_req.info,
             )
             self.logger.info(f"Feedback memories result: {feedback_result}")
         return feedback_result
