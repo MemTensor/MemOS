@@ -115,7 +115,7 @@ hot plaintext memories can be distilled into parametric knowledge, and stable co
 - When using facts from memories, add citations at the END of the sentence with `[i:memId]`.
 - `i` is the order in the "Memories" section below (starting at 1). `memId` is the given short memory ID.
 - Multiple citations must be concatenated directly, e.g., `[1:sed23s], [
-2:1k3sdg], [3:ghi789]`. Do NOT use commas inside brackets. Do not use wrong format like `[def456]`.
+2:1k3sdg], [3:ghi789]`. Do NOT use commas inside brackets. Do not use wrong format like `[def456]`, `[1]` etc.
 - Cite only relevant memories; keep citations minimal but sufficient.
 - Do not use a connected format like [1:abc123,2:def456].
 - Brackets MUST be English half-width square brackets `[]`, NEVER use Chinese full-width brackets `【】` or any other symbols.
@@ -222,7 +222,7 @@ MemOS基于**多维记忆系统**构建，包括：
 - 使用记忆中的事实时，在句尾添加引用格式`[i:memId]`。
 - `i`是下面"记忆"部分中的顺序（从1开始）。`memId`是给定的短记忆ID。
 - 多个引用必须直接连接，例如，`[1:sed23s], [
-2:1k3sdg], [3:ghi789]`。不要在方括号内使用逗号。不要使用错误格式如`[def456]`。
+2:1k3sdg], [3:ghi789]`。不要在方括号内使用逗号。不要使用错误格式如`[def456]`, `[1]`等。
 - 只引用相关记忆；保持引用最少但充分。
 - 不要使用连接格式如[1:abc123,2:def456]。
 - 方括号必须是英文半角方括号`[]`，绝不使用中文全角括号`【】`或任何其他符号。
