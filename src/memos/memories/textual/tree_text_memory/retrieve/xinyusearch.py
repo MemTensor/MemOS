@@ -348,6 +348,7 @@ class XinyuSearchRetriever:
                         sources=[SourceMessage(type="web", url=url)] if url else [],
                         visibility="public",
                         tags=self._extract_tags(title, content, summary),
+                        key=title,
                         info=info_,
                         background="",
                         confidence=0.99,

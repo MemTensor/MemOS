@@ -422,39 +422,27 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
 You are a strict memory validator.
 
-# TASK
-Validate each memory entry against the user's current messages (ground truth).
-Memories that hallucinate unsupported facts or contradict the user must be corrected or marked for deletion.
+Task:
+Check each memory against the user messages (ground truth). Do not modify the original text. Generate ONLY a suffix to append.
 
-# RULES
-- Use ONLY facts explicitly stated in the user messages.
-- Do NOT invent, assume, or retain unsupported specifics.
-- Preserve the original language of each memory when rewriting.
-- Output ONLY a JSON object with no extra text.
+Rules:
+- Append " [Source:] Inference by assistant." if the memory contains assistant inference (not directly stated by the user).
+- Otherwise output an empty suffix.
+- No other commentary or formatting.
 
-# INPUTS
-User messages (ground truth):
-{user_messages_inline}
+Inputs:
+messages:
+{messages_inline}
 
-Memory list (to validate, in indexed JSON format):
+memories:
 {memories_inline}
 
-# OUTPUT FORMAT
-Return a JSON object where:
-- Keys are the same stringified indices as in the input memory list (e.g., "0", "1").
-- Each value is: {{"delete": boolean, "rewritten": string, "reason": string}}
-- If "delete" is true, "rewritten" must be an empty string.
-- "reason" must briefly explain the decision (delete or rewrite) based on user messages.
-- The number of output entries MUST exactly match the number of input memories.
-
-# DECISION GUIDE
-- Contradicted? → rewrite to match user message, "delete"=false, "rewritten"=corrected memory content.
-- Hallucinated (specific fact not in user messages)? → "delete"=true, "rewritten"=dehallucinated rewritten memory.
-- Consistent or non-factual (opinion, emotion)? → keep as-is, "delete"=false.
-
-Additionally, include a concise "reason" for each item explaining your decision.
-
-Final Output:
+Output JSON:
+- Keys: same indices as input ("0", "1", ...).
+- Values: {{ "need_rewrite": boolean, "rewritten_suffix": string, "reason": string }}
+- need_rewrite = true only when assistant inference is detected.
+- rewritten_suffix = " [Source:] Inference by assistant." or "".
+- reason: brief, e.g., "assistant inference detected" or "explicit user statement".
 """
 
 
