@@ -1740,9 +1740,12 @@ class PolarDBGraphDB(BaseGraphDB):
             """
 
         params = (query_word,)
-        logger.info(f"[seach_by_keywords_LIKE start:]  user_name: {user_name}, params: {params}")
-        conn = self._get_connection()
+        logger.info(
+            f"[seach_by_keywords_LIKE start:]  user_name: {user_name}, query: {query}, params: {params}"
+        )
+        conn = None
         try:
+            conn = self._get_connection()
             with conn.cursor() as cursor:
                 cursor.execute(query, params)
                 results = cursor.fetchall()
@@ -1752,7 +1755,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     id_val = str(oldid)
                     output.append({"id": id_val})
                 logger.info(
-                    f"[seach_by_keywords_LIKE end:] user_name: {user_name}, params: {params} recalled: {output}"
+                    f"[seach_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
                 )
                 return output
         finally:
@@ -1837,8 +1840,9 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[seach_by_keywords_TFIDF start:] user_name: {user_name}, query: {query}, params: {params}"
         )
-        conn = self._get_connection()
+        conn = None
         try:
+            conn = self._get_connection()
             with conn.cursor() as cursor:
                 cursor.execute(query, params)
                 results = cursor.fetchall()
@@ -1848,9 +1852,6 @@ class PolarDBGraphDB(BaseGraphDB):
                     id_val = str(oldid)
                     output.append({"id": id_val})
 
-                logger.info(
-                    f"[seach_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
-                )
                 logger.info(
                     f"[seach_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
                 )
