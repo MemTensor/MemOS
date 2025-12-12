@@ -420,14 +420,15 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 
 
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
-You are a strict memory validator.
+You are a strict memory validator and rewriter.
 
 Task:
-Check each memory against the user messages (ground truth). Do not modify the original text. Generate ONLY a suffix to append.
+Evaluate each memory against the user messages (ground truth). Rewrite the memory text when needed so it perfectly reflects the messages without ambiguity. Make the rewritten memory more accurate and sufficiently detailed, strictly based on the messages.
 
 Rules:
-- Append " [Source:] Inference by assistant." if the memory contains assistant inference (not directly stated by the user).
-- Otherwise output an empty suffix.
+- If the memory cannot perfectly reflect the information in the messages and contains ambiguity, set need_rewrite = true and return a rewritten memory that is more accurate and sufficiently detailed, strictly based on the messages.
+- Otherwise set need_rewrite = false and keep rewritten equal to the original memory.
+- Do not introduce any information not present in the messages.
 - No other commentary or formatting.
 
 Inputs:
@@ -439,10 +440,10 @@ memories:
 
 Output JSON:
 - Keys: same indices as input ("0", "1", ...).
-- Values: {{ "need_rewrite": boolean, "rewritten_suffix": string, "reason": string }}
-- need_rewrite = true only when assistant inference is detected.
-- rewritten_suffix = " [Source:] Inference by assistant." or "".
-- reason: brief, e.g., "assistant inference detected" or "explicit user statement".
+- Values: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- need_rewrite = true when the memory cannot perfectly reflect the messages and shows ambiguity or insufficiency; otherwise false.
+- rewritten = a more accurate and sufficiently detailed memory text when rewriting is needed; otherwise the original memory.
+- reason: brief, e.g., "assistant inference detected", "ambiguous or incomplete memory", or "explicit user statement".
 """
 
 

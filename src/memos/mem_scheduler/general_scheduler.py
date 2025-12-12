@@ -154,8 +154,8 @@ class GeneralScheduler(BaseScheduler):
         logger.info(
             f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
             f"Scheduler replaced working memory based on query history {queries}. "
-            f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
-            f"New working memory ({len(new_memory_texts)} items): {new_memory_texts}."
+            f"Old working memory ({len(cur_working_memory)} items): {old_memory_texts}. "
+            f"New working memory ({len(new_order_working_memory)} items): {new_memory_texts}."
         )
 
         # update activation memories

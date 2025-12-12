@@ -204,19 +204,16 @@ if __name__ == "__main__":
 
     for item_idx, item in enumerate(tqdm(questions, desc="processing queries")):
         query = item["question"]
-        messages_to_send = [
-            ScheduleMessageItem(
-                item_id=f"test_item_{item_idx}",
-                user_id=trying_modules.current_user_id,
-                mem_cube_id=trying_modules.current_mem_cube_id,
-                label=MEM_UPDATE_TASK_LABEL,
-                content=query,
-            )
-        ]
-
+        message = ScheduleMessageItem(
+            item_id=f"test_item_{item_idx}",
+            user_id=trying_modules.current_user_id,
+            mem_cube_id=trying_modules.current_mem_cube_id,
+            label=MEM_UPDATE_TASK_LABEL,
+            content=query,
+        )
         # Run one session turn manually to get search candidates
         mem_scheduler._memory_update_consumer(
-            messages=messages_to_send,
+            messages=[message],
         )
 
     # Show accumulated web logs
