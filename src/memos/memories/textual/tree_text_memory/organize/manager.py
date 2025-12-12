@@ -134,7 +134,7 @@ class MemoryManager:
         return added_ids
 
     def _add_memories_batch(
-        self, memories: list[TextualMemoryItem], user_name: str | None = None, batch_size: int = 10
+        self, memories: list[TextualMemoryItem], user_name: str | None = None, batch_size: int = 50
     ) -> list[str]:
         """
         Add memories using batch database operations (more efficient for large batches).
