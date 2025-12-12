@@ -185,7 +185,7 @@ class SingleCubeView(MemCubeView):
                 task_id=feedback_req.task_id,
                 info=feedback_req.info,
             )
-            self.logger.info(f"Feedback memories result: {feedback_result}")
+            self.logger.info(f"[Feedback memories result:] {feedback_result}")
         return feedback_result
 
     def _get_search_mode(self, mode: str) -> str:
