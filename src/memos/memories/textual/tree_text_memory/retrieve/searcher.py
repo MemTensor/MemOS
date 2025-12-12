@@ -227,8 +227,7 @@ class Searcher:
         query_embedding = None
 
         # fine mode will trigger initial embedding search
-        # TODO: tmp "playground_search_goal_parser" for playground search goal parser, will be removed later
-        if mode == "fine_old" or kwargs.get("playground_search_goal_parser", False):
+        if mode == "fine_old":
             logger.info("[SEARCH] Fine mode: embedding search")
             query_embedding = self.embedder.embed([query])[0]
 
@@ -274,10 +273,6 @@ class Searcher:
             use_fast_graph=self.use_fast_graph,
             **kwargs,
         )
-
-        # TODO: tmp field playground_search_goal_parser for playground, will be removed later
-        if kwargs.get("playground_search_goal_parser", False):
-            parsed_goal.internet_search = False
 
         query = parsed_goal.rephrased_query or query
         # if goal has extra memories, embed them too
@@ -536,14 +531,14 @@ class Searcher:
             return []
         logger.info(f"[PATH-C] '{query}' Retrieving from internet...")
         items = self.internet_retriever.retrieve_from_internet(
-            query=query, top_k=top_k, parsed_goal=parsed_goal, info=info, mode=mode
+            query=query, top_k=2 * top_k, parsed_goal=parsed_goal, info=info, mode=mode
         )
         logger.info(f"[PATH-C] '{query}' Retrieved from internet {len(items)} items: {items}")
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embedding[0],
             graph_results=items,
-            top_k=min(top_k, 5),
+            top_k=top_k,
             parsed_goal=parsed_goal,
         )
 

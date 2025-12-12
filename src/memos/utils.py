@@ -6,6 +6,9 @@ from memos.log import get_logger
 
 logger = get_logger(__name__)
 
+# Global threshold (seconds) for timing logs
+DEFAULT_TIME_BAR = 10.0
+
 
 def timed_with_status(
     func=None,
@@ -19,8 +22,10 @@ def timed_with_status(
     Parameters:
     - log: enable timing logs (default True)
     - log_prefix: prefix; falls back to function name
-    - log_args: names to include in logs (str or list/tuple of str).
-    - log_extra_args: extra arguments to include in logs (dict).
+    - log_args: names to include in logs (str or list/tuple of str), values are taken from kwargs by name.
+    - log_extra_args:
+        - can be a dict: fixed contextual fields that are always attached to logs;
+        - or a callable: like `fn(*args, **kwargs) -> dict`, used to dynamically generate contextual fields at runtime.
     """
 
     if isinstance(log_args, str):
@@ -51,12 +56,24 @@ def timed_with_status(
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
 
                 ctx_parts = []
+                # 1) Collect parameters from kwargs by name
                 for key in effective_log_args:
                     val = kwargs.get(key)
                     ctx_parts.append(f"{key}={val}")
 
-                if log_extra_args:
-                    ctx_parts.extend(f"{key}={val}" for key, val in log_extra_args.items())
+                # 2) Support log_extra_args as dict or callable, so we can dynamically
+                #    extract values from self or other runtime context
+                extra_items = {}
+                try:
+                    if callable(log_extra_args):
+                        extra_items = log_extra_args(*args, **kwargs) or {}
+                    elif isinstance(log_extra_args, dict):
+                        extra_items = log_extra_args
+                except Exception as e:
+                    logger.warning(f"[TIMER_WITH_STATUS] log_extra_args callback error: {e!r}")
+
+                if extra_items:
+                    ctx_parts.extend(f"{key}={val}" for key, val in extra_items.items())
 
                 ctx_str = f" [{', '.join(ctx_parts)}]" if ctx_parts else ""
 
@@ -80,7 +97,7 @@ def timed_with_status(
     return decorator(func)
 
 
-def timed(func=None, *, log=True, log_prefix=""):
+def timed(func=None, *, log=False, log_prefix=""):
     def decorator(fn):
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
@@ -90,7 +107,8 @@ def timed(func=None, *, log=True, log_prefix=""):
             if log is not True:
                 return result
 
-            logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
+            if elapsed_ms >= (DEFAULT_TIME_BAR * 1000.0):
+                logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
 
             return result
 

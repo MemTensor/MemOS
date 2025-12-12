@@ -315,7 +315,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 return False
 
             logger.info(
-                f"[DIAGNOSTIC] rabbitmq_service.rabbitmq_publish_message: Attempting to publish message. Exchange: {exchange_name}, Routing Key: {routing_key}, Message Content: {json.dumps(message, indent=2)}"
+                f"[DIAGNOSTIC] rabbitmq_service.rabbitmq_publish_message: Attempting to publish message. Exchange: {exchange_name}, Routing Key: {routing_key}, Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}"
             )
             try:
                 self.rabbitmq_channel.basic_publish(
