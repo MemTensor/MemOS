@@ -505,15 +505,16 @@ class ChatHandler(BaseHandler):
 
                     # Filter memories by threshold, min_num is the min number of memories for playground
                     second_filtered_memories = self._filter_memories_by_threshold(
-                        memories_list, min_num=30
+                        memories_list, min_num=35
                     )
 
                     # dedup and supplement memories
                     fast_length = len(filtered_memories)
                     supplement_length = max(0, 50 - fast_length)  # 50 is the max mem for playground
-                    filtered_memories = self._dedup_and_supplement_memories(
+                    second_dedup_memories = self._dedup_and_supplement_memories(
                         filtered_memories, second_filtered_memories
                     )[:supplement_length]
+                    filtered_memories = filtered_memories + second_dedup_memories
 
                     # Prepare remain reference data (second search)
                     reference = prepare_reference_data(filtered_memories)

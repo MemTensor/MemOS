@@ -46,7 +46,9 @@ class BochaAISearchAPI:
             "Content-Type": "application/json",
         }
 
-    def search_web(self, query: str, summary: bool = True, freshness="noLimit") -> list[dict]:
+    def search_web(
+        self, query: str, summary: bool = True, freshness="noLimit", max_results=None
+    ) -> list[dict]:
         """
         Perform a Web Search (equivalent to the first curl).
 
@@ -54,6 +56,7 @@ class BochaAISearchAPI:
             query: Search query string
             summary: Whether to include summary in the results
             freshness: Freshness filter (e.g. 'noLimit', 'day', 'week')
+            max_results: Maximum number of results to retrieve, bocha is limited to 50
 
         Returns:
             A list of search result dicts
@@ -62,12 +65,17 @@ class BochaAISearchAPI:
             "query": query,
             "summary": summary,
             "freshness": freshness,
-            "count": self.max_results,
+            "count": max_results or self.max_results,
         }
         return self._post(self.web_url, body)
 
     def search_ai(
-        self, query: str, answer: bool = False, stream: bool = False, freshness="noLimit"
+        self,
+        query: str,
+        answer: bool = False,
+        stream: bool = False,
+        freshness="noLimit",
+        max_results=None,
     ) -> list[dict]:
         """
         Perform an AI Search (equivalent to the second curl).
@@ -77,6 +85,7 @@ class BochaAISearchAPI:
             answer: Whether BochaAI should generate an answer
             stream: Whether to use streaming response
             freshness: Freshness filter (e.g. 'noLimit', 'day', 'week')
+            max_results: Maximum number of results to retrieve, bocha is limited to 50
 
         Returns:
             A list of search result dicts
@@ -84,7 +93,7 @@ class BochaAISearchAPI:
         body = {
             "query": query,
             "freshness": freshness,
-            "count": self.max_results,
+            "count": max_results or self.max_results,
             "answer": answer,
             "stream": stream,
         }
@@ -276,7 +285,7 @@ class BochaAISearchRetriever:
         Returns:
             List of TextualMemoryItem
         """
-        search_results = self.bocha_api.search_ai(query)  # ✅ default to
+        search_results = self.bocha_api.search_ai(query, max_results=top_k)  # ✅ default to
         # web-search
         return self._convert_to_mem_items(search_results, query, parsed_goal, info, mode=mode)
 
