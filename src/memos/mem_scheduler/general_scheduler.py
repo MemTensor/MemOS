@@ -126,7 +126,10 @@ class GeneralScheduler(BaseScheduler):
             top_k=self.top_k,
         )
         logger.info(
-            f"[long_memory_update_process] Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} new candidate memories for user_id={user_id}"
+            # Build the candidate preview string outside the f-string to avoid backslashes in expression
+            f"[long_memory_update_process] Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} "
+            f"new candidate memories for user_id={user_id}: "
+            + ("\n- " + "\n- ".join([f"{one.id}: {one.memory}" for one in new_candidates]))
         )
 
         # rerank
@@ -141,10 +144,14 @@ class GeneralScheduler(BaseScheduler):
             f"[long_memory_update_process] Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
         )
 
-        old_memory_texts = [mem.memory for mem in cur_working_memory]
-        new_memory_texts = [mem.memory for mem in new_order_working_memory]
+        old_memory_texts = "\n- " + "\n- ".join(
+            [f"{one.id}: {one.memory}" for one in cur_working_memory]
+        )
+        new_memory_texts = "\n- " + "\n- ".join(
+            [f"{one.id}: {one.memory}" for one in new_order_working_memory]
+        )
 
-        logger.debug(
+        logger.info(
             f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
             f"Scheduler replaced working memory based on query history {queries}. "
             f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
@@ -1413,20 +1420,21 @@ class GeneralScheduler(BaseScheduler):
             logger.info(
                 f"[process_session_turn] Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
             )
-            info = {
-                "user_id": user_id,
-                "session_id": "",
-            }
 
+            search_args = {}
             results: list[TextualMemoryItem] = self.retriever.search(
                 query=item,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
                 top_k=k_per_evidence,
                 method=self.search_method,
-                info=info,
+                search_args=search_args,
             )
+
             logger.info(
-                f"[process_session_turn] Search results for missing evidence '{item}': {[one.memory for one in results]}"
+                f"[process_session_turn] Search results for missing evidence '{item}': "
+                + ("\n- " + "\n- ".join([f"{one.id}: {one.memory}" for one in results]))
             )
             new_candidates.extend(results)
         return cur_working_memory, new_candidates
