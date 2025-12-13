@@ -21,7 +21,7 @@ class SentenceChunker(BaseChunker):
 
         self.config = config
         self.chunker = ChonkieSentenceChunker(
-            tokenizer_or_token_counter=config.tokenizer_or_token_counter,
+            tokenizer=config.tokenizer_or_token_counter,
             chunk_size=config.chunk_size,
             chunk_overlap=config.chunk_overlap,
             min_sentences_per_chunk=config.min_sentences_per_chunk,

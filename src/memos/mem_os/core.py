@@ -2,7 +2,7 @@ import json
 import os
 import time
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
@@ -192,7 +192,7 @@ class MOSCore:
         self.chat_history_manager[user_id] = ChatHistory(
             user_id=user_id if user_id is not None else self.user_id,
             session_id=session_id if session_id is not None else self.session_id,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             total_messages=0,
             chat_history=[],
         )
