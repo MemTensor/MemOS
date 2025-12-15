@@ -458,13 +458,6 @@ class APISearchRequest(BaseRequest):
         return self
 
 
-class APISearchPlaygroundRequest(APISearchRequest):
-    """Request model for searching memories in playground."""
-
-    # TODO: tmp field for playground search goal parser, will be removed later
-    playground_search_goal_parser: bool = Field(False, description="Playground search goal parser")
-
-
 class APIADDRequest(BaseRequest):
     """Request model for creating memories."""
 
@@ -684,6 +677,19 @@ class APIFeedbackRequest(BaseRequest):
         "async", description="feedback mode: sync or async"
     )
     corrected_answer: bool = Field(False, description="Whether need return corrected answer")
+    info: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Additional metadata for the add request. "
+            "All keys can be used as filters in search. "
+            "Example: "
+            "{'agent_id': 'xxxxxx', "
+            "'app_id': 'xxxx', "
+            "'source_type': 'web', "
+            "'source_url': 'https://www.baidu.com', "
+            "'source_content': 'West Lake is the most famous scenic spot in Hangzhou'}."
+        ),
+    )
     # ==== mem_cube_id is NOT enabled====
     mem_cube_id: str | None = Field(
         None,

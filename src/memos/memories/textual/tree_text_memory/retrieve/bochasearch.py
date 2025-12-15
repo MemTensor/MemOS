@@ -9,9 +9,11 @@ from typing import Any
 import requests
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.dependency import require_python_package
 from memos.embedders.factory import OllamaEmbedder
 from memos.log import get_logger
 from memos.mem_reader.base import BaseMemReader
+from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import (
     SearchedTreeNodeTextualMemoryMetadata,
     SourceMessage,
@@ -44,7 +46,9 @@ class BochaAISearchAPI:
             "Content-Type": "application/json",
         }
 
-    def search_web(self, query: str, summary: bool = True, freshness="noLimit") -> list[dict]:
+    def search_web(
+        self, query: str, summary: bool = True, freshness="noLimit", max_results=None
+    ) -> list[dict]:
         """
         Perform a Web Search (equivalent to the first curl).
 
@@ -52,6 +56,7 @@ class BochaAISearchAPI:
             query: Search query string
             summary: Whether to include summary in the results
             freshness: Freshness filter (e.g. 'noLimit', 'day', 'week')
+            max_results: Maximum number of results to retrieve, bocha is limited to 50
 
         Returns:
             A list of search result dicts
@@ -60,12 +65,17 @@ class BochaAISearchAPI:
             "query": query,
             "summary": summary,
             "freshness": freshness,
-            "count": self.max_results,
+            "count": max_results or self.max_results,
         }
         return self._post(self.web_url, body)
 
     def search_ai(
-        self, query: str, answer: bool = False, stream: bool = False, freshness="noLimit"
+        self,
+        query: str,
+        answer: bool = False,
+        stream: bool = False,
+        freshness="noLimit",
+        max_results=None,
     ) -> list[dict]:
         """
         Perform an AI Search (equivalent to the second curl).
@@ -75,6 +85,7 @@ class BochaAISearchAPI:
             answer: Whether BochaAI should generate an answer
             stream: Whether to use streaming response
             freshness: Freshness filter (e.g. 'noLimit', 'day', 'week')
+            max_results: Maximum number of results to retrieve, bocha is limited to 50
 
         Returns:
             A list of search result dicts
@@ -82,7 +93,7 @@ class BochaAISearchAPI:
         body = {
             "query": query,
             "freshness": freshness,
-            "count": self.max_results,
+            "count": max_results or self.max_results,
             "answer": answer,
             "stream": stream,
         }
@@ -121,6 +132,11 @@ class BochaAISearchAPI:
 class BochaAISearchRetriever:
     """BochaAI retriever that converts search results into TextualMemoryItem objects"""
 
+    @require_python_package(
+        import_name="jieba",
+        install_command="pip install jieba",
+        install_link="https://github.com/fxsjy/jieba",
+    )
     def __init__(
         self,
         access_key: str,
@@ -137,9 +153,121 @@ class BochaAISearchRetriever:
             reader: MemReader instance for processing internet content
             max_results: Maximum number of search results to retrieve
         """
+
+        from jieba.analyse import TextRank
+
         self.bocha_api = BochaAISearchAPI(access_key, max_results=max_results)
         self.embedder = embedder
         self.reader = reader
+        self.zh_fast_keywords_extractor = TextRank()
+
+    def _extract_tags(self, title: str, content: str, summary: str, parsed_goal=None) -> list[str]:
+        """
+        Extract tags from title, content and summary
+
+        Args:
+            title: Article title
+            content: Article content
+            summary: Article summary
+            parsed_goal: Parsed task goal (optional)
+
+        Returns:
+            List of extracted tags
+        """
+        tags = []
+
+        # Add source-based tags
+        tags.append("bocha_search")
+        tags.append("news")
+
+        # Add content-based tags
+        text = f"{title} {content} {summary}".lower()
+
+        # Simple keyword-based tagging
+        keywords = {
+            "economy": [
+                "economy",
+                "GDP",
+                "growth",
+                "production",
+                "industry",
+                "investment",
+                "consumption",
+                "market",
+                "trade",
+                "finance",
+            ],
+            "politics": [
+                "politics",
+                "government",
+                "policy",
+                "meeting",
+                "leader",
+                "election",
+                "parliament",
+                "ministry",
+            ],
+            "technology": [
+                "technology",
+                "tech",
+                "innovation",
+                "digital",
+                "internet",
+                "AI",
+                "artificial intelligence",
+                "software",
+                "hardware",
+            ],
+            "sports": [
+                "sports",
+                "game",
+                "athlete",
+                "olympic",
+                "championship",
+                "tournament",
+                "team",
+                "player",
+            ],
+            "culture": [
+                "culture",
+                "education",
+                "art",
+                "history",
+                "literature",
+                "music",
+                "film",
+                "museum",
+            ],
+            "health": [
+                "health",
+                "medical",
+                "pandemic",
+                "hospital",
+                "doctor",
+                "medicine",
+                "disease",
+                "treatment",
+            ],
+            "environment": [
+                "environment",
+                "ecology",
+                "pollution",
+                "green",
+                "climate",
+                "sustainability",
+                "renewable",
+            ],
+        }
+
+        for category, words in keywords.items():
+            if any(word in text for word in words):
+                tags.append(category)
+
+        # Add goal-based tags if available
+        if parsed_goal and hasattr(parsed_goal, "tags"):
+            tags.extend(parsed_goal.tags)
+
+        return list(set(tags))[:15]  # Limit to 15 tags
 
     def retrieve_from_internet(
         self, query: str, top_k: int = 10, parsed_goal=None, info=None, mode="fast"
@@ -157,7 +285,7 @@ class BochaAISearchRetriever:
         Returns:
             List of TextualMemoryItem
         """
-        search_results = self.bocha_api.search_ai(query)  # ✅ default to
+        search_results = self.bocha_api.search_ai(query, max_results=top_k)  # ✅ default to
         # web-search
         return self._convert_to_mem_items(search_results, query, parsed_goal, info, mode=mode)
 
@@ -224,6 +352,13 @@ class BochaAISearchRetriever:
             info_ = info.copy()
             user_id = info_.pop("user_id", "")
             session_id = info_.pop("session_id", "")
+            lang = detect_lang(summary)
+            tags = (
+                self.zh_fast_keywords_extractor.textrank(summary, topK=3)[:3]
+                if lang == "zh"
+                else self._extract_tags(title, content, summary)[:3]
+            )
+
             return [
                 TextualMemoryItem(
                     memory=(
@@ -244,6 +379,8 @@ class BochaAISearchRetriever:
                         background="",
                         confidence=0.99,
                         usage=[],
+                        tags=tags,
+                        key=title,
                         embedding=self.embedder.embed([content])[0],
                         internet_info={
                             "title": title,

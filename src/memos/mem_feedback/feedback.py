@@ -3,26 +3,27 @@ import difflib
 import json
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-from memos import log
 from memos.configs.memory import MemFeedbackConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
+from memos.log import get_logger
 from memos.mem_feedback.base import BaseMemFeedback
-from memos.mem_feedback.utils import should_keep_update, split_into_chunks
+from memos.mem_feedback.utils import make_mem_item, should_keep_update, split_into_chunks
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.read_multi_modal import detect_lang
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
+from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.organize.manager import (
     MemoryManager,
     extract_working_binding_ids,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ FEEDBACK_PROMPT_DICT = {
     "generation": {"en": FEEDBACK_ANSWER_PROMPT, "zh": FEEDBACK_ANSWER_PROMPT_ZH},
 }
 
-logger = log.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class MemFeedback(BaseMemFeedback):
@@ -77,22 +78,52 @@ class MemFeedback(BaseMemFeedback):
             },
             is_reorganize=self.is_reorganize,
         )
-        self.searcher: Searcher = self.memory_manager.searcher
+        self.stopword_manager = StopwordManager
+        self.searcher: Searcher = None
+        self.reranker = None
         self.DB_IDX_READY = False
 
+    @require_python_package(
+        import_name="jieba",
+        install_command="pip install jieba",
+        install_link="https://github.com/fxsjy/jieba",
+    )
+    def _tokenize_chinese(self, text):
+        """split zh jieba"""
+        import jieba
+
+        tokens = jieba.lcut(text)
+        tokens = [token.strip() for token in tokens if token.strip()]
+        return self.stopword_manager.filter_words(tokens)
+
+    @retry(stop=stop_after_attempt(4), wait=wait_random_exponential(multiplier=1, max=10))
+    def _embed_once(self, texts):
+        return self.embedder.embed(texts)
+
+    @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(multiplier=1, min=4, max=10))
+    def _retry_db_operation(self, operation):
+        try:
+            return operation()
+        except Exception as e:
+            logger.error(
+                f"[Feedback Core: _retry_db_operation] DB operation failed: {e}", exc_info=True
+            )
+            raise
+
     def _batch_embed(self, texts: list[str], embed_bs: int = 5):
-        embed_bs = 5
-        texts_embeddings = []
+        results = []
+        dim = self.embedder.config.embedding_dims
+
         for i in range(0, len(texts), embed_bs):
             batch = texts[i : i + embed_bs]
             try:
-                texts_embeddings.extend(self.embedder.embed(batch))
+                results.extend(self._embed_once(batch))
             except Exception as e:
                 logger.error(
-                    f"[Feedback Core: process_feedback_core] Embedding batch failed: {e}",
-                    exc_info=True,
+                    f"[Feedback Core: process_feedback_core] Embedding batch failed, Cover with all zeros: {len(batch)} entries: {e}"
                 )
-        return texts_embeddings
+                results.extend([[0.0] * dim for _ in range(len(batch))])
+        return results
 
     def _pure_add(self, user_name: str, feedback_content: str, feedback_time: str, info: dict):
         """
@@ -105,7 +136,7 @@ class MemFeedback(BaseMemFeedback):
             lambda: self.memory_manager.add(to_add_memories, user_name=user_name)
         )
         logger.info(
-            f"[Feedback Core: _pure_add] Added {len(added_ids)} memories for user {user_name}."
+            f"[Feedback Core: _pure_add] Pure added {len(added_ids)} memories for user {user_name}."
         )
         return {
             "record": {
@@ -196,7 +227,7 @@ class MemFeedback(BaseMemFeedback):
             lambda: self.memory_manager.add([to_add_memory], user_name=user_name, mode=async_mode)
         )
 
-        logger.info(f"[Memory Feedback ADD] {added_ids[0]}")
+        logger.info(f"[Memory Feedback ADD] memory id: {added_ids[0]}")
         return {"id": added_ids[0], "text": to_add_memory.memory}
 
     def _single_update_operation(
@@ -259,7 +290,6 @@ class MemFeedback(BaseMemFeedback):
 
         for mid in delete_ids:
             try:
-                print("del", mid)
                 self.graph_store.delete_node(mid, user_name=user_name)
 
                 logger.info(
@@ -276,21 +306,41 @@ class MemFeedback(BaseMemFeedback):
         user_name: str,
         memory_item: TextualMemoryItem,
         current_memories: list[TextualMemoryItem],
-        fact_history: str,
+        history_str: str,
+        chat_history_list: list,
+        info: dict,
     ):
+        """Modify memory at the semantic level"""
         lang = detect_lang("".join(memory_item.memory))
         template = FEEDBACK_PROMPT_DICT["compare"][lang]
         if current_memories == []:
-            current_memories = self._retrieve(
-                memory_item.memory, info={"user_id": user_id}, user_name=user_name
-            )
+            # retrieve feedback
+            feedback_retrieved = self._retrieve(memory_item.memory, info=info, user_name=user_name)
+
+            # retrieve question
+            last_user_index = max(i for i, d in enumerate(chat_history_list) if d["role"] == "user")
+            last_qa = " ".join([item["content"] for item in chat_history_list[last_user_index:]])
+            supplementary_retrieved = self._retrieve(last_qa, info=info, user_name=user_name)
+            ids = []
+            for item in feedback_retrieved + supplementary_retrieved:
+                if item.id not in ids:
+                    ids.append(item.id)
+                    current_memories.append(item)
+            include_keys = ["agent_id", "app_id"]
+            current_memories = [
+                item for item in current_memories if self._info_comparison(item, info, include_keys)
+            ]
 
         if not current_memories:
             operations = [{"operation": "ADD"}]
+            logger.warning(
+                "[Feedback Core]: There was no recall of the relevant memory, so it was added directly."
+            )
         else:
             memory_chunks = split_into_chunks(current_memories, max_tokens_per_chunk=500)
 
             all_operations = []
+            now_time = datetime.now().isoformat()
             with ContextThreadPoolExecutor(max_workers=10) as executor:
                 future_to_chunk_idx = {}
                 for chunk in memory_chunks:
@@ -298,9 +348,10 @@ class MemFeedback(BaseMemFeedback):
                         [f"{item.id}: {item.memory}" for item in chunk]
                     )
                     prompt = template.format(
+                        now_time=now_time,
                         current_memories=current_memories_str,
                         new_facts=memory_item.memory,
-                        chat_history=fact_history,
+                        chat_history=history_str,
                     )
 
                     future = executor.submit(self._get_llm_response, prompt)
@@ -319,8 +370,7 @@ class MemFeedback(BaseMemFeedback):
 
             operations = self.standard_operations(all_operations, current_memories)
 
-        # TODO based on the operation, change memory_item memory info ; change source info
-        logger.info(f"[Feedback memory operations]: {operations!s}")
+        logger.info(f"[Feedback Core Operations]: {operations!s}")
 
         if not operations:
             return {"record": {"add": [], "update": []}}
@@ -378,9 +428,10 @@ class MemFeedback(BaseMemFeedback):
         retrieved_memory_ids = kwargs.get("retrieved_memory_ids") or []
         chat_history = kwargs.get("chat_history", [])
         feedback_content = kwargs.get("feedback_content", "")
+        info = kwargs.get("info", {})
 
         chat_history_lis = [f"""{msg["role"]}: {msg["content"]}""" for msg in chat_history[-4:]]
-        fact_history = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
+        history_str = "\n".join(chat_history_lis) + f"\nuser feedback: \n{feedback_content}"
 
         retrieved_memories = [
             self.graph_store.get_node(_id, user_name=user_name) for _id in retrieved_memory_ids
@@ -402,7 +453,14 @@ class MemFeedback(BaseMemFeedback):
         with ContextThreadPoolExecutor(max_workers=3) as ex:
             futures = {
                 ex.submit(
-                    self.semantics_feedback, user_id, user_name, mem, current_memories, fact_history
+                    self.semantics_feedback,
+                    user_id,
+                    user_name,
+                    mem,
+                    current_memories,
+                    history_str,
+                    chat_history,
+                    info,
                 ): i
                 for i, mem in enumerate(feedback_memories)
             }
@@ -427,10 +485,22 @@ class MemFeedback(BaseMemFeedback):
             }
         }
 
-    def _retrieve(self, query: str, info=None, user_name=None):
+    def _info_comparison(self, memory: TextualMemoryItem, _info: dict, include_keys: list) -> bool:
+        """Filter the relevant memory items based on info"""
+        if not _info and not memory.metadata.info:
+            return True
+
+        record = []
+        for key in include_keys:
+            info_v = _info.get(key)
+            mem_v = memory.metadata.info.get(key, None)
+            record.append(info_v == mem_v)
+        return all(record)
+
+    def _retrieve(self, query: str, info=None, top_k=100, user_name=None):
         """Retrieve memory items"""
         retrieved_mems = self.searcher.search(
-            query, info=info, user_name=user_name, topk=50, full_recall=True
+            query, info=info, user_name=user_name, top_k=top_k, full_recall=True
         )
         retrieved_mems = [item[0] for item in retrieved_mems]
         return retrieved_mems
@@ -460,8 +530,6 @@ class MemFeedback(BaseMemFeedback):
             self.graph_store.get_node(item["id"], user_name=user_name) for item in retrieved_ids
         ]
 
-        for item in current_memories:
-            print(item["id"], item["metadata"]["memory_type"], item["metadata"]["status"])
         if not retrieved_ids:
             logger.info(
                 f"[Feedback Core: _vec_query] No similar memories found for embedding query for user {user_name}."
@@ -490,11 +558,19 @@ class MemFeedback(BaseMemFeedback):
             else:
                 return response_text
         except Exception as e:
-            logger.error(f"[Feedback Core LLM] Exception during chat generation: {e}")
+            logger.error(
+                f"[Feedback Core LLM Error] Exception during chat generation: {e} | response_text： {response_text}"
+            )
             response_json = None
         return response_json
 
     def standard_operations(self, operations, current_memories):
+        """
+        Regularize the operation design
+            1. Map the id to the correct original memory id
+            2. If there is an update, skip the memory object of add
+            3. If the modified text is too long, skip the update
+        """
         right_ids = [item.id for item in current_memories]
         right_lower_map = {x.lower(): x for x in right_ids}
 
@@ -542,7 +618,24 @@ class MemFeedback(BaseMemFeedback):
             return None
 
         dehallu_res = [correct_item(item) for item in operations]
-        return [item for item in dehallu_res if item]
+        llm_operations = [item for item in dehallu_res if item]
+
+        # Update takes precedence over add
+        has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
+        if has_update:
+            filtered_items = [
+                item for item in llm_operations if item.get("operation").lower() == "add"
+            ]
+            update_items = [
+                item for item in llm_operations if item.get("operation").lower() != "add"
+            ]
+            if filtered_items:
+                logger.info(
+                    f"[Feedback Core: semantics_feedback] Due to have update objects, skip add: {filtered_items}"
+                )
+            return update_items
+        else:
+            return llm_operations
 
     def _generate_answer(
         self, chat_history: list[MessageDict], feedback_content: str, corrected_answer: bool
@@ -562,13 +655,49 @@ class MemFeedback(BaseMemFeedback):
 
         return self._get_llm_response(prompt, dsl=False)
 
-    def process_keyword_replace(self, user_id: str, user_name: str, kwp_judge: dict | None = None):
+    def _doc_filter(self, doc_scope: str, memories: list[TextualMemoryItem]):
         """
-        memory keyword replace process
+        Filter the memory based on filename
         """
+        filename2_memid = {}
+        filename_mems = []
+
+        for item in memories:
+            for file_info in item.metadata.sources:
+                if file_info.type == "file":
+                    file_dict = file_info.original_part
+                    filename = file_dict["file"]["filename"]
+                    if filename not in filename2_memid:
+                        filename2_memid[filename] = []
+                        filename_mems.append(make_mem_item(filename))
+                    filename2_memid[filename].append(item.id)
+
+        rerank_res = self.reranker.rerank(doc_scope, filename_mems, top_k=100)
+        inscope_docs = [item[0].memory for item in rerank_res if item[1] > 0.95]
+
+        inscope_ids = [
+            memid for inscope_file in inscope_docs for memid in filename2_memid[inscope_file]
+        ]
+        logger.info(
+            f"[Feedback Core: process_keyword_replace] These docs are in scope : {inscope_docs}, relared memids: {inscope_ids}"
+        )
+        filter_memories = [mem for mem in memories if mem.id in inscope_ids]
+        return filter_memories
+
+    def process_keyword_replace(
+        self, user_id: str, user_name: str, kwp_judge: dict | None = None, info: dict | None = None
+    ):
+        """
+        Memory keyword replace process
+        """
+        info = info or {}
         doc_scope = kwp_judge.get("doc_scope", "NONE")
         original_word = kwp_judge.get("original")
         target_word = kwp_judge.get("target")
+        include_keys = ["agent_id", "app_id"]
+
+        mem_info = {key: info[key] for key in info if key in include_keys}
+        filter_dict = {f"info.{key}": info[key] for key in mem_info}
 
         if self.DB_IDX_READY:
             # retrieve
@@ -579,29 +708,33 @@ class MemFeedback(BaseMemFeedback):
 
             must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
             retrieved_ids = self.graph_store.seach_by_keywords_tfidf(
-                [must_part], user_name=user_name
+                [must_part], user_name=user_name, filter=filter_dict
             )
             if len(retrieved_ids) < 1:
                 retrieved_ids = self.graph_store.search_by_fulltext(
-                    queries, top_k=100, user_name=user_name
+                    queries, top_k=100, user_name=user_name, filter=filter_dict
                 )
         else:
             retrieved_ids = self.graph_store.seach_by_keywords_like(
-                f"%{original_word}%", user_name=user_name
+                f"%{original_word}%", user_name=user_name, filter=filter_dict
             )
 
-        # filter by doc scope
         mem_data = [
             self.graph_store.get_node(item["id"], user_name=user_name) for item in retrieved_ids
         ]
         retrieved_memories = [TextualMemoryItem(**item) for item in mem_data]
+        retrieved_memories = [
+            item
+            for item in retrieved_memories
+            if self._info_comparison(item, mem_info, include_keys)
+        ]
 
         if doc_scope != "NONE":
-            retrieved_memories = [
-                item
-                for item in retrieved_memories
-                if doc_scope in item.metadata.sources  # TODO
-            ]
+            retrieved_memories = self._doc_filter(doc_scope, retrieved_memories)
+
+        logger.info(
+            f"[Feedback Core: process_keyword_replace] Keywords recalled memory for user {user_name}: {len(retrieved_ids)} memories | After filtering: {len(retrieved_memories)} memories."
+        )
 
         if not retrieved_memories:
             return {"record": {"add": [], "update": []}}
@@ -613,14 +746,14 @@ class MemFeedback(BaseMemFeedback):
             if original_word in old_mem.memory:
                 mem = old_mem.model_copy(deep=True)
                 mem.memory = mem.memory.replace(original_word, target_word)
+                if original_word in mem.metadata.tags:
+                    mem.metadata.tags.remove(original_word)
                 if target_word not in mem.metadata.tags:
                     mem.metadata.tags.append(target_word)
                 pick_index.append(i)
                 update_memories.append(mem)
+        update_memories_embed = self._batch_embed([mem.memory for mem in update_memories])
 
-        update_memories_embed = self._retry_db_operation(
-            lambda: self._batch_embed([mem.memory for mem in update_memories])
-        )
         for _i, embed in zip(range(len(update_memories)), update_memories_embed, strict=False):
             update_memories[_i].metadata.embedding = embed
 
@@ -645,7 +778,7 @@ class MemFeedback(BaseMemFeedback):
                     update_results.append(result)
                 except Exception as e:
                     mem_id = future_to_info[future][0]
-                    self.logger.error(
+                    logger.error(
                         f"[Feedback Core DB] Exception during update operation for memory {mem_id}: {e}"
                     )
 
@@ -657,6 +790,7 @@ class MemFeedback(BaseMemFeedback):
         user_name: str,
         chat_history: list[MessageDict],
         feedback_content: str,
+        info: dict | None = None,
         **kwargs,
     ) -> dict:
         """
@@ -678,7 +812,11 @@ class MemFeedback(BaseMemFeedback):
         try:
             feedback_time = kwargs.get("feedback_time") or datetime.now().isoformat()
             session_id = kwargs.get("session_id")
-            info = {"user_id": user_id, "user_name": user_name, "session_id": session_id}
+            if not info:
+                info = {"user_id": user_id, "user_name": user_name, "session_id": session_id}
+            else:
+                info.update({"user_id": user_id, "user_name": user_name, "session_id": session_id})
+
             logger.info(
                 f"[Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
             )
@@ -690,7 +828,9 @@ class MemFeedback(BaseMemFeedback):
                 and kwp_judge.get("original", "NONE") != "NONE"
                 and kwp_judge.get("target", "NONE") != "NONE"
             ):
-                return self.process_keyword_replace(user_id, user_name, kwp_judge=kwp_judge)
+                return self.process_keyword_replace(
+                    user_id, user_name, kwp_judge=kwp_judge, info=info
+                )
 
             # llm update memory
             if not chat_history:
@@ -718,9 +858,7 @@ class MemFeedback(BaseMemFeedback):
                 feedback_memories = []
 
                 corrected_infos = [item["corrected_info"] for item in valid_feedback]
-                feedback_memories_embeddings = self._retry_db_operation(
-                    lambda: self._batch_embed(corrected_infos)
-                )
+                feedback_memories_embeddings = self._batch_embed(corrected_infos)
 
                 for item, embedding in zip(
                     valid_feedback, feedback_memories_embeddings, strict=False
@@ -728,29 +866,26 @@ class MemFeedback(BaseMemFeedback):
                     value = item["corrected_info"]
                     key = item["key"]
                     tags = item["tags"]
-                    feedback_memories.append(
-                        TextualMemoryItem(
-                            memory=value,
-                            metadata=TreeNodeTextualMemoryMetadata(
-                                user_id=info.get("user_id", ""),
-                                session_id=info.get("session_id", ""),
-                                memory_type="LongTermMemory",
-                                status="activated",
-                                tags=tags,
-                                key=key,
-                                embedding=embedding,
-                                usage=[],
-                                sources=[{"type": "chat"}],
-                                user_name=user_name,
-                                background="[Feedback update background]: "
-                                + str(chat_history)
-                                + "\nUser feedback: "
-                                + str(feedback_content),
-                                confidence=0.99,
-                                type="fine",
-                            ),
-                        )
+                    background = (
+                        "[Feedback update background]: "
+                        + str(chat_history)
+                        + "\nUser feedback: "
+                        + str(feedback_content)
                     )
+                    mem_item = make_mem_item(
+                        value,
+                        user_id=user_id,
+                        user_name=user_name,
+                        session_id=session_id,
+                        tags=tags,
+                        key=key,
+                        embedding=embedding,
+                        sources=[{"type": "chat"}],
+                        background=background,
+                        type="fine",
+                        info=info,
+                    )
+                    feedback_memories.append(mem_item)
 
                 mem_record = self._feedback_memory(
                     user_id,
@@ -758,10 +893,13 @@ class MemFeedback(BaseMemFeedback):
                     feedback_memories,
                     chat_history=chat_history,
                     feedback_content=feedback_content,
+                    info=info,
                     **kwargs,
                 )
+                add_memories = mem_record["record"]["add"]
+                update_memories = mem_record["record"]["update"]
                 logger.info(
-                    f"[Feedback Core: process_feedback_core] Processed {len(feedback_memories)} feedback memories for user {user_name}."
+                    f"[Feedback Core: process_feedback_core] Processed {len(feedback_memories)} feedback | add {len(add_memories)} memories | update {len(update_memories)} memories for user {user_name}."
                 )
                 return mem_record
 
@@ -775,6 +913,7 @@ class MemFeedback(BaseMemFeedback):
         user_name: str,
         chat_history: list[MessageDict],
         feedback_content: str,
+        info: dict[str, Any] | None = None,
         **kwargs,
     ):
         """
@@ -804,6 +943,7 @@ class MemFeedback(BaseMemFeedback):
                 user_name,
                 chat_history,
                 feedback_content,
+                info,
                 **kwargs,
             )
             done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
@@ -815,42 +955,19 @@ class MemFeedback(BaseMemFeedback):
                 task_id = kwargs.get("task_id", "default")
 
                 logger.info(
-                    f"[MemFeedback process] Feedback Completed : user {user_name} | task_id {task_id} | record {record}."
+                    f"[Feedback Core MemFeedback process] Feedback Completed : user {user_name} | task_id {task_id} | record {record}."
                 )
 
                 return {"answer": answer, "record": record["record"]}
             except concurrent.futures.TimeoutError:
                 logger.error(
-                    f"[MemFeedback process] Timeout in sync mode for {user_name}", exc_info=True
+                    f"[Feedback Core MemFeedback process] Timeout in sync mode for {user_name}",
+                    exc_info=True,
                 )
                 return {"answer": "", "record": {"add": [], "update": []}}
             except Exception as e:
                 logger.error(
-                    f"[MemFeedback process] Error in concurrent tasks for {user_name}: {e}",
+                    f"[Feedback Core MemFeedback process] Error in concurrent tasks for {user_name}: {e}",
                     exc_info=True,
                 )
                 return {"answer": "", "record": {"add": [], "update": []}}
-
-    #  Helper for DB operations with retry
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def _retry_db_operation(self, operation):
-        try:
-            return operation()
-        except Exception as e:
-            logger.error(
-                f"[MemFeedback: _retry_db_operation] DB operation failed: {e}", exc_info=True
-            )
-            raise
-
-    @require_python_package(
-        import_name="jieba",
-        install_command="pip install jieba",
-        install_link="https://github.com/fxsjy/jieba",
-    )
-    def _tokenize_chinese(self, text):
-        """split zh jieba"""
-        import jieba
-
-        tokens = jieba.lcut(text)
-        tokens = [token.strip() for token in tokens if token.strip()]
-        return self.stopword_manager.filter_words(tokens)

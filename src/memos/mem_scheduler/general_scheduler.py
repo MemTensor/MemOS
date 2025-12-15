@@ -66,7 +66,7 @@ class GeneralScheduler(BaseScheduler):
     def long_memory_update_process(
         self, user_id: str, mem_cube_id: str, messages: list[ScheduleMessageItem]
     ):
-        mem_cube = self.current_mem_cube
+        mem_cube = self.mem_cube
 
         # update query monitors
         for msg in messages:
@@ -109,8 +109,8 @@ class GeneralScheduler(BaseScheduler):
 
             query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
             query_db_manager.obj.put(item=item)
-            # Sync with database after adding new item
-            query_db_manager.sync_with_orm()
+        # Sync with database after adding new item
+        query_db_manager.sync_with_orm()
         logger.debug(
             f"Queries in monitor for user_id={user_id}, mem_cube_id={mem_cube_id}: {query_db_manager.obj.get_queries_with_timesort()}"
         )
@@ -126,7 +126,10 @@ class GeneralScheduler(BaseScheduler):
             top_k=self.top_k,
         )
         logger.info(
-            f"[long_memory_update_process] Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} new candidate memories for user_id={user_id}"
+            # Build the candidate preview string outside the f-string to avoid backslashes in expression
+            f"[long_memory_update_process] Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} "
+            f"new candidate memories for user_id={user_id}: "
+            + ("\n- " + "\n- ".join([f"{one.id}: {one.memory}" for one in new_candidates]))
         )
 
         # rerank
@@ -141,10 +144,14 @@ class GeneralScheduler(BaseScheduler):
             f"[long_memory_update_process] Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
         )
 
-        old_memory_texts = [mem.memory for mem in cur_working_memory]
-        new_memory_texts = [mem.memory for mem in new_order_working_memory]
+        old_memory_texts = "\n- " + "\n- ".join(
+            [f"{one.id}: {one.memory}" for one in cur_working_memory]
+        )
+        new_memory_texts = "\n- " + "\n- ".join(
+            [f"{one.id}: {one.memory}" for one in new_order_working_memory]
+        )
 
-        logger.debug(
+        logger.info(
             f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
             f"Scheduler replaced working memory based on query history {queries}. "
             f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
@@ -162,7 +169,7 @@ class GeneralScheduler(BaseScheduler):
                 label=QUERY_TASK_LABEL,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
             )
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
@@ -249,7 +256,7 @@ class GeneralScheduler(BaseScheduler):
                             to_memory_type=NOT_APPLICABLE_TYPE,
                             user_id=msg.user_id,
                             mem_cube_id=msg.mem_cube_id,
-                            mem_cube=self.current_mem_cube,
+                            mem_cube=self.mem_cube,
                             memcube_log_content=[
                                 {
                                     "content": f"[User] {msg.content}",
@@ -305,7 +312,7 @@ class GeneralScheduler(BaseScheduler):
                             to_memory_type=NOT_APPLICABLE_TYPE,
                             user_id=msg.user_id,
                             mem_cube_id=msg.mem_cube_id,
-                            mem_cube=self.current_mem_cube,
+                            mem_cube=self.mem_cube,
                             memcube_log_content=[
                                 {
                                     "content": f"[Assistant] {msg.content}",
@@ -338,7 +345,7 @@ class GeneralScheduler(BaseScheduler):
             try:
                 # This mem_item represents the NEW content that was just added/processed
                 mem_item: TextualMemoryItem | None = None
-                mem_item = self.current_mem_cube.text_mem.get(
+                mem_item = self.mem_cube.text_mem.get(
                     memory_id=memory_id, user_name=msg.mem_cube_id
                 )
                 if mem_item is None:
@@ -352,8 +359,8 @@ class GeneralScheduler(BaseScheduler):
                 original_item_id = None
 
                 # Only check graph_store if a key exists and the text_mem has a graph_store
-                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
-                    candidates = self.current_mem_cube.text_mem.graph_store.get_by_metadata(
+                if key and hasattr(self.mem_cube.text_mem, "graph_store"):
+                    candidates = self.mem_cube.text_mem.graph_store.get_by_metadata(
                         [
                             {"field": "key", "op": "=", "value": key},
                             {
@@ -368,7 +375,7 @@ class GeneralScheduler(BaseScheduler):
                         original_item_id = candidates[0]
                         # Crucial step: Fetch the original content for updates
                         # This `get` is for the *existing* memory that will be updated
-                        original_mem_item = self.current_mem_cube.text_mem.get(
+                        original_mem_item = self.mem_cube.text_mem.get(
                             memory_id=original_item_id, user_name=msg.mem_cube_id
                         )
                         original_content = original_mem_item.memory
@@ -481,7 +488,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
                 memcube_log_content=add_content_legacy,
                 metadata=add_meta_legacy,
                 memory_len=len(add_content_legacy),
@@ -496,7 +503,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
                 memcube_log_content=update_content_legacy,
                 metadata=update_meta_legacy,
                 memory_len=len(update_content_legacy),
@@ -562,7 +569,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
                 memcube_log_content=kb_log_content,
                 metadata=None,
                 memory_len=len(kb_log_content),
@@ -577,7 +584,7 @@ class GeneralScheduler(BaseScheduler):
             if not messages:
                 return
             message = messages[0]
-            mem_cube = self.current_mem_cube
+            mem_cube = self.mem_cube
 
             user_id = message.user_id
             mem_cube_id = message.mem_cube_id
@@ -604,6 +611,7 @@ class GeneralScheduler(BaseScheduler):
                 feedback_content=feedback_data.get("feedback_content"),
                 feedback_time=feedback_data.get("feedback_time"),
                 task_id=task_id,
+                info=feedback_data.get("info", None),
             )
 
             logger.info(
@@ -744,9 +752,9 @@ class GeneralScheduler(BaseScheduler):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
-                mem_cube = self.current_mem_cube
+                mem_cube = self.mem_cube
                 if mem_cube is None:
-                    logger.warning(
+                    logger.error(
                         f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing",
                         stack_info=True,
                     )
@@ -923,7 +931,7 @@ class GeneralScheduler(BaseScheduler):
                                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                                 user_id=user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=self.current_mem_cube,
+                                mem_cube=self.mem_cube,
                                 memcube_log_content=kb_log_content,
                                 metadata=None,
                                 memory_len=len(kb_log_content),
@@ -968,7 +976,7 @@ class GeneralScheduler(BaseScheduler):
                                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                                 user_id=user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=self.current_mem_cube,
+                                mem_cube=self.mem_cube,
                                 memcube_log_content=add_content_legacy,
                                 metadata=add_meta_legacy,
                                 memory_len=len(add_content_legacy),
@@ -1036,7 +1044,7 @@ class GeneralScheduler(BaseScheduler):
                         to_memory_type=LONG_TERM_MEMORY_TYPE,
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=self.current_mem_cube,
+                        mem_cube=self.mem_cube,
                         memcube_log_content=kb_log_content,
                         metadata=None,
                         memory_len=len(kb_log_content),
@@ -1054,7 +1062,7 @@ class GeneralScheduler(BaseScheduler):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
-                mem_cube = self.current_mem_cube
+                mem_cube = self.mem_cube
                 if mem_cube is None:
                     logger.warning(
                         f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
@@ -1284,7 +1292,7 @@ class GeneralScheduler(BaseScheduler):
 
         def process_message(message: ScheduleMessageItem):
             try:
-                mem_cube = self.current_mem_cube
+                mem_cube = self.mem_cube
                 if mem_cube is None:
                     logger.warning(
                         f"mem_cube is None for user_id={message.user_id}, mem_cube_id={message.mem_cube_id}, skipping processing"
@@ -1412,20 +1420,21 @@ class GeneralScheduler(BaseScheduler):
             logger.info(
                 f"[process_session_turn] Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
             )
-            info = {
-                "user_id": user_id,
-                "session_id": "",
-            }
 
+            search_args = {}
             results: list[TextualMemoryItem] = self.retriever.search(
                 query=item,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
                 top_k=k_per_evidence,
                 method=self.search_method,
-                info=info,
+                search_args=search_args,
             )
+
             logger.info(
-                f"[process_session_turn] Search results for missing evidence '{item}': {[one.memory for one in results]}"
+                f"[process_session_turn] Search results for missing evidence '{item}': "
+                + ("\n- " + "\n- ".join([f"{one.id}: {one.memory}" for one in results]))
             )
             new_candidates.extend(results)
         return cur_working_memory, new_candidates

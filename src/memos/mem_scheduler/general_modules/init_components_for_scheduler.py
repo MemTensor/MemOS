@@ -1,7 +1,7 @@
 import json
 import os
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.api.config import APIConfig
 from memos.configs.embedder import EmbedderConfigFactory
@@ -16,6 +16,7 @@ from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_reader.factory import MemReaderFactory
 from memos.memories.textual.prefer_text_memory.config import (
     AdderConfigFactory,
@@ -34,6 +35,10 @@ from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory
     InternetRetrieverFactory,
 )
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.factory import RerankerFactory
 from memos.vec_dbs.factory import VecDBFactory
 
@@ -385,7 +390,21 @@ def init_components() -> dict[str, Any]:
         act_mem=None,
         para_mem=None,
     )
+
+    tree_mem: SimpleTreeTextMemory = naive_mem_cube.text_mem
+    searcher: Searcher = tree_mem.get_searcher(
+        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+        moscube=False,
+        process_llm=mem_reader.llm,
+    )
+    # Initialize feedback server
+    feedback_server = SimpleMemFeedback(
+        llm=llm,
+        embedder=embedder,
+        graph_store=graph_db,
+        memory_manager=memory_manager,
+        mem_reader=mem_reader,
+        searcher=searcher,
+    )
     # Return all components as a dictionary for easy access and extension
-    return {
-        "naive_mem_cube": naive_mem_cube,
-    }
+    return {"naive_mem_cube": naive_mem_cube, "feedback_server": feedback_server}

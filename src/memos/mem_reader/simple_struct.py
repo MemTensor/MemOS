@@ -210,7 +210,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
-
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
@@ -454,7 +453,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     @staticmethod
     def _parse_hallucination_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
         """Parse index-keyed JSON from hallucination filter response.
-        Expected shape: { "0": {"if_delete": bool, "rewritten memory content": str}, ... }
+        Expected shape: { "0": {"need_rewrite": bool, "rewritten_suffix": str, "reason": str}, ... }
         Returns (success, parsed_dict) with int keys.
         """
         try:
@@ -477,54 +476,79 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     continue
             if not isinstance(v, dict):
                 continue
-            delete_flag = v.get("delete_flag")
-            rewritten = v.get("rewritten memory content", "")
-            if isinstance(delete_flag, bool) and isinstance(rewritten, str):
-                result[idx] = {"delete_flag": delete_flag, "rewritten memory content": rewritten}
+            need_rewrite = v.get("need_rewrite")
+            rewritten_suffix = v.get("rewritten_suffix", "")
+            reason = v.get("reason", "")
+            if (
+                isinstance(need_rewrite, bool)
+                and isinstance(rewritten_suffix, str)
+                and isinstance(reason, str)
+            ):
+                result[idx] = {
+                    "need_rewrite": need_rewrite,
+                    "rewritten_suffix": rewritten_suffix,
+                    "reason": reason,
+                }
 
         return (len(result) > 0), result
 
     def filter_hallucination_in_memories(
-        self, user_messages: list[str], memory_list: list[list[TextualMemoryItem]]
-    ):
-        filtered_memory_list = []
-        for group in memory_list:
-            try:
-                flat_memories = [one.memory for one in group]
-                template = PROMPT_MAPPING["hallucination_filter"]
-                prompt_args = {
-                    "user_messages_inline": "\n".join(user_messages),
-                    "memories_inline": json.dumps(flat_memories, ensure_ascii=False, indent=2),
-                }
-                prompt = template.format(**prompt_args)
+        self, messages: list[dict], memory_list: list[TextualMemoryItem]
+    ) -> list[TextualMemoryItem]:
+        # Build input objects with memory text and metadata (timestamps, sources, etc.)
+        template = PROMPT_MAPPING["hallucination_filter"]
+        prompt_args = {
+            "messages_inline": "\n".join(
+                [f"- [{message['role']}]: {message['content']}" for message in messages]
+            ),
+            "memories_inline": json.dumps(
+                {idx: mem.memory for idx, mem in enumerate(memory_list)},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        }
+        prompt = template.format(**prompt_args)
 
-                # Optionally run filter and parse the output
-                try:
-                    raw = self.llm.generate(prompt)
-                    success, parsed = self._parse_hallucination_filter_response(raw)
-                    logger.info(f"Hallucination filter parsed successfully: {success}")
-                    new_mem_list = []
-                    if success:
-                        logger.info(f"Hallucination filter result: {parsed}")
-                        for mem_idx, (delete_flag, rewritten_mem_content) in parsed.items():
-                            if not delete_flag:
-                                group[mem_idx].memory = rewritten_mem_content
-                                new_mem_list.append(group[mem_idx])
-                        filtered_memory_list.append(new_mem_list)
+        # Optionally run filter and parse the output
+        try:
+            raw = self.llm.generate([{"role": "user", "content": prompt}])
+            success, parsed = self._parse_hallucination_filter_response(raw)
+            logger.info(
+                f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}"
+            )
+            if success:
+                new_mem_list = []
+                logger.info(f"Hallucination filter result: {parsed}")
+                assert len(parsed) == len(memory_list)
+                for mem_idx, content in parsed.items():
+                    need_rewrite = content.get("need_rewrite", False)
+                    rewritten_suffix = content.get("rewritten_suffix", "")
+                    reason = content.get("reason", "")
+
+                    # Append a new memory item instead of replacing the original
+                    if (
+                        need_rewrite
+                        and isinstance(rewritten_suffix, str)
+                        and len(rewritten_suffix.strip()) > 0
+                    ):
+                        original_text = memory_list[mem_idx].memory
+
                         logger.info(
-                            f"Successfully transform origianl memories from {group} to {new_mem_list}."
+                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten_suffix='{rewritten_suffix}', reason='{reason}', original memory='{original_text}', action='append_suffix'"
                         )
+
+                        # Append only the suffix to the original memory text
+                        memory_list[mem_idx].memory = original_text + rewritten_suffix
+                        new_mem_list.append(memory_list[mem_idx])
                     else:
-                        logger.warning(
-                            "Hallucination filter parsing failed or returned empty result."
-                        )
-                except Exception as e:
-                    logger.error(f"Hallucination filter execution error: {e}", stack_info=True)
-                    filtered_memory_list.append(group)
-            except Exception:
-                logger.error("Fail to filter memories", stack_info=True)
-                filtered_memory_list.append(group)
-        return filtered_memory_list
+                        new_mem_list.append(memory_list[mem_idx])
+                return new_mem_list
+            else:
+                logger.warning("Hallucination filter parsing failed or returned empty result.")
+        except Exception as e:
+            logger.error(f"Hallucination filter execution error: {e}", stack_info=True)
+
+        return memory_list
 
     def _read_memory(
         self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
@@ -573,11 +597,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if os.getenv("SIMPLE_STRUCT_ADD_FILTER", "false") == "true":
             # Build inputs
-            user_messages = [msg.content for msg in messages if msg.role == "user"]
-            memory_list = self.filter_hallucination_in_memories(
-                user_messages=user_messages, memory_list=memory_list
-            )
-
+            new_memory_list = []
+            for unit_messages, unit_memory_list in zip(messages, memory_list, strict=False):
+                unit_memory_list = self.filter_hallucination_in_memories(
+                    messages=unit_messages, memory_list=unit_memory_list
+                )
+                new_memory_list.append(unit_memory_list)
+            memory_list = new_memory_list
         return memory_list
 
     def fine_transfer_simple_mem(

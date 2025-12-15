@@ -183,8 +183,9 @@ class SingleCubeView(MemCubeView):
                 async_mode=feedback_req.async_mode,
                 corrected_answer=feedback_req.corrected_answer,
                 task_id=feedback_req.task_id,
+                info=feedback_req.info,
             )
-            self.logger.info(f"Feedback memories result: {feedback_result}")
+            self.logger.info(f"[Feedback memories result:] {feedback_result}")
         return feedback_result
 
     def _get_search_mode(self, mode: str) -> str:
@@ -443,10 +444,6 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
-            # TODO: tmp field for playground search goal parser, will be removed later
-            playground_search_goal_parser=search_req.playground_search_goal_parser
-            if hasattr(search_req, "playground_search_goal_parser")
-            else False,
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]
