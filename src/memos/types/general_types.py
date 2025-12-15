@@ -101,6 +101,7 @@ class FineStrategy(str, Enum):
     REWRITE = "rewrite"
     RECREATE = "recreate"
     DEEP_SEARCH = "deep_search"
+    AGENTIC_SEARCH = "agentic_search"
 
 
 # algorithm strategies

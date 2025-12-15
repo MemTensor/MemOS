@@ -47,6 +47,7 @@ dependencies = [
     "fastmcp (>=2.10.5,<3.0.0)",
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
     "prometheus-client (>=0.23.1,<0.24.0)",
+    "concurrent-log-handler (>=0.9.28,<1.0.0)",  # Process-safe rotating file handler
 ]
 
 [project.urls]
@@ -120,6 +121,8 @@ all = [
     "sentence-transformers (>=4.1.0,<5.0.0)",
     "qdrant-client (>=1.14.2,<2.0.0)",
     "volcengine-python-sdk (>=4.0.4,<5.0.0)",
+    "nltk (>=3.9.1,<4.0.0)",
+    "rake-nltk (>=1.0.6,<1.1.0)",
 
     # Uncategorized dependencies
 ]

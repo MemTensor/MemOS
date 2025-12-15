@@ -136,7 +136,7 @@ class GeneralTextMemory(BaseTextMemory):
         ]
         return result_memories
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID."""
         result = self.vector_db.get_by_id(memory_id)
         if result is None:

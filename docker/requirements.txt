@@ -160,4 +160,5 @@ xlrd==2.0.2
 xlsxwriter==3.2.5
 prometheus-client==0.23.1
 pymilvus==2.5.12
-langchain-text-splitters==1.0.0
+nltk==3.9.1
+rake-nltk==1.0.6

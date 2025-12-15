@@ -4,11 +4,13 @@ from memos.configs.mem_os import MOSConfig
 from memos.log import get_logger
 from memos.mem_os.main import MOS
 from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
     MONITOR_WORKING_MEMORY_TYPE,
-    QUERY_LABEL,
 )
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 
 
 logger = get_logger(__name__)
@@ -427,7 +429,7 @@ class MOSForTestScheduler(MOS):
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    label=QUERY_LABEL,
+                    label=QUERY_TASK_LABEL,
                     content=query,
                     timestamp=datetime.now(),
                 )
@@ -517,11 +519,11 @@ class MOSForTestScheduler(MOS):
                 message_item = ScheduleMessageItem(
                     user_id=target_user_id,
                     mem_cube_id=mem_cube_id,
-                    label=ANSWER_LABEL,
+                    label=ANSWER_TASK_LABEL,
                     content=response,
                     timestamp=datetime.now(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                self.mem_scheduler.submit_messages(messages=[message_item])
 
         return response
 

@@ -236,6 +236,110 @@ class Neo4jGraphDB(BaseGraphDB):
                 metadata=metadata,
             )
 
+    def add_nodes_batch(
+        self,
+        nodes: list[dict[str, Any]],
+        user_name: str | None = None,
+    ) -> None:
+        """
+        Batch add multiple memory nodes to the graph.
+
+        Args:
+            nodes: List of node dictionaries, each containing:
+                - id: str - Node ID
+                - memory: str - Memory content
+                - metadata: dict[str, Any] - Node metadata
+            user_name: Optional user name (will use config default if not provided)
+        """
+        if not nodes:
+            logger.warning("[add_nodes_batch] Empty nodes list, skipping")
+            return
+
+        logger.info(f"[add_nodes_batch] Adding {len(nodes)} nodes")
+
+        # user_name comes from parameter; fallback to config if missing
+        effective_user_name = user_name if user_name else self.config.user_name
+
+        # Prepare all nodes
+        prepared_nodes = []
+        for node_data in nodes:
+            try:
+                id = node_data["id"]
+                memory = node_data["memory"]
+                metadata = node_data.get("metadata", {})
+
+                logger.debug(f"[add_nodes_batch] Processing node id: {id}")
+
+                # Set user_name in metadata if needed
+                if not self.config.use_multi_db and (self.config.user_name or effective_user_name):
+                    metadata["user_name"] = effective_user_name
+
+                # Safely process metadata
+                metadata = _prepare_node_metadata(metadata)
+
+                # Flatten info fields to top level (for Neo4j flat structure)
+                metadata = _flatten_info_fields(metadata)
+
+                # Merge node and set metadata
+                created_at = metadata.pop("created_at")
+                updated_at = metadata.pop("updated_at")
+
+                # Serialization for sources
+                if metadata.get("sources"):
+                    for idx in range(len(metadata["sources"])):
+                        metadata["sources"][idx] = json.dumps(metadata["sources"][idx])
+
+                prepared_nodes.append(
+                    {
+                        "id": id,
+                        "memory": memory,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                        "metadata": metadata,
+                    }
+                )
+            except Exception as e:
+                logger.error(
+                    f"[add_nodes_batch] Failed to prepare node {node_data.get('id', 'unknown')}: {e}",
+                    exc_info=True,
+                )
+                # Continue with other nodes
+                continue
+
+        if not prepared_nodes:
+            logger.warning("[add_nodes_batch] No valid nodes to insert after preparation")
+            return
+
+        # Batch insert using Neo4j UNWIND for better performance
+        query = """
+            UNWIND $nodes AS node
+            MERGE (n:Memory {id: node.id})
+            SET n.memory = node.memory,
+                n.created_at = datetime(node.created_at),
+                n.updated_at = datetime(node.updated_at),
+                n += node.metadata
+        """
+
+        # Prepare nodes data for UNWIND
+        nodes_data = [
+            {
+                "id": node["id"],
+                "memory": node["memory"],
+                "created_at": node["created_at"],
+                "updated_at": node["updated_at"],
+                "metadata": node["metadata"],
+            }
+            for node in prepared_nodes
+        ]
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                session.run(query, nodes=nodes_data)
+                logger.info(f"[add_nodes_batch] Successfully inserted {len(prepared_nodes)} nodes")
+        except Exception as e:
+            logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
+            raise
+
     def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """
         Update node fields in Neo4j, auto-converting `created_at` and `updated_at` to datetime type if present.
@@ -1588,7 +1692,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 file_id_and_conditions.append(f"${param_name} IN n.file_ids")
             if file_id_and_conditions:
                 # Use AND to require all file_ids to be present
-                where_clauses.append(f"({' AND '.join(file_id_and_conditions)})")
+                where_clauses.append(f"({' OR '.join(file_id_and_conditions)})")
 
         # Query nodes by filter if provided
         filter_ids = []

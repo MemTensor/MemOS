@@ -1,5 +1,6 @@
 """Parser for system messages."""
 
+import ast
 import json
 import re
 import uuid
@@ -137,8 +138,14 @@ class SystemParser(BaseMessageParser):
             tool_schema = json.loads(content)
             assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
         except json.JSONDecodeError:
-            logger.warning(f"[SystemParser] Failed to parse tool schema: {content}")
-            return []
+            try:
+                tool_schema = ast.literal_eval(content)
+                assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
+            except (ValueError, SyntaxError, AssertionError):
+                logger.warning(
+                    f"[SystemParser] Failed to parse tool schema with both JSON and ast.literal_eval: {content}"
+                )
+                return []
         except AssertionError:
             logger.warning(f"[SystemParser] Tool schema must be a list[dict]: {content}")
             return []

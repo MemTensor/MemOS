@@ -142,11 +142,14 @@ class TaskStatusTracker:
         # Get statuses for all items
         key = self._get_key(user_id)
         item_statuses = []
+        errors = []
         for item_id in item_ids:
             item_data_json = self.redis.hget(key, item_id)
             if item_data_json:
                 item_data = json.loads(item_data_json)
                 item_statuses.append(item_data["status"])
+                if item_data.get("status") == "failed" and "error" in item_data:
+                    errors.append(item_data["error"])
 
         if not item_statuses:
             return None
@@ -167,4 +170,33 @@ class TaskStatusTracker:
             "business_task_id": business_task_id,
             "item_count": len(item_ids),
             "item_statuses": item_statuses,
+            "errors": errors,
         }
+
+    def get_all_tasks_global(self) -> dict[str, dict[str, dict]]:
+        """
+        Retrieve all tasks for all users from Redis.
+
+        Returns:
+            dict: {user_id: {task_id: task_data, ...}, ...}
+        """
+        all_users_tasks = {}
+        cursor: int | str = 0
+        while True:
+            cursor, keys = self.redis.scan(cursor=cursor, match="memos:task_meta:*", count=100)
+            for key in keys:
+                # key format: memos:task_meta:{user_id}
+                parts = key.split(":")
+                if len(parts) < 3:
+                    continue
+                user_id = parts[2]
+
+                tasks = self.redis.hgetall(key)
+                if tasks:
+                    user_tasks = {tid: json.loads(t_data) for tid, t_data in tasks.items()}
+                    all_users_tasks[user_id] = user_tasks
+
+            if cursor == 0 or cursor == "0":
+                break
+
+        return all_users_tasks

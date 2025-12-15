@@ -250,3 +250,16 @@ class BaseGraphDB(ABC):
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
+
+    @abstractmethod
+    def add_nodes_batch(self, nodes: list[dict[str, Any]], user_name: str | None = None) -> None:
+        """
+        Batch add multiple memory nodes to the graph.
+
+        Args:
+            nodes: List of node dictionaries, each containing:
+                - id: str - Node ID
+                - memory: str - Memory content
+                - metadata: dict[str, Any] - Node metadata
+            user_name: Optional user name (will use config default if not provided)
+        """

@@ -39,12 +39,13 @@ class TaskGoalParser:
         - mode == 'fast': use jieba to split words only
         - mode == 'fine': use LLM to parse structured topic/keys/tags
         """
+
         if mode == "fast":
             return self._parse_fast(task_description, context=context, **kwargs)
         elif mode == "fine":
             if not self.llm:
                 raise ValueError("LLM not provided for slow mode.")
-            return self._parse_fine(task_description, context, conversation)
+            return self._parse_fine(task_description, context, conversation, **kwargs)
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
@@ -77,7 +78,7 @@ class TaskGoalParser:
             )
 
     def _parse_fine(
-        self, query: str, context: str = "", conversation: list[dict] | None = None
+        self, query: str, context: str = "", conversation: list[dict] | None = None, **kwargs
     ) -> ParsedTaskGoal:
         """
         Slow mode: LLM structured parse.

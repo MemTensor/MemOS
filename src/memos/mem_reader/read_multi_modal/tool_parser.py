@@ -79,7 +79,7 @@ class ToolParser(BaseMessageParser):
                                 filename=file_info.get("filename", ""),
                                 file_id=file_info.get("file_id", ""),
                                 tool_call_id=tool_call_id,
-                                original_part=part,
+                                file_info=file_info,
                             )
                         )
                     elif part_type == "image_url":
@@ -93,7 +93,6 @@ class ToolParser(BaseMessageParser):
                                 content=file_info.get("url", ""),
                                 detail=file_info.get("detail", "auto"),
                                 tool_call_id=tool_call_id,
-                                original_part=part,
                             )
                         )
                     elif part_type == "input_audio":
@@ -107,7 +106,6 @@ class ToolParser(BaseMessageParser):
                                 content=file_info.get("data", ""),
                                 format=file_info.get("format", "wav"),
                                 tool_call_id=tool_call_id,
-                                original_part=part,
                             )
                         )
                     else:

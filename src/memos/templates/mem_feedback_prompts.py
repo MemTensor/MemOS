@@ -441,6 +441,8 @@ Operation recommendations:
         ]
 }}
 
+**Current time**
+{now_time}
 
 **Current Memories**
 {current_memories}
@@ -580,6 +582,9 @@ user feedback: 错了，请更新我的地址：北京市朝阳区明月社区
             }}
         ]
 }}
+
+**当前时间：**
+{now_time}
 
 **当前记忆：**
 {current_memories}

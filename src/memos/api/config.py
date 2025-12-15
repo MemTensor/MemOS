@@ -590,6 +590,7 @@ class APIConfig:
             "user": os.getenv("POLAR_DB_USER", "root"),
             "password": os.getenv("POLAR_DB_PASSWORD", "123456"),
             "db_name": db_name,
+            "maxconn": int(os.getenv("POLARDB_POOL_MAX_CONN", "100")),
             "user_name": user_name,
             "use_multi_db": use_multi_db,
             "auto_create": True,

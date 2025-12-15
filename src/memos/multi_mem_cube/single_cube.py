@@ -15,13 +15,13 @@ from memos.api.handlers.formatters_handler import (
 )
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
-from memos.mem_scheduler.schemas.general_schemas import (
-    ADD_LABEL,
-    MEM_FEEDBACK_LABEL,
-    MEM_READ_LABEL,
-    PREF_ADD_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    MEM_FEEDBACK_TASK_LABEL,
+    MEM_READ_TASK_LABEL,
+    PREF_ADD_TASK_LABEL,
+)
 from memos.multi_mem_cube.views import MemCubeView
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -30,6 +30,7 @@ from memos.types.general_types import (
     SearchMode,
     UserContext,
 )
+from memos.utils import timed
 
 
 logger = get_logger(__name__)
@@ -93,7 +94,11 @@ class SingleCubeView(MemCubeView):
         for item in pref_results:
             item["cube_id"] = self.cube_id
 
-        return text_results + pref_results
+        all_memories = text_results + pref_results
+
+        # TODO: search existing memories and compare
+
+        return all_memories
 
     def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
         # Create UserContext object
@@ -153,13 +158,12 @@ class SingleCubeView(MemCubeView):
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
-                    label=MEM_FEEDBACK_LABEL,
+                    label=MEM_FEEDBACK_TASK_LABEL,
                     content=feedback_req_str,
                     timestamp=datetime.utcnow(),
                 )
-                self.mem_scheduler.memos_message_queue.submit_messages(
-                    messages=[message_item_feedback]
-                )
+                # Use scheduler submission to ensure tracking and metrics
+                self.mem_scheduler.submit_messages(messages=[message_item_feedback])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted FEEDBACK async")
             except Exception as e:
                 self.logger.error(
@@ -179,8 +183,9 @@ class SingleCubeView(MemCubeView):
                 async_mode=feedback_req.async_mode,
                 corrected_answer=feedback_req.corrected_answer,
                 task_id=feedback_req.task_id,
+                info=feedback_req.info,
             )
-            self.logger.info(f"Feedback memories result: {feedback_result}")
+            self.logger.info(f"[Feedback memories result:] {feedback_result}")
         return feedback_result
 
     def _get_search_mode(self, mode: str) -> str:
@@ -195,6 +200,7 @@ class SingleCubeView(MemCubeView):
         """
         return mode
 
+    @timed
     def _search_text(
         self,
         search_req: APISearchRequest,
@@ -360,6 +366,7 @@ class SingleCubeView(MemCubeView):
 
         return formatted_memories
 
+    @timed
     def _search_pref(
         self,
         search_req: APISearchRequest,
@@ -426,6 +433,7 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             mode=SearchMode.FAST,
             manual_close_internet=not search_req.internet_search,
+            memory_type=search_req.search_memory_type,
             search_filter=search_filter,
             search_priority=search_priority,
             info={
@@ -501,7 +509,7 @@ class SingleCubeView(MemCubeView):
                     session_id=target_session_id,
                     mem_cube_id=self.cube_id,
                     mem_cube=self.naive_mem_cube,
-                    label=MEM_READ_LABEL,
+                    label=MEM_READ_TASK_LABEL,
                     content=json.dumps(mem_ids),
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
@@ -523,7 +531,7 @@ class SingleCubeView(MemCubeView):
                 session_id=target_session_id,
                 mem_cube_id=self.cube_id,
                 mem_cube=self.naive_mem_cube,
-                label=ADD_LABEL,
+                label=ADD_TASK_LABEL,
                 content=json.dumps(mem_ids),
                 timestamp=datetime.utcnow(),
                 user_name=self.cube_id,
@@ -556,7 +564,7 @@ class SingleCubeView(MemCubeView):
             return []
 
         for message in add_req.messages:
-            if message.get("role", None) is None:
+            if isinstance(message, dict) and message.get("role", None) is None:
                 return []
 
         target_session_id = add_req.session_id or "default_session"
@@ -569,7 +577,7 @@ class SingleCubeView(MemCubeView):
                     session_id=target_session_id,
                     mem_cube_id=user_context.mem_cube_id,
                     mem_cube=self.naive_mem_cube,
-                    label=PREF_ADD_LABEL,
+                    label=PREF_ADD_TASK_LABEL,
                     content=json.dumps(messages_list),
                     timestamp=datetime.utcnow(),
                     info=add_req.info,
@@ -661,6 +669,13 @@ class SingleCubeView(MemCubeView):
             mode=extract_mode,
         )
         flattened_local = [mm for m in memories_local for mm in m]
+
+        # Explicitly set source_doc_id to metadata if present in info
+        source_doc_id = (add_req.info or {}).get("source_doc_id")
+        if source_doc_id:
+            for memory in flattened_local:
+                memory.metadata.source_doc_id = source_doc_id
+
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
 
         # Add memories to text_mem
@@ -681,7 +696,7 @@ class SingleCubeView(MemCubeView):
             sync_mode=sync_mode,
         )
 
-        return [
+        text_memories = [
             {
                 "memory": memory.memory,
                 "memory_id": memory_id,
@@ -689,3 +704,5 @@ class SingleCubeView(MemCubeView):
             }
             for memory_id, memory in zip(mem_ids_local, flattened_local, strict=False)
         ]
+
+        return text_memories

@@ -4,7 +4,7 @@ You are a task parsing expert. Given a user task instruction, optional former co
 1. Keys: the high-level keywords directly relevant to the user’s task.
 2. Tags: thematic tags to help categorize and retrieve related memories.
 3. Goal Type: retrieval | qa | generation
-4. Rephrased instruction: Give a rephrased task instruction based on the former conversation to make it less confusing to look alone. If you think the task instruction is easy enough to understand, or there is no former conversation, set "rephrased_instruction" to an empty string.
+4. Rephrased instruction: Give a rephrased task instruction based on the former conversation to make it less confusing to look alone. Make full use of information related to the query, including user's personal information, such as user's name, location, preferences, etc. If you think the task instruction is easy enough to understand, or there is no former conversation, set "rephrased_instruction" to an empty string.
 5. Need for internet search: If the user's task instruction only involves objective facts or can be completed without introducing external knowledge, set "internet_search" to False. Otherwise, set it to True.
 6. Memories: Provide 2–5 short semantic expansions or rephrasings of the rephrased/original user task instruction. These are used for improved embedding search coverage. Each should be clear, concise, and meaningful for retrieval.
 

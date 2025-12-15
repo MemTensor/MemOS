@@ -1,7 +1,6 @@
 import concurrent.futures
 import contextlib
 import json
-import os
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -9,27 +8,31 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.base_scheduler import BaseScheduler
-from memos.mem_scheduler.schemas.general_schemas import (
-    ADD_LABEL,
-    ANSWER_LABEL,
-    DEFAULT_MAX_QUERY_KEY_WORDS,
-    LONG_TERM_MEMORY_TYPE,
-    MEM_FEEDBACK_LABEL,
-    MEM_ORGANIZE_LABEL,
-    MEM_READ_LABEL,
-    NOT_APPLICABLE_TYPE,
-    PREF_ADD_LABEL,
-    QUERY_LABEL,
-    USER_INPUT_TYPE,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    ANSWER_TASK_LABEL,
+    DEFAULT_MAX_QUERY_KEY_WORDS,
+    LONG_TERM_MEMORY_TYPE,
+    MEM_FEEDBACK_TASK_LABEL,
+    MEM_ORGANIZE_TASK_LABEL,
+    MEM_READ_TASK_LABEL,
+    MEM_UPDATE_TASK_LABEL,
+    NOT_APPLICABLE_TYPE,
+    PREF_ADD_TASK_LABEL,
+    QUERY_TASK_LABEL,
+    USER_INPUT_TYPE,
+)
 from memos.mem_scheduler.utils.filter_utils import (
     is_all_chinese,
     is_all_english,
     transform_name_to_key,
 )
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
+from memos.mem_scheduler.utils.misc_utils import (
+    group_messages_by_user_and_mem_cube,
+    is_cloud_env,
+)
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.preference import PreferenceTextMemory
 from memos.memories.textual.tree import TreeTextMemory
@@ -51,20 +54,21 @@ class GeneralScheduler(BaseScheduler):
 
         # register handlers
         handlers = {
-            QUERY_LABEL: self._query_message_consumer,
-            ANSWER_LABEL: self._answer_message_consumer,
-            ADD_LABEL: self._add_message_consumer,
-            MEM_READ_LABEL: self._mem_read_message_consumer,
-            MEM_ORGANIZE_LABEL: self._mem_reorganize_message_consumer,
-            PREF_ADD_LABEL: self._pref_add_message_consumer,
-            MEM_FEEDBACK_LABEL: self._mem_feedback_message_consumer,
+            QUERY_TASK_LABEL: self._query_message_consumer,
+            ANSWER_TASK_LABEL: self._answer_message_consumer,
+            MEM_UPDATE_TASK_LABEL: self._memory_update_consumer,
+            ADD_TASK_LABEL: self._add_message_consumer,
+            MEM_READ_TASK_LABEL: self._mem_read_message_consumer,
+            MEM_ORGANIZE_TASK_LABEL: self._mem_reorganize_message_consumer,
+            PREF_ADD_TASK_LABEL: self._pref_add_message_consumer,
+            MEM_FEEDBACK_TASK_LABEL: self._mem_feedback_message_consumer,
         }
         self.dispatcher.register_handlers(handlers)
 
     def long_memory_update_process(
         self, user_id: str, mem_cube_id: str, messages: list[ScheduleMessageItem]
     ):
-        mem_cube = self.current_mem_cube
+        mem_cube = self.mem_cube
 
         # update query monitors
         for msg in messages:
@@ -107,8 +111,8 @@ class GeneralScheduler(BaseScheduler):
 
             query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
             query_db_manager.obj.put(item=item)
-            # Sync with database after adding new item
-            query_db_manager.sync_with_orm()
+        # Sync with database after adding new item
+        query_db_manager.sync_with_orm()
         logger.debug(
             f"Queries in monitor for user_id={user_id}, mem_cube_id={mem_cube_id}: {query_db_manager.obj.get_queries_with_timesort()}"
         )
@@ -124,7 +128,10 @@ class GeneralScheduler(BaseScheduler):
             top_k=self.top_k,
         )
         logger.info(
-            f"Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} new candidate memories for user_id={user_id}"
+            # Build the candidate preview string outside the f-string to avoid backslashes in expression
+            f"[long_memory_update_process] Processed {len(queries)} queries {queries} and retrieved {len(new_candidates)} "
+            f"new candidate memories for user_id={user_id}: "
+            + ("\n- " + "\n- ".join([f"{one.id}: {one.memory}" for one in new_candidates]))
         )
 
         # rerank
@@ -135,30 +142,44 @@ class GeneralScheduler(BaseScheduler):
             original_memory=cur_working_memory,
             new_memory=new_candidates,
         )
+        logger.debug(
+            f"[long_memory_update_process] Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
+        )
+
+        old_memory_texts = "\n- " + "\n- ".join(
+            [f"{one.id}: {one.memory}" for one in cur_working_memory]
+        )
+        new_memory_texts = "\n- " + "\n- ".join(
+            [f"{one.id}: {one.memory}" for one in new_order_working_memory]
+        )
+
         logger.info(
-            f"Final working memory size: {len(new_order_working_memory)} memories for user_id={user_id}"
+            f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
+            f"Scheduler replaced working memory based on query history {queries}. "
+            f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
+            f"New working memory ({len(new_memory_texts)} items): {new_memory_texts}."
         )
 
         # update activation memories
-        logger.info(
+        logger.debug(
             f"Activation memory update {'enabled' if self.enable_activation_memory else 'disabled'} "
             f"(interval: {self.monitor.act_mem_update_interval}s)"
         )
         if self.enable_activation_memory:
             self.update_activation_memory_periodically(
                 interval_seconds=self.monitor.act_mem_update_interval,
-                label=QUERY_LABEL,
+                label=QUERY_TASK_LABEL,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
             )
 
     def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {ADD_TASK_LABEL} handler.")
         # Process the query in a session turn
         grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
 
-        self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
+        self.validate_schedule_messages(messages=messages, label=ADD_TASK_LABEL)
         try:
             for user_id in grouped_messages:
                 for mem_cube_id in grouped_messages[user_id]:
@@ -175,12 +196,9 @@ class GeneralScheduler(BaseScheduler):
                             f"prepared_add_items: {prepared_add_items};\n prepared_update_items_with_original: {prepared_update_items_with_original}"
                         )
                         # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
-                        is_cloud_env = (
-                            os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-                            == "memos-memory-change"
-                        )
+                        cloud_env = is_cloud_env()
 
-                        if is_cloud_env:
+                        if cloud_env:
                             self.send_add_log_messages_to_cloud_env(
                                 msg, prepared_add_items, prepared_update_items_with_original
                             )
@@ -192,6 +210,23 @@ class GeneralScheduler(BaseScheduler):
         except Exception as e:
             logger.error(f"Error: {e}", exc_info=True)
 
+    def _memory_update_consumer(self, messages: list[ScheduleMessageItem]) -> None:
+        logger.info(f"Messages {messages} assigned to {MEM_UPDATE_TASK_LABEL} handler.")
+
+        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
+
+        self.validate_schedule_messages(messages=messages, label=MEM_UPDATE_TASK_LABEL)
+
+        for user_id in grouped_messages:
+            for mem_cube_id in grouped_messages[user_id]:
+                batch = grouped_messages[user_id][mem_cube_id]
+                if not batch:
+                    continue
+                # Process the whole batch once; no need to iterate per message
+                self.long_memory_update_process(
+                    user_id=user_id, mem_cube_id=mem_cube_id, messages=batch
+                )
+
     def _query_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
         Process and handle query trigger messages from the queue.
@@ -199,26 +234,28 @@ class GeneralScheduler(BaseScheduler):
         Args:
             messages: List of query messages to process
         """
-        logger.info(f"Messages {messages} assigned to {QUERY_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {QUERY_TASK_LABEL} handler.")
 
         grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
 
-        self.validate_schedule_messages(messages=messages, label=QUERY_LABEL)
+        self.validate_schedule_messages(messages=messages, label=QUERY_TASK_LABEL)
 
+        mem_update_messages = []
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
                 batch = grouped_messages[user_id][mem_cube_id]
                 if not batch:
                     continue
-                try:
-                    for msg in batch:
+
+                for msg in batch:
+                    try:
                         event = self.create_event_log(
                             label="addMessage",
                             from_memory_type=USER_INPUT_TYPE,
                             to_memory_type=NOT_APPLICABLE_TYPE,
                             user_id=msg.user_id,
                             mem_cube_id=msg.mem_cube_id,
-                            mem_cube=self.current_mem_cube,
+                            mem_cube=self.mem_cube,
                             memcube_log_content=[
                                 {
                                     "content": f"[User] {msg.content}",
@@ -232,11 +269,22 @@ class GeneralScheduler(BaseScheduler):
                         )
                         event.task_id = msg.task_id
                         self._submit_web_logs([event])
-                except Exception:
-                    logger.exception("Failed to record addMessage log for query")
-                self.long_memory_update_process(
-                    user_id=user_id, mem_cube_id=mem_cube_id, messages=batch
-                )
+                    except Exception:
+                        logger.exception("Failed to record addMessage log for query")
+                    # Re-submit the message with label changed to mem_update
+                    update_msg = ScheduleMessageItem(
+                        user_id=msg.user_id,
+                        mem_cube_id=msg.mem_cube_id,
+                        label=MEM_UPDATE_TASK_LABEL,
+                        content=msg.content,
+                        session_id=msg.session_id,
+                        user_name=msg.user_name,
+                        info=msg.info,
+                        task_id=msg.task_id,
+                    )
+                    mem_update_messages.append(update_msg)
+
+        self.submit_messages(messages=mem_update_messages)
 
     def _answer_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
@@ -245,10 +293,10 @@ class GeneralScheduler(BaseScheduler):
         Args:
           messages: List of answer messages to process
         """
-        logger.info(f"Messages {messages} assigned to {ANSWER_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {ANSWER_TASK_LABEL} handler.")
         grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
 
-        self.validate_schedule_messages(messages=messages, label=ANSWER_LABEL)
+        self.validate_schedule_messages(messages=messages, label=ANSWER_TASK_LABEL)
 
         for user_id in grouped_messages:
             for mem_cube_id in grouped_messages[user_id]:
@@ -263,7 +311,7 @@ class GeneralScheduler(BaseScheduler):
                             to_memory_type=NOT_APPLICABLE_TYPE,
                             user_id=msg.user_id,
                             mem_cube_id=msg.mem_cube_id,
-                            mem_cube=self.current_mem_cube,
+                            mem_cube=self.mem_cube,
                             memcube_log_content=[
                                 {
                                     "content": f"[Assistant] {msg.content}",
@@ -295,9 +343,12 @@ class GeneralScheduler(BaseScheduler):
         for memory_id in userinput_memory_ids:
             try:
                 # This mem_item represents the NEW content that was just added/processed
-                mem_item: TextualMemoryItem = self.current_mem_cube.text_mem.get(
-                    memory_id=memory_id
+                mem_item: TextualMemoryItem | None = None
+                mem_item = self.mem_cube.text_mem.get(
+                    memory_id=memory_id, user_name=msg.mem_cube_id
                 )
+                if mem_item is None:
+                    raise ValueError(f"Memory {memory_id} not found after retries")
                 # Check if a memory with the same key already exists (determining if it's an update)
                 key = getattr(mem_item.metadata, "key", None) or transform_name_to_key(
                     name=mem_item.memory
@@ -307,8 +358,8 @@ class GeneralScheduler(BaseScheduler):
                 original_item_id = None
 
                 # Only check graph_store if a key exists and the text_mem has a graph_store
-                if key and hasattr(self.current_mem_cube.text_mem, "graph_store"):
-                    candidates = self.current_mem_cube.text_mem.graph_store.get_by_metadata(
+                if key and hasattr(self.mem_cube.text_mem, "graph_store"):
+                    candidates = self.mem_cube.text_mem.graph_store.get_by_metadata(
                         [
                             {"field": "key", "op": "=", "value": key},
                             {
@@ -323,8 +374,8 @@ class GeneralScheduler(BaseScheduler):
                         original_item_id = candidates[0]
                         # Crucial step: Fetch the original content for updates
                         # This `get` is for the *existing* memory that will be updated
-                        original_mem_item = self.current_mem_cube.text_mem.get(
-                            memory_id=original_item_id
+                        original_mem_item = self.mem_cube.text_mem.get(
+                            memory_id=original_item_id, user_name=msg.mem_cube_id
                         )
                         original_content = original_mem_item.memory
 
@@ -341,9 +392,8 @@ class GeneralScheduler(BaseScheduler):
 
             except Exception:
                 missing_ids.append(memory_id)
-                logger.warning(
-                    f"This MemoryItem {memory_id} has already been deleted or an error occurred during preparation.",
-                    stack_info=True,
+                logger.debug(
+                    f"This MemoryItem {memory_id} has already been deleted or an error occurred during preparation."
                 )
 
         if missing_ids:
@@ -437,7 +487,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
                 memcube_log_content=add_content_legacy,
                 metadata=add_meta_legacy,
                 memory_len=len(add_content_legacy),
@@ -452,7 +502,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
                 memcube_log_content=update_content_legacy,
                 metadata=update_meta_legacy,
                 memory_len=len(update_content_legacy),
@@ -472,8 +522,12 @@ class GeneralScheduler(BaseScheduler):
         """
         kb_log_content: list[dict] = []
         info = msg.info or {}
+
         # Process added items
         for item in prepared_add_items:
+            metadata = getattr(item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+            source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
             kb_log_content.append(
                 {
                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -482,13 +536,16 @@ class GeneralScheduler(BaseScheduler):
                     "memory_id": item.id,
                     "content": item.memory,
                     "original_content": None,
-                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                    "source_doc_id": source_doc_id,
                 }
             )
 
         # Process updated items
         for item_data in prepared_update_items_with_original:
             item = item_data["new_item"]
+            metadata = getattr(item, "metadata", None)
+            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+            source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
             kb_log_content.append(
                 {
                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -497,7 +554,7 @@ class GeneralScheduler(BaseScheduler):
                     "memory_id": item.id,
                     "content": item.memory,
                     "original_content": item_data.get("original_content"),
-                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                    "source_doc_id": source_doc_id,
                 }
             )
 
@@ -511,7 +568,7 @@ class GeneralScheduler(BaseScheduler):
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.current_mem_cube,
+                mem_cube=self.mem_cube,
                 memcube_log_content=kb_log_content,
                 metadata=None,
                 memory_len=len(kb_log_content),
@@ -521,48 +578,12 @@ class GeneralScheduler(BaseScheduler):
             event.task_id = msg.task_id
             self._submit_web_logs([event])
 
-    def _add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {ADD_LABEL} handler.")
-        # Process the query in a session turn
-        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
-
-        self.validate_schedule_messages(messages=messages, label=ADD_LABEL)
-        try:
-            for user_id in grouped_messages:
-                for mem_cube_id in grouped_messages[user_id]:
-                    batch = grouped_messages[user_id][mem_cube_id]
-                    if not batch:
-                        continue
-
-                    # Process each message in the batch
-                    for msg in batch:
-                        prepared_add_items, prepared_update_items_with_original = (
-                            self.log_add_messages(msg=msg)
-                        )
-                        # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
-                        is_cloud_env = (
-                            os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-                            == "memos-memory-change"
-                        )
-
-                        if is_cloud_env:
-                            self.send_add_log_messages_to_cloud_env(
-                                msg, prepared_add_items, prepared_update_items_with_original
-                            )
-                        else:
-                            self.send_add_log_messages_to_local_env(
-                                msg, prepared_add_items, prepared_update_items_with_original
-                            )
-
-        except Exception as e:
-            logger.error(f"Error: {e}", exc_info=True)
-
     def _mem_feedback_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         try:
             if not messages:
                 return
             message = messages[0]
-            mem_cube = self.current_mem_cube
+            mem_cube = self.mem_cube
 
             user_id = message.user_id
             mem_cube_id = message.mem_cube_id
@@ -589,18 +610,15 @@ class GeneralScheduler(BaseScheduler):
                 feedback_content=feedback_data.get("feedback_content"),
                 feedback_time=feedback_data.get("feedback_time"),
                 task_id=task_id,
+                info=feedback_data.get("info", None),
             )
 
             logger.info(
                 f"Successfully processed feedback for user_id={user_id}, mem_cube_id={mem_cube_id}"
             )
 
-            should_send_log = (
-                self.rabbitmq_config is not None
-                and hasattr(self.rabbitmq_config, "exchange_type")
-                and self.rabbitmq_config.exchange_type == "direct"
-            )
-            if should_send_log:
+            cloud_env = is_cloud_env()
+            if cloud_env:
                 record = feedback_result.get("record") if isinstance(feedback_result, dict) else {}
                 add_records = record.get("add") if isinstance(record, dict) else []
                 update_records = record.get("update") if isinstance(record, dict) else []
@@ -626,18 +644,8 @@ class GeneralScheduler(BaseScheduler):
                         or mem_item.get("original_content")
                     )
                     source_doc_id = None
-                    if isinstance(mem_item, dict):
-                        source_doc_id = (
-                            mem_item.get("source_doc_id")
-                            or mem_item.get("doc_id")
-                            or (mem_item.get("metadata") or {}).get("source_doc_id")
-                        )
-                    else:
-                        metadata = getattr(mem_item, "metadata", None)
-                        if metadata:
-                            source_doc_id = getattr(metadata, "source_doc_id", None) or getattr(
-                                metadata, "doc_id", None
-                            )
+                    if "archived_id" in mem_item:
+                        source_doc_id = mem_item.get("archived_id")
 
                     return mem_id, mem_memory, original_content, source_doc_id
 
@@ -724,6 +732,11 @@ class GeneralScheduler(BaseScheduler):
                         task_id,
                         stack_info=True,
                     )
+            else:
+                logger.info(
+                    "Skipping web log for feedback. Not in a cloud environment (is_cloud_env=%s)",
+                    cloud_env,
+                )
 
         except Exception as e:
             logger.error(f"Error processing feedbackMemory message: {e}", exc_info=True)
@@ -732,15 +745,15 @@ class GeneralScheduler(BaseScheduler):
         logger.info(
             f"[DIAGNOSTIC] general_scheduler._mem_read_message_consumer called. Received messages: {[msg.model_dump_json(indent=2) for msg in messages]}"
         )
-        logger.info(f"Messages {messages} assigned to {MEM_READ_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {MEM_READ_TASK_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
-                mem_cube = self.current_mem_cube
+                mem_cube = self.mem_cube
                 if mem_cube is None:
-                    logger.warning(
+                    logger.error(
                         f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing",
                         stack_info=True,
                     )
@@ -829,7 +842,7 @@ class GeneralScheduler(BaseScheduler):
             memory_items = []
             for mem_id in mem_ids:
                 try:
-                    memory_item = text_mem.get(mem_id)
+                    memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
                     logger.warning(f"Failed to get memory {mem_id}: {e}")
@@ -882,13 +895,16 @@ class GeneralScheduler(BaseScheduler):
 
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging
-                    is_cloud_env = (
-                        os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
-                    )
-                    if is_cloud_env:
+                    cloud_env = is_cloud_env()
+                    if cloud_env:
                         # New: Knowledge Base Logging (Cloud Service)
                         kb_log_content = []
                         for item in flattened_memories:
+                            metadata = getattr(item, "metadata", None)
+                            file_ids = getattr(metadata, "file_ids", None) if metadata else None
+                            source_doc_id = (
+                                file_ids[0] if isinstance(file_ids, list) and file_ids else None
+                            )
                             kb_log_content.append(
                                 {
                                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -899,7 +915,7 @@ class GeneralScheduler(BaseScheduler):
                                     "memory_id": item.id,
                                     "content": item.memory,
                                     "original_content": None,
-                                    "source_doc_id": getattr(item.metadata, "source_doc_id", None),
+                                    "source_doc_id": source_doc_id,
                                 }
                             )
                         if kb_log_content:
@@ -912,7 +928,7 @@ class GeneralScheduler(BaseScheduler):
                                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                                 user_id=user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=self.current_mem_cube,
+                                mem_cube=self.mem_cube,
                                 memcube_log_content=kb_log_content,
                                 metadata=None,
                                 memory_len=len(kb_log_content),
@@ -957,7 +973,7 @@ class GeneralScheduler(BaseScheduler):
                                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                                 user_id=user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=self.current_mem_cube,
+                                mem_cube=self.mem_cube,
                                 memcube_log_content=add_content_legacy,
                                 metadata=add_meta_legacy,
                                 memory_len=len(add_content_legacy),
@@ -999,10 +1015,8 @@ class GeneralScheduler(BaseScheduler):
                 f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
             )
             with contextlib.suppress(Exception):
-                is_cloud_env = (
-                    os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
-                )
-                if is_cloud_env:
+                cloud_env = is_cloud_env()
+                if cloud_env:
                     if not kb_log_content:
                         trigger_source = (
                             info.get("trigger_source", "Messages") if info else "Messages"
@@ -1025,7 +1039,7 @@ class GeneralScheduler(BaseScheduler):
                         to_memory_type=LONG_TERM_MEMORY_TYPE,
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=self.current_mem_cube,
+                        mem_cube=self.mem_cube,
                         memcube_log_content=kb_log_content,
                         metadata=None,
                         memory_len=len(kb_log_content),
@@ -1037,13 +1051,13 @@ class GeneralScheduler(BaseScheduler):
                     self._submit_web_logs([event])
 
     def _mem_reorganize_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {MEM_ORGANIZE_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {MEM_ORGANIZE_TASK_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
             try:
                 user_id = message.user_id
                 mem_cube_id = message.mem_cube_id
-                mem_cube = self.current_mem_cube
+                mem_cube = self.mem_cube
                 if mem_cube is None:
                     logger.warning(
                         f"mem_cube is None for user_id={user_id}, mem_cube_id={mem_cube_id}, skipping processing"
@@ -1081,7 +1095,7 @@ class GeneralScheduler(BaseScheduler):
                     mem_items: list[TextualMemoryItem] = []
                     for mid in mem_ids:
                         with contextlib.suppress(Exception):
-                            mem_items.append(text_mem.get(mid))
+                            mem_items.append(text_mem.get(mid, user_name=user_name))
                     if len(mem_items) > 1:
                         keys: list[str] = []
                         memcube_content: list[dict] = []
@@ -1137,7 +1151,7 @@ class GeneralScheduler(BaseScheduler):
                         if merged_target_ids:
                             post_ref_id = next(iter(merged_target_ids))
                             with contextlib.suppress(Exception):
-                                merged_item = text_mem.get(post_ref_id)
+                                merged_item = text_mem.get(post_ref_id, user_name=user_name)
                                 combined_key = (
                                     getattr(getattr(merged_item, "metadata", {}), "key", None)
                                     or combined_key
@@ -1246,7 +1260,7 @@ class GeneralScheduler(BaseScheduler):
             memory_items = []
             for mem_id in mem_ids:
                 try:
-                    memory_item = text_mem.get(mem_id)
+                    memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
                     logger.warning(f"Failed to get memory {mem_id}: {e}|{traceback.format_exc()}")
@@ -1269,11 +1283,11 @@ class GeneralScheduler(BaseScheduler):
             )
 
     def _pref_add_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {PREF_ADD_LABEL} handler.")
+        logger.info(f"Messages {messages} assigned to {PREF_ADD_TASK_LABEL} handler.")
 
         def process_message(message: ScheduleMessageItem):
             try:
-                mem_cube = self.current_mem_cube
+                mem_cube = self.mem_cube
                 if mem_cube is None:
                     logger.warning(
                         f"mem_cube is None for user_id={message.user_id}, mem_cube_id={message.mem_cube_id}, skipping processing"
@@ -1322,50 +1336,6 @@ class GeneralScheduler(BaseScheduler):
                     f"Successfully processed and add preferences for user_id={user_id}, mem_cube_id={mem_cube_id}, pref_ids={pref_ids}"
                 )
 
-                # Create and submit log for web display
-                # Only send logs if RabbitMQ is configured with direct exchange (cloud service scenario)
-                should_send_log = (
-                    self.rabbitmq_config is not None
-                    and hasattr(self.rabbitmq_config, "exchange_type")
-                    and self.rabbitmq_config.exchange_type == "direct"
-                )
-                if pref_ids and should_send_log:
-                    pref_content = []
-                    pref_meta = []
-                    for i, pref_mem_item in enumerate(pref_memories):
-                        if i < len(pref_ids):
-                            pref_content.append(
-                                {
-                                    "content": pref_mem_item.memory,
-                                    "ref_id": pref_ids[i],
-                                }
-                            )
-                            pref_meta.append(
-                                {
-                                    "ref_id": pref_ids[i],
-                                    "id": pref_ids[i],
-                                    "memory": pref_mem_item.memory,
-                                    "memory_type": getattr(
-                                        pref_mem_item.metadata, "memory_type", "preference"
-                                    ),
-                                }
-                            )
-
-                    event = self.create_event_log(
-                        label="addMemory",
-                        from_memory_type=USER_INPUT_TYPE,
-                        to_memory_type=LONG_TERM_MEMORY_TYPE,
-                        user_id=user_id,
-                        mem_cube_id=mem_cube_id,
-                        mem_cube=mem_cube,
-                        memcube_log_content=pref_content,
-                        metadata=pref_meta,
-                        memory_len=len(pref_content),
-                        memcube_name=self._map_memcube_name(mem_cube_id),
-                    )
-                    event.task_id = message.task_id
-                    self._submit_web_logs([event])
-
             except Exception as e:
                 logger.error(f"Error processing pref_add message: {e}", exc_info=True)
 
@@ -1402,10 +1372,12 @@ class GeneralScheduler(BaseScheduler):
             return
 
         logger.info(
-            f"Processing {len(queries)} queries for user_id={user_id}, mem_cube_id={mem_cube_id}"
+            f"[process_session_turn] Processing {len(queries)} queries for user_id={user_id}, mem_cube_id={mem_cube_id}"
         )
 
-        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory()
+        cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory(
+            user_name=mem_cube_id
+        )
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         intent_result = self.monitor.detect_intent(
             q_list=queries, text_working_memory=text_working_memory
@@ -1420,18 +1392,18 @@ class GeneralScheduler(BaseScheduler):
 
         if (not intent_result["trigger_retrieval"]) and (not time_trigger_flag):
             logger.info(
-                f"Query schedule not triggered for user_id={user_id}, mem_cube_id={mem_cube_id}. Intent_result: {intent_result}"
+                f"[process_session_turn] Query schedule not triggered for user_id={user_id}, mem_cube_id={mem_cube_id}. Intent_result: {intent_result}"
             )
             return
         elif (not intent_result["trigger_retrieval"]) and time_trigger_flag:
             logger.info(
-                f"Query schedule forced to trigger due to time ticker for user_id={user_id}, mem_cube_id={mem_cube_id}"
+                f"[process_session_turn] Query schedule forced to trigger due to time ticker for user_id={user_id}, mem_cube_id={mem_cube_id}"
             )
             intent_result["trigger_retrieval"] = True
             intent_result["missing_evidences"] = queries
         else:
             logger.info(
-                f"Query schedule triggered for user_id={user_id}, mem_cube_id={mem_cube_id}. "
+                f"[process_session_turn] Query schedule triggered for user_id={user_id}, mem_cube_id={mem_cube_id}. "
                 f"Missing evidences: {intent_result['missing_evidences']}"
             )
 
@@ -1441,22 +1413,23 @@ class GeneralScheduler(BaseScheduler):
         new_candidates = []
         for item in missing_evidences:
             logger.info(
-                f"Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
+                f"[process_session_turn] Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
             )
-            info = {
-                "user_id": user_id,
-                "session_id": "",
-            }
 
+            search_args = {}
             results: list[TextualMemoryItem] = self.retriever.search(
                 query=item,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
                 top_k=k_per_evidence,
                 method=self.search_method,
-                info=info,
+                search_args=search_args,
             )
+
             logger.info(
-                f"Search results for missing evidence '{item}': {[one.memory for one in results]}"
+                f"[process_session_turn] Search results for missing evidence '{item}': "
+                + ("\n- " + "\n- ".join([f"{one.id}: {one.memory}" for one in results]))
             )
             new_candidates.extend(results)
         return cur_working_memory, new_candidates

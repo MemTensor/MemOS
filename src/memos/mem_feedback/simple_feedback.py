@@ -7,6 +7,7 @@ from memos.mem_reader.simple_struct import SimpleStructMemReader
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
+from memos.reranker.base import BaseReranker
 
 
 logger = log.get_logger(__name__)
@@ -21,6 +22,7 @@ class SimpleMemFeedback(MemFeedback):
         memory_manager: MemoryManager,
         mem_reader: SimpleStructMemReader,
         searcher: Searcher,
+        reranker: BaseReranker,
     ):
         self.llm = llm
         self.embedder = embedder
@@ -29,3 +31,5 @@ class SimpleMemFeedback(MemFeedback):
         self.mem_reader = mem_reader
         self.searcher = searcher
         self.stopword_manager = StopwordManager
+        self.reranker = reranker
+        self.DB_IDX_READY = False
