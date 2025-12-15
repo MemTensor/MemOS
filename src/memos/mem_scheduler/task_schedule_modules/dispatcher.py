@@ -1,5 +1,4 @@
 import concurrent
-import os
 import threading
 import time
 
@@ -25,7 +24,7 @@ from memos.mem_scheduler.schemas.task_schemas import RunningTaskItem
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
+from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube, is_cloud_env
 from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to_iso
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 
@@ -351,8 +350,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
         mem_cube_id = first.mem_cube_id
 
         try:
-            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-            if not is_cloud_env:
+            cloud_env = is_cloud_env()
+            if not cloud_env:
                 return
 
             for task_id in task_ids:

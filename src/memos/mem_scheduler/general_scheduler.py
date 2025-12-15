@@ -1,7 +1,6 @@
 import concurrent.futures
 import contextlib
 import json
-import os
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -30,7 +29,10 @@ from memos.mem_scheduler.utils.filter_utils import (
     is_all_english,
     transform_name_to_key,
 )
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
+from memos.mem_scheduler.utils.misc_utils import (
+    group_messages_by_user_and_mem_cube,
+    is_cloud_env,
+)
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.preference import PreferenceTextMemory
 from memos.memories.textual.tree import TreeTextMemory
@@ -194,9 +196,9 @@ class GeneralScheduler(BaseScheduler):
                             f"prepared_add_items: {prepared_add_items};\n prepared_update_items_with_original: {prepared_update_items_with_original}"
                         )
                         # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
-                        is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+                        cloud_env = is_cloud_env()
 
-                        if is_cloud_env:
+                        if cloud_env:
                             self.send_add_log_messages_to_cloud_env(
                                 msg, prepared_add_items, prepared_update_items_with_original
                             )
@@ -615,8 +617,8 @@ class GeneralScheduler(BaseScheduler):
                 f"Successfully processed feedback for user_id={user_id}, mem_cube_id={mem_cube_id}"
             )
 
-            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-            if is_cloud_env:
+            cloud_env = is_cloud_env()
+            if cloud_env:
                 record = feedback_result.get("record") if isinstance(feedback_result, dict) else {}
                 add_records = record.get("add") if isinstance(record, dict) else []
                 update_records = record.get("update") if isinstance(record, dict) else []
@@ -733,7 +735,7 @@ class GeneralScheduler(BaseScheduler):
             else:
                 logger.info(
                     "Skipping web log for feedback. Not in a cloud environment (is_cloud_env=%s)",
-                    is_cloud_env,
+                    cloud_env,
                 )
 
         except Exception as e:
@@ -893,8 +895,8 @@ class GeneralScheduler(BaseScheduler):
 
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging
-                    is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-                    if is_cloud_env:
+                    cloud_env = is_cloud_env()
+                    if cloud_env:
                         # New: Knowledge Base Logging (Cloud Service)
                         kb_log_content = []
                         for item in flattened_memories:
@@ -1013,8 +1015,8 @@ class GeneralScheduler(BaseScheduler):
                 f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
             )
             with contextlib.suppress(Exception):
-                is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-                if is_cloud_env:
+                cloud_env = is_cloud_env()
+                if cloud_env:
                     if not kb_log_content:
                         trigger_source = (
                             info.get("trigger_source", "Messages") if info else "Messages"

@@ -13,6 +13,7 @@ from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue
 from memos.mem_scheduler.schemas.general_schemas import DIRECT_EXCHANGE_TYPE, FANOUT_EXCHANGE_TYPE
+from memos.mem_scheduler.utils.misc_utils import is_cloud_env
 
 
 logger = get_logger(__name__)
@@ -291,7 +292,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
         # Cloud environment override: applies to specific message types if MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME is set
         env_exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-        if env_exchange_name and label in ["taskStatus", "knowledgeBaseUpdate"]:
+        if is_cloud_env() and env_exchange_name and label in ["taskStatus", "knowledgeBaseUpdate"]:
             exchange_name = env_exchange_name
             routing_key = ""  # Routing key is always empty in cloud environment for these types
 
