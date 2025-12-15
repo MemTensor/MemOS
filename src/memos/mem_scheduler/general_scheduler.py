@@ -194,10 +194,7 @@ class GeneralScheduler(BaseScheduler):
                             f"prepared_add_items: {prepared_add_items};\n prepared_update_items_with_original: {prepared_update_items_with_original}"
                         )
                         # Conditional Logging: Knowledge Base (Cloud Service) vs. Playground/Default
-                        is_cloud_env = (
-                            os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
-                            == "memos-memory-change"
-                        )
+                        is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
 
                         if is_cloud_env:
                             self.send_add_log_messages_to_cloud_env(
@@ -618,7 +615,7 @@ class GeneralScheduler(BaseScheduler):
                 f"Successfully processed feedback for user_id={user_id}, mem_cube_id={mem_cube_id}"
             )
 
-            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
+            is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
             if is_cloud_env:
                 record = feedback_result.get("record") if isinstance(feedback_result, dict) else {}
                 add_records = record.get("add") if isinstance(record, dict) else []
@@ -896,9 +893,7 @@ class GeneralScheduler(BaseScheduler):
 
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging
-                    is_cloud_env = (
-                        os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
-                    )
+                    is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
                     if is_cloud_env:
                         # New: Knowledge Base Logging (Cloud Service)
                         kb_log_content = []
@@ -1018,9 +1013,7 @@ class GeneralScheduler(BaseScheduler):
                 f"Error in _process_memories_with_reader: {traceback.format_exc()}", exc_info=True
             )
             with contextlib.suppress(Exception):
-                is_cloud_env = (
-                    os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME") == "memos-memory-change"
-                )
+                is_cloud_env = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
                 if is_cloud_env:
                     if not kb_log_content:
                         trigger_source = (
