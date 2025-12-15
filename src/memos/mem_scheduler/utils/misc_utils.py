@@ -47,10 +47,9 @@ def is_cloud_env() -> bool:
     if not exchange_name:
         return False
 
-    if exchange_name == "memos-fanout" and (not exchange_type or exchange_type == "fanout"):
-        return False
-
-    return True
+    return not (
+        exchange_name == "memos-fanout" and (not exchange_type or exchange_type == "fanout")
+    )
 
 
 def extract_json_obj(text: str):
