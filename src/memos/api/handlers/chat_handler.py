@@ -395,6 +395,16 @@ class ChatHandler(BaseHandler):
                         [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                     )
 
+                    # for playground, add the query to memory without response
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        writable_cube_ids=writable_cube_ids,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=None,
+                        async_mode="sync",
+                    )
+
                     # ====== first search text mem with parse goal ======
                     search_req = APISearchRequest(
                         query=chat_req.query,
