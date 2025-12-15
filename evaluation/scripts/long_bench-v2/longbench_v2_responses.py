@@ -22,72 +22,73 @@ sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 
-# Prompt template from LongBench v2
-LONGBENCH_V2_PROMPT = """Please read the following text and answer the question below.
+# RAG-style prompt template aligned with longbench_stx.TEMPLATE_RAG
+TEMPLATE_RAG = """Please read the following retrieved text chunks and answer the question below.
 
 <text>
-{context}
+$DOC$
 </text>
 
-What is the correct answer to this question: {question}
+What is the correct answer to this question: $Q$
 Choices:
-(A) {choice_A}
-(B) {choice_B}
-(C) {choice_C}
-(D) {choice_D}
+(A) $C_A$
+(B) $C_B$
+(C) $C_C$
+(D) $C_D$
 
 Format your response as follows: "The correct answer is (insert answer here)"."""
 
 
 def extract_answer(response):
-    """Extract answer from response (A, B, C, or D)."""
+    """Extract answer from response (A, B, C, or D).
+
+    Logic is kept consistent with longbench_stx.extract_answer.
+    """
     response = response.replace("*", "")
     # Try to find "The correct answer is (X)" pattern
-    match = re.search(r"The correct answer is \(([A-D])\)", response, re.IGNORECASE)
+    match = re.search(r"The correct answer is \(([A-D])\)", response)
     if match:
-        return match.group(1).upper()
+        return match.group(1)
     else:
-        match = re.search(r"The correct answer is ([A-D])", response, re.IGNORECASE)
+        match = re.search(r"The correct answer is ([A-D])", response)
         if match:
-            return match.group(1).upper()
-        else:
-            # Try to find standalone A, B, C, or D
-            match = re.search(r"\b([A-D])\b", response)
-            if match:
-                return match.group(1).upper()
-    return None
+            return match.group(1)
+        return None
 
 
-def generate_response(llm_client, context, question, choice_a, choice_b, choice_c, choice_d):
-    """Generate response using LLM."""
-    prompt = LONGBENCH_V2_PROMPT.format(
-        context=context,
-        question=question,
-        choice_A=choice_a,
-        choice_B=choice_b,
-        choice_C=choice_c,
-        choice_D=choice_d,
+def llm_answer(llm_client, memories, question, choices):
+    """Generate response using RAG-style prompt, aligned with longbench_stx.llm_answer."""
+    # Join memories to form the retrieved context document
+    doc_content = "\n\n".join([f"Retrieved chunk {idx + 1}: {m}" for idx, m in enumerate(memories)])
+
+    prompt = (
+        TEMPLATE_RAG.replace("$DOC$", doc_content)
+        .replace("$Q$", question)
+        .replace("$C_A$", choices.get("A", ""))
+        .replace("$C_B$", choices.get("B", ""))
+        .replace("$C_C$", choices.get("C", ""))
+        .replace("$C_D$", choices.get("D", ""))
     )
 
     try:
         response = llm_client.chat.completions.create(
             model=os.getenv("CHAT_MODEL"),
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=128,
+            max_tokens=12800,
         )
-        result = response.choices[0].message.content or ""
-        return result
+        return response.choices[0].message.content or ""
     except Exception as e:
         print(f"Error generating response: {e}")
         return ""
 
 
 def process_sample(search_result, llm_client, success_records, record_file, file_lock):
-    """Process a single sample: generate answer."""
+    """Process a single sample: generate answer.
+
+    This mirrors longbench_stx.evaluate_sample but consumes precomputed search results
+    produced by longbench_v2_search.py.
+    """
     sample_idx = search_result.get("sample_idx")
     # Skip if already processed
     if sample_idx is not None and str(sample_idx) in success_records:
@@ -95,21 +96,36 @@ def process_sample(search_result, llm_client, success_records, record_file, file
 
     start = time()
 
-    context = search_result.get("context", "")
     question = search_result.get("question", "")
-    choice_a = search_result.get("choice_A", "")
-    choice_b = search_result.get("choice_B", "")
-    choice_c = search_result.get("choice_C", "")
-    choice_d = search_result.get("choice_D", "")
+    choices = {
+        "A": search_result.get("choice_A", "") or "",
+        "B": search_result.get("choice_B", "") or "",
+        "C": search_result.get("choice_C", "") or "",
+        "D": search_result.get("choice_D", "") or "",
+    }
 
-    # Skip empty/placeholder contexts (e.g., "\n" or whitespace-only)
-    if not context or context.strip() == "":
+    # Prefer memories saved by longbench_v2_search; fall back to reconstructing
+    # from raw search_results if needed (for old search jsons).
+    memories = search_result.get("memories_used")
+    if memories is None:
+        raw = search_result.get("search_results") or {}
+        memories = []
+        if isinstance(raw, dict) and raw.get("text_mem"):
+            text_mem = raw["text_mem"]
+            if text_mem and text_mem[0].get("memories"):
+                memories = [
+                    m.get("memory", "") for m in text_mem[0]["memories"] if isinstance(m, dict)
+                ]
+
+    # Ensure we have a list, even if empty
+    memories = memories or []
+
+    # Skip if no retrieved memories and no question
+    if not question:
         return None
 
     # Generate answer
-    response = generate_response(
-        llm_client, context, question, choice_a, choice_b, choice_c, choice_d
-    )
+    response = llm_answer(llm_client, memories, str(question), choices)
 
     # Extract answer (A, B, C, or D)
     pred = extract_answer(response)
@@ -124,15 +140,16 @@ def process_sample(search_result, llm_client, success_records, record_file, file
         "difficulty": search_result.get("difficulty"),
         "length": search_result.get("length"),
         "question": question,
-        "choice_A": choice_a,
-        "choice_B": choice_b,
-        "choice_C": choice_c,
-        "choice_D": choice_d,
+        "choice_A": choices["A"],
+        "choice_B": choices["B"],
+        "choice_C": choices["C"],
+        "choice_D": choices["D"],
         "answer": search_result.get("answer"),
         "pred": pred,
         "response": response,
         "judge": pred == search_result.get("answer") if pred else False,
-        "search_context": context,
+        # Keep full retrieved memories list for inspection / debugging
+        "memories_used": memories,
         # Preserve full search results payload (e.g., list of memories)
         "search_results": search_result.get("search_results"),
         "response_duration_ms": response_duration_ms,
