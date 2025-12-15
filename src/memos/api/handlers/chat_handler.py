@@ -524,16 +524,6 @@ class ChatHandler(BaseHandler):
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
-                    # for playground, add the query to memory without response
-                    self._start_add_to_memory(
-                        user_id=chat_req.user_id,
-                        writable_cube_ids=writable_cube_ids,
-                        session_id=chat_req.session_id or "default_session",
-                        query=chat_req.query,
-                        full_response=None,
-                        async_mode="sync",
-                    )
-
                     # Step 2: Build system prompt with memories
                     lang = detect_lang(chat_req.query)
                     system_prompt = self._build_enhance_system_prompt(
