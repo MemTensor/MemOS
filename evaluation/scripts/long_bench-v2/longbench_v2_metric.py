@@ -90,8 +90,17 @@ def main(frame, version="default"):
     with open(responses_path, encoding="utf-8") as f:
         responses = json.load(f)
 
-    # Use all responses (aligned with longbench_stx.print_metrics behavior)
-    filtered = responses
+    # Only keep entries that actually have search results:
+    # - For new pipeline: non-empty memories_used list
+    # - For older runs: non-empty search_context string
+    def _has_search_results(r: dict) -> bool:
+        mems = r.get("memories_used")
+        if isinstance(mems, list) and any(str(m).strip() for m in mems):
+            return True
+        ctx = str(r.get("search_context", "")).strip()
+        return ctx != ""
+
+    filtered = [r for r in responses if _has_search_results(r)]
 
     # Calculate metrics
     metrics = calculate_accuracy(filtered)
