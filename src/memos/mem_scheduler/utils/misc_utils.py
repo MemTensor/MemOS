@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import traceback
 
@@ -15,6 +16,40 @@ from memos.mem_scheduler.schemas.message_schemas import (
 
 
 logger = get_logger(__name__)
+
+
+def _normalize_env_value(value: str | None) -> str:
+    """Normalize environment variable values for comparison."""
+    return value.strip().lower() if isinstance(value, str) else ""
+
+
+def is_playground_env() -> bool:
+    """Return True when ENV_NAME indicates a Playground environment."""
+    env_name = _normalize_env_value(os.getenv("ENV_NAME"))
+    return env_name.startswith("playground")
+
+
+def is_cloud_env() -> bool:
+    """
+    Determine whether the scheduler should treat the runtime as a cloud environment.
+
+    Rules:
+    - Any Playground ENV_NAME is explicitly NOT cloud.
+    - MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME must be set to enable cloud behavior.
+    - The default memos-fanout/fanout combination is treated as non-cloud.
+    """
+    if is_playground_env():
+        return False
+
+    exchange_name = _normalize_env_value(os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME"))
+    exchange_type = _normalize_env_value(os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_TYPE"))
+
+    if not exchange_name:
+        return False
+
+    return not (
+        exchange_name == "memos-fanout" and (not exchange_type or exchange_type == "fanout")
+    )
 
 
 def extract_json_obj(text: str):
