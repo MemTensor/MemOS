@@ -5,7 +5,11 @@ This module tests that the product_router endpoints correctly validate
 input request formats and return properly formatted responses.
 """
 
-from unittest.mock import Mock, patch
+# Mock sklearn before importing any memos modules to avoid import errors
+import importlib.util
+import sys
+
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -20,7 +24,38 @@ import memos.api.routers.product_router as pr_module
 _mock_mos_instance = Mock()
 pr_module.MOS_PRODUCT_INSTANCE = _mock_mos_instance
 pr_module.get_mos_product_instance = lambda: _mock_mos_instance
+
+
+# Create a proper mock module with __spec__
+sklearn_mock = MagicMock()
+sklearn_mock.__spec__ = importlib.util.spec_from_loader("sklearn", None)
+sys.modules["sklearn"] = sklearn_mock
+
+sklearn_fe_mock = MagicMock()
+sklearn_fe_mock.__spec__ = importlib.util.spec_from_loader("sklearn.feature_extraction", None)
+sys.modules["sklearn.feature_extraction"] = sklearn_fe_mock
+
+sklearn_fet_mock = MagicMock()
+sklearn_fet_mock.__spec__ = importlib.util.spec_from_loader("sklearn.feature_extraction.text", None)
+sklearn_fet_mock.TfidfVectorizer = MagicMock()
+sys.modules["sklearn.feature_extraction.text"] = sklearn_fet_mock
+
+# Mock sklearn.metrics as well
+sklearn_metrics_mock = MagicMock()
+sklearn_metrics_mock.__spec__ = importlib.util.spec_from_loader("sklearn.metrics", None)
+sklearn_metrics_mock.roc_curve = MagicMock()
+sys.modules["sklearn.metrics"] = sklearn_metrics_mock
+
+
+# Create mock instance
+_mock_mos_instance = Mock()
+
+pr_module.MOS_PRODUCT_INSTANCE = _mock_mos_instance
+pr_module.get_mos_product_instance = lambda: _mock_mos_instance
+
+# Mock MOSProduct class before importing to prevent initialization
 with patch("memos.mem_os.product.MOSProduct", return_value=_mock_mos_instance):
+    # Import after patching
     from memos.api import product_api
 
 

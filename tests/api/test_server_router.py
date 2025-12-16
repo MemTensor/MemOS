@@ -5,7 +5,11 @@ This module tests that the server_router endpoints correctly validate
 input request formats and return properly formatted responses.
 """
 
-from unittest.mock import Mock, patch
+# Mock sklearn before importing any memos modules to avoid import errors
+import importlib.util
+import sys
+
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -21,8 +25,25 @@ from memos.api.product_models import (
 )
 
 
-# Patch init_server so we can import server_api without starting the full MemOS stack,
-# and keep sklearn and other core dependencies untouched for other tests.
+# Create a proper mock module with __spec__
+sklearn_mock = MagicMock()
+sklearn_mock.__spec__ = importlib.util.spec_from_loader("sklearn", None)
+sys.modules["sklearn"] = sklearn_mock
+
+sklearn_fe_mock = MagicMock()
+sklearn_fe_mock.__spec__ = importlib.util.spec_from_loader("sklearn.feature_extraction", None)
+sys.modules["sklearn.feature_extraction"] = sklearn_fe_mock
+
+sklearn_metrics_mock = MagicMock()
+sklearn_metrics_mock.__spec__ = importlib.util.spec_from_loader("sklearn.metrics", None)
+sys.modules["sklearn.metrics"] = sklearn_metrics_mock
+
+sklearn_fet_mock = MagicMock()
+sklearn_fet_mock.__spec__ = importlib.util.spec_from_loader("sklearn.feature_extraction.text", None)
+sklearn_fet_mock.TfidfVectorizer = MagicMock()
+sys.modules["sklearn.feature_extraction.text"] = sklearn_fet_mock
+
+
 @pytest.fixture(scope="module")
 def mock_init_server():
     """Mock init_server before importing server_api."""
@@ -209,6 +230,18 @@ class TestServerRouterAdd:
         assert isinstance(call_args, APIADDRequest)
         assert call_args.mem_cube_id == "test_cube"
         assert call_args.user_id == "test_user"
+
+    def test_add_invalid_input_missing_cube_id(self, mock_handlers, client):
+        """Test add endpoint with missing required field."""
+        request_data = {
+            "user_id": "test_user",
+            "memory_content": "test memory content",
+        }
+
+        response = client.post("/product/add", json=request_data)
+
+        # Should return validation error
+        assert response.status_code == 422
 
     def test_add_response_format(self, mock_handlers, client):
         """Test add endpoint returns MemoryResponse format."""
