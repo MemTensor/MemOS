@@ -536,6 +536,12 @@ class ChatHandler(BaseHandler):
 
                     # Step 2: Build system prompt with memories
                     lang = detect_lang(chat_req.query)
+                    if pref_string:
+                        pref_string += (
+                            "\n# 注意\n- 在思考内容中，不要出现引用序号和id [1,2,3]等标记，否则会导致引用错误。"
+                            if lang == "zh"
+                            else "\n#warning\n- In thinking content, do not appear the reference number and id [1,2,3]etc. otherwise it will cause reference error."
+                        )
                     system_prompt = self._build_enhance_system_prompt(
                         filtered_memories, pref_string, lang=lang
                     )
