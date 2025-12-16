@@ -863,7 +863,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.debug(f"Submitted Scheduling log for web: {message_info}")
 
             # Always call publish; the publisher now caches when offline and flushes after reconnect
-            logger.info(f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message_info}")
+            logger.info(
+                f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message_info}"
+            )
             self.rabbitmq_publish_message(message=message.to_dict())
         logger.debug(
             f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"

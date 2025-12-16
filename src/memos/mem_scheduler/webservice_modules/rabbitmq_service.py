@@ -4,8 +4,8 @@ import ssl
 import threading
 import time
 
-from queue import Empty
 from pathlib import Path
+from queue import Empty
 
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.context.context import ContextThread
@@ -79,7 +79,9 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         """
         with self._rabbitmq_lock:
             if self._rabbitmq_initializing:
-                logger.info("[DIAGNOSTIC] initialize_rabbitmq: initialization already in progress; skipping duplicate call.")
+                logger.info(
+                    "[DIAGNOSTIC] initialize_rabbitmq: initialization already in progress; skipping duplicate call."
+                )
                 return
             self._rabbitmq_initializing = True
         try:
@@ -349,7 +351,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 self.initialize_rabbitmq(config=self.rabbitmq_config)
                 return False
 
-            logger.warning(
+            logger.info(
                 f"[DIAGNOSTIC] rabbitmq_service.rabbitmq_publish_message: Attempting to publish message. Exchange: {exchange_name}, Routing Key: {routing_key}, Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}"
             )
             try:
