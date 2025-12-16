@@ -36,8 +36,11 @@ def ingest_sample(
     # For memos, we ingest the context as document content
     messages = [
         {
-            "role": "user",
-            "content": context,
+            "type": "file",
+            "file": {
+                "file_data": context,
+                "file_id": str(sample_idx),
+            },
         }
     ]
 
@@ -176,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="longbench_v2_20251215_1838",
+        default="default",
         help="Version identifier for saving results",
     )
     parser.add_argument(

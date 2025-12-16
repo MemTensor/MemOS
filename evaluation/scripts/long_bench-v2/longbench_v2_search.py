@@ -35,7 +35,17 @@ def memos_api_search(client, query, user_id, top_k, frame):
         text_mem = search_results.get("text_mem") or []
         if text_mem and text_mem[0].get("memories"):
             memories = text_mem[0]["memories"]
-            memories_texts = [m.get("memory", "") for m in memories if isinstance(m, dict)]
+            for m in memories:
+                if not isinstance(m, dict):
+                    continue
+                # tags may be at top-level or inside metadata
+                tags = m.get("tags") or m.get("metadata", {}).get("tags") or []
+                # Skip fast-mode memories
+                if any(isinstance(t, str) and "mode:fast" in t for t in tags):
+                    continue
+                mem_text = m.get("memory", "")
+                if str(mem_text).strip():
+                    memories_texts.append(mem_text)
 
     duration_ms = (time() - start) * 1000
     return memories_texts, duration_ms, search_results
@@ -58,6 +68,9 @@ def process_sample(
     memories_used, duration_ms, search_results = memos_api_search(
         client, query, user_id, top_k, frame
     )
+
+    if not (isinstance(memories_used, list) and any(str(m).strip() for m in memories_used)):
+        return None
 
     result = {
         "sample_idx": sample_idx,

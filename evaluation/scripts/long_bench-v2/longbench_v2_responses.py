@@ -57,7 +57,11 @@ def extract_answer(response):
 
 
 def llm_answer(llm_client, memories, question, choices):
-    """Generate response using RAG-style prompt, aligned with longbench_stx.llm_answer."""
+    """Generate response using RAG-style prompt, aligned with longbench_stx.llm_answer.
+
+    Returns:
+        tuple[str, int | None]: (response_text, prompt_tokens)
+    """
     # Join memories to form the retrieved context document
     doc_content = "\n\n".join([f"Retrieved chunk {idx + 1}: {m}" for idx, m in enumerate(memories)])
 
@@ -77,10 +81,24 @@ def llm_answer(llm_client, memories, question, choices):
             temperature=0.1,
             max_tokens=12800,
         )
-        return response.choices[0].message.content or ""
+        text = response.choices[0].message.content or ""
+        prompt_tokens = None
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            # openai>=1.x style: usage.prompt_tokens
+            pt = getattr(usage, "prompt_tokens", None)
+            if isinstance(pt, int):
+                prompt_tokens = pt
+            else:
+                # fallback for dict-like usage
+                try:
+                    prompt_tokens = int(usage.get("prompt_tokens"))  # type: ignore[call-arg]
+                except Exception:
+                    prompt_tokens = None
+        return text, prompt_tokens
     except Exception as e:
         print(f"Error generating response: {e}")
-        return ""
+        return "", None
 
 
 def process_sample(search_result, llm_client, success_records, record_file, file_lock):
@@ -89,9 +107,13 @@ def process_sample(search_result, llm_client, success_records, record_file, file
     This mirrors longbench_stx.evaluate_sample but consumes precomputed search results
     produced by longbench_v2_search.py.
     """
+    # Use sample_idx when available, otherwise fall back to _id so that
+    # we can work with stx-style search results that only have _id.
     sample_idx = search_result.get("sample_idx")
+    sample_key = str(sample_idx) if sample_idx is not None else str(search_result.get("_id", ""))
+
     # Skip if already processed
-    if sample_idx is not None and str(sample_idx) in success_records:
+    if sample_key and sample_key in success_records:
         return None
 
     start = time()
@@ -123,9 +145,11 @@ def process_sample(search_result, llm_client, success_records, record_file, file
     # Skip if no retrieved memories and no question
     if not question:
         return None
+    if not memories:
+        return None
 
     # Generate answer
-    response = llm_answer(llm_client, memories, str(question), choices)
+    response, prompt_tokens = llm_answer(llm_client, memories, str(question), choices)
 
     # Extract answer (A, B, C, or D)
     pred = extract_answer(response)
@@ -133,6 +157,7 @@ def process_sample(search_result, llm_client, success_records, record_file, file
     response_duration_ms = (time() - start) * 1000
 
     result = {
+        # Preserve sample_idx if present for backward compatibility
         "sample_idx": search_result.get("sample_idx"),
         "_id": search_result.get("_id"),
         "domain": search_result.get("domain"),
@@ -148,6 +173,7 @@ def process_sample(search_result, llm_client, success_records, record_file, file
         "pred": pred,
         "response": response,
         "judge": pred == search_result.get("answer") if pred else False,
+        "prompt_tokens": prompt_tokens,
         # Keep full retrieved memories list for inspection / debugging
         "memories_used": memories,
         # Preserve full search results payload (e.g., list of memories)
@@ -157,9 +183,9 @@ def process_sample(search_result, llm_client, success_records, record_file, file
     }
 
     # Record successful processing (thread-safe)
-    if sample_idx is not None:
+    if sample_key:
         with file_lock, open(record_file, "a") as f:
-            f.write(f"{sample_idx}\n")
+            f.write(f"{sample_key}\n")
             f.flush()
 
     return result
@@ -192,16 +218,18 @@ def main(frame, version="default", num_workers=10):
         search_results = json.load(f)
 
     # Load existing results and success records for resume
-    existing_results = {}
-    success_records = set()
+    existing_results: dict[str, dict] = {}
+    success_records: set[str] = set()
     if os.path.exists(output_path):
         with open(output_path, encoding="utf-8") as f:
             existing_results_list = json.load(f)
             for result in existing_results_list:
+                # Use sample_idx if present, otherwise _id as the unique key
                 sample_idx = result.get("sample_idx")
-                if sample_idx is not None:
-                    existing_results[sample_idx] = result
-                    success_records.add(str(sample_idx))
+                key = str(sample_idx) if sample_idx is not None else str(result.get("_id", ""))
+                if key:
+                    existing_results[key] = result
+                    success_records.add(key)
         print(f"📋 Found {len(existing_results)} existing responses (resume mode)")
     else:
         print("📋 Starting fresh response generation (no checkpoint found)")
@@ -222,7 +250,7 @@ def main(frame, version="default", num_workers=10):
     )
     print(f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}")
 
-    # Process all samples
+    # Process all samples concurrently using ThreadPoolExecutor
     new_results = []
     file_lock = threading.Lock()  # Lock for thread-safe file writing
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -241,15 +269,22 @@ def main(frame, version="default", num_workers=10):
             result = future.result()
             if result:
                 new_results.append(result)
-                # Update existing results with new result
+                # Update existing results with new result (keyed by sample_idx or _id)
                 sample_idx = result.get("sample_idx")
-                if sample_idx is not None:
-                    existing_results[sample_idx] = result
+                key = str(sample_idx) if sample_idx is not None else str(result.get("_id", ""))
+                if key:
+                    existing_results[key] = result
 
     # Merge and save all results
     all_responses = list(existing_results.values())
-    # Sort by sample_idx to maintain order
-    all_responses.sort(key=lambda x: x.get("sample_idx", 0))
+
+    # Sort by sample_idx when available, otherwise by _id for stability
+    def _sort_key(x: dict):
+        if x.get("sample_idx") is not None:
+            return ("0", int(x.get("sample_idx")))
+        return ("1", str(x.get("_id", "")))
+
+    all_responses.sort(key=_sort_key)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_responses, f, ensure_ascii=False, indent=2)

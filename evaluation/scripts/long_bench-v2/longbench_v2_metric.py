@@ -16,11 +16,16 @@ def calculate_accuracy(responses):
     # Counters (aligned with longbench_stx.print_metrics)
     easy = hard = short = medium = long = 0
     easy_acc = hard_acc = short_acc = medium_acc = long_acc = 0
+    total_prompt_tokens = 0
 
     for pred in responses:
         acc = int(pred.get("judge", False))
         diff = pred.get("difficulty", "easy")
         length = pred.get("length", "short")
+
+        pt = pred.get("prompt_tokens")
+        if isinstance(pt, int | float):
+            total_prompt_tokens += int(pt)
 
         if diff == "easy":
             easy += 1
@@ -71,6 +76,8 @@ def calculate_accuracy(responses):
         "by_domain": domain_acc,
         "total_samples": total,
         "correct_samples": easy_acc + hard_acc,
+        "total_prompt_tokens": total_prompt_tokens,
+        "avg_prompt_tokens": round(total_prompt_tokens / total, 2) if total > 0 else 0.0,
     }
 
 
@@ -102,8 +109,24 @@ def main(frame, version="default"):
 
     filtered = [r for r in responses if _has_search_results(r)]
 
-    # Calculate metrics
-    metrics = calculate_accuracy(filtered)
+    # Calculate metrics (handle case where no samples have search results)
+    if not filtered:
+        print("⚠️  No responses with valid search results were found. Metrics will be zeroed.")
+        metrics = {
+            "overall": 0.0,
+            "easy": 0.0,
+            "hard": 0.0,
+            "short": 0.0,
+            "medium": 0.0,
+            "long": 0.0,
+            "by_domain": {},
+            "total_samples": 0,
+            "correct_samples": 0,
+            "total_prompt_tokens": 0,
+            "avg_prompt_tokens": 0.0,
+        }
+    else:
+        metrics = calculate_accuracy(filtered)
 
     # Save metrics
     output_path = f"results/long_bench_v2/{frame}-{version}/{frame}_longbench_v2_metrics.json"
@@ -125,6 +148,7 @@ def main(frame, version="default"):
     print(f"{'Short':<30s}: {metrics['short']:.2f}%")
     print(f"{'Medium':<30s}: {metrics['medium']:.2f}%")
     print(f"{'Long':<30s}: {metrics['long']:.2f}%")
+    print(f"{'Avg Prompt Tokens':<30s}: {metrics.get('avg_prompt_tokens', 0.0):.2f}")
     print("\nBy Domain:")
     for domain, acc in metrics["by_domain"].items():
         print(f"  {domain:<28s}: {acc:.1f}%")
