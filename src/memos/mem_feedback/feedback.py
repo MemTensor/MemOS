@@ -618,7 +618,19 @@ class MemFeedback(BaseMemFeedback):
             return None
 
         dehallu_res = [correct_item(item) for item in operations]
-        llm_operations = [item for item in dehallu_res if item]
+        dehalluded_operations = [item for item in dehallu_res if item]
+
+        # deduplicate add objects
+        add_texts = []
+        llm_operations = []
+        for item in dehalluded_operations:
+            if item["operation"].lower() == "add" and "text" in item and item["text"]:
+                if item["text"] in add_texts:
+                    continue
+                llm_operations.append(item)
+                add_texts.append(item["text"])
+            elif item["operation"].lower() == "update":
+                llm_operations.append(item)
 
         # Update takes precedence over add
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
