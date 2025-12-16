@@ -223,7 +223,7 @@ class PolarDBGraphDB(BaseGraphDB):
         if self._pool_closed:
             raise RuntimeError("Connection pool has been closed")
 
-        max_retries = 5
+        max_retries = 500
         import psycopg2.pool
 
         for attempt in range(max_retries):
@@ -251,7 +251,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     conn = None
                     if attempt < max_retries - 1:
                         # Exponential backoff: 0.1s, 0.2s, 0.4s
-                        time.sleep(0.1 * (2**attempt))
+                        """time.sleep(0.1 * (2**attempt))"""
+                        time.sleep(0.01)
                         continue
                     else:
                         raise RuntimeError("Pool returned a closed connection after all retries")
@@ -282,7 +283,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     conn = None
                     if attempt < max_retries - 1:
                         # Exponential backoff: 0.1s, 0.2s, 0.4s
-                        time.sleep(0.1 * (2**attempt))
+                        """time.sleep(0.1 * (2**attempt))"""
+                        time.sleep(0.01)
                         continue
                     else:
                         raise RuntimeError(
@@ -314,7 +316,8 @@ class PolarDBGraphDB(BaseGraphDB):
                         # Longer backoff for pool exhaustion: 0.5s, 1.0s, 2.0s
                         wait_time = 0.5 * (2**attempt)
                         logger.info(f"[_get_connection] Waiting {wait_time}s before retry...")
-                        time.sleep(wait_time)
+                        """time.sleep(wait_time)"""
+                        time.sleep(0.01)
                         continue
                     else:
                         raise RuntimeError(
@@ -325,7 +328,8 @@ class PolarDBGraphDB(BaseGraphDB):
                 else:
                     # Other pool errors - retry with normal backoff
                     if attempt < max_retries - 1:
-                        time.sleep(0.1 * (2**attempt))
+                        """time.sleep(0.1 * (2**attempt))"""
+                        time.sleep(0.01)
                         continue
                     else:
                         raise RuntimeError(
@@ -351,7 +355,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     raise RuntimeError(f"Failed to get a valid connection from pool: {e}") from e
                 else:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s
-                    time.sleep(0.1 * (2**attempt))
+                    """time.sleep(0.1 * (2**attempt))"""
+                    time.sleep(0.01)
                 continue
 
         # Should never reach here, but just in case
