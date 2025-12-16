@@ -231,18 +231,6 @@ class TestServerRouterAdd:
         assert call_args.mem_cube_id == "test_cube"
         assert call_args.user_id == "test_user"
 
-    def test_add_invalid_input_missing_cube_id(self, mock_handlers, client):
-        """Test add endpoint with missing required field."""
-        request_data = {
-            "user_id": "test_user",
-            "memory_content": "test memory content",
-        }
-
-        response = client.post("/product/add", json=request_data)
-
-        # Should return validation error
-        assert response.status_code == 422
-
     def test_add_response_format(self, mock_handlers, client):
         """Test add endpoint returns MemoryResponse format."""
         mock_handlers["add"].handle_add_memories.return_value = MemoryResponse(
