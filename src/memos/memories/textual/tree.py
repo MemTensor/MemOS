@@ -92,6 +92,7 @@ class TreeTextMemory(BaseTextMemory):
         else:
             logger.info("No internet retriever configured")
         self.tokenizer = None
+        self.include_embedding = config.include_embedding or False
 
     def add(
         self,
@@ -192,6 +193,7 @@ class TreeTextMemory(BaseTextMemory):
             search_strategy=self.search_strategy,
             manual_close_internet=manual_close_internet,
             tokenizer=self.tokenizer,
+            include_embedding=self.include_embedding,
         )
         return searcher.search(
             query,
