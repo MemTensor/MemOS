@@ -1,6 +1,7 @@
 import concurrent.futures
 import difflib
 import json
+import re
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -493,7 +494,7 @@ class MemFeedback(BaseMemFeedback):
         record = []
         for key in include_keys:
             info_v = _info.get(key)
-            mem_v = memory.metadata.info.get(key, None)
+            mem_v = memory.metadata.info.get(key, None) if memory.metadata.info else None
             record.append(info_v == mem_v)
         return all(record)
 
@@ -554,7 +555,8 @@ class MemFeedback(BaseMemFeedback):
             response_text = self.llm.generate(messages, temperature=0.3, timeout=60)
             if dsl:
                 response_text = response_text.replace("```", "").replace("json", "")
-                response_json = json.loads(response_text)
+                cleaned_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", response_text)
+                response_json = json.loads(cleaned_text)
             else:
                 return response_text
         except Exception as e:
@@ -620,7 +622,7 @@ class MemFeedback(BaseMemFeedback):
         dehallu_res = [correct_item(item) for item in operations]
         dehalluded_operations = [item for item in dehallu_res if item]
 
-        # deduplicate add objects
+        # c add objects
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:
@@ -631,6 +633,9 @@ class MemFeedback(BaseMemFeedback):
                 add_texts.append(item["text"])
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
+        logger.info(
+            f"[Feedback Core: deduplicate add] {len(dehalluded_operations)} ->  {len(llm_operations)} memories"
+        )
 
         # Update takes precedence over add
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
