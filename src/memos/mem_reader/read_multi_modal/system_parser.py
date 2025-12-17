@@ -87,13 +87,42 @@ class SystemParser(BaseMessageParser):
         if isinstance(content, dict):
             content = content["text"]
 
-        # Replace tool_schema content with "omitted" in remaining content
-        content_wo_tool_schema = re.sub(
-            r"<tool_schema>(.*?)</tool_schema>",
-            r"<tool_schema>omitted</tool_schema>",
-            content,
-            flags=re.DOTALL,
-        )
+        # Process tool_schema content
+        content_wo_tool_schema = content
+
+        # Find first tool_schema block
+        tool_schema_pattern = r"<tool_schema>(.*?)</tool_schema>"
+        match = re.search(tool_schema_pattern, content, flags=re.DOTALL)
+
+        if match:
+            original_text = match.group(0)  # 完整的 <tool_schema>...</tool_schema>
+            schema_content = match.group(1)  # 标签之间的内容
+
+            # Parse tool schema
+            try:
+                tool_schema = json.loads(schema_content)
+                assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
+            except json.JSONDecodeError:
+                try:
+                    tool_schema = ast.literal_eval(schema_content)
+                    assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
+                except (ValueError, SyntaxError, AssertionError):
+                    logger.warning(
+                        f"[SystemParser] Failed to parse tool schema with both JSON and ast.literal_eval: {schema_content[:100]}..."
+                    )
+                    tool_schema = None
+            except AssertionError:
+                logger.warning(
+                    f"[SystemParser] Tool schema must be a list[dict]: {schema_content[:100]}..."
+                )
+                tool_schema = None
+
+            # Process and replace
+            if tool_schema is not None:
+                processed_text = f"<tool_schema>{json.dumps(tool_schema)}</tool_schema>"
+                content_wo_tool_schema = content_wo_tool_schema.replace(
+                    original_text, processed_text, 1
+                )
 
         source = self.create_source(message, info)
 
