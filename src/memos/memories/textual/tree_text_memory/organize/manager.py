@@ -131,6 +131,7 @@ class MemoryManager:
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
+        logger.info(f"[MemoryManager: _add_memories_parallel] Added {len(added_ids)} memories")
         return added_ids
 
     def _add_memories_batch(
