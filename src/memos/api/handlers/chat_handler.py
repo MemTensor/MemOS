@@ -405,7 +405,7 @@ class ChatHandler(BaseHandler):
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
                         internet_search=False,
-                        top_k=5,
+                        top_k=20,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=True,
@@ -428,7 +428,7 @@ class ChatHandler(BaseHandler):
                             memories_list = text_mem_results[0]["memories"]
 
                     # Filter memories by threshold
-                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    filtered_memories = self._filter_memories_by_threshold(memories_list)[:5]
 
                     # Prepare reference data (first search)
                     reference = prepare_reference_data(filtered_memories)
@@ -459,9 +459,7 @@ class ChatHandler(BaseHandler):
                     searcher = self.dependencies.searcher
                     parsed_goal = searcher.task_goal_parser.parse(
                         task_description=chat_req.query,
-                        context="\n".join(
-                            [memory.get("memory", "") for memory in filtered_memories]
-                        ),
+                        context="\n".join([memory.get("memory", "") for memory in memories_list]),
                         conversation=chat_req.history,
                         mode="fine",
                     )
@@ -481,7 +479,7 @@ class ChatHandler(BaseHandler):
                     # ======  second deep search  ======
                     search_req = APISearchRequest(
                         query=(parsed_goal.rephrased_query or chat_req.query)
-                        + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
+                        + (f" {parsed_goal.memories}" if parsed_goal.memories else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
