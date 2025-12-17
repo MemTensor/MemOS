@@ -515,6 +515,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         value=m.get("trajectory", ""),
                         info=info,
                         memory_type=memory_type,
+                        experience=m.get("experience", ""),
                         tool_used_status=m.get("tool_used_status", []),
                     )
                     fine_memory_items.append(node)
