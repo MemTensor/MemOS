@@ -5,7 +5,6 @@ This module tests that the product_router endpoints correctly validate
 input request formats and return properly formatted responses.
 """
 
-# Mock sklearn before importing any memos modules to avoid import errors
 from unittest.mock import Mock, patch
 
 import pytest
@@ -21,8 +20,6 @@ import memos.api.routers.product_router as pr_module
 _mock_mos_instance = Mock()
 pr_module.MOS_PRODUCT_INSTANCE = _mock_mos_instance
 pr_module.get_mos_product_instance = lambda: _mock_mos_instance
-
-
 with patch("memos.mem_os.product.MOSProduct", return_value=_mock_mos_instance):
     from memos.api import product_api
 
