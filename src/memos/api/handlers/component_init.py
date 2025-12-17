@@ -247,7 +247,7 @@ def init_server() -> dict[str, Any]:
             config_factory=pref_retriever_config,
             llm_provider=llm,
             embedder=embedder,
-            reranker=reranker,
+            reranker=feedback_reranker,
             vector_db=vector_db,
         )
         if os.getenv("ENABLE_PREFERENCE_MEMORY", "false") == "true"
@@ -262,7 +262,7 @@ def init_server() -> dict[str, Any]:
             extractor_llm=llm,
             vector_db=vector_db,
             embedder=embedder,
-            reranker=reranker,
+            reranker=feedback_reranker,
             extractor=pref_extractor,
             adder=pref_adder,
             retriever=pref_retriever,
