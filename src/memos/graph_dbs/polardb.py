@@ -4883,7 +4883,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 SELECT * FROM cypher('{self.db_name}_graph', $$
                 MATCH (n:Memory)
                 WHERE {ids_where}
-                DETACH DELETE n
+                DELETE n
                 $$) AS (result agtype)
             """
 
