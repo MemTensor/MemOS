@@ -465,6 +465,7 @@ class ChatHandler(BaseHandler):
                         conversation=chat_req.history,
                         mode="fine",
                     )
+                    self.logger.info(f"[PLAYGROUND chat parsed_goal]: {parsed_goal}")
 
                     if chat_req.beginner_guide_step == "first":
                         chat_req.internet_search = False
@@ -479,8 +480,8 @@ class ChatHandler(BaseHandler):
 
                     # ======  second deep search  ======
                     search_req = APISearchRequest(
-                        query=parsed_goal.rephrased_query
-                        or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
+                        query=(parsed_goal.rephrased_query or chat_req.query)
+                        + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
@@ -494,6 +495,9 @@ class ChatHandler(BaseHandler):
                         search_memory_type="All",
                         search_tool_memory=False,
                     )
+
+                    self.logger.info(f"[PLAYGROUND second search query]: {search_req.query}")
+
                     start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
                     end_time = time.time()
