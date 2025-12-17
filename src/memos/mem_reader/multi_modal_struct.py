@@ -328,22 +328,23 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         Returns:
             LLM response dictionary
         """
-        # Try to extract actual text content from sources for better language detection
-        text_for_lang_detection = mem_str
+        # Determine language: prioritize lang from sources (set in fast mode),
+        # fallback to detecting from mem_str if sources don't have lang
+        lang = None
+
+        # First, try to get lang from sources (fast mode already set this)
         if sources:
-            source_texts = []
             for source in sources:
-                if hasattr(source, "content") and source.content:
-                    source_texts.append(source.content)
-                elif isinstance(source, dict) and source.get("content"):
-                    source_texts.append(source.get("content"))
+                if hasattr(source, "lang") and source.lang:
+                    lang = source.lang
+                    break
+                elif isinstance(source, dict) and source.get("lang"):
+                    lang = source.get("lang")
+                    break
 
-            # If we have text content from sources, use it for language detection
-            if source_texts:
-                text_for_lang_detection = " ".join(source_texts)
-
-        # Use the extracted text for language detection
-        lang = detect_lang(text_for_lang_detection)
+        # Fallback: detect language from mem_str if no lang from sources
+        if lang is None:
+            lang = detect_lang(mem_str)
 
         # Select prompt template based on prompt_type
         if prompt_type == "doc":
