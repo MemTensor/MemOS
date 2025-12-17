@@ -26,6 +26,8 @@ from memos.memories.textual.item import (
 from memos.templates.mem_reader_prompts import (
     CUSTOM_TAGS_INSTRUCTION,
     CUSTOM_TAGS_INSTRUCTION_ZH,
+    GENERAL_STRUCT_STRING_READER_PROMPT,
+    GENERAL_STRUCT_STRING_READER_PROMPT_ZH,
     PROMPT_MAPPING,
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
@@ -79,6 +81,10 @@ PROMPT_DICT = {
         "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
+    "general_string": {
+        "en": GENERAL_STRUCT_STRING_READER_PROMPT,
+        "zh": GENERAL_STRUCT_STRING_READER_PROMPT_ZH,
+    },
     "custom_tags": {"en": CUSTOM_TAGS_INSTRUCTION, "zh": CUSTOM_TAGS_INSTRUCTION_ZH},
 }
 

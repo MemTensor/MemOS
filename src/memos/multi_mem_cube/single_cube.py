@@ -360,7 +360,20 @@ class SingleCubeView(MemCubeView):
             logger.info(
                 f"Added {len(additional_memories)} more memories. Total enhanced memories: {len(enhanced_memories)}"
             )
-        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+
+        def _dedup_by_content(memories: list) -> list:
+            seen = set()
+            unique_memories = []
+            for mem in memories:
+                key = " ".join(mem.memory.split())
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_memories.append(mem)
+            return unique_memories
+
+        deduped_memories = _dedup_by_content(enhanced_memories)
+        formatted_memories = [format_memory_item(data) for data in deduped_memories]
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
 
