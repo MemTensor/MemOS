@@ -8,6 +8,7 @@ consolidating all chat-related logic without depending on mos_server.
 import asyncio
 import json
 import re
+import time
 import traceback
 
 from collections.abc import Generator
@@ -170,12 +171,18 @@ class ChatHandler(BaseHandler):
                 )
 
             model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+
+            self.logger.info(f"[Cloud Service Chat Complete Model]: {model}")
+            strat = time.time()
             response = self.chat_llms[model].generate(current_messages, model_name_or_path=model)
+            end = time.time()
+            self.logger.info(f"[Cloud Service Chat Complete Time]: {end - strat} seconds")
 
             # Step 4: start add after chat asynchronously
             if chat_req.add_message_on_answer:
                 # Resolve writable cube IDs (for add)
                 writable_cube_ids = chat_req.writable_cube_ids or [chat_req.user_id]
+                start = time.time()
                 self._start_add_to_memory(
                     user_id=chat_req.user_id,
                     writable_cube_ids=writable_cube_ids,
@@ -184,6 +191,8 @@ class ChatHandler(BaseHandler):
                     full_response=response,
                     async_mode="async",
                 )
+                end = time.time()
+                self.logger.info(f"[Cloud Service Chat Add Time]: {end - start} seconds")
 
             match = re.search(r"<think>([\s\S]*?)</think>", response)
             reasoning_text = match.group(1) if match else None
@@ -295,9 +304,14 @@ class ChatHandler(BaseHandler):
                         )
 
                     model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    self.logger.info(f"[Cloud Service Chat Stream Model]: {model}")
+
+                    start = time.time()
                     response_stream = self.chat_llms[model].generate_stream(
                         current_messages, model_name_or_path=model
                     )
+                    end = time.time()
+                    self.logger.info(f"[Cloud Service Chat Stream Time]: {end - start} seconds")
 
                     # Stream the response
                     buffer = ""
@@ -329,6 +343,7 @@ class ChatHandler(BaseHandler):
                         writable_cube_ids = chat_req.writable_cube_ids or (
                             [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                         )
+                        start = time.time()
                         self._start_add_to_memory(
                             user_id=chat_req.user_id,
                             writable_cube_ids=writable_cube_ids,
@@ -337,7 +352,10 @@ class ChatHandler(BaseHandler):
                             full_response=full_response,
                             async_mode="async",
                         )
-
+                        end = time.time()
+                        self.logger.info(
+                            f"[Cloud Service Chat Stream Add Time]: {end - start} seconds"
+                        )
                 except Exception as e:
                     self.logger.error(f"Error in chat stream: {e}", exc_info=True)
                     error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
@@ -405,7 +423,7 @@ class ChatHandler(BaseHandler):
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
                         internet_search=False,
-                        top_k=5,
+                        top_k=20,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=True,
@@ -428,7 +446,7 @@ class ChatHandler(BaseHandler):
                             memories_list = text_mem_results[0]["memories"]
 
                     # Filter memories by threshold
-                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    filtered_memories = self._filter_memories_by_threshold(memories_list)[:5]
 
                     # Prepare reference data (first search)
                     reference = prepare_reference_data(filtered_memories)
@@ -459,9 +477,7 @@ class ChatHandler(BaseHandler):
                     searcher = self.dependencies.searcher
                     parsed_goal = searcher.task_goal_parser.parse(
                         task_description=chat_req.query,
-                        context="\n".join(
-                            [memory.get("memory", "") for memory in filtered_memories]
-                        ),
+                        context="\n".join([memory.get("memory", "") for memory in memories_list]),
                         conversation=chat_req.history,
                         mode="fine",
                     )
@@ -481,7 +497,7 @@ class ChatHandler(BaseHandler):
                     # ======  second deep search  ======
                     search_req = APISearchRequest(
                         query=(parsed_goal.rephrased_query or chat_req.query)
-                        + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
+                        + (f" {parsed_goal.memories}" if parsed_goal.memories else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",

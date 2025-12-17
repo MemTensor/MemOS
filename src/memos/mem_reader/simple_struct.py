@@ -459,7 +459,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     @staticmethod
     def _parse_hallucination_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
         """Parse index-keyed JSON from hallucination filter response.
-        Expected shape: { "0": {"need_rewrite": bool, "rewritten_suffix": str, "reason": str}, ... }
+        Expected shape: { "0": {"need_rewrite": bool, "rewritten": str, "reason": str}, ... }
         Returns (success, parsed_dict) with int keys.
         """
         try:
@@ -483,16 +483,16 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             if not isinstance(v, dict):
                 continue
             need_rewrite = v.get("need_rewrite")
-            rewritten_suffix = v.get("rewritten_suffix", "")
+            rewritten = v.get("rewritten", "")
             reason = v.get("reason", "")
             if (
                 isinstance(need_rewrite, bool)
-                and isinstance(rewritten_suffix, str)
+                and isinstance(rewritten, str)
                 and isinstance(reason, str)
             ):
                 result[idx] = {
                     "need_rewrite": need_rewrite,
-                    "rewritten_suffix": rewritten_suffix,
+                    "rewritten": rewritten,
                     "reason": reason,
                 }
 
@@ -503,6 +503,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     ) -> list[TextualMemoryItem]:
         # Build input objects with memory text and metadata (timestamps, sources, etc.)
         template = PROMPT_MAPPING["hallucination_filter"]
+        if len(messages) < 2:
+            return memory_list
         prompt_args = {
             "messages_inline": "\n".join(
                 [f"- [{message['role']}]: {message['content']}" for message in messages]
@@ -523,32 +525,27 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}"
             )
             if success:
-                new_mem_list = []
                 logger.info(f"Hallucination filter result: {parsed}")
                 assert len(parsed) == len(memory_list)
                 for mem_idx, content in parsed.items():
                     need_rewrite = content.get("need_rewrite", False)
-                    rewritten_suffix = content.get("rewritten_suffix", "")
+                    rewritten_text = content.get("rewritten", "")
                     reason = content.get("reason", "")
 
-                    # Append a new memory item instead of replacing the original
+                    # Replace memory text with rewritten content when rewrite is needed
                     if (
                         need_rewrite
-                        and isinstance(rewritten_suffix, str)
-                        and len(rewritten_suffix.strip()) > 0
+                        and isinstance(rewritten_text, str)
+                        and len(rewritten_text.strip()) > 0
                     ):
                         original_text = memory_list[mem_idx].memory
 
                         logger.info(
-                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten_suffix='{rewritten_suffix}', reason='{reason}', original memory='{original_text}', action='append_suffix'"
+                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten='{rewritten_text}', reason='{reason}', original memory='{original_text}', action='replace_text'"
                         )
 
-                        # Append only the suffix to the original memory text
-                        memory_list[mem_idx].memory = original_text + rewritten_suffix
-                        new_mem_list.append(memory_list[mem_idx])
-                    else:
-                        new_mem_list.append(memory_list[mem_idx])
-                return new_mem_list
+                        memory_list[mem_idx].memory = rewritten_text
+                return memory_list
             else:
                 logger.warning("Hallucination filter parsing failed or returned empty result.")
         except Exception as e:
@@ -603,13 +600,46 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if os.getenv("SIMPLE_STRUCT_ADD_FILTER", "false") == "true":
             # Build inputs
-            new_memory_list = []
-            for unit_messages, unit_memory_list in zip(messages, memory_list, strict=False):
-                unit_memory_list = self.filter_hallucination_in_memories(
-                    messages=unit_messages, memory_list=unit_memory_list
-                )
-                new_memory_list.append(unit_memory_list)
-            memory_list = new_memory_list
+            combined_messages = []
+            for group_messages in messages:
+                combined_messages.extend(group_messages)
+
+            for group_id in range(len(memory_list)):
+                try:
+                    revised_memory_list = self.filter_hallucination_in_memories(
+                        messages=combined_messages,
+                        memory_list=memory_list[group_id],
+                    )
+                    if len(revised_memory_list) != len(memory_list[group_id]):
+                        original_serialized = [
+                            one.memory if hasattr(one, "memory") else str(one)
+                            for one in memory_list[group_id]
+                        ]
+                        filtered_serialized = [
+                            one.memory if hasattr(one, "memory") else str(one)
+                            for one in revised_memory_list
+                        ]
+                        logger.error(
+                            f"Length mismatch after hallucination filtering for group_id={group_id}: "
+                            f"original={len(memory_list[group_id])}, filtered={len(revised_memory_list)}"
+                            f"\noriginal_memory_list(serialized): {original_serialized}"
+                            f"\nfiltered_memory_list(serialized): {filtered_serialized}"
+                            f"\nmessages: {combined_messages}"
+                            f"\nSkipping update and keeping original memory."
+                        )
+                        continue
+                    memory_list[group_id] = revised_memory_list
+                except Exception as e:
+                    group_serialized = [
+                        one.memory if hasattr(one, "memory") else str(one)
+                        for one in memory_list[group_id]
+                    ]
+                    logger.error(
+                        f"There is an exception while filtering group_id={group_id}: {e}\n"
+                        f"messages: {combined_messages}\n"
+                        f"memory_list(serialized): {group_serialized}",
+                        exc_info=True,
+                    )
         return memory_list
 
     def fine_transfer_simple_mem(

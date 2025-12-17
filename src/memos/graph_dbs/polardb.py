@@ -3349,6 +3349,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+        batch_start_time = time.time()
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
@@ -3517,13 +3518,6 @@ class PolarDBGraphDB(BaseGraphDB):
                                 %s::vector
                             )
                         """
-                        logger.info(
-                            f"[add_nodes_batch] embedding_column Inserting insert_query:{insert_query}"
-                        )
-                        logger.info(
-                            f"[add_nodes_batch] embedding_column Inserting data_tuples:{data_tuples}"
-                        )
-
                         # Execute batch insert
                         execute_values(
                             cursor,
@@ -3571,6 +3565,10 @@ class PolarDBGraphDB(BaseGraphDB):
 
                     logger.info(
                         f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
+                    )
+                    elapsed_time = time.time() - batch_start_time
+                    logger.info(
+                        f"[add_nodes_batch] execute_values completed successfully in {elapsed_time:.2f}s"
                     )
 
         except Exception as e:
@@ -4780,10 +4778,8 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             int: Number of nodes deleted.
         """
+        batch_start_time = time.time()
         logger.info(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
-        )
-        print(
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
 
@@ -4879,7 +4875,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 $$) AS (node_count agtype)
             """
         logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
 
         # Then delete nodes
         delete_query = f"""
@@ -4893,11 +4888,7 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
 
         conn = None
         deleted_count = 0
@@ -4917,10 +4908,12 @@ class PolarDBGraphDB(BaseGraphDB):
                 cursor.execute(delete_query)
                 # Use the count from before deletion as the actual deleted count
                 deleted_count = expected_count
-                conn.commit()
+                elapsed_time = time.time() - batch_start_time
+                logger.info(
+                    f"[delete_node_by_prams] execute_values completed successfully in {elapsed_time:.2f}s"
+                )
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
-            conn.rollback()
             raise
         finally:
             self._return_connection(conn)

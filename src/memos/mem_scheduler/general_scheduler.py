@@ -156,8 +156,8 @@ class GeneralScheduler(BaseScheduler):
         logger.info(
             f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
             f"Scheduler replaced working memory based on query history {queries}. "
-            f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
-            f"New working memory ({len(new_memory_texts)} items): {new_memory_texts}."
+            f"Old working memory ({len(cur_working_memory)} items): {old_memory_texts}. "
+            f"New working memory ({len(new_order_working_memory)} items): {new_memory_texts}."
         )
 
         # update activation memories
@@ -644,8 +644,8 @@ class GeneralScheduler(BaseScheduler):
                         or mem_item.get("original_content")
                     )
                     source_doc_id = None
-                    if "archived_id" in mem_item:
-                        source_doc_id = mem_item.get("archived_id")
+                    if isinstance(mem_item, dict):
+                        source_doc_id = mem_item.get("source_doc_id", None)
 
                     return mem_id, mem_memory, original_content, source_doc_id
 
@@ -699,6 +699,7 @@ class GeneralScheduler(BaseScheduler):
                             stack_info=True,
                         )
 
+                logger.info(f"[Feedback Scheduler] kb_log_content: {kb_log_content!s}")
                 if kb_log_content:
                     logger.info(
                         "[DIAGNOSTIC] general_scheduler._mem_feedback_message_consumer: Creating knowledgeBaseUpdate event for feedback. user_id=%s mem_cube_id=%s task_id=%s items=%s",
