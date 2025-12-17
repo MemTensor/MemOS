@@ -1,4 +1,5 @@
 import concurrent.futures
+import copy
 import difflib
 import json
 import re
@@ -331,7 +332,7 @@ class MemFeedback(BaseMemFeedback):
             current_memories = [
                 item for item in current_memories if self._info_comparison(item, info, include_keys)
             ]
-
+        operations = []
         if not current_memories:
             operations = [{"operation": "ADD"}]
             logger.warning(
@@ -370,6 +371,21 @@ class MemFeedback(BaseMemFeedback):
                         logger.error(f"[Feedback Core: semantics_feedback] Operation failed: {e}")
 
             operations = self.standard_operations(all_operations, current_memories)
+
+        add_texts = []
+        final_operations = []
+        for item in operations:
+            if item["operation"].lower() == "add" and "text" in item and item["text"]:
+                if item["text"] in add_texts:
+                    continue
+                final_operations.append(item)
+                add_texts.append(item["text"])
+            elif item["operation"].lower() == "update":
+                final_operations.append(item)
+        logger.info(
+            f"[Feedback Core: deduplicate add] {len(operations)} ->  {len(final_operations)} memories"
+        )
+        operations = copy.deepcopy(final_operations)
 
         logger.info(f"[Feedback Core Operations]: {operations!s}")
 
@@ -622,7 +638,7 @@ class MemFeedback(BaseMemFeedback):
         dehallu_res = [correct_item(item) for item in operations]
         dehalluded_operations = [item for item in dehallu_res if item]
 
-        # c add objects
+        # deduplicate add objects
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:
