@@ -59,7 +59,8 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         # Thread management
         self._rabbitmq_io_loop_thread = None  # For IOLoop execution
         self._rabbitmq_stop_flag = False  # Graceful shutdown flag
-        self._rabbitmq_lock = threading.Lock()  # Ensure thread safety
+        # Use RLock because publishing may trigger initialization, which also grabs the lock.
+        self._rabbitmq_lock = threading.RLock()
         self._rabbitmq_initializing = False  # Avoid duplicate concurrent initializations
 
     def is_rabbitmq_connected(self) -> bool:

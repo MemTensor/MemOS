@@ -133,7 +133,7 @@ class MemFeedback(BaseMemFeedback):
         memories = self.mem_reader.get_memory(scene_data, type="chat", info=info)
         to_add_memories = [item for scene in memories for item in scene]
         added_ids = self._retry_db_operation(
-            lambda: self.memory_manager.add(to_add_memories, user_name=user_name)
+            lambda: self.memory_manager.add(to_add_memories, user_name=user_name, use_batch=False)
         )
         logger.info(
             f"[Feedback Core: _pure_add] Pure added {len(added_ids)} memories for user {user_name}."
@@ -224,10 +224,10 @@ class MemFeedback(BaseMemFeedback):
 
         to_add_memory.id = ""
         added_ids = self._retry_db_operation(
-            lambda: self.memory_manager.add([to_add_memory], user_name=user_name, mode=async_mode)
+            lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
         )
 
-        logger.info(f"[Memory Feedback ADD] memory id: {added_ids[0]}")
+        logger.info(f"[Memory Feedback ADD] memory id: {added_ids!s}")
         return {"id": added_ids[0], "text": to_add_memory.memory}
 
     def _single_update_operation(
