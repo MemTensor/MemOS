@@ -574,8 +574,13 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for fast_item in fast_memory_items:
                 sources = fast_item.metadata.sources
                 for source in sources:
+                    lang = getattr(source, "lang", "en")
                     items = self.multi_modal_parser.process_transfer(
-                        source, context_items=[fast_item], custom_tags=custom_tags, info=info
+                        source,
+                        context_items=[fast_item],
+                        custom_tags=custom_tags,
+                        info=info,
+                        lang=lang,
                     )
                     fine_memory_items.extend(items)
             return fine_memory_items
@@ -616,8 +621,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         # Part B: get fine multimodal items
         for source in sources:
+            lang = getattr(source, "lang", "en")
             items = self.multi_modal_parser.process_transfer(
-                source, context_items=[raw_node], info=info, custom_tags=custom_tags
+                source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
             )
             fine_memory_items.extend(items)
         return fine_memory_items
