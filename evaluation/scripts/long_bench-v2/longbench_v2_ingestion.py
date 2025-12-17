@@ -33,7 +33,7 @@ def ingest_sample(
     # Get context and convert to messages
     context = sample.get("context", "")
 
-    # For memos, we ingest the context as document content
+    # For memos, we ingest the context as a raw document content
     messages = [
         {
             "type": "file",
