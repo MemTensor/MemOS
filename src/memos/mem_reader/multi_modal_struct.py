@@ -8,8 +8,9 @@ from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
+from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
 from memos.utils import timed
@@ -184,6 +185,33 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if window:
                 windows.append(window)
 
+        # Batch compute embeddings for all windows
+        if windows:
+            # Collect all valid windows that need embedding
+            valid_windows = [w for w in windows if w and w.memory]
+
+            if valid_windows:
+                # Collect all texts that need embedding
+                texts_to_embed = [w.memory for w in valid_windows]
+
+                # Batch compute all embeddings at once
+                try:
+                    embeddings = self.embedder.embed(texts_to_embed)
+                    # Fill embeddings back into memory items
+                    for window, embedding in zip(valid_windows, embeddings, strict=True):
+                        window.metadata.embedding = embedding
+                except Exception as e:
+                    logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
+                    # Fallback: compute embeddings individually
+                    for window in valid_windows:
+                        if window.memory:
+                            try:
+                                window.metadata.embedding = self.embedder.embed([window.memory])[0]
+                            except Exception as e2:
+                                logger.error(
+                                    f"[MultiModalStruct] Error computing embedding for item: {e2}"
+                                )
+
         return windows
 
     def _build_window_from_items(
@@ -247,17 +275,35 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # If no text content, return None
             return None
 
-        # Create aggregated memory item (similar to _build_fast_node in simple_struct)
+        # Create aggregated memory item without embedding (will be computed in batch later)
         extra_kwargs: dict[str, Any] = {}
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
-        aggregated_item = self._make_memory_item(
-            value=merged_text,
-            info=info,
-            memory_type=memory_type,
-            tags=["mode:fast"],
-            sources=all_sources,
-            **extra_kwargs,
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # Create memory item without embedding (set to None, will be filled in batch)
+        aggregated_item = TextualMemoryItem(
+            memory=merged_text,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=user_id,
+                session_id=session_id,
+                memory_type=memory_type,
+                status="activated",
+                tags=["mode:fast"],
+                key=_derive_key(merged_text),
+                embedding=None,  # Will be computed in batch
+                usage=[],
+                sources=all_sources,
+                background="",
+                confidence=0.99,
+                type="fact",
+                info=info_,
+                **extra_kwargs,
+            ),
         )
 
         return aggregated_item
