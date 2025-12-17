@@ -622,7 +622,7 @@ class MemFeedback(BaseMemFeedback):
         dehallu_res = [correct_item(item) for item in operations]
         dehalluded_operations = [item for item in dehallu_res if item]
 
-        # deduplicate add objects
+        # c add objects
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:
@@ -633,6 +633,10 @@ class MemFeedback(BaseMemFeedback):
                 add_texts.append(item["text"])
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
+        logger.info(
+            f"[Feedback Core: deduplicate add] {len(dehalluded_operations)} ->  {len(llm_operations)} memories"
+        )
+
         # Update takes precedence over add
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)
         if has_update:
