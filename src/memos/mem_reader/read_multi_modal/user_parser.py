@@ -156,8 +156,6 @@ class UserParser(BaseMessageParser):
             return []
 
         role = message.get("role", "")
-        # TODO: if file/url/audio etc in content, how to transfer them into a
-        #  readable string?
         content = message.get("content", "")
         chat_time = message.get("chat_time", None)
         if role != "user":
