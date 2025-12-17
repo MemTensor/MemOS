@@ -1160,13 +1160,11 @@ class PolarDBGraphDB(BaseGraphDB):
                         properties = properties_json if properties_json else {}
 
                     # Parse embedding from JSONB if it exists
-                    if embedding_json is not None:
+                    if embedding_json is not None and kwargs.get("include_embedding"):
                         try:
                             # remove embedding
-                            """
                             embedding = json.loads(embedding_json) if isinstance(embedding_json, str) else embedding_json
-                            # properties["embedding"] = embedding
-                            """
+                            properties["embedding"] = embedding
                         except (json.JSONDecodeError, TypeError):
                             logger.warning(f"Failed to parse embedding for node {node_id}")
                     nodes.append(
