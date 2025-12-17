@@ -638,7 +638,7 @@ class MemFeedback(BaseMemFeedback):
         dehallu_res = [correct_item(item) for item in operations]
         dehalluded_operations = [item for item in dehallu_res if item]
 
-        # deduplicate add objects
+        # c add objects
         add_texts = []
         llm_operations = []
         for item in dehalluded_operations:

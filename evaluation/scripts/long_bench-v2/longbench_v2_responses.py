@@ -22,94 +22,134 @@ sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, EVAL_SCRIPTS_DIR)
 
 
-# Prompt template from LongBench v2
-LONGBENCH_V2_PROMPT = """Please read the following text and answer the question below.
+# RAG-style prompt template aligned with longbench_stx.TEMPLATE_RAG
+TEMPLATE_RAG = """Please read the following retrieved text chunks and answer the question below.
 
 <text>
-{context}
+$DOC$
 </text>
 
-What is the correct answer to this question: {question}
+What is the correct answer to this question: $Q$
 Choices:
-(A) {choice_A}
-(B) {choice_B}
-(C) {choice_C}
-(D) {choice_D}
+(A) $C_A$
+(B) $C_B$
+(C) $C_C$
+(D) $C_D$
 
 Format your response as follows: "The correct answer is (insert answer here)"."""
 
 
 def extract_answer(response):
-    """Extract answer from response (A, B, C, or D)."""
+    """Extract answer from response (A, B, C, or D).
+
+    Logic is kept consistent with longbench_stx.extract_answer.
+    """
     response = response.replace("*", "")
     # Try to find "The correct answer is (X)" pattern
-    match = re.search(r"The correct answer is \(([A-D])\)", response, re.IGNORECASE)
+    match = re.search(r"The correct answer is \(([A-D])\)", response)
     if match:
-        return match.group(1).upper()
+        return match.group(1)
     else:
-        match = re.search(r"The correct answer is ([A-D])", response, re.IGNORECASE)
+        match = re.search(r"The correct answer is ([A-D])", response)
         if match:
-            return match.group(1).upper()
-        else:
-            # Try to find standalone A, B, C, or D
-            match = re.search(r"\b([A-D])\b", response)
-            if match:
-                return match.group(1).upper()
-    return None
+            return match.group(1)
+        return None
 
 
-def generate_response(llm_client, context, question, choice_a, choice_b, choice_c, choice_d):
-    """Generate response using LLM."""
-    prompt = LONGBENCH_V2_PROMPT.format(
-        context=context,
-        question=question,
-        choice_A=choice_a,
-        choice_B=choice_b,
-        choice_C=choice_c,
-        choice_D=choice_d,
+def llm_answer(llm_client, memories, question, choices):
+    """Generate response using RAG-style prompt, aligned with longbench_stx.llm_answer.
+
+    Returns:
+        tuple[str, int | None]: (response_text, prompt_tokens)
+    """
+    # Join memories to form the retrieved context document
+    doc_content = "\n\n".join([f"Retrieved chunk {idx + 1}: {m}" for idx, m in enumerate(memories)])
+
+    prompt = (
+        TEMPLATE_RAG.replace("$DOC$", doc_content)
+        .replace("$Q$", question)
+        .replace("$C_A$", choices.get("A", ""))
+        .replace("$C_B$", choices.get("B", ""))
+        .replace("$C_C$", choices.get("C", ""))
+        .replace("$C_D$", choices.get("D", ""))
     )
 
     try:
         response = llm_client.chat.completions.create(
             model=os.getenv("CHAT_MODEL"),
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=128,
+            max_tokens=12800,
         )
-        result = response.choices[0].message.content or ""
-        return result
+        text = response.choices[0].message.content or ""
+        prompt_tokens = None
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            # openai>=1.x style: usage.prompt_tokens
+            pt = getattr(usage, "prompt_tokens", None)
+            if isinstance(pt, int):
+                prompt_tokens = pt
+            else:
+                # fallback for dict-like usage
+                try:
+                    prompt_tokens = int(usage.get("prompt_tokens"))  # type: ignore[call-arg]
+                except Exception:
+                    prompt_tokens = None
+        return text, prompt_tokens
     except Exception as e:
         print(f"Error generating response: {e}")
-        return ""
+        return "", None
 
 
 def process_sample(search_result, llm_client, success_records, record_file, file_lock):
-    """Process a single sample: generate answer."""
+    """Process a single sample: generate answer.
+
+    This mirrors longbench_stx.evaluate_sample but consumes precomputed search results
+    produced by longbench_v2_search.py.
+    """
+    # Use sample_idx when available, otherwise fall back to _id so that
+    # we can work with stx-style search results that only have _id.
     sample_idx = search_result.get("sample_idx")
+    sample_key = str(sample_idx) if sample_idx is not None else str(search_result.get("_id", ""))
+
     # Skip if already processed
-    if sample_idx is not None and str(sample_idx) in success_records:
+    if sample_key and sample_key in success_records:
         return None
 
     start = time()
 
-    context = search_result.get("context", "")
     question = search_result.get("question", "")
-    choice_a = search_result.get("choice_A", "")
-    choice_b = search_result.get("choice_B", "")
-    choice_c = search_result.get("choice_C", "")
-    choice_d = search_result.get("choice_D", "")
+    choices = {
+        "A": search_result.get("choice_A", "") or "",
+        "B": search_result.get("choice_B", "") or "",
+        "C": search_result.get("choice_C", "") or "",
+        "D": search_result.get("choice_D", "") or "",
+    }
 
-    # Skip empty/placeholder contexts (e.g., "\n" or whitespace-only)
-    if not context or context.strip() == "":
+    # Prefer memories saved by longbench_v2_search; fall back to reconstructing
+    # from raw search_results if needed (for old search jsons).
+    memories = search_result.get("memories_used")
+    if memories is None:
+        raw = search_result.get("search_results") or {}
+        memories = []
+        if isinstance(raw, dict) and raw.get("text_mem"):
+            text_mem = raw["text_mem"]
+            if text_mem and text_mem[0].get("memories"):
+                memories = [
+                    m.get("memory", "") for m in text_mem[0]["memories"] if isinstance(m, dict)
+                ]
+
+    # Ensure we have a list, even if empty
+    memories = memories or []
+
+    # Skip if no retrieved memories and no question
+    if not question:
+        return None
+    if not memories:
         return None
 
     # Generate answer
-    response = generate_response(
-        llm_client, context, question, choice_a, choice_b, choice_c, choice_d
-    )
+    response, prompt_tokens = llm_answer(llm_client, memories, str(question), choices)
 
     # Extract answer (A, B, C, or D)
     pred = extract_answer(response)
@@ -117,6 +157,7 @@ def process_sample(search_result, llm_client, success_records, record_file, file
     response_duration_ms = (time() - start) * 1000
 
     result = {
+        # Preserve sample_idx if present for backward compatibility
         "sample_idx": search_result.get("sample_idx"),
         "_id": search_result.get("_id"),
         "domain": search_result.get("domain"),
@@ -124,15 +165,17 @@ def process_sample(search_result, llm_client, success_records, record_file, file
         "difficulty": search_result.get("difficulty"),
         "length": search_result.get("length"),
         "question": question,
-        "choice_A": choice_a,
-        "choice_B": choice_b,
-        "choice_C": choice_c,
-        "choice_D": choice_d,
+        "choice_A": choices["A"],
+        "choice_B": choices["B"],
+        "choice_C": choices["C"],
+        "choice_D": choices["D"],
         "answer": search_result.get("answer"),
         "pred": pred,
         "response": response,
         "judge": pred == search_result.get("answer") if pred else False,
-        "search_context": context,
+        "prompt_tokens": prompt_tokens,
+        # Keep full retrieved memories list for inspection / debugging
+        "memories_used": memories,
         # Preserve full search results payload (e.g., list of memories)
         "search_results": search_result.get("search_results"),
         "response_duration_ms": response_duration_ms,
@@ -140,9 +183,9 @@ def process_sample(search_result, llm_client, success_records, record_file, file
     }
 
     # Record successful processing (thread-safe)
-    if sample_idx is not None:
+    if sample_key:
         with file_lock, open(record_file, "a") as f:
-            f.write(f"{sample_idx}\n")
+            f.write(f"{sample_key}\n")
             f.flush()
 
     return result
@@ -175,16 +218,18 @@ def main(frame, version="default", num_workers=10):
         search_results = json.load(f)
 
     # Load existing results and success records for resume
-    existing_results = {}
-    success_records = set()
+    existing_results: dict[str, dict] = {}
+    success_records: set[str] = set()
     if os.path.exists(output_path):
         with open(output_path, encoding="utf-8") as f:
             existing_results_list = json.load(f)
             for result in existing_results_list:
+                # Use sample_idx if present, otherwise _id as the unique key
                 sample_idx = result.get("sample_idx")
-                if sample_idx is not None:
-                    existing_results[sample_idx] = result
-                    success_records.add(str(sample_idx))
+                key = str(sample_idx) if sample_idx is not None else str(result.get("_id", ""))
+                if key:
+                    existing_results[key] = result
+                    success_records.add(key)
         print(f"📋 Found {len(existing_results)} existing responses (resume mode)")
     else:
         print("📋 Starting fresh response generation (no checkpoint found)")
@@ -205,7 +250,7 @@ def main(frame, version="default", num_workers=10):
     )
     print(f"🔌 Using OpenAI client with model: {os.getenv('CHAT_MODEL')}")
 
-    # Process all samples
+    # Process all samples concurrently using ThreadPoolExecutor
     new_results = []
     file_lock = threading.Lock()  # Lock for thread-safe file writing
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -224,15 +269,22 @@ def main(frame, version="default", num_workers=10):
             result = future.result()
             if result:
                 new_results.append(result)
-                # Update existing results with new result
+                # Update existing results with new result (keyed by sample_idx or _id)
                 sample_idx = result.get("sample_idx")
-                if sample_idx is not None:
-                    existing_results[sample_idx] = result
+                key = str(sample_idx) if sample_idx is not None else str(result.get("_id", ""))
+                if key:
+                    existing_results[key] = result
 
     # Merge and save all results
     all_responses = list(existing_results.values())
-    # Sort by sample_idx to maintain order
-    all_responses.sort(key=lambda x: x.get("sample_idx", 0))
+
+    # Sort by sample_idx when available, otherwise by _id for stability
+    def _sort_key(x: dict):
+        if x.get("sample_idx") is not None:
+            return ("0", int(x.get("sample_idx")))
+        return ("1", str(x.get("_id", "")))
+
+    all_responses.sort(key=_sort_key)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_responses, f, ensure_ascii=False, indent=2)
