@@ -37,6 +37,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     ANSWER_TASK_LABEL,
     QUERY_TASK_LABEL,
 )
+from memos.templates.cloud_service_prompt import get_cloud_chat_prompt
 from memos.templates.mos_prompts import (
     FURTHER_SUGGESTION_PROMPT,
     get_memos_prompt,
@@ -145,9 +146,10 @@ class ChatHandler(BaseHandler):
 
             # Step 2: Build system prompt
             system_prompt = self._build_system_prompt(
-                filtered_memories,
-                search_response.data.get("pref_string", ""),
-                chat_req.system_prompt,
+                query=chat_req.query,
+                memories=filtered_memories,
+                pref_string=search_response.data.get("pref_string", ""),
+                base_prompt=chat_req.system_prompt,
             )
 
             # Prepare message history
@@ -263,9 +265,10 @@ class ChatHandler(BaseHandler):
 
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_system_prompt(
-                        filtered_memories,
-                        search_response.data.get("pref_string", ""),
-                        chat_req.system_prompt,
+                        query=chat_req.query,
+                        memories=filtered_memories,
+                        pref_string=search_response.data.get("pref_string", ""),
+                        base_prompt=chat_req.system_prompt,
                     )
 
                     # Prepare messages
@@ -402,7 +405,7 @@ class ChatHandler(BaseHandler):
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
                         internet_search=False,
-                        top_k=5,
+                        top_k=20,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=True,
@@ -425,7 +428,7 @@ class ChatHandler(BaseHandler):
                             memories_list = text_mem_results[0]["memories"]
 
                     # Filter memories by threshold
-                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    filtered_memories = self._filter_memories_by_threshold(memories_list)[:5]
 
                     # Prepare reference data (first search)
                     reference = prepare_reference_data(filtered_memories)
@@ -456,12 +459,11 @@ class ChatHandler(BaseHandler):
                     searcher = self.dependencies.searcher
                     parsed_goal = searcher.task_goal_parser.parse(
                         task_description=chat_req.query,
-                        context="\n".join(
-                            [memory.get("memory", "") for memory in filtered_memories]
-                        ),
+                        context="\n".join([memory.get("memory", "") for memory in memories_list]),
                         conversation=chat_req.history,
                         mode="fine",
                     )
+                    self.logger.info(f"[PLAYGROUND chat parsed_goal]: {parsed_goal}")
 
                     if chat_req.beginner_guide_step == "first":
                         chat_req.internet_search = False
@@ -476,8 +478,8 @@ class ChatHandler(BaseHandler):
 
                     # ======  second deep search  ======
                     search_req = APISearchRequest(
-                        query=parsed_goal.rephrased_query
-                        or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
+                        query=(parsed_goal.rephrased_query or chat_req.query)
+                        + (f" {parsed_goal.memories}" if parsed_goal.memories else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
@@ -491,6 +493,9 @@ class ChatHandler(BaseHandler):
                         search_memory_type="All",
                         search_tool_memory=False,
                     )
+
+                    self.logger.info(f"[PLAYGROUND second search query]: {search_req.query}")
+
                     start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
                     end_time = time.time()
@@ -762,6 +767,7 @@ class ChatHandler(BaseHandler):
 
     def _build_system_prompt(
         self,
+        query: str,
         memories: list | None = None,
         pref_string: str | None = None,
         base_prompt: str | None = None,
@@ -769,12 +775,8 @@ class ChatHandler(BaseHandler):
     ) -> str:
         """Build system prompt with optional memories context."""
         if base_prompt is None:
-            base_prompt = (
-                "You are a knowledgeable and helpful AI assistant. "
-                "You have access to conversation memories that help you provide more personalized responses. "
-                "Use the memories to understand the user's context, preferences, and past interactions. "
-                "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
-            )
+            lang = detect_lang(query)
+            base_prompt = get_cloud_chat_prompt(lang=lang)
 
         memory_context = ""
         if memories:
@@ -790,7 +792,7 @@ class ChatHandler(BaseHandler):
             return base_prompt.format(memories=memory_context)
         elif base_prompt and memories:
             # For backward compatibility, append memories if no placeholder is found
-            memory_context_with_header = "\n\n## Memories:\n" + memory_context
+            memory_context_with_header = "\n\n## Fact Memories:\n" + memory_context
             return base_prompt + memory_context_with_header
         return base_prompt
 

@@ -887,6 +887,9 @@ class APIConfig:
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
+                            "include_embedding": bool(
+                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                            ),
                         },
                     },
                     "act_mem": {}
@@ -960,6 +963,9 @@ class APIConfig:
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
                             "mode": os.getenv("ASYNC_MODE", "sync"),
+                            "include_embedding": bool(
+                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                            ),
                         },
                     },
                     "act_mem": {}
