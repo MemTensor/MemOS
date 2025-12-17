@@ -3602,6 +3602,11 @@ class PolarDBGraphDB(BaseGraphDB):
                 return None
 
             if embedding is not None:
+                if isinstance(embedding, str):
+                    try:
+                        embedding = json.loads(embedding)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning("Failed to parse embedding for node")
                 props["embedding"] = embedding
 
             # Return standard format directly

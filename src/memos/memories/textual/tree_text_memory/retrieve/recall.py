@@ -22,6 +22,7 @@ class GraphMemoryRetriever:
         graph_store: Neo4jGraphDB,
         embedder: OllamaEmbedder,
         bm25_retriever: EnhancedBM25 | None = None,
+        include_embedding: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
@@ -29,6 +30,7 @@ class GraphMemoryRetriever:
         self.max_workers = 10
         self.filter_weight = 0.6
         self.use_bm25 = bool(self.bm25_retriever)
+        self.include_embedding = include_embedding
 
     def retrieve(
         self,
@@ -72,7 +74,7 @@ class GraphMemoryRetriever:
             # For working memory, retrieve all entries (no session-oriented filtering)
             working_memories = self.graph_store.get_all_memory_items(
                 scope="WorkingMemory",
-                include_embedding=False,
+                include_embedding=self.include_embedding,
                 user_name=user_name,
                 filter=search_filter,
             )
@@ -244,7 +246,9 @@ class GraphMemoryRetriever:
                 return []
 
             # Load nodes and post-filter
-            node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False)
+            node_dicts = self.graph_store.get_nodes(
+                list(candidate_ids), include_embedding=self.include_embedding
+            )
 
             final_nodes = []
             for node in node_dicts:
@@ -291,7 +295,7 @@ class GraphMemoryRetriever:
 
             # Load nodes and post-filter
             node_dicts = self.graph_store.get_nodes(
-                list(candidate_ids), include_embedding=False, user_name=user_name
+                list(candidate_ids), include_embedding=self.include_embedding, user_name=user_name
             )
 
             final_nodes = []
@@ -385,7 +389,10 @@ class GraphMemoryRetriever:
         unique_ids = {r["id"] for r in all_hits if r.get("id")}
         node_dicts = (
             self.graph_store.get_nodes(
-                list(unique_ids), include_embedding=False, cube_name=cube_name, user_name=user_name
+                list(unique_ids),
+                include_embedding=self.include_embedding,
+                cube_name=cube_name,
+                user_name=user_name,
             )
             or []
         )
@@ -416,7 +423,9 @@ class GraphMemoryRetriever:
                 key_filters.append({"field": key, "op": "=", "value": value})
             corpus_name += "".join(list(search_filter.values()))
         candidate_ids = self.graph_store.get_by_metadata(key_filters, user_name=user_name)
-        node_dicts = self.graph_store.get_nodes(list(candidate_ids), include_embedding=False)
+        node_dicts = self.graph_store.get_nodes(
+            list(candidate_ids), include_embedding=self.include_embedding
+        )
 
         bm25_query = " ".join(list({query, *parsed_goal.keys}))
         bm25_results = self.bm25_retriever.search(
@@ -471,7 +480,10 @@ class GraphMemoryRetriever:
         unique_ids = {r["id"] for r in all_hits if r.get("id")}
         node_dicts = (
             self.graph_store.get_nodes(
-                list(unique_ids), include_embedding=False, cube_name=cube_name, user_name=user_name
+                list(unique_ids),
+                include_embedding=self.include_embedding,
+                cube_name=cube_name,
+                user_name=user_name,
             )
             or []
         )
