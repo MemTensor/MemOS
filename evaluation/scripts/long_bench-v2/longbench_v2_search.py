@@ -247,7 +247,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--version",
         type=str,
-        default="long-bench-v2-1208-1639",
+        default="default",
         help="Version identifier for saving results",
     )
     parser.add_argument(
