@@ -165,7 +165,9 @@ class ToolParser(BaseMessageParser):
         if chat_time:
             parts.append(f"[{chat_time}]: ")
         prefix = "".join(parts)
-        content = json.dumps(content) if isinstance(content, list | dict) else content
+        content = (
+            json.dumps(content, ensure_ascii=False) if isinstance(content, list | dict) else content
+        )
         line = f"{prefix}{content}\n"
         if not line:
             return []

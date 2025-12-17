@@ -158,13 +158,13 @@ class SystemParser(BaseMessageParser):
         return [
             TextualMemoryItem(
                 id=str(uuid.uuid4()),
-                memory=json.dumps(schema),
+                memory=json.dumps(schema, ensure_ascii=False),
                 metadata=TreeNodeTextualMemoryMetadata(
                     user_id=user_id,
                     session_id=session_id,
                     memory_type="ToolSchemaMemory",
                     status="activated",
-                    embedding=self.embedder.embed([json.dumps(schema)])[0],
+                    embedding=self.embedder.embed([json.dumps(schema, ensure_ascii=False)])[0],
                     info=info_,
                 ),
             )
