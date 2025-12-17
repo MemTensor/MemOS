@@ -140,6 +140,16 @@ def build_reranker_config() -> dict[str, Any]:
     return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
 
 
+def build_feedback_reranker_config() -> dict[str, Any]:
+    """
+    Build reranker configuration.
+
+    Returns:
+        Validated reranker configuration dictionary
+    """
+    return RerankerConfigFactory.model_validate(APIConfig.get_feedback_reranker_config())
+
+
 def build_internet_retriever_config() -> dict[str, Any]:
     """
     Build internet retriever configuration.

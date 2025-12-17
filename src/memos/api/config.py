@@ -396,6 +396,32 @@ class APIConfig:
             }
 
     @staticmethod
+    def get_feedback_reranker_config() -> dict[str, Any]:
+        """Get embedder configuration."""
+        embedder_backend = os.getenv("MOS_FEEDBACK_RERANKER_BACKEND", "http_bge")
+
+        if embedder_backend in ["http_bge", "http_bge_strategy"]:
+            return {
+                "backend": embedder_backend,
+                "config": {
+                    "url": os.getenv("MOS_RERANKER_URL"),
+                    "model": os.getenv("MOS_FEEDBACK_RERANKER_MODEL", "bge-reranker-v2-m3"),
+                    "timeout": 10,
+                    "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
+                    "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
+                    "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
+                },
+            }
+        else:
+            return {
+                "backend": "cosine_local",
+                "config": {
+                    "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
+                    "level_field": "background",
+                },
+            }
+
+    @staticmethod
     def get_embedder_config() -> dict[str, Any]:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_EMBEDDER_BACKEND", "ollama")
