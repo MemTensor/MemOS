@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import re
 import traceback
 
 from typing import Any
@@ -498,7 +499,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if not mem_str.strip() or (
                 "tool:" not in mem_str
                 and "[tool_calls]:" not in mem_str
-                and "<tool_schema>omitted</tool_schema>" not in mem_str
+                and not re.search(r"<tool_schema>.*?</tool_schema>", mem_str, re.DOTALL)
             ):
                 continue
             try:

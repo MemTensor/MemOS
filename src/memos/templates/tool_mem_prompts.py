@@ -11,11 +11,9 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
    - 工具的执行结果（tool message with tool_call_id and content，无论成功或失败）
    - 助手基于工具结果的响应（assistant message）
 
-   **情况B - 无需工具调用的轨迹**（同时满足以下条件）：
+   **情况B - 无工具调用的轨迹**（同时满足以下条件）：
    - 对话中提供了可用的工具列表
-   - 助手没有进行任何工具调用
-   - 直接给出了答案并获得正确反馈
-   - 这种情况需要提取并标注"此问题无需工具调用即可回答"
+   - 助手没有进行任何工具调用,直接给出了答案
 
 ## 输出格式：
 返回一个JSON数组，格式如下：
@@ -25,7 +23,7 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 [
   {
     "trajectory": "自然语言输出包含'任务、使用的工具、工具观察、最终回答'的完整精炼的总结，体现顺序",
-    "experience": "深入分析本次轨迹的经验教训：\n- 成功（完成用户任务）：总结有效的参数模式、调用策略和最佳实践\n- 失败（未完成用户任务）：必须深入分析真实错误原因，包括：\n  1. 结合system中给定的函数定义和说明，分析工具是否被正确理解和使用\n  2. 分析用户问题的真实需求，判断工具选择是否合理\n  3. 分析错误的根本原因（参数错误、逻辑错误、工具选择错误、幻觉调用等）\n  4. 提供可能的正确解法和避免该错误的策略\n- 不要只复述表面错误信息，要透过现象看本质"
+    "experience": "深入分析本次轨迹的经验教训，输出精简的结论：\n- 成功（完成用户任务）：总结有效的参数模式、调用策略和最佳实践\n- 失败（未完成用户任务）：按以下步骤分析后，输出精简的结论\n  分析步骤（不要在结论中输出这些步骤，仅作为分析指导）：\n  步骤1：检查调用的工具是否在system中提供，即使问题需要调用工具，但system中没有提供，则不能强行调用工具\n  步骤2：如果有工具可用，结合函数定义和说明，分析工具是否被正确理解和使用\n  步骤3：分析用户问题的真实需求，判断工具选择是否合理，是否本身不需要不需要但调用了工具\n  步骤4：分析错误的根本原因（参数错误、逻辑错误、工具选择错误、幻觉调用等）\n  步骤5：提供可能的正确解法和避免该错误的策略\n  最终输出：基于以上分析，给出精简、准确的结论，不要复述分析步骤"
     "tool_used_status": [
       {
         "used_tool": "工具名1",
@@ -42,7 +40,7 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 [
   {
     "trajectory": "自然语言输出说明'任务内容、为什么不需要工具调用、最终回答'",
-    "experience": "深入分析本次轨迹的经验教训：\n- 成功（完成用户任务）：总结有效的参数模式、调用策略和最佳实践\n- 失败（未完成用户任务）：必须深入分析真实错误原因，包括：\n  1. 结合system中给定的函数定义和说明，分析工具是否被正确理解和使用\n  2. 分析用户问题的真实需求，判断工具选择是否合理\n  3. 分析错误的根本原因（参数错误、逻辑错误、工具选择错误、幻觉调用等）\n  4. 提供可能的正确解法和避免该错误的策略\n- 不要只复述表面错误信息，要透过现象看本质"
+    "experience": "正确则输出'正确的执行轨迹',错误则分析原因并给出简短的结论",
     "tool_used_status": []
   }
 ]
@@ -78,9 +76,7 @@ You are a professional tool experience extraction expert. Your task is to extrac
 
    **Scenario B - No Tool Call Needed Trajectory** (must meet all conditions):
    - Tools are provided in the conversation
-   - Assistant made no tool calls
-   - Assistant directly provided an answer and received correct feedback
-   - This should be extracted with annotation "This question can be answered without tool calls"
+   - Assistant made no tool calls and directly provided an answer
 
 ## Output Format:
 Return a JSON array in the following format:
@@ -90,7 +86,7 @@ Return a JSON array in the following format:
 [
   {
     "trajectory": "Natural language summary containing 'task, tools used, tool observations, final answer' in a complete and refined manner, reflecting the sequence",
-    "experience": "In-depth analysis of lessons learned from this trajectory:\n- Success (user task completed): Summarize effective parameter patterns, calling strategies, and best practices\n- Failure (user task not completed): Must deeply analyze the root cause of the error, including:\n  1. Analyze whether the tool was correctly understood and used based on the function definitions and descriptions in the system\n  2. Analyze the actual needs of the user's question to determine if the tool selection was appropriate\n  3. Analyze the fundamental cause of the error (parameter errors, logic errors, incorrect tool selection, hallucinated calls, etc.)\n  4. Provide possible correct solutions and strategies to avoid this error\n- Don't just repeat superficial error messages; look beyond the surface to understand the essence"
+    "experience": "In-depth analysis of lessons learned from this trajectory, output concise conclusions:\n- Success (user task completed): Summarize effective parameter patterns, calling strategies, and best practices\n- Failure (user task not completed): Analyze following these steps, then output concise conclusions\n  Analysis steps (do not output these steps in the conclusion, only use as analysis guidance):\n  Step 1: Check if the called tool is provided in the system. Even if the problem requires a tool call, if the system does not provide it, the tool cannot be forcibly called\n  Step 2: If tools are available, analyze whether the tool was correctly understood and used based on the function definitions and descriptions\n  Step 3: Analyze the actual needs of the user's question to determine if the tool selection was appropriate, or if tools were unnecessarily called when not needed\n  Step 4: Analyze the fundamental cause of the error (parameter errors, logic errors, incorrect tool selection, hallucinated calls, etc.)\n  Step 5: Provide possible correct solutions and strategies to avoid this error\n  Final output: Based on the above analysis, provide concise and accurate conclusions without repeating the analysis steps"
     "tool_used_status": [
       {
         "used_tool": "Tool Name 1",
@@ -107,7 +103,7 @@ Return a JSON array in the following format:
 [
   {
     "trajectory": "Natural language description of 'task content, why tool calls are not needed, final answer'",
-    "experience": "In-depth analysis of lessons learned from this trajectory:\n- Success (user task completed): Summarize effective parameter patterns, calling strategies, and best practices\n- Failure (user task not completed): Must deeply analyze the root cause of the error, including:\n  1. Analyze whether the tool was correctly understood and used based on the function definitions and descriptions in the system\n  2. Analyze the actual needs of the user's question to determine if the tool selection was appropriate\n  3. Analyze the fundamental cause of the error (parameter errors, logic errors, incorrect tool selection, hallucinated calls, etc.)\n  4. Provide possible correct solutions and strategies to avoid this error\n- Don't just repeat superficial error messages; look beyond the surface to understand the essence"
+    "experience": "Output 'Correct execution trajectory' if correct, otherwise analyze the reason and provide a brief conclusion",
     "tool_used_status": []
   }
 ]
