@@ -16,7 +16,7 @@ from memos.memories.textual.item import (
     TreeNodeTextualMemoryMetadata,
 )
 
-from .utils import get_text_splitter
+from .utils import detect_lang, get_text_splitter
 
 
 logger = log.get_logger(__name__)
@@ -55,6 +55,25 @@ def _extract_text_from_content(content: Any) -> str:
                 texts.append(str(part))
         return " ".join(texts)
     return str(content)
+
+
+def _add_lang_to_source(source: SourceMessage, content: str | None = None) -> SourceMessage:
+    """
+    Add lang field to SourceMessage based on content.
+
+    Args:
+        source: SourceMessage to add lang field to
+        content: Optional content text for language detection.
+                 If None, uses source.content
+
+    Returns:
+        SourceMessage with lang field added
+    """
+    if not hasattr(source, "lang") or getattr(source, "lang", None) is None:
+        text_for_detection = content or getattr(source, "content", None) or ""
+        lang = detect_lang(text_for_detection)
+        source.lang = lang
+    return source
 
 
 class BaseMessageParser(ABC):
