@@ -259,6 +259,7 @@ class MemFeedback(BaseMemFeedback):
         user_id: str,
         user_name: str,
         async_mode: str = "sync",
+        operation: dict | None = None,
     ) -> dict:
         """
         Individual update operations
@@ -271,6 +272,9 @@ class MemFeedback(BaseMemFeedback):
             and old_memory_item.metadata.file_ids
             else None
         )
+        if operation and "text" in operation and operation["text"]:
+            new_memory_item.memory = operation["text"]
+
         if memory_type == "WorkingMemory":
             fields = {
                 "memory": new_memory_item.memory,
@@ -445,6 +449,7 @@ class MemFeedback(BaseMemFeedback):
                         memory_item,
                         user_id,
                         user_name,
+                        operation=op,
                     )
                     future_to_op[future] = ("update", op)
 
