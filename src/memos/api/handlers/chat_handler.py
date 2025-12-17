@@ -8,6 +8,7 @@ consolidating all chat-related logic without depending on mos_server.
 import asyncio
 import json
 import re
+import time
 import traceback
 
 from collections.abc import Generator
@@ -37,6 +38,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     ANSWER_TASK_LABEL,
     QUERY_TASK_LABEL,
 )
+from memos.templates.cloud_service_prompt import get_cloud_chat_prompt
 from memos.templates.mos_prompts import (
     FURTHER_SUGGESTION_PROMPT,
     get_memos_prompt,
@@ -145,9 +147,10 @@ class ChatHandler(BaseHandler):
 
             # Step 2: Build system prompt
             system_prompt = self._build_system_prompt(
-                filtered_memories,
-                search_response.data.get("pref_string", ""),
-                chat_req.system_prompt,
+                query=chat_req.query,
+                memories=filtered_memories,
+                pref_string=search_response.data.get("pref_string", ""),
+                base_prompt=chat_req.system_prompt,
             )
 
             # Prepare message history
@@ -168,12 +171,18 @@ class ChatHandler(BaseHandler):
                 )
 
             model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+
+            self.logger.info(f"[Cloud Service Chat Complete Model]: {model}")
+            strat = time.time()
             response = self.chat_llms[model].generate(current_messages, model_name_or_path=model)
+            end = time.time()
+            self.logger.info(f"[Cloud Service Chat Complete Time]: {end - strat} seconds")
 
             # Step 4: start add after chat asynchronously
             if chat_req.add_message_on_answer:
                 # Resolve writable cube IDs (for add)
                 writable_cube_ids = chat_req.writable_cube_ids or [chat_req.user_id]
+                start = time.time()
                 self._start_add_to_memory(
                     user_id=chat_req.user_id,
                     writable_cube_ids=writable_cube_ids,
@@ -182,6 +191,8 @@ class ChatHandler(BaseHandler):
                     full_response=response,
                     async_mode="async",
                 )
+                end = time.time()
+                self.logger.info(f"[Cloud Service Chat Add Time]: {end - start} seconds")
 
             match = re.search(r"<think>([\s\S]*?)</think>", response)
             reasoning_text = match.group(1) if match else None
@@ -263,9 +274,10 @@ class ChatHandler(BaseHandler):
 
                     # Step 2: Build system prompt with memories
                     system_prompt = self._build_system_prompt(
-                        filtered_memories,
-                        search_response.data.get("pref_string", ""),
-                        chat_req.system_prompt,
+                        query=chat_req.query,
+                        memories=filtered_memories,
+                        pref_string=search_response.data.get("pref_string", ""),
+                        base_prompt=chat_req.system_prompt,
                     )
 
                     # Prepare messages
@@ -292,9 +304,14 @@ class ChatHandler(BaseHandler):
                         )
 
                     model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    self.logger.info(f"[Cloud Service Chat Stream Model]: {model}")
+
+                    start = time.time()
                     response_stream = self.chat_llms[model].generate_stream(
                         current_messages, model_name_or_path=model
                     )
+                    end = time.time()
+                    self.logger.info(f"[Cloud Service Chat Stream Time]: {end - start} seconds")
 
                     # Stream the response
                     buffer = ""
@@ -326,6 +343,7 @@ class ChatHandler(BaseHandler):
                         writable_cube_ids = chat_req.writable_cube_ids or (
                             [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                         )
+                        start = time.time()
                         self._start_add_to_memory(
                             user_id=chat_req.user_id,
                             writable_cube_ids=writable_cube_ids,
@@ -334,7 +352,10 @@ class ChatHandler(BaseHandler):
                             full_response=full_response,
                             async_mode="async",
                         )
-
+                        end = time.time()
+                        self.logger.info(
+                            f"[Cloud Service Chat Stream Add Time]: {end - start} seconds"
+                        )
                 except Exception as e:
                     self.logger.error(f"Error in chat stream: {e}", exc_info=True)
                     error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
@@ -402,7 +423,7 @@ class ChatHandler(BaseHandler):
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
                         internet_search=False,
-                        top_k=5,
+                        top_k=20,
                         chat_history=chat_req.history,
                         session_id=chat_req.session_id,
                         include_preference=True,
@@ -425,7 +446,7 @@ class ChatHandler(BaseHandler):
                             memories_list = text_mem_results[0]["memories"]
 
                     # Filter memories by threshold
-                    filtered_memories = self._filter_memories_by_threshold(memories_list)
+                    filtered_memories = self._filter_memories_by_threshold(memories_list)[:5]
 
                     # Prepare reference data (first search)
                     reference = prepare_reference_data(filtered_memories)
@@ -456,12 +477,11 @@ class ChatHandler(BaseHandler):
                     searcher = self.dependencies.searcher
                     parsed_goal = searcher.task_goal_parser.parse(
                         task_description=chat_req.query,
-                        context="\n".join(
-                            [memory.get("memory", "") for memory in filtered_memories]
-                        ),
+                        context="\n".join([memory.get("memory", "") for memory in memories_list]),
                         conversation=chat_req.history,
                         mode="fine",
                     )
+                    self.logger.info(f"[PLAYGROUND chat parsed_goal]: {parsed_goal}")
 
                     if chat_req.beginner_guide_step == "first":
                         chat_req.internet_search = False
@@ -476,8 +496,8 @@ class ChatHandler(BaseHandler):
 
                     # ======  second deep search  ======
                     search_req = APISearchRequest(
-                        query=parsed_goal.rephrased_query
-                        or chat_req.query + (f"{parsed_goal.tags}" if parsed_goal.tags else ""),
+                        query=(parsed_goal.rephrased_query or chat_req.query)
+                        + (f" {parsed_goal.memories}" if parsed_goal.memories else ""),
                         user_id=chat_req.user_id,
                         readable_cube_ids=readable_cube_ids,
                         mode="fast",
@@ -491,10 +511,23 @@ class ChatHandler(BaseHandler):
                         search_memory_type="All",
                         search_tool_memory=False,
                     )
+
+                    self.logger.info(f"[PLAYGROUND second search query]: {search_req.query}")
+
                     start_time = time.time()
                     search_response = self.search_handler.handle_search_memories(search_req)
                     end_time = time.time()
                     self.logger.info(f"second search time: {end_time - start_time}")
+
+                    # for playground, add the query to memory without response
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        writable_cube_ids=writable_cube_ids,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=None,
+                        async_mode="sync",
+                    )
 
                     # Extract memories from search results (second search)
                     memories_list = []
@@ -524,18 +557,14 @@ class ChatHandler(BaseHandler):
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
 
-                    # for playground, add the query to memory without response
-                    self._start_add_to_memory(
-                        user_id=chat_req.user_id,
-                        writable_cube_ids=writable_cube_ids,
-                        session_id=chat_req.session_id or "default_session",
-                        query=chat_req.query,
-                        full_response=None,
-                        async_mode="sync",
-                    )
-
                     # Step 2: Build system prompt with memories
                     lang = detect_lang(chat_req.query)
+                    if pref_string:
+                        pref_string += (
+                            "\n# 注意\n- 在思考内容中，不要出现引用序号和id [1,2,3]等标记，否则会导致引用错误。"
+                            if lang == "zh"
+                            else "\n#warning\n- In thinking content, do not appear the reference number and id [1,2,3]etc. otherwise it will cause reference error."
+                        )
                     system_prompt = self._build_enhance_system_prompt(
                         filtered_memories, pref_string, lang=lang
                     )
@@ -682,14 +711,24 @@ class ChatHandler(BaseHandler):
     def _dedup_and_supplement_memories(
         self, first_filtered_memories: list, second_filtered_memories: list
     ) -> list:
-        """Remove memory from second_filtered_memories that already exists in first_filtered_memories, return remaining memories"""
-        # Create a set of IDs from first_filtered_memories for efficient lookup
-        first_memory_ids = {memory["id"] for memory in first_filtered_memories}
+        """
+        Remove memories from second_filtered_memories whose content already exists in
+        first_filtered_memories, return the remaining list.
+        """
+
+        def _norm(text: str) -> str:
+            # Use normalized text as the dedup key; keep original text in the payload.
+            return " ".join(text.split())
+
+        first_memory_texts = {_norm(memory.get("memory", "")) for memory in first_filtered_memories}
 
         remaining_memories = []
         for memory in second_filtered_memories:
-            if memory["id"] not in first_memory_ids:
-                remaining_memories.append(memory)
+            key = _norm(memory.get("memory", ""))
+            if key in first_memory_texts:
+                continue
+            first_memory_texts.add(key)
+            remaining_memories.append(memory)
         return remaining_memories
 
     def _get_internet_reference(
@@ -746,6 +785,7 @@ class ChatHandler(BaseHandler):
 
     def _build_system_prompt(
         self,
+        query: str,
         memories: list | None = None,
         pref_string: str | None = None,
         base_prompt: str | None = None,
@@ -753,12 +793,8 @@ class ChatHandler(BaseHandler):
     ) -> str:
         """Build system prompt with optional memories context."""
         if base_prompt is None:
-            base_prompt = (
-                "You are a knowledgeable and helpful AI assistant. "
-                "You have access to conversation memories that help you provide more personalized responses. "
-                "Use the memories to understand the user's context, preferences, and past interactions. "
-                "If memories are provided, reference them naturally when relevant, but don't explicitly mention having memories."
-            )
+            lang = detect_lang(query)
+            base_prompt = get_cloud_chat_prompt(lang=lang)
 
         memory_context = ""
         if memories:
@@ -774,7 +810,7 @@ class ChatHandler(BaseHandler):
             return base_prompt.format(memories=memory_context)
         elif base_prompt and memories:
             # For backward compatibility, append memories if no placeholder is found
-            memory_context_with_header = "\n\n## Memories:\n" + memory_context
+            memory_context_with_header = "\n\n## Fact Memories:\n" + memory_context
             return base_prompt + memory_context_with_header
         return base_prompt
 

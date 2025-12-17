@@ -1,6 +1,8 @@
 import concurrent.futures
+import copy
 import difflib
 import json
+import re
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -133,7 +135,7 @@ class MemFeedback(BaseMemFeedback):
         memories = self.mem_reader.get_memory(scene_data, type="chat", info=info)
         to_add_memories = [item for scene in memories for item in scene]
         added_ids = self._retry_db_operation(
-            lambda: self.memory_manager.add(to_add_memories, user_name=user_name)
+            lambda: self.memory_manager.add(to_add_memories, user_name=user_name, use_batch=False)
         )
         logger.info(
             f"[Feedback Core: _pure_add] Pure added {len(added_ids)} memories for user {user_name}."
@@ -141,7 +143,17 @@ class MemFeedback(BaseMemFeedback):
         return {
             "record": {
                 "add": [
-                    {"id": _id, "text": added_mem.memory}
+                    {
+                        "id": _id,
+                        "text": added_mem.memory,
+                        "source_doc_id": (
+                            added_mem.metadata.file_ids[0]
+                            if hasattr(added_mem.metadata, "file_ids")
+                            and isinstance(added_mem.metadata.file_ids, list)
+                            and added_mem.metadata.file_ids
+                            else None
+                        ),
+                    }
                     for _id, added_mem in zip(added_ids, to_add_memories, strict=False)
                 ],
                 "update": [],
@@ -224,11 +236,21 @@ class MemFeedback(BaseMemFeedback):
 
         to_add_memory.id = ""
         added_ids = self._retry_db_operation(
-            lambda: self.memory_manager.add([to_add_memory], user_name=user_name, mode=async_mode)
+            lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
         )
 
-        logger.info(f"[Memory Feedback ADD] memory id: {added_ids[0]}")
-        return {"id": added_ids[0], "text": to_add_memory.memory}
+        logger.info(f"[Memory Feedback ADD] memory id: {added_ids!s}")
+        return {
+            "id": added_ids[0],
+            "text": to_add_memory.memory,
+            "source_doc_id": (
+                to_add_memory.metadata.file_ids[0]
+                if hasattr(to_add_memory.metadata, "file_ids")
+                and isinstance(to_add_memory.metadata.file_ids, list)
+                and to_add_memory.metadata.file_ids
+                else None
+            ),
+        }
 
     def _single_update_operation(
         self,
@@ -237,11 +259,22 @@ class MemFeedback(BaseMemFeedback):
         user_id: str,
         user_name: str,
         async_mode: str = "sync",
+        operation: dict | None = None,
     ) -> dict:
         """
         Individual update operations
         """
         memory_type = old_memory_item.metadata.memory_type
+        source_doc_id = (
+            old_memory_item.metadata.file_ids[0]
+            if hasattr(old_memory_item.metadata, "file_ids")
+            and isinstance(old_memory_item.metadata.file_ids, list)
+            and old_memory_item.metadata.file_ids
+            else None
+        )
+        if operation and "text" in operation and operation["text"]:
+            new_memory_item.memory = operation["text"]
+
         if memory_type == "WorkingMemory":
             fields = {
                 "memory": new_memory_item.memory,
@@ -272,6 +305,7 @@ class MemFeedback(BaseMemFeedback):
         return {
             "id": item_id,
             "text": new_memory_item.memory,
+            "source_doc_id": source_doc_id,
             "archived_id": old_memory_item.id,
             "origin_memory": old_memory_item.memory,
         }
@@ -330,7 +364,7 @@ class MemFeedback(BaseMemFeedback):
             current_memories = [
                 item for item in current_memories if self._info_comparison(item, info, include_keys)
             ]
-
+        operations = []
         if not current_memories:
             operations = [{"operation": "ADD"}]
             logger.warning(
@@ -370,6 +404,21 @@ class MemFeedback(BaseMemFeedback):
 
             operations = self.standard_operations(all_operations, current_memories)
 
+        add_texts = []
+        final_operations = []
+        for item in operations:
+            if item["operation"].lower() == "add" and "text" in item and item["text"]:
+                if item["text"] in add_texts:
+                    continue
+                final_operations.append(item)
+                add_texts.append(item["text"])
+            elif item["operation"].lower() == "update":
+                final_operations.append(item)
+        logger.info(
+            f"[Feedback Core: deduplicate add] {len(operations)} ->  {len(final_operations)} memories"
+        )
+        operations = copy.deepcopy(final_operations)
+
         logger.info(f"[Feedback Core Operations]: {operations!s}")
 
         if not operations:
@@ -400,6 +449,7 @@ class MemFeedback(BaseMemFeedback):
                         memory_item,
                         user_id,
                         user_name,
+                        operation=op,
                     )
                     future_to_op[future] = ("update", op)
 
@@ -493,7 +543,7 @@ class MemFeedback(BaseMemFeedback):
         record = []
         for key in include_keys:
             info_v = _info.get(key)
-            mem_v = memory.metadata.info.get(key, None)
+            mem_v = memory.metadata.info.get(key, None) if memory.metadata.info else None
             record.append(info_v == mem_v)
         return all(record)
 
@@ -554,7 +604,8 @@ class MemFeedback(BaseMemFeedback):
             response_text = self.llm.generate(messages, temperature=0.3, timeout=60)
             if dsl:
                 response_text = response_text.replace("```", "").replace("json", "")
-                response_json = json.loads(response_text)
+                cleaned_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", response_text)
+                response_json = json.loads(cleaned_text)
             else:
                 return response_text
         except Exception as e:
@@ -618,7 +669,23 @@ class MemFeedback(BaseMemFeedback):
             return None
 
         dehallu_res = [correct_item(item) for item in operations]
-        llm_operations = [item for item in dehallu_res if item]
+        dehalluded_operations = [item for item in dehallu_res if item]
+        logger.info(f"[Feedback Core: dehalluded_operations] {dehalluded_operations}")
+
+        # c add objects
+        add_texts = []
+        llm_operations = []
+        for item in dehalluded_operations:
+            if item["operation"].lower() == "add" and "text" in item and item["text"]:
+                if item["text"] in add_texts:
+                    continue
+                llm_operations.append(item)
+                add_texts.append(item["text"])
+            elif item["operation"].lower() == "update":
+                llm_operations.append(item)
+        logger.info(
+            f"[Feedback Core: deduplicate add] {len(dehalluded_operations)} ->  {len(llm_operations)} memories"
+        )
 
         # Update takes precedence over add
         has_update = any(item.get("operation").lower() == "update" for item in llm_operations)

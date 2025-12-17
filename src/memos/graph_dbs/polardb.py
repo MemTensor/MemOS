@@ -223,7 +223,7 @@ class PolarDBGraphDB(BaseGraphDB):
         if self._pool_closed:
             raise RuntimeError("Connection pool has been closed")
 
-        max_retries = 5
+        max_retries = 500
         import psycopg2.pool
 
         for attempt in range(max_retries):
@@ -251,7 +251,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     conn = None
                     if attempt < max_retries - 1:
                         # Exponential backoff: 0.1s, 0.2s, 0.4s
-                        time.sleep(0.1 * (2**attempt))
+                        """time.sleep(0.1 * (2**attempt))"""
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError("Pool returned a closed connection after all retries")
@@ -282,7 +283,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     conn = None
                     if attempt < max_retries - 1:
                         # Exponential backoff: 0.1s, 0.2s, 0.4s
-                        time.sleep(0.1 * (2**attempt))
+                        """time.sleep(0.1 * (2**attempt))"""
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError(
@@ -314,7 +316,8 @@ class PolarDBGraphDB(BaseGraphDB):
                         # Longer backoff for pool exhaustion: 0.5s, 1.0s, 2.0s
                         wait_time = 0.5 * (2**attempt)
                         logger.info(f"[_get_connection] Waiting {wait_time}s before retry...")
-                        time.sleep(wait_time)
+                        """time.sleep(wait_time)"""
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError(
@@ -325,7 +328,8 @@ class PolarDBGraphDB(BaseGraphDB):
                 else:
                     # Other pool errors - retry with normal backoff
                     if attempt < max_retries - 1:
-                        time.sleep(0.1 * (2**attempt))
+                        """time.sleep(0.1 * (2**attempt))"""
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError(
@@ -351,7 +355,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     raise RuntimeError(f"Failed to get a valid connection from pool: {e}") from e
                 else:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s
-                    time.sleep(0.1 * (2**attempt))
+                    """time.sleep(0.1 * (2**attempt))"""
+                    time.sleep(0.003)
                 continue
 
         # Should never reach here, but just in case
@@ -3344,6 +3349,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+        batch_start_time = time.time()
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
@@ -3512,13 +3518,6 @@ class PolarDBGraphDB(BaseGraphDB):
                                 %s::vector
                             )
                         """
-                        logger.info(
-                            f"[add_nodes_batch] embedding_column Inserting insert_query:{insert_query}"
-                        )
-                        logger.info(
-                            f"[add_nodes_batch] embedding_column Inserting data_tuples:{data_tuples}"
-                        )
-
                         # Execute batch insert
                         execute_values(
                             cursor,
@@ -3567,6 +3566,10 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.info(
                         f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
                     )
+                    elapsed_time = time.time() - batch_start_time
+                    logger.info(
+                        f"[add_nodes_batch] execute_values completed successfully in {elapsed_time:.2f}s"
+                    )
 
         except Exception as e:
             logger.error(f"[add_nodes_batch] Failed to add nodes: {e}", exc_info=True)
@@ -3597,6 +3600,11 @@ class PolarDBGraphDB(BaseGraphDB):
                 return None
 
             if embedding is not None:
+                if isinstance(embedding, str):
+                    try:
+                        embedding = json.loads(embedding)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning("Failed to parse embedding for node")
                 props["embedding"] = embedding
 
             # Return standard format directly
@@ -4770,10 +4778,8 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             int: Number of nodes deleted.
         """
+        batch_start_time = time.time()
         logger.info(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
-        )
-        print(
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
 
@@ -4869,7 +4875,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 $$) AS (node_count agtype)
             """
         logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
 
         # Then delete nodes
         delete_query = f"""
@@ -4883,11 +4888,7 @@ class PolarDBGraphDB(BaseGraphDB):
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
 
         conn = None
         deleted_count = 0
@@ -4907,10 +4908,12 @@ class PolarDBGraphDB(BaseGraphDB):
                 cursor.execute(delete_query)
                 # Use the count from before deletion as the actual deleted count
                 deleted_count = expected_count
-                conn.commit()
+                elapsed_time = time.time() - batch_start_time
+                logger.info(
+                    f"[delete_node_by_prams] execute_values completed successfully in {elapsed_time:.2f}s"
+                )
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
-            conn.rollback()
             raise
         finally:
             self._return_connection(conn)

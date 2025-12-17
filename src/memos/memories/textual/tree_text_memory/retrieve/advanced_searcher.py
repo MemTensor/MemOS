@@ -35,6 +35,7 @@ class AdvancedSearcher(Searcher):
         manual_close_internet: bool = True,
         process_llm: Any | None = None,
         tokenizer: FastTokenizer | None = None,
+        include_embedding: bool = False,
     ):
         super().__init__(
             dispatcher_llm=dispatcher_llm,
@@ -46,6 +47,7 @@ class AdvancedSearcher(Searcher):
             search_strategy=search_strategy,
             manual_close_internet=manual_close_internet,
             tokenizer=tokenizer,
+            include_embedding=include_embedding,
         )
 
         self.stage_retrieve_top = 3

@@ -196,6 +196,10 @@ class TreeTextMemoryConfig(BaseTextMemoryConfig):
         default="sync",
         description=("whether use asynchronous mode in memory add"),
     )
+    include_embedding: bool | None = Field(
+        default=False,
+        description="Whether to include embedding in the memory retrieval",
+    )
 
 
 class SimpleTreeTextMemoryConfig(TreeTextMemoryConfig):

@@ -210,6 +210,7 @@ def init_server() -> dict[str, Any]:
         config=default_cube_config.text_mem.config,
         internet_retriever=internet_retriever,
         tokenizer=tokenizer,
+        include_embedding=bool(os.getenv("INCLUDE_EMBEDDING", "false") == "true"),
     )
 
     logger.debug("Text memory initialized")
