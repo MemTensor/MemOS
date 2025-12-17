@@ -1,5 +1,5 @@
 TOOL_TRAJECTORY_PROMPT_ZH = """
-你是一个专业的工具调用轨迹提取专家。你的任务是从给定的对话消息中提取完整的工具调用轨迹经验。
+你是一个专业的工具经验提取取专家。你的任务是从给定的对话消息中提取完整的工具调用轨迹经验。
 
 ## 提取规则：
 1. 只有当对话中存在有价值的工具调用经验时才进行提取
@@ -25,7 +25,7 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 [
   {
     "trajectory": "自然语言输出包含'任务、使用的工具、工具观察、最终回答'的完整精炼的总结，体现顺序",
-    "experience": "成功时总结参数模式和最佳实践；失败时反思总结教训和注意事项，以及可能的正确解法"
+    "experience": "深入分析本次轨迹的经验教训：\n- 成功（完成用户任务）：总结有效的参数模式、调用策略和最佳实践\n- 失败（未完成用户任务）：必须深入分析真实错误原因，包括：\n  1. 结合system中给定的函数定义和说明，分析工具是否被正确理解和使用\n  2. 分析用户问题的真实需求，判断工具选择是否合理\n  3. 分析错误的根本原因（参数错误、逻辑错误、工具选择错误、幻觉调用等）\n  4. 提供可能的正确解法和避免该错误的策略\n- 不要只复述表面错误信息，要透过现象看本质"
     "tool_used_status": [
       {
         "used_tool": "工具名1",
@@ -42,7 +42,7 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 [
   {
     "trajectory": "自然语言输出说明'任务内容、为什么不需要工具调用、最终回答'",
-    "experience": "成功时总结参数模式和最佳实践；失败时反思总结教训和注意事项，以及可能的正确解法"
+    "experience": "深入分析本次轨迹的经验教训：\n- 成功（完成用户任务）：总结有效的参数模式、调用策略和最佳实践\n- 失败（未完成用户任务）：必须深入分析真实错误原因，包括：\n  1. 结合system中给定的函数定义和说明，分析工具是否被正确理解和使用\n  2. 分析用户问题的真实需求，判断工具选择是否合理\n  3. 分析错误的根本原因（参数错误、逻辑错误、工具选择错误、幻觉调用等）\n  4. 提供可能的正确解法和避免该错误的策略\n- 不要只复述表面错误信息，要透过现象看本质"
     "tool_used_status": []
   }
 ]
@@ -50,7 +50,6 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 
 ## 注意事项：
 - **trajectory 必须精简**：用最少的文字清晰表达完整流程，避免冗长描述
-- 如果对话中没有完整的工具调用轨迹（情况A）且不符合（情况B）的条件，返回空数组
 - 每个轨迹必须是独立的完整过程
 - 一个轨迹中可能涉及多个工具的使用，每个工具在tool_used_status中独立记录
 - 如果多条轨迹存在顺序依赖关系，需要将它们视为一条轨迹
@@ -65,7 +64,7 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 
 
 TOOL_TRAJECTORY_PROMPT_EN = """
-You are a professional tool call trajectory extraction expert. Your task is to extract valuable tool call trajectory experiences from given conversation messages.
+You are a professional tool experience extraction expert. Your task is to extract valuable tool experience from given conversation messages.
 
 ## Extraction Rules:
 1. Only extract when there are valuable tool calling experiences in the conversation
@@ -91,7 +90,7 @@ Return a JSON array in the following format:
 [
   {
     "trajectory": "Natural language summary containing 'task, tools used, tool observations, final answer' in a complete and refined manner, reflecting the sequence",
-    "experience": "When successful, summarize parameter patterns and best practices; when failed, reflect on lessons learned, precautions, and possible correct solutions",
+    "experience": "In-depth analysis of lessons learned from this trajectory:\n- Success (user task completed): Summarize effective parameter patterns, calling strategies, and best practices\n- Failure (user task not completed): Must deeply analyze the root cause of the error, including:\n  1. Analyze whether the tool was correctly understood and used based on the function definitions and descriptions in the system\n  2. Analyze the actual needs of the user's question to determine if the tool selection was appropriate\n  3. Analyze the fundamental cause of the error (parameter errors, logic errors, incorrect tool selection, hallucinated calls, etc.)\n  4. Provide possible correct solutions and strategies to avoid this error\n- Don't just repeat superficial error messages; look beyond the surface to understand the essence"
     "tool_used_status": [
       {
         "used_tool": "Tool Name 1",
@@ -108,7 +107,7 @@ Return a JSON array in the following format:
 [
   {
     "trajectory": "Natural language description of 'task content, why tool calls are not needed, final answer'",
-    "experience": "When successful, summarize parameter patterns and best practices; when failed, reflect on lessons learned, precautions, and possible correct solutions",
+    "experience": "In-depth analysis of lessons learned from this trajectory:\n- Success (user task completed): Summarize effective parameter patterns, calling strategies, and best practices\n- Failure (user task not completed): Must deeply analyze the root cause of the error, including:\n  1. Analyze whether the tool was correctly understood and used based on the function definitions and descriptions in the system\n  2. Analyze the actual needs of the user's question to determine if the tool selection was appropriate\n  3. Analyze the fundamental cause of the error (parameter errors, logic errors, incorrect tool selection, hallucinated calls, etc.)\n  4. Provide possible correct solutions and strategies to avoid this error\n- Don't just repeat superficial error messages; look beyond the surface to understand the essence"
     "tool_used_status": []
   }
 ]
@@ -116,7 +115,6 @@ Return a JSON array in the following format:
 
 ## Notes:
 - **trajectory must be concise**: Express the complete process clearly with minimal words, avoid lengthy descriptions
-- If there are no complete tool call trajectories (Scenario A) and (Scenario B) conditions are not met, return an empty array
 - Each trajectory must be an independent complete process
 - Multiple tools may be used in one trajectory, each tool is recorded independently in tool_used_status
 - If multiple trajectories have sequential dependencies, they should be considered as one trajectory
