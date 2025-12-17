@@ -17,7 +17,7 @@ from memos.memories.textual.item import (
 )
 from memos.types.openai_chat_completion_types import ChatCompletionSystemMessageParam
 
-from .base import BaseMessageParser
+from .base import BaseMessageParser, _add_lang_to_source
 
 
 logger = get_logger(__name__)
@@ -55,7 +55,7 @@ class SystemParser(BaseMessageParser):
         tool_schema_match = re.search(r"<tool_schema>(.*?)</tool_schema>", content, re.DOTALL)
         tool_schema_content = tool_schema_match.group(1) if tool_schema_match else ""
 
-        return SourceMessage(
+        source = SourceMessage(
             type="chat",
             role="system",
             chat_time=message.get("chat_time", None),
@@ -63,6 +63,7 @@ class SystemParser(BaseMessageParser):
             content=content_wo_tool_schema,
             tool_schema=tool_schema_content,
         )
+        return _add_lang_to_source(source, content_wo_tool_schema)
 
     def rebuild_from_source(
         self,
