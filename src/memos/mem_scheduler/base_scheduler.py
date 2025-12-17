@@ -844,9 +844,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
             )
         if self.rabbitmq_config is None:
-            logger.info(
-                "[DIAGNOSTIC] base_scheduler._submit_web_logs: RabbitMQ config not loaded; skipping publish."
-            )
             return
 
         if isinstance(messages, ScheduleLogForWebItem):
@@ -862,11 +859,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             message_info = message.debug_info()
             logger.debug(f"Submitted Scheduling log for web: {message_info}")
 
-            # Always call publish; the publisher now caches when offline and flushes after reconnect
-            logger.info(
-                f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message_info}"
-            )
-            self.rabbitmq_publish_message(message=message.to_dict())
+            if self.is_rabbitmq_connected():
+                logger.info(f"Submitted Scheduling log to rabbitmq: {message_info}")
+                self.rabbitmq_publish_message(message=message.to_dict())
         logger.debug(
             f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
         )
