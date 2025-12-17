@@ -47,13 +47,16 @@ class Searcher:
         search_strategy: dict | None = None,
         manual_close_internet: bool = True,
         tokenizer: FastTokenizer | None = None,
+        include_embedding: bool = False,
     ):
         self.graph_store = graph_store
         self.embedder = embedder
         self.llm = dispatcher_llm
 
         self.task_goal_parser = TaskGoalParser(dispatcher_llm)
-        self.graph_retriever = GraphMemoryRetriever(graph_store, embedder, bm25_retriever)
+        self.graph_retriever = GraphMemoryRetriever(
+            graph_store, embedder, bm25_retriever, include_embedding=include_embedding
+        )
         self.reranker = reranker
         self.reasoner = MemoryReasoner(dispatcher_llm)
 
