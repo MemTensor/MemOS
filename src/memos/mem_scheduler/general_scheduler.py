@@ -1379,6 +1379,7 @@ class GeneralScheduler(BaseScheduler):
         cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory(
             user_name=mem_cube_id
         )
+        cur_working_memory = cur_working_memory[:top_k]
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         intent_result = self.monitor.detect_intent(
             q_list=queries, text_working_memory=text_working_memory
