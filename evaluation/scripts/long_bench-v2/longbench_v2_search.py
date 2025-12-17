@@ -25,63 +25,30 @@ def memos_api_search(client, query, user_id, top_k, frame):
     start = time()
     search_results = client.search(query=query, user_id=user_id, top_k=top_k)
 
-    def _reorder_memories_by_sources(sr: dict) -> list:
-        """
-        Reorder text_mem[0].memories using sources' chunk_index (ascending).
-        Falls back to original order if no chunk_index is found.
-        """
-        if not isinstance(sr, dict):
-            return []
-        text_mem = sr.get("text_mem") or []
-        if not text_mem or not text_mem[0].get("memories"):
-            return []
-        memories = list(text_mem[0]["memories"])
-
-        def _first_source(mem: dict):
-            if not isinstance(mem, dict):
-                return None
-            # Prefer top-level sources, else metadata.sources
-            return (mem.get("sources") or mem.get("metadata", {}).get("sources") or []) or None
-
-        def _chunk_index(mem: dict):
-            srcs = _first_source(mem)
-            if not srcs or not isinstance(srcs, list):
-                return None
-            for s in srcs:
-                if isinstance(s, dict) and s.get("chunk_index") is not None:
-                    return s.get("chunk_index")
-            return None
-
-        # Collect keys
-        keyed = []
-        for i, mem in enumerate(memories):
-            ci = _chunk_index(mem)
-            keyed.append((ci, i, mem))  # keep original order as tie-breaker
-
-        # If no chunk_index present at all, return original
-        if all(ci is None for ci, _, _ in keyed):
-            return memories
-
-        keyed.sort(key=lambda x: (float("inf") if x[0] is None else x[0], x[1]))
-        return [k[2] for k in keyed]
-
-    # Format context from search results based on frame type for backward compatibility
-    context = ""
+    # Extract raw memory texts in the same way as longbench_stx.memos_search
+    memories_texts: list[str] = []
     if (
         (frame == "memos-api" or frame == "memos-api-online")
         and isinstance(search_results, dict)
         and "text_mem" in search_results
     ):
-        ordered_memories = _reorder_memories_by_sources(search_results)
-        if not ordered_memories and search_results["text_mem"][0].get("memories"):
-            ordered_memories = search_results["text_mem"][0]["memories"]
-
-        context = "\n".join([i.get("memory", "") for i in ordered_memories])
-        if "pref_string" in search_results:
-            context += f"\n{search_results.get('pref_string', '')}"
+        text_mem = search_results.get("text_mem") or []
+        if text_mem and text_mem[0].get("memories"):
+            memories = text_mem[0]["memories"]
+            for m in memories:
+                if not isinstance(m, dict):
+                    continue
+                # tags may be at top-level or inside metadata
+                tags = m.get("tags") or m.get("metadata", {}).get("tags") or []
+                # Skip fast-mode memories
+                if any(isinstance(t, str) and "mode:fast" in t for t in tags):
+                    continue
+                mem_text = m.get("memory", "")
+                if str(mem_text).strip():
+                    memories_texts.append(mem_text)
 
     duration_ms = (time() - start) * 1000
-    return context, duration_ms, search_results
+    return memories_texts, duration_ms, search_results
 
 
 def process_sample(
@@ -98,7 +65,12 @@ def process_sample(
     if not query:
         return None
 
-    context, duration_ms, search_results = memos_api_search(client, query, user_id, top_k, frame)
+    memories_used, duration_ms, search_results = memos_api_search(
+        client, query, user_id, top_k, frame
+    )
+
+    if not (isinstance(memories_used, list) and any(str(m).strip() for m in memories_used)):
+        return None
 
     result = {
         "sample_idx": sample_idx,
@@ -113,8 +85,9 @@ def process_sample(
         "choice_C": sample.get("choice_C"),
         "choice_D": sample.get("choice_D"),
         "answer": sample.get("answer"),
-        "context": context,
-        # Preserve full search results instead of only the concatenated context
+        # Raw memories used for RAG answering (aligned with longbench_stx)
+        "memories_used": memories_used,
+        # Preserve full search results payload for debugging / analysis
         "search_results": search_results,
         "search_duration_ms": duration_ms,
     }

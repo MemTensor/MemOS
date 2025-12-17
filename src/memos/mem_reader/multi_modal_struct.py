@@ -304,6 +304,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             template = PROMPT_DICT["doc"][lang]
             examples = ""  # doc prompts don't have examples
             prompt = template.replace("{chunk_text}", mem_str)
+        elif prompt_type == "general_string":
+            template = PROMPT_DICT["general_string"][lang]
+            examples = ""
+            prompt = template.replace("{chunk_text}", mem_str)
         else:
             template = PROMPT_DICT["chat"][lang]
             examples = PROMPT_DICT["chat"][f"{lang}_example"]
@@ -316,7 +320,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         )
 
         # Replace custom_tags_prompt placeholder (different for doc vs chat)
-        if prompt_type == "doc":
+        if prompt_type in ["doc", "general_string"]:
             prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
         else:
             prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
@@ -348,7 +352,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         """
         if not sources:
             return "chat"
-        prompt_type = "doc"
+        prompt_type = "general_string"
         for source in sources:
             source_role = None
             if hasattr(source, "role"):

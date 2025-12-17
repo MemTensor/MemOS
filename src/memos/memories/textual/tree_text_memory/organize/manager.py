@@ -131,10 +131,11 @@ class MemoryManager:
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
+        logger.info(f"[MemoryManager: _add_memories_parallel] Added {len(added_ids)} memories")
         return added_ids
 
     def _add_memories_batch(
-        self, memories: list[TextualMemoryItem], user_name: str | None = None, batch_size: int = 50
+        self, memories: list[TextualMemoryItem], user_name: str | None = None, batch_size: int = 5
     ) -> list[str]:
         """
         Add memories using batch database operations (more efficient for large batches).
@@ -199,25 +200,31 @@ class MemoryManager:
                 graph_node_ids.append(graph_node_id)
                 added_ids.append(graph_node_id)
 
-        for i in range(0, len(working_nodes), batch_size):
-            batch = working_nodes[i : i + batch_size]
-            try:
-                self.graph_store.add_nodes_batch(batch, user_name=user_name)
-            except Exception as e:
-                logger.exception(
-                    f"Batch add WorkingMemory nodes error (batch {i // batch_size + 1}): ",
-                    exc_info=e,
-                )
+        def _submit_batches(nodes: list[dict], node_kind: str) -> None:
+            if not nodes:
+                return
 
-        for i in range(0, len(graph_nodes), batch_size):
-            batch = graph_nodes[i : i + batch_size]
-            try:
-                self.graph_store.add_nodes_batch(batch, user_name=user_name)
-            except Exception as e:
-                logger.exception(
-                    f"Batch add graph memory nodes error (batch {i // batch_size + 1}): ",
-                    exc_info=e,
-                )
+            max_workers = min(8, max(1, len(nodes) // max(1, batch_size)))
+            with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures: list[tuple[int, int, object]] = []
+                for batch_index, i in enumerate(range(0, len(nodes), batch_size), start=1):
+                    batch = nodes[i : i + batch_size]
+                    fut = executor.submit(
+                        self.graph_store.add_nodes_batch, batch, user_name=user_name
+                    )
+                    futures.append((batch_index, len(batch), fut))
+
+                for idx, size, fut in futures:
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        logger.exception(
+                            f"Batch add {node_kind} nodes error (batch {idx}, size {size}): ",
+                            exc_info=e,
+                        )
+
+        _submit_batches(working_nodes, "WorkingMemory")
+        _submit_batches(graph_nodes, "graph memory")
 
         if graph_node_ids and self.is_reorganize:
             self.reorganizer.add_message(QueueMessage(op="add", after_node=graph_node_ids))

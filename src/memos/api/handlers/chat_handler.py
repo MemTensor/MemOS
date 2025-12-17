@@ -691,14 +691,24 @@ class ChatHandler(BaseHandler):
     def _dedup_and_supplement_memories(
         self, first_filtered_memories: list, second_filtered_memories: list
     ) -> list:
-        """Remove memory from second_filtered_memories that already exists in first_filtered_memories, return remaining memories"""
-        # Create a set of IDs from first_filtered_memories for efficient lookup
-        first_memory_ids = {memory["id"] for memory in first_filtered_memories}
+        """
+        Remove memories from second_filtered_memories whose content already exists in
+        first_filtered_memories, return the remaining list.
+        """
+
+        def _norm(text: str) -> str:
+            # Use normalized text as the dedup key; keep original text in the payload.
+            return " ".join(text.split())
+
+        first_memory_texts = {_norm(memory.get("memory", "")) for memory in first_filtered_memories}
 
         remaining_memories = []
         for memory in second_filtered_memories:
-            if memory["id"] not in first_memory_ids:
-                remaining_memories.append(memory)
+            key = _norm(memory.get("memory", ""))
+            if key in first_memory_texts:
+                continue
+            first_memory_texts.add(key)
+            remaining_memories.append(memory)
         return remaining_memories
 
     def _get_internet_reference(

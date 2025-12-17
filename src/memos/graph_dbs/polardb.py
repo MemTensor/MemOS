@@ -252,7 +252,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     if attempt < max_retries - 1:
                         # Exponential backoff: 0.1s, 0.2s, 0.4s
                         """time.sleep(0.1 * (2**attempt))"""
-                        time.sleep(0.01)
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError("Pool returned a closed connection after all retries")
@@ -284,7 +284,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     if attempt < max_retries - 1:
                         # Exponential backoff: 0.1s, 0.2s, 0.4s
                         """time.sleep(0.1 * (2**attempt))"""
-                        time.sleep(0.01)
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError(
@@ -317,7 +317,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         wait_time = 0.5 * (2**attempt)
                         logger.info(f"[_get_connection] Waiting {wait_time}s before retry...")
                         """time.sleep(wait_time)"""
-                        time.sleep(0.01)
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError(
@@ -329,7 +329,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     # Other pool errors - retry with normal backoff
                     if attempt < max_retries - 1:
                         """time.sleep(0.1 * (2**attempt))"""
-                        time.sleep(0.01)
+                        time.sleep(0.003)
                         continue
                     else:
                         raise RuntimeError(
@@ -356,7 +356,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 else:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s
                     """time.sleep(0.1 * (2**attempt))"""
-                    time.sleep(0.01)
+                    time.sleep(0.003)
                 continue
 
         # Should never reach here, but just in case
