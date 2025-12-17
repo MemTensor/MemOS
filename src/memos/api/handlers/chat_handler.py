@@ -395,16 +395,6 @@ class ChatHandler(BaseHandler):
                         [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
                     )
 
-                    # for playground, add the query to memory without response
-                    self._start_add_to_memory(
-                        user_id=chat_req.user_id,
-                        writable_cube_ids=writable_cube_ids,
-                        session_id=chat_req.session_id or "default_session",
-                        query=chat_req.query,
-                        full_response=None,
-                        async_mode="sync",
-                    )
-
                     # ====== first search text mem with parse goal ======
                     search_req = APISearchRequest(
                         query=chat_req.query,
@@ -505,6 +495,16 @@ class ChatHandler(BaseHandler):
                     search_response = self.search_handler.handle_search_memories(search_req)
                     end_time = time.time()
                     self.logger.info(f"second search time: {end_time - start_time}")
+
+                    # for playground, add the query to memory without response
+                    self._start_add_to_memory(
+                        user_id=chat_req.user_id,
+                        writable_cube_ids=writable_cube_ids,
+                        session_id=chat_req.session_id or "default_session",
+                        query=chat_req.query,
+                        full_response=None,
+                        async_mode="sync",
+                    )
 
                     # Extract memories from search results (second search)
                     memories_list = []
