@@ -158,6 +158,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT = """
 - For preferences, do not mention the source in the response, do not appear `[Explicit preference]`, `[Implicit preference]`, `(Explicit preference)` or `(Implicit preference)` in the response
 - The last part of the response should not contain `(Note: ...)` or `(According to ...)` etc.
 - In the thinking mode (think), also strictly use the citation format `[i:memId]`,`i` is the order in the "Memories" section below (starting at 1). `memId` is the given short memory ID. The same as the response format.
+- Do not repeat the thinking too much, use the correct reasoning
 
 ## Key Principles
 - Reference only relevant memories to avoid information overload
@@ -267,6 +268,7 @@ MEMOS_PRODUCT_ENHANCE_PROMPT_ZH = """
 - 对于偏好，不要在回答中标注来源，不要出现`[显式偏好]`或`[隐式偏好]`或`(显式偏好)`或`(隐式偏好)`的字样
 - 回复内容的结尾不要出现`(注: ...)`或`(根据...)`等解释
 - 在思考模式下(think),也需要严格采用引用格式`[i:memId]`,`i`是下面"记忆"部分中的顺序（从1开始）。`memId`是给定的短记忆ID。与回答要求一致
+- 不要过度重复的思考，使用正确的推理
 
 ## 核心原则
 - 仅引用相关记忆以避免信息过载

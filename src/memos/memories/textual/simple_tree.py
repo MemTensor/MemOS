@@ -37,6 +37,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         internet_retriever: None = None,
         is_reorganize: bool = False,
         tokenizer: FastTokenizer | None = None,
+        include_embedding: bool = False,
     ):
         """Initialize memory with the given configuration."""
         self.config: TreeTextMemoryConfig = config
@@ -65,3 +66,4 @@ class SimpleTreeTextMemory(TreeTextMemory):
             )
         else:
             logger.info("No internet retriever configured")
+        self.include_embedding = include_embedding
