@@ -637,6 +637,7 @@ class MemFeedback(BaseMemFeedback):
 
         dehallu_res = [correct_item(item) for item in operations]
         dehalluded_operations = [item for item in dehallu_res if item]
+        logger.info(f"[Feedback Core: dehalluded_operations] {dehalluded_operations}")
 
         # c add objects
         add_texts = []
