@@ -39,7 +39,6 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import Fast
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.api.handlers.config_builders import build_feedback_reranker_config
 from memos.reranker.factory import RerankerFactory
 from memos.vec_dbs.factory import VecDBFactory
 
@@ -159,6 +158,16 @@ def build_reranker_config() -> dict[str, Any]:
         Validated reranker configuration dictionary
     """
     return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
+
+
+def build_feedback_reranker_config() -> dict[str, Any]:
+    """
+    Build reranker configuration.
+
+    Returns:
+        Validated reranker configuration dictionary
+    """
+    return RerankerConfigFactory.model_validate(APIConfig.get_feedback_reranker_config())
 
 
 def build_internet_retriever_config() -> dict[str, Any]:
