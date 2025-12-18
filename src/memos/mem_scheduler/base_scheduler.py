@@ -49,12 +49,6 @@ from memos.mem_scheduler.schemas.message_schemas import (
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
 from memos.mem_scheduler.schemas.task_schemas import (
-    ADD_TASK_LABEL,
-    ANSWER_TASK_LABEL,
-    MEM_ARCHIVE_TASK_LABEL,
-    MEM_ORGANIZE_TASK_LABEL,
-    MEM_UPDATE_TASK_LABEL,
-    QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
@@ -853,9 +847,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message_info}"
             )
             self.rabbitmq_publish_message(message=message.to_dict())
-        logger.debug(
-            f"{len(messages)} submitted. additional_log_info: {additional_log_info}"
-        )
+        logger.debug(f"{len(messages)} submitted. additional_log_info: {additional_log_info}")
 
     def get_web_log_messages(self) -> list[dict]:
         """
