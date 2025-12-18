@@ -108,8 +108,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 elif Path(config_path).exists():
                     auth_config = AuthConfig.from_local_config(config_path=config_path)
                 else:
-                    logger.error("Fail to initialize auth_config")
-                    return
+                    auth_config = AuthConfig.from_local_env()
                 self.rabbitmq_config = auth_config.rabbitmq
             elif isinstance(config, RabbitMQConfig):
                 self.rabbitmq_config = config
