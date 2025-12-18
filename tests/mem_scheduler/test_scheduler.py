@@ -139,44 +139,21 @@ class TestGeneralScheduler(unittest.TestCase):
             },
         )
 
-        # Empty the queue by consuming all elements
-        while not self.scheduler._web_log_message_queue.empty():
-            self.scheduler._web_log_message_queue.get()
+        self.scheduler.rabbitmq_config = MagicMock()
+        self.scheduler.rabbitmq_publish_message = MagicMock()
 
         # Submit the log message
         self.scheduler._submit_web_logs(messages=log_message)
 
-        # Verify the message was added to the queue
-        self.assertEqual(self.scheduler._web_log_message_queue.qsize(), 1)
-
-        # Get the actual message from the queue
-        actual_message = self.scheduler._web_log_message_queue.get()
-
-        # Verify core fields
-        self.assertEqual(actual_message.user_id, "test_user")
-        self.assertEqual(actual_message.mem_cube_id, "test_cube")
-        self.assertEqual(actual_message.label, QUERY_TASK_LABEL)
-        self.assertEqual(actual_message.from_memory_type, "WorkingMemory")
-        self.assertEqual(actual_message.to_memory_type, "LongTermMemory")
-        self.assertEqual(actual_message.log_content, "Test Content")
-
-        # Verify memory sizes
-        self.assertEqual(actual_message.current_memory_sizes["long_term_memory_size"], 0)
-        self.assertEqual(actual_message.current_memory_sizes["user_memory_size"], 0)
-        self.assertEqual(actual_message.current_memory_sizes["working_memory_size"], 0)
-        self.assertEqual(actual_message.current_memory_sizes["transformed_act_memory_size"], 0)
-
-        # Verify memory capacities
-        self.assertEqual(actual_message.memory_capacities["long_term_memory_capacity"], 1000)
-        self.assertEqual(actual_message.memory_capacities["user_memory_capacity"], 500)
-        self.assertEqual(actual_message.memory_capacities["working_memory_capacity"], 100)
-        self.assertEqual(actual_message.memory_capacities["transformed_act_memory_capacity"], 0)
+        self.scheduler.rabbitmq_publish_message.assert_called_once_with(
+            message=log_message.to_dict()
+        )
 
         # Verify auto-generated fields exist
-        self.assertTrue(hasattr(actual_message, "item_id"))
-        self.assertTrue(isinstance(actual_message.item_id, str))
-        self.assertTrue(hasattr(actual_message, "timestamp"))
-        self.assertTrue(isinstance(actual_message.timestamp, datetime))
+        self.assertTrue(hasattr(log_message, "item_id"))
+        self.assertTrue(isinstance(log_message.item_id, str))
+        self.assertTrue(hasattr(log_message, "timestamp"))
+        self.assertTrue(isinstance(log_message.timestamp, datetime))
 
     def test_activation_memory_update(self):
         """Test activation memory update functionality with DynamicCache handling."""
