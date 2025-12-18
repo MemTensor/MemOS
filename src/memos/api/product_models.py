@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from memos.log import get_logger
 from memos.types import MessageList, MessagesType, PermissionDict, SearchMode
 
+
 logger = get_logger(__name__)
 T = TypeVar("T")
 
@@ -827,10 +828,14 @@ class SearchMemoryData(BaseModel):
         None, alias="message_detail_list", description="List of message details (usually None)"
     )
     preference_detail_list: list[MessageDetail] | None = Field(
-        None, alias="preference_detail_list", description="List of preference details (usually None)"
+        None,
+        alias="preference_detail_list",
+        description="List of preference details (usually None)",
     )
     tool_memory_detail_list: list[MessageDetail] | None = Field(
-        None, alias="tool_memory_detail_list", description="List of tool_memor details (usually None)"
+        None,
+        alias="tool_memory_detail_list",
+        description="List of tool_memor details (usually None)",
     )
     preference_note: list[MessageDetail] | None = Field(
         None, alias="preference_note", description="String of preference_note"
@@ -866,11 +871,13 @@ class AddMessageData(BaseModel):
 
 class DeleteMessageData(BaseModel):
     """Data model for delete  Message based on actual API."""
+
     success: bool = Field(..., description="Operation success status")
 
 
 class GetTaskStatusMessageData(BaseModel):
     """Data model for task status Message based on actual API."""
+
     status: bool = Field(..., description="Operation task status")
 
 

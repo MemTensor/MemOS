@@ -6,10 +6,22 @@ from typing import Any
 
 import requests
 
-from api.product_models import MemOSGetMemoryResponse, MemOSSearchResponse, MemOSAddResponse, MemOSGetMessagesResponse, \
-    MemOSCreateKnowledgebaseResponse, MemOSDeleteKnowledgebaseResponse, MemOSAddKnowledgebaseFileResponse, \
-    MemOSGetTaskStatusResponse, MemOSGetKnowledgebaseFileResponse, MemOSAddFeedBackResponse, MemOSDeleteMemoryResponse
+from api.product_models import (
+    MemOSAddFeedBackResponse,
+    MemOSAddKnowledgebaseFileResponse,
+    MemOSAddResponse,
+    MemOSCreateKnowledgebaseResponse,
+    MemOSDeleteKnowledgebaseResponse,
+    MemOSDeleteMemoryResponse,
+    MemOSGetKnowledgebaseFileResponse,
+    MemOSGetMemoryResponse,
+    MemOSGetMessagesResponse,
+    MemOSGetTaskStatusResponse,
+    MemOSSearchResponse,
+)
+
 from memos.log import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -21,7 +33,7 @@ class MemOSClient:
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.base_url = (
-                base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem/v1"
+            base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem/v1"
         )
         api_key = api_key or os.getenv("MEMOS_API_KEY")
 
@@ -37,8 +49,12 @@ class MemOSClient:
                 raise ValueError(f"{param_name} is required")
 
     def get_message(
-            self, user_id: str, conversation_id: str | None = None, conversation_limit_number: int = 6,
-            message_limit_number: int = 6, source: str = None
+        self,
+        user_id: str,
+        conversation_id: str | None = None,
+        conversation_limit_number: int = 6,
+        message_limit_number: int = 6,
+        source: str | None = None,
     ) -> MemOSGetMessagesResponse | None:
         """Get messages"""
         # Validate required parameters
@@ -67,9 +83,18 @@ class MemOSClient:
                     raise
 
     def add_message(
-            self, messages: list[dict[str, Any]], user_id: str, conversation_id: str, info: dict[str, Any] = None,
-            source: str = None, app_id: str = None, agent_id: str = None, asyncMode: bool = True,
-            tags: list[str] = None, allow_public: bool = False, allow_knowledgebase_ids: list[str] = None
+        self,
+        messages: list[dict[str, Any]],
+        user_id: str,
+        conversation_id: str,
+        info: dict[str, Any] | None = None,
+        source: str | None = None,
+        app_id: str | None = None,
+        agent_id: str | None = None,
+        async_mode: bool = True,
+        tags: list[str] | None = None,
+        allow_public: bool = False,
+        allow_knowledgebase_ids: list[str] | None = None,
     ) -> MemOSAddResponse | None:
         """Add message"""
         # Validate required parameters
@@ -89,7 +114,7 @@ class MemOSClient:
             "allow_public": allow_public,
             "allow_knowledgebase_ids": allow_knowledgebase_ids,
             "tags": tags,
-            "asyncMode": asyncMode,
+            "asyncMode": async_mode,
         }
         for retry in range(MAX_RETRY_COUNT):
             try:
@@ -106,10 +131,18 @@ class MemOSClient:
                     raise
 
     def search_memory(
-            self, query: str, user_id: str, conversation_id: str, memory_limit_number: int = 6,
-            include_preference: bool = True, knowledgebase_ids: list[str] = None, filter: dict[str, Any] = None,
-            source: str = None, include_tool_memory: bool = False, preference_limit_number: int = 6,
-            tool_memory_limit_number: int = 6
+        self,
+        query: str,
+        user_id: str,
+        conversation_id: str,
+        memory_limit_number: int = 6,
+        include_preference: bool = True,
+        knowledgebase_ids: list[str] | None = None,
+        filter: dict[str, Any] | None = None,
+        source: str | None = None,
+        include_tool_memory: bool = False,
+        preference_limit_number: int = 6,
+        tool_memory_limit_number: int = 6,
     ) -> MemOSSearchResponse | None:
         """Search memories"""
         # Validate required parameters
@@ -144,9 +177,7 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def get_memory(
-            self, user_id: str, include_preference: str
-    ) -> MemOSGetMemoryResponse | None:
+    def get_memory(self, user_id: str, include_preference: str) -> MemOSGetMemoryResponse | None:
         """get memories"""
         # Validate required parameters
         self._validate_required_params(include_preference=include_preference, user_id=user_id)
@@ -172,14 +203,16 @@ class MemOSClient:
                     raise
 
     def create_knowledgebase(
-            self, knowledgebase_name: str, knowledgebase_description: str
+        self, knowledgebase_name: str, knowledgebase_description: str
     ) -> MemOSCreateKnowledgebaseResponse | None:
         """
-            Create knowledgebase
+        Create knowledgebase
         """
         # Validate required parameters
-        self._validate_required_params(knowledgebase_name=knowledgebase_name,
-                                       knowledgebase_description=knowledgebase_description)
+        self._validate_required_params(
+            knowledgebase_name=knowledgebase_name,
+            knowledgebase_description=knowledgebase_description,
+        )
 
         url = f"{self.base_url}/create/knowledgebase"
         payload = {
@@ -202,10 +235,10 @@ class MemOSClient:
                     raise
 
     def delete_knowledgebase(
-            self, knowledgebase_id: str
+        self, knowledgebase_id: str
     ) -> MemOSDeleteKnowledgebaseResponse | None:
         """
-            Delete knowledgebase
+        Delete knowledgebase
         """
         # Validate required parameters
         self._validate_required_params(knowledgebase_id=knowledgebase_id)
@@ -230,10 +263,10 @@ class MemOSClient:
                     raise
 
     def add_knowledgebase_file_json(
-            self, knowledgebase_id: str, file: list[dict[str, Any]]
+        self, knowledgebase_id: str, file: list[dict[str, Any]]
     ) -> MemOSAddKnowledgebaseFileResponse | None:
         """
-            add knowledgebase-file from json
+        add knowledgebase-file from json
         """
         # Validate required parameters
         self._validate_required_params(knowledgebase_id=knowledgebase_id, file=file)
@@ -259,17 +292,17 @@ class MemOSClient:
                     raise
 
     def add_knowledgebase_file_form(
-            self, knowledgebase_id: str, files: list[str]
+        self, knowledgebase_id: str, files: list[str]
     ) -> MemOSAddKnowledgebaseFileResponse | None:
         """
-            add knowledgebase-file from form
+        add knowledgebase-file from form
         """
         # Validate required parameters
         self._validate_required_params(knowledgebase_id=knowledgebase_id, files=files)
 
         def build_file_form_param(file_path):
             """
-            form-Automatically generate the structure required for the `files` parameter in requests based on the local file path：
+            form-Automatically generate the structure required for the `files` parameter in requests based on the local file path
             """
             if not os.path.isfile(file_path):
                 logger.warning(f"File {file_path} does not exist")
@@ -293,7 +326,11 @@ class MemOSClient:
         for retry in range(MAX_RETRY_COUNT):
             try:
                 response = requests.post(
-                    url, data=json.dumps(payload), headers=self.headers, timeout=30, files=files_data
+                    url,
+                    data=json.dumps(payload),
+                    headers=self.headers,
+                    timeout=30,
+                    files=files_data,
                 )
                 response.raise_for_status()
                 response_data = response.json()
@@ -305,10 +342,10 @@ class MemOSClient:
                     raise
 
     def delete_knowledgebase_file(
-            self, file_ids: list[str]
+        self, file_ids: list[str]
     ) -> MemOSDeleteKnowledgebaseResponse | None:
         """
-            delete knowledgebase-file
+        delete knowledgebase-file
         """
         # Validate required parameters
         self._validate_required_params(file_ids=file_ids)
@@ -333,10 +370,10 @@ class MemOSClient:
                     raise
 
     def get_knowledgebase_file(
-            self, file_ids: list[str]
+        self, file_ids: list[str]
     ) -> MemOSGetKnowledgebaseFileResponse | None:
         """
-            get knowledgebase-file
+        get knowledgebase-file
         """
         # Validate required parameters
         self._validate_required_params(file_ids=file_ids)
@@ -360,11 +397,9 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def get_task_status(
-            self, task_id: str
-    ) -> MemOSGetTaskStatusResponse | None:
+    def get_task_status(self, task_id: str) -> MemOSGetTaskStatusResponse | None:
         """
-            get task status
+        get task status
         """
         # Validate required parameters
         self._validate_required_params(task_id=task_id)
@@ -389,8 +424,15 @@ class MemOSClient:
                     raise
 
     def add_feedback(
-            self, user_id: str, conversation_id: str, feedback_content: str, agent_id: str = None, app_id: str = None,
-            feedback_time: str = None, allow_public: bool = False, allow_knowledgebase_ids: list[str] = None
+        self,
+        user_id: str,
+        conversation_id: str,
+        feedback_content: str,
+        agent_id: str | None = None,
+        app_id: str | None = None,
+        feedback_time: str | None = None,
+        allow_public: bool = False,
+        allow_knowledgebase_ids: list[str] | None = None,
     ) -> MemOSAddFeedBackResponse | None:
         """Add feedback"""
         # Validate required parameters
@@ -407,7 +449,7 @@ class MemOSClient:
             "app_id": app_id,
             "feedback_time": feedback_time,
             "allow_public": allow_public,
-            "allow_knowledgebase_ids": allow_knowledgebase_ids
+            "allow_knowledgebase_ids": allow_knowledgebase_ids,
         }
         for retry in range(MAX_RETRY_COUNT):
             try:
@@ -424,7 +466,7 @@ class MemOSClient:
                     raise
 
     def delete_memory(
-            self, user_ids: list[str], memory_ids: list[str]
+        self, user_ids: list[str], memory_ids: list[str]
     ) -> MemOSDeleteMemoryResponse | None:
         """delete_memory memories"""
         # Validate required parameters
