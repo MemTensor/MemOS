@@ -522,7 +522,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             raw = self.llm.generate([{"role": "user", "content": prompt}])
             success, parsed = self._parse_hallucination_filter_response(raw)
             logger.info(
-                f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}"
+                f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}；prompt: {prompt}"
             )
             if success:
                 logger.info(f"Hallucination filter result: {parsed}")
