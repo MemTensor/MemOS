@@ -144,6 +144,7 @@ class TreeTextMemory(BaseTextMemory):
             manual_close_internet=manual_close_internet,
             process_llm=process_llm,
             tokenizer=self.tokenizer,
+            include_embedding=self.include_embedding,
         )
         return searcher
 

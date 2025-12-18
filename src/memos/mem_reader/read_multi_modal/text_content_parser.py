@@ -16,7 +16,7 @@ from memos.memories.textual.item import (
 )
 from memos.types.openai_chat_completion_types import ChatCompletionContentPartTextParam
 
-from .base import BaseMessageParser, _derive_key
+from .base import BaseMessageParser, _add_lang_to_source, _derive_key
 
 
 logger = get_logger(__name__)
@@ -48,11 +48,13 @@ class TextContentParser(BaseMessageParser):
         """Create SourceMessage from text content part."""
         if isinstance(message, dict):
             text = message.get("text", "")
-            return SourceMessage(
+            source = SourceMessage(
                 type="text",
                 content=text,
             )
-        return SourceMessage(type="text", content=str(message))
+            return _add_lang_to_source(source, text)
+        source = SourceMessage(type="text", content=str(message))
+        return _add_lang_to_source(source, str(message))
 
     def rebuild_from_source(
         self,
