@@ -266,6 +266,7 @@ class GeneralScheduler(BaseScheduler):
                             metadata=[],
                             memory_len=1,
                             memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                            item_id=msg.item_id,
                         )
                         event.task_id = msg.task_id
                         self._submit_web_logs([event])
@@ -322,6 +323,7 @@ class GeneralScheduler(BaseScheduler):
                             metadata=[],
                             memory_len=1,
                             memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                            item_id=msg.item_id,
                         )
                         event.task_id = msg.task_id
                         self._submit_web_logs([event])
@@ -492,6 +494,7 @@ class GeneralScheduler(BaseScheduler):
                 metadata=add_meta_legacy,
                 memory_len=len(add_content_legacy),
                 memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                item_id=msg.item_id,
             )
             event.task_id = msg.task_id
             events.append(event)
@@ -507,6 +510,7 @@ class GeneralScheduler(BaseScheduler):
                 metadata=update_meta_legacy,
                 memory_len=len(update_content_legacy),
                 memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                item_id=msg.item_id,
             )
             event.task_id = msg.task_id
             events.append(event)
@@ -573,6 +577,7 @@ class GeneralScheduler(BaseScheduler):
                 metadata=None,
                 memory_len=len(kb_log_content),
                 memcube_name=self._map_memcube_name(msg.mem_cube_id),
+                item_id=msg.item_id,
             )
             event.log_content = f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
             event.task_id = msg.task_id
@@ -719,6 +724,7 @@ class GeneralScheduler(BaseScheduler):
                         metadata=None,
                         memory_len=len(kb_log_content),
                         memcube_name=self._map_memcube_name(mem_cube_id),
+                        item_id=message.item_id,
                     )
                     event.log_content = (
                         f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
@@ -788,6 +794,7 @@ class GeneralScheduler(BaseScheduler):
                     user_name=user_name,
                     custom_tags=info.get("custom_tags", None),
                     task_id=message.task_id,
+                    item_id=message.item_id,
                     info=info,
                 )
 
@@ -815,6 +822,7 @@ class GeneralScheduler(BaseScheduler):
         user_name: str,
         custom_tags: list[str] | None = None,
         task_id: str | None = None,
+        item_id: str | None = None,
         info: dict | None = None,
     ) -> None:
         logger.info(
@@ -934,6 +942,7 @@ class GeneralScheduler(BaseScheduler):
                                 metadata=None,
                                 memory_len=len(kb_log_content),
                                 memcube_name=self._map_memcube_name(mem_cube_id),
+                                item_id=item_id,
                             )
                             event.log_content = (
                                 f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
@@ -979,6 +988,7 @@ class GeneralScheduler(BaseScheduler):
                                 metadata=add_meta_legacy,
                                 memory_len=len(add_content_legacy),
                                 memcube_name=self._map_memcube_name(mem_cube_id),
+                                item_id=item_id,
                             )
                             event.task_id = task_id
                             self._submit_web_logs([event])
@@ -1045,6 +1055,7 @@ class GeneralScheduler(BaseScheduler):
                         metadata=None,
                         memory_len=len(kb_log_content),
                         memcube_name=self._map_memcube_name(mem_cube_id),
+                        item_id=item_id,
                     )
                     event.log_content = f"Knowledge Base Memory Update failed: {exc!s}"
                     event.task_id = task_id
@@ -1212,6 +1223,7 @@ class GeneralScheduler(BaseScheduler):
                             metadata=meta,
                             memory_len=len(keys),
                             memcube_name=self._map_memcube_name(mem_cube_id),
+                            item_id=message.item_id,
                         )
                         self._submit_web_logs([event])
 
