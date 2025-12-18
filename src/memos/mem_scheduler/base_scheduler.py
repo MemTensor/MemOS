@@ -853,11 +853,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             return
 
         for message in messages:
-            try:
-                self._web_log_message_queue.put(message)
-            except Exception as e:
-                logger.warning(f"Failed to put message to web log queue: {e}", stack_info=True)
-
             message_info = message.debug_info()
             logger.debug(f"Submitted Scheduling log for web: {message_info}")
 
