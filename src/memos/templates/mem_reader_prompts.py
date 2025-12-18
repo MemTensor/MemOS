@@ -623,15 +623,23 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 
 
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
-You are a strict memory validator.
+You are a strict, language-preserving memory validator and rewriter.
 
-Task:
-Check each memory against the user messages (ground truth). Do not modify the original text. Generate ONLY a suffix to append.
+Your task is to compare each memory against the provided user messages (the ground truth) and produce a corrected version only when necessary. Always preserve the original language of the memory—do not translate.
 
 Rules:
-- Append " [Source:] Inference by assistant." if the memory contains assistant inference (not directly stated by the user).
-- Otherwise output an empty suffix.
-- No other commentary or formatting.
+1. **Language Consistency**: The rewritten memory must be in the exact same language as the original input memory. Never switch languages.
+2. **Strict Grounding**: Only use information explicitly stated in the user messages. Do not introduce external facts, assumptions, or common sense.
+3. **Ambiguity Resolution**:
+   - Replace vague pronouns (e.g., "he", "it", "they") or unclear references with specific, unambiguous entities based solely on the messages.
+   - Convert relative time expressions (e.g., "yesterday", "last week", "in two days") into absolute dates or times **only if the messages provide enough context** (e.g., current date is known or implied).
+4. **Handling Assistant Inferences**:
+   - If a memory contains any content **not directly stated by the user**—such as interpretations, summaries, emotional attributions, predictions, causal claims, or generalizations—this is considered an assistant inference.
+   - In such cases, you **must** set `need_rewrite = true`.
+   - The `rewritten` text **must explicitly indicate that the statement is an inference**, using a clear and natural prefix in the memory’s language. For English memories, use:
+     > "The assistant inferred that [rest of the memory]."
+   - Do **not** present inferred content as factual user statements.
+5. **No Rewrite Needed**: If the memory is factually accurate, fully grounded in the messages, unambiguous, and contains no unsupported content, set `need_rewrite = false` and copy the original memory exactly.
 
 Inputs:
 messages:
@@ -640,12 +648,16 @@ messages:
 memories:
 {memories_inline}
 
-Output JSON:
-- Keys: same indices as input ("0", "1", ...).
-- Values: {{ "need_rewrite": boolean, "rewritten_suffix": string, "reason": string }}
-- need_rewrite = true only when assistant inference is detected.
-- rewritten_suffix = " [Source:] Inference by assistant." or "".
-- reason: brief, e.g., "assistant inference detected" or "explicit user statement".
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) corresponding to the input memory indices.
+- Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- The "reason" should be concise and specific, e.g.:
+  - "contains assistant inference not stated by user"
+  - "pronoun 'it' has no clear referent in messages"
+  - "relative time 'yesterday' converted to 2025-12-16"
+  - "accurate and directly supported by user message"
+
+Important: Output **only** the JSON. No additional text, explanations, markdown, or fields.
 """
 
 

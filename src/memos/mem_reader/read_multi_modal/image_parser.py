@@ -133,13 +133,18 @@ class ImageParser(BaseMessageParser):
         # Get context items if available
         context_items = kwargs.get("context_items")
 
-        # Determine language from context if available
-        lang = "en"
-        if context_items:
+        # Determine language: prioritize lang from source (passed via kwargs),
+        # fallback to detecting from context_items if lang not provided
+        lang = kwargs.get("lang")
+        if lang is None and context_items:
             for item in context_items:
                 if hasattr(item, "memory") and item.memory:
                     lang = detect_lang(item.memory)
                     break
+        if not lang:
+            lang = "en"
+        if not hasattr(source, "lang") or source.lang is None:
+            source.lang = lang
 
         # Select prompt based on language
         image_analysis_prompt = (

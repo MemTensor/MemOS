@@ -14,7 +14,7 @@ from memos.memories.textual.item import (
     TreeNodeTextualMemoryMetadata,
 )
 
-from .base import BaseMessageParser, _derive_key
+from .base import BaseMessageParser, _add_lang_to_source, _derive_key
 
 
 logger = get_logger(__name__)
@@ -44,10 +44,11 @@ class StringParser(BaseMessageParser):
         info: dict[str, Any],
     ) -> SourceMessage:
         """Create SourceMessage from string message."""
-        return SourceMessage(
+        source = SourceMessage(
             type="doc",
             content=str(message),
         )
+        return _add_lang_to_source(source, str(message))
 
     def rebuild_from_source(
         self,
