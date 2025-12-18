@@ -329,6 +329,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
         # messages in one batch can belong to different business task_ids; check each
         task_ids = set()
         task_id_to_doc_id = {}
+        task_id_to_item_id = {}
 
         for msg in messages:
             tid = getattr(msg, "task_id", None)
@@ -340,6 +341,8 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     sid = info.get("source_doc_id")
                     if sid:
                         task_id_to_doc_id[tid] = sid
+                if tid not in task_id_to_item_id:
+                    task_id_to_item_id[tid] = msg.item_id
 
         if not task_ids:
             return
@@ -356,6 +359,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
 
             for task_id in task_ids:
                 source_doc_id = task_id_to_doc_id.get(task_id)
+                event_item_id = task_id_to_item_id.get(task_id)
                 status_data = self.status_tracker.get_task_status_by_business_id(
                     business_task_id=task_id, user_id=user_id
                 )
@@ -369,6 +373,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                     # (Although if status is 'completed', local error shouldn't happen theoretically,
                     # unless status update lags or is inconsistent. We trust status_tracker here.)
                     event = ScheduleLogForWebItem(
+                        item_id=event_item_id,
                         task_id=task_id,
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
@@ -393,6 +398,7 @@ class SchedulerDispatcher(BaseSchedulerModule):
                             error_msg = "Unknown error (check system logs)"
 
                     event = ScheduleLogForWebItem(
+                        item_id=event_item_id,
                         task_id=task_id,
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
