@@ -838,27 +838,26 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Args:
             messages: Single log message or list of log messages
         """
-        messages_list = [messages] if isinstance(messages, ScheduleLogForWebItem) else messages
-        for message in messages_list:
+        if isinstance(messages, ScheduleLogForWebItem):
+            messages = [messages]  # transform single message to list
+
+        for message in messages:
             logger.info(
                 f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
             )
+
         if self.rabbitmq_config is None:
             logger.info(
                 "[DIAGNOSTIC] base_scheduler._submit_web_logs: RabbitMQ config not loaded; skipping publish."
             )
             return
 
-        if isinstance(messages, ScheduleLogForWebItem):
-            messages = [messages]  # transform single message to list
-
         for message in messages:
-            if not isinstance(message, ScheduleLogForWebItem):
-                error_msg = f"Invalid message type: {type(message)}, expected ScheduleLogForWebItem"
-                logger.error(error_msg)
-                raise TypeError(error_msg)
+            try:
+                self._web_log_message_queue.put(message)
+            except Exception as e:
+                logger.warning(f"Failed to put message to web log queue: {e}", stack_info=True)
 
-            self._web_log_message_queue.put(message)
             message_info = message.debug_info()
             logger.debug(f"Submitted Scheduling log for web: {message_info}")
 
