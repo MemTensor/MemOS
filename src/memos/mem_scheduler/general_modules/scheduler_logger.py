@@ -49,7 +49,6 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         user_id: str,
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
-        item_id: str | None = None,
     ) -> ScheduleLogForWebItem:
         if mem_cube is None:
             logger.error(
@@ -95,19 +94,16 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             )
             memory_capacities["parameter_memory_capacity"] = 1
 
-        log_kwargs = {
-            "user_id": user_id,
-            "mem_cube_id": mem_cube_id,
-            "label": label,
-            "from_memory_type": from_memory_type,
-            "to_memory_type": to_memory_type,
-            "log_content": log_content,
-            "current_memory_sizes": current_memory_sizes,
-            "memory_capacities": memory_capacities,
-        }
-        if item_id:
-            log_kwargs["item_id"] = item_id
-        log_message = ScheduleLogForWebItem(**log_kwargs)
+        log_message = ScheduleLogForWebItem(
+            user_id=user_id,
+            mem_cube_id=mem_cube_id,
+            label=label,
+            from_memory_type=from_memory_type,
+            to_memory_type=to_memory_type,
+            log_content=log_content,
+            current_memory_sizes=current_memory_sizes,
+            memory_capacities=memory_capacities,
+        )
         return log_message
 
     @log_exceptions(logger=logger)
@@ -124,7 +120,6 @@ class SchedulerLoggerModule(BaseSchedulerModule):
         memory_len: int,
         memcube_name: str | None = None,
         log_content: str | None = None,
-        item_id: str | None = None,
     ) -> ScheduleLogForWebItem:
         item = self.create_autofilled_log_item(
             log_content=log_content or "",
@@ -134,7 +129,6 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             user_id=user_id,
             mem_cube_id=mem_cube_id,
             mem_cube=mem_cube,
-            item_id=item_id,
         )
         item.memcube_log_content = memcube_log_content
         item.metadata = metadata
