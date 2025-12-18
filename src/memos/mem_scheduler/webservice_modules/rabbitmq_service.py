@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from queue import Empty
 
+from pyglet.libs.win32.constants import FALSE
+
 from memos.configs.mem_scheduler import AuthConfig, RabbitMQConfig
 from memos.context.context import ContextThread
 from memos.dependency import require_python_package
@@ -325,14 +327,14 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 f"[DIAGNOSTIC] Publishing {label} message in Cloud Env. "
                 f"Exchange: {exchange_name}, Routing Key: '{routing_key}'."
             )
-            logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")
+            logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=FALSE)}")
         elif label == "knowledgeBaseUpdate":
             # Original diagnostic logging for knowledgeBaseUpdate if NOT in cloud env
             logger.info(
                 f"[DIAGNOSTIC] Publishing knowledgeBaseUpdate message (Local Env). "
                 f"Current configured Exchange: {exchange_name}, Routing Key: '{routing_key}'."
             )
-            logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")
+            logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=FALSE)}")
 
         with self._rabbitmq_lock:
             logger.info(

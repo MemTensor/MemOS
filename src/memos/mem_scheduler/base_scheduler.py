@@ -842,12 +842,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             messages = [messages]  # transform single message to list
 
         for message in messages:
-            logger.info(
-                f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
-            )
-
-        try:
-            for message in messages:
+            try:
                 # Always call publish; the publisher now caches when offline and flushes after reconnect
                 logger.info(
                     f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message.model_dump_json(indent=2)}"
@@ -860,8 +855,10 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     message.task_id,
                     message.label,
                 )
-        except Exception as e:
-            logger.error(f"[DIAGNOSTIC] base_scheduler._submit_web_logs failed: {e}", exc_info=True)
+            except Exception as e:
+                logger.error(
+                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs failed: {e}", exc_info=True
+                )
 
         logger.debug(
             f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
