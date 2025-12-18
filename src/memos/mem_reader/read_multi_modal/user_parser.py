@@ -12,7 +12,8 @@ from memos.memories.textual.item import (
 )
 from memos.types.openai_chat_completion_types import ChatCompletionUserMessageParam
 
-from .base import BaseMessageParser, _derive_key, _extract_text_from_content
+from .base import BaseMessageParser, _add_lang_to_source, _derive_key, _extract_text_from_content
+from .utils import detect_lang
 
 
 logger = get_logger(__name__)
@@ -56,74 +57,87 @@ class UserParser(BaseMessageParser):
         sources = []
 
         if isinstance(raw_content, list):
-            # Multimodal: create one SourceMessage per part
+            # Multimodal: first collect all text content to detect overall language
+            text_contents = []
             for part in raw_content:
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
                     if part_type == "text":
-                        sources.append(
-                            SourceMessage(
-                                type="chat",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=part.get("text", ""),
-                            )
+                        text_contents.append(part.get("text", ""))
+
+            # Detect overall language from all text content
+            overall_lang = "en"
+            if text_contents:
+                combined_text = " ".join(text_contents)
+                overall_lang = detect_lang(combined_text)
+
+            # Create one SourceMessage per part, all with the same detected language
+            for part in raw_content:
+                if isinstance(part, dict):
+                    part_type = part.get("type", "")
+                    if part_type == "text":
+                        source = SourceMessage(
+                            type="chat",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=part.get("text", ""),
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     elif part_type == "file":
                         file_info = part.get("file", {})
-                        sources.append(
-                            SourceMessage(
-                                type="file",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                doc_path=file_info.get("filename") or file_info.get("file_id", ""),
-                                content=file_info.get("file_data", ""),
-                                file_info=file_info,
-                            )
+                        source = SourceMessage(
+                            type="file",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            doc_path=file_info.get("filename") or file_info.get("file_id", ""),
+                            content=file_info.get("file_data", ""),
+                            file_info=file_info,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     elif part_type == "image_url":
                         image_info = part.get("image_url", {})
-                        sources.append(
-                            SourceMessage(
-                                type="image",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                image_path=image_info.get("url"),
-                            )
+                        source = SourceMessage(
+                            type="image",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            image_path=image_info.get("url"),
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     else:
                         # input_audio, etc.
-                        sources.append(
-                            SourceMessage(
-                                type=part_type,
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=f"[{part_type}]",
-                            )
+                        source = SourceMessage(
+                            type=part_type,
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=f"[{part_type}]",
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
         else:
             # Simple message: single SourceMessage
             content = _extract_text_from_content(raw_content)
             if content:
-                sources.append(
-                    SourceMessage(
-                        type="chat",
-                        role=role,
-                        chat_time=chat_time,
-                        message_id=message_id,
-                        content=content,
-                    )
+                source = SourceMessage(
+                    type="chat",
+                    role=role,
+                    chat_time=chat_time,
+                    message_id=message_id,
+                    content=content,
                 )
+                sources.append(_add_lang_to_source(source, content))
 
-        return (
-            sources
-            if len(sources) > 1
-            else (sources[0] if sources else SourceMessage(type="chat", role=role))
-        )
+        if not sources:
+            return _add_lang_to_source(SourceMessage(type="chat", role=role), None)
+        if len(sources) > 1:
+            return sources
+        return sources[0]
 
     def rebuild_from_source(
         self,
@@ -142,8 +156,6 @@ class UserParser(BaseMessageParser):
             return []
 
         role = message.get("role", "")
-        # TODO: if file/url/audio etc in content, how to transfer them into a
-        #  readable string?
         content = message.get("content", "")
         chat_time = message.get("chat_time", None)
         if role != "user":

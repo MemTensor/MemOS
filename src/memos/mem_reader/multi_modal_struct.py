@@ -8,8 +8,9 @@ from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
+from memos.mem_reader.read_multi_modal.base import _derive_key
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
-from memos.memories.textual.item import TextualMemoryItem
+from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
 from memos.utils import timed
@@ -184,6 +185,33 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if window:
                 windows.append(window)
 
+        # Batch compute embeddings for all windows
+        if windows:
+            # Collect all valid windows that need embedding
+            valid_windows = [w for w in windows if w and w.memory]
+
+            if valid_windows:
+                # Collect all texts that need embedding
+                texts_to_embed = [w.memory for w in valid_windows]
+
+                # Batch compute all embeddings at once
+                try:
+                    embeddings = self.embedder.embed(texts_to_embed)
+                    # Fill embeddings back into memory items
+                    for window, embedding in zip(valid_windows, embeddings, strict=True):
+                        window.metadata.embedding = embedding
+                except Exception as e:
+                    logger.error(f"[MultiModalStruct] Error batch computing embeddings: {e}")
+                    # Fallback: compute embeddings individually
+                    for window in valid_windows:
+                        if window.memory:
+                            try:
+                                window.metadata.embedding = self.embedder.embed([window.memory])[0]
+                            except Exception as e2:
+                                logger.error(
+                                    f"[MultiModalStruct] Error computing embedding for item: {e2}"
+                                )
+
         return windows
 
     def _build_window_from_items(
@@ -247,17 +275,35 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # If no text content, return None
             return None
 
-        # Create aggregated memory item (similar to _build_fast_node in simple_struct)
+        # Create aggregated memory item without embedding (will be computed in batch later)
         extra_kwargs: dict[str, Any] = {}
         if aggregated_file_ids:
             extra_kwargs["file_ids"] = aggregated_file_ids
-        aggregated_item = self._make_memory_item(
-            value=merged_text,
-            info=info,
-            memory_type=memory_type,
-            tags=["mode:fast"],
-            sources=all_sources,
-            **extra_kwargs,
+
+        # Extract info fields
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
+        # Create memory item without embedding (set to None, will be filled in batch)
+        aggregated_item = TextualMemoryItem(
+            memory=merged_text,
+            metadata=TreeNodeTextualMemoryMetadata(
+                user_id=user_id,
+                session_id=session_id,
+                memory_type=memory_type,
+                status="activated",
+                tags=["mode:fast"],
+                key=_derive_key(merged_text),
+                embedding=None,  # Will be computed in batch
+                usage=[],
+                sources=all_sources,
+                background="",
+                confidence=0.99,
+                type="fact",
+                info=info_,
+                **extra_kwargs,
+            ),
         )
 
         return aggregated_item
@@ -282,22 +328,23 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         Returns:
             LLM response dictionary
         """
-        # Try to extract actual text content from sources for better language detection
-        text_for_lang_detection = mem_str
+        # Determine language: prioritize lang from sources (set in fast mode),
+        # fallback to detecting from mem_str if sources don't have lang
+        lang = None
+
+        # First, try to get lang from sources (fast mode already set this)
         if sources:
-            source_texts = []
             for source in sources:
-                if hasattr(source, "content") and source.content:
-                    source_texts.append(source.content)
-                elif isinstance(source, dict) and source.get("content"):
-                    source_texts.append(source.get("content"))
+                if hasattr(source, "lang") and source.lang:
+                    lang = source.lang
+                    break
+                elif isinstance(source, dict) and source.get("lang"):
+                    lang = source.get("lang")
+                    break
 
-            # If we have text content from sources, use it for language detection
-            if source_texts:
-                text_for_lang_detection = " ".join(source_texts)
-
-        # Use the extracted text for language detection
-        lang = detect_lang(text_for_lang_detection)
+        # Fallback: detect language from mem_str if no lang from sources
+        if lang is None:
+            lang = detect_lang(mem_str)
 
         # Select prompt template based on prompt_type
         if prompt_type == "doc":
@@ -574,8 +621,13 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for fast_item in fast_memory_items:
                 sources = fast_item.metadata.sources
                 for source in sources:
+                    lang = getattr(source, "lang", "en")
                     items = self.multi_modal_parser.process_transfer(
-                        source, context_items=[fast_item], custom_tags=custom_tags, info=info
+                        source,
+                        context_items=[fast_item],
+                        custom_tags=custom_tags,
+                        info=info,
+                        lang=lang,
                     )
                     fine_memory_items.extend(items)
             return fine_memory_items
@@ -616,8 +668,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         # Part B: get fine multimodal items
         for source in sources:
+            lang = getattr(source, "lang", "en")
             items = self.multi_modal_parser.process_transfer(
-                source, context_items=[raw_node], info=info, custom_tags=custom_tags
+                source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
             )
             fine_memory_items.extend(items)
         return fine_memory_items

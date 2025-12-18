@@ -14,7 +14,8 @@ from memos.memories.textual.item import (
 )
 from memos.types.openai_chat_completion_types import ChatCompletionToolMessageParam
 
-from .base import BaseMessageParser
+from .base import BaseMessageParser, _add_lang_to_source
+from .utils import detect_lang
 
 
 logger = get_logger(__name__)
@@ -52,78 +53,92 @@ class ToolParser(BaseMessageParser):
         sources = []
 
         if isinstance(raw_content, list):
-            # Multimodal: create one SourceMessage per part
+            text_contents = []
             for part in raw_content:
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
                     if part_type == "text":
-                        sources.append(
-                            SourceMessage(
-                                type="text",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=part.get("text", ""),
-                                tool_call_id=tool_call_id,
-                            )
+                        text_contents.append(part.get("text", ""))
+
+            # Detect overall language from all text content
+            overall_lang = "en"
+            if text_contents:
+                combined_text = " ".join(text_contents)
+                overall_lang = detect_lang(combined_text)
+
+            # Create one SourceMessage per part, all with the same detected language
+            for part in raw_content:
+                if isinstance(part, dict):
+                    part_type = part.get("type", "")
+                    if part_type == "text":
+                        text_content = part.get("text", "")
+                        source = SourceMessage(
+                            type="text",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=text_content,
+                            tool_call_id=tool_call_id,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     elif part_type == "file":
                         file_info = part.get("file", {})
-                        sources.append(
-                            SourceMessage(
-                                type="file",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=file_info.get("file_data", ""),
-                                filename=file_info.get("filename", ""),
-                                file_id=file_info.get("file_id", ""),
-                                tool_call_id=tool_call_id,
-                                file_info=file_info,
-                            )
+                        file_content = file_info.get("file_data", "")
+                        source = SourceMessage(
+                            type="file",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=file_content,
+                            filename=file_info.get("filename", ""),
+                            file_id=file_info.get("file_id", ""),
+                            tool_call_id=tool_call_id,
+                            file_info=file_info,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     elif part_type == "image_url":
                         file_info = part.get("image_url", {})
-                        sources.append(
-                            SourceMessage(
-                                type="image_url",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=file_info.get("url", ""),
-                                detail=file_info.get("detail", "auto"),
-                                tool_call_id=tool_call_id,
-                            )
+                        source = SourceMessage(
+                            type="image_url",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=file_info.get("url", ""),
+                            detail=file_info.get("detail", "auto"),
+                            tool_call_id=tool_call_id,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     elif part_type == "input_audio":
                         file_info = part.get("input_audio", {})
-                        sources.append(
-                            SourceMessage(
-                                type="input_audio",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=file_info.get("data", ""),
-                                format=file_info.get("format", "wav"),
-                                tool_call_id=tool_call_id,
-                            )
+                        source = SourceMessage(
+                            type="input_audio",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=file_info.get("data", ""),
+                            format=file_info.get("format", "wav"),
+                            tool_call_id=tool_call_id,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     else:
                         logger.warning(f"[ToolParser] Unsupported part type: {part_type}")
                         continue
         else:
             # Simple string content message: single SourceMessage
             if raw_content:
-                sources.append(
-                    SourceMessage(
-                        type="chat",
-                        role=role,
-                        chat_time=chat_time,
-                        message_id=message_id,
-                        content=raw_content,
-                        tool_call_id=tool_call_id,
-                    )
+                source = SourceMessage(
+                    type="chat",
+                    role=role,
+                    chat_time=chat_time,
+                    message_id=message_id,
+                    content=raw_content,
+                    tool_call_id=tool_call_id,
                 )
+                sources.append(_add_lang_to_source(source, raw_content))
 
         return sources
 
@@ -150,7 +165,9 @@ class ToolParser(BaseMessageParser):
         if chat_time:
             parts.append(f"[{chat_time}]: ")
         prefix = "".join(parts)
-        content = json.dumps(content) if isinstance(content, list | dict) else content
+        content = (
+            json.dumps(content, ensure_ascii=False) if isinstance(content, list | dict) else content
+        )
         line = f"{prefix}{content}\n"
         if not line:
             return []

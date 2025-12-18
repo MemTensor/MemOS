@@ -156,8 +156,8 @@ class GeneralScheduler(BaseScheduler):
         logger.info(
             f"[long_memory_update_process] For user_id='{user_id}', mem_cube_id='{mem_cube_id}': "
             f"Scheduler replaced working memory based on query history {queries}. "
-            f"Old working memory ({len(old_memory_texts)} items): {old_memory_texts}. "
-            f"New working memory ({len(new_memory_texts)} items): {new_memory_texts}."
+            f"Old working memory ({len(cur_working_memory)} items): {old_memory_texts}. "
+            f"New working memory ({len(new_order_working_memory)} items): {new_memory_texts}."
         )
 
         # update activation memories
@@ -1379,6 +1379,7 @@ class GeneralScheduler(BaseScheduler):
         cur_working_memory: list[TextualMemoryItem] = text_mem_base.get_working_memory(
             user_name=mem_cube_id
         )
+        cur_working_memory = cur_working_memory[:top_k]
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         intent_result = self.monitor.detect_intent(
             q_list=queries, text_working_memory=text_working_memory
