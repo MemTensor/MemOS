@@ -87,16 +87,13 @@ class SystemParser(BaseMessageParser):
         if isinstance(content, dict):
             content = content["text"]
 
-        # Process tool_schema content
-        content_wo_tool_schema = content
-
         # Find first tool_schema block
         tool_schema_pattern = r"<tool_schema>(.*?)</tool_schema>"
         match = re.search(tool_schema_pattern, content, flags=re.DOTALL)
 
         if match:
-            original_text = match.group(0)  # 完整的 <tool_schema>...</tool_schema>
-            schema_content = match.group(1)  # 标签之间的内容
+            original_text = match.group(0)  # Complete <tool_schema>...</tool_schema> block
+            schema_content = match.group(1)  # Content between the tags
 
             # Parse tool schema
             try:
@@ -119,10 +116,102 @@ class SystemParser(BaseMessageParser):
 
             # Process and replace
             if tool_schema is not None:
-                processed_text = f"<tool_schema>{json.dumps(tool_schema)}</tool_schema>"
-                content_wo_tool_schema = content_wo_tool_schema.replace(
-                    original_text, processed_text, 1
-                )
+
+                def remove_descriptions(obj):
+                    """Recursively remove all 'description' keys from a nested dict/list structure."""
+                    if isinstance(obj, dict):
+                        return {
+                            k: remove_descriptions(v) for k, v in obj.items() if k != "description"
+                        }
+                    elif isinstance(obj, list):
+                        return [remove_descriptions(item) for item in obj]
+                    else:
+                        return obj
+
+                def keep_first_layer_params(obj):
+                    """Only keep first layer parameter information, remove nested parameters."""
+                    if isinstance(obj, list):
+                        return [keep_first_layer_params(item) for item in obj]
+                    elif isinstance(obj, dict):
+                        result = {}
+                        for k, v in obj.items():
+                            if k == "properties" and isinstance(v, dict):
+                                # For properties, only keep first layer parameter names and types
+                                first_layer_props = {}
+                                for param_name, param_info in v.items():
+                                    if isinstance(param_info, dict):
+                                        # Only keep type and basic info, remove nested properties
+                                        first_layer_props[param_name] = {
+                                            key: val
+                                            for key, val in param_info.items()
+                                            if key in ["type", "enum", "required"]
+                                            and key != "properties"
+                                        }
+                                    else:
+                                        first_layer_props[param_name] = param_info
+                                result[k] = first_layer_props
+                            elif k == "parameters" and isinstance(v, dict):
+                                # Process parameters object but only keep first layer
+                                result[k] = keep_first_layer_params(v)
+                            elif isinstance(v, dict | list) and k != "properties":
+                                result[k] = keep_first_layer_params(v)
+                            else:
+                                result[k] = v
+                        return result
+                    else:
+                        return obj
+
+                def format_tool_schema_readable(tool_schema):
+                    """Convert tool schema to readable format: tool_name: [param1 (type1), ...](required: ...)"""
+                    lines = []
+                    for tool in tool_schema:
+                        # Handle both new format and old-style OpenAI function format
+                        if tool.get("type") == "function" and "function" in tool:
+                            tool_info = tool["function"]
+                        else:
+                            tool_info = tool
+
+                        tool_name = tool_info.get("name", "unknown")
+                        params_obj = tool_info.get("parameters", {})
+                        properties = params_obj.get("properties", {})
+                        required = params_obj.get("required", [])
+
+                        # Format parameters
+                        param_strs = []
+                        for param_name, param_info in properties.items():
+                            if isinstance(param_info, dict):
+                                param_type = param_info.get("type", "any")
+                                # Handle enum
+                                if "enum" in param_info:
+                                    param_type = f"{param_type}[{', '.join(param_info['enum'])}]"
+                                param_strs.append(f"{param_name} ({param_type})")
+                            else:
+                                param_strs.append(f"{param_name} (any)")
+
+                        # Format required parameters
+                        required_str = f"(required: {', '.join(required)})" if required else ""
+
+                        # Construct the line
+                        params_part = f"[{', '.join(param_strs)}]" if param_strs else "[]"
+                        line = f"{tool_name}: {params_part}{required_str}"
+                        lines.append(line)
+
+                    return "\n".join(lines)
+
+                # First keep only first layer params, then remove descriptions
+                simple_tool_schema = keep_first_layer_params(tool_schema)
+                simple_tool_schema = remove_descriptions(simple_tool_schema)
+                # change to readable format
+                readable_schema = format_tool_schema_readable(simple_tool_schema)
+
+                processed_text = f"<tool_schema>{readable_schema}</tool_schema>"
+                content = content.replace(original_text, processed_text, 1)
+
+            parts = ["system: "]
+            if message.get("chat_time"):
+                parts.append(f"[{message.get('chat_time')}]: ")
+            prefix = "".join(parts)
+            line = f"{prefix}{content}\n"
 
         source = self.create_source(message, info)
 
@@ -132,7 +221,7 @@ class SystemParser(BaseMessageParser):
         session_id = info_.pop("session_id", "")
 
         # Split parsed text into chunks
-        content_chunks = self._split_text(content_wo_tool_schema)
+        content_chunks = self._split_text(line)
 
         memory_items = []
         for _chunk_idx, chunk_text in enumerate(content_chunks):

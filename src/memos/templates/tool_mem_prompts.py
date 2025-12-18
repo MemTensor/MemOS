@@ -1,96 +1,101 @@
 TOOL_TRAJECTORY_PROMPT_ZH = """
-你是一个专业的工具经验提取取专家。你的任务是从给定的对话消息中提取完整的工具调用轨迹经验。
+你是一个专业的工具经验提取专家。你的任务是从给定的对话消息中提取完整的工具调用轨迹经验。
 
-## 提取规则：
-1. 只有当对话中存在有价值的工具调用经验时才进行提取
-2. 有价值的轨迹包含两种情况：
-
-   **情况A - 标准工具调用轨迹**（包含以下完整流程）：
-   - 用户的问题（user message）
-   - 助手的工具调用尝试（assistant message with tool_calls）
-   - 工具的执行结果（tool message with tool_call_id and content，无论成功或失败）
-   - 助手基于工具结果的响应（assistant message）
-
-   **情况B - 无工具调用的轨迹**（同时满足以下条件）：
-   - 对话中提供了可用的工具列表
-   - 助手没有进行任何工具调用,直接给出了答案
+## 分析判断步骤：
+**步骤1：判断任务完成度**
+根据用户反馈，判定correctness：success（成功）或 failed（失败），用户反馈决定权大于执行结果，用户反馈有误，则判定为failed
+**步骤2：成功轨迹（success）**
+总结：有效的参数模式、调用策略、最佳实践
+**步骤3：失败轨迹（failed）- 错误分析**
+3.1 工具需求判断
+  - 任务是否需要工具？（需要/直接回答/误调用）
+3.2 工具调用检查
+  - 工具存在性：是否在system中提供
+  - 工具选择：是否选对工具
+  - 参数正确性：是否符合类型定义
+  - 幻觉检测：是否调用不存在的工具
+3.3 错误根因定位
+  结合消息中的错误反馈信息和上述分析，精准输出根本原因
+3.4 正确解法
+  给出避免错误的策略和正确调用方式，正确解法不单单是这个工具本身，而是整个轨迹的正确解法
 
 ## 输出格式：
 返回一个JSON数组，格式如下：
 
-**情况A的输出格式：**
 ```json
 [
   {
-    "trajectory": "自然语言输出包含'任务、使用的工具、工具观察、最终回答'的完整精炼的总结，体现顺序",
-    "experience": "深入分析本次轨迹的经验教训，输出精简的结论：\n- 成功（完成用户任务）：总结有效的参数模式、调用策略和最佳实践\n- 失败（未完成用户任务）：按以下步骤分析后，输出精简的结论\n  分析步骤（不要在结论中输出这些步骤，仅作为分析指导）：\n  步骤1：检查调用的工具是否在system中提供，即使问题需要调用工具，但system中没有提供，则不能强行调用工具\n  步骤2：如果有工具可用，结合函数定义和说明，分析工具是否被正确理解和使用\n  步骤3：分析用户问题的真实需求，判断工具选择是否合理，是否本身不需要不需要但调用了工具\n  步骤4：分析错误的根本原因（参数错误、逻辑错误、工具选择错误、幻觉调用等）\n  步骤5：提供可能的正确解法和避免该错误的策略\n  最终输出：基于以上分析，给出精简、准确的结论，不要复述分析步骤"
+    "correctness": "success 或 failed",
+    "trajectory": "精炼完整的自然语言总结，包含：用户任务 -> 执行动作（调用的工具/直接回答） -> 执行结果 -> 最终回答",
+    "experience": "如果成功：总结有效的调用策略和最佳实践\n如果失败：按步骤3分析后，输出精简的结论，包含：错误原因 + 正确解法",
     "tool_used_status": [
       {
-        "used_tool": "工具名1",
+        "used_tool": "工具名称（如果调用了工具）",
         "success_rate": "0.0-1.0之间的数值，表示该工具在本次轨迹中的成功率",
-        "error_type": "调用失败时的错误类型和描述，成功时为空字符串",
+        "error_type": "调用失败时的错误类型和描述，成功时为空字符串"
       }
     ]
   }
 ]
 ```
 
-**情况B的输出格式：**
-```json
-[
-  {
-    "trajectory": "自然语言输出说明'任务内容、为什么不需要工具调用、最终回答'",
-    "experience": "正确则输出'正确的执行轨迹',错误则分析原因并给出简短的结论",
-    "tool_used_status": []
-  }
-]
-```
-
 ## 注意事项：
-- **trajectory 必须精简**：用最少的文字清晰表达完整流程，避免冗长描述
 - 每个轨迹必须是独立的完整过程
 - 一个轨迹中可能涉及多个工具的使用，每个工具在tool_used_status中独立记录
+- 如果没有调用工具，tool_used_status为空数组[]
 - 如果多条轨迹存在顺序依赖关系，需要将它们视为一条轨迹
 - 只提取事实内容，不要添加任何解释或额外信息
 - 确保返回的是有效的JSON格式
+- 输出的trajectory需要按照messages的发展顺序排列
 
-请分析以下对话消息并提取工具调用轨迹：
-
+请分析以下对话消息并提取工具调用轨迹，基于以下对话消息：
+<messages>
 {messages}
-
+</messages>
 """
 
 
 TOOL_TRAJECTORY_PROMPT_EN = """
-You are a professional tool experience extraction expert. Your task is to extract valuable tool experience from given conversation messages.
+You are a professional tool experience extraction expert. Your task is to extract complete tool call trajectory experiences from given conversation messages.
 
-## Extraction Rules:
-1. Only extract when there are valuable tool calling experiences in the conversation
-2. Valuable trajectories include two scenarios:
+## Analysis and Judgment Steps:
 
-   **Scenario A - Standard Tool Call Trajectory** (contains the complete flow):
-   - User's question (user message)
-   - Assistant's tool call attempt (assistant message with tool_calls)
-   - Tool execution results (tool message with tool_call_id and content, regardless of success or failure)
-   - Assistant's response based on tool results (assistant message)
+**Step 1: Assess Task Completion**
+Determine correctness based on user feedback: success or failed, user feedback has higher priority than execution results, if user feedback is incorrect, then determine as failed
 
-   **Scenario B - No Tool Call Needed Trajectory** (must meet all conditions):
-   - Tools are provided in the conversation
-   - Assistant made no tool calls and directly provided an answer
+**Step 2: Successful Trajectory (success)**
+Summarize: effective parameter patterns, calling strategies, best practices
+
+**Step 3: Failed Trajectory (failed) - Error Analysis**
+
+3.1 Tool Requirement Assessment
+  - Does the task require tools? (required/direct answer/unnecessary call)
+
+3.2 Tool Call Verification
+  - Tool availability: provided in system?
+  - Tool selection: correct tool chosen?
+  - Parameter correctness: conform to type definitions?
+  - Hallucination detection: calling non-existent tools?
+
+3.3 Root Cause Identification
+  Combine error feedback from messages with above analysis to precisely output root cause
+
+3.4 Correct Solution
+  Provide strategies to avoid errors and correct calling approach. The solution should address the entire trajectory, not just the tool itself
 
 ## Output Format:
 Return a JSON array in the following format:
 
-**Format for Scenario A:**
 ```json
 [
   {
-    "trajectory": "Natural language summary containing 'task, tools used, tool observations, final answer' in a complete and refined manner, reflecting the sequence",
-    "experience": "In-depth analysis of lessons learned from this trajectory, output concise conclusions:\n- Success (user task completed): Summarize effective parameter patterns, calling strategies, and best practices\n- Failure (user task not completed): Analyze following these steps, then output concise conclusions\n  Analysis steps (do not output these steps in the conclusion, only use as analysis guidance):\n  Step 1: Check if the called tool is provided in the system. Even if the problem requires a tool call, if the system does not provide it, the tool cannot be forcibly called\n  Step 2: If tools are available, analyze whether the tool was correctly understood and used based on the function definitions and descriptions\n  Step 3: Analyze the actual needs of the user's question to determine if the tool selection was appropriate, or if tools were unnecessarily called when not needed\n  Step 4: Analyze the fundamental cause of the error (parameter errors, logic errors, incorrect tool selection, hallucinated calls, etc.)\n  Step 5: Provide possible correct solutions and strategies to avoid this error\n  Final output: Based on the above analysis, provide concise and accurate conclusions without repeating the analysis steps"
+    "correctness": "success or failed",
+    "trajectory": "Concise and complete natural language summary including: user task -> execution action (tool called/direct answer) -> execution result -> final answer",
+    "experience": "If success: summarize effective calling strategies and best practices\nIf failed: after Step 3 analysis, output concise conclusion including: error cause + correct solution",
     "tool_used_status": [
       {
-        "used_tool": "Tool Name 1",
-        "success_rate": "Numerical value between 0.0-1.0, indicating the success rate of this tool in the current trajectory",
+        "used_tool": "Tool name (if tool was called)",
+        "success_rate": "Numerical value between 0.0-1.0, indicating the success rate of this tool in current trajectory",
         "error_type": "Error type and description when call fails, empty string when successful"
       }
     ]
@@ -98,27 +103,17 @@ Return a JSON array in the following format:
 ]
 ```
 
-**Format for Scenario B:**
-```json
-[
-  {
-    "trajectory": "Natural language description of 'task content, why tool calls are not needed, final answer'",
-    "experience": "Output 'Correct execution trajectory' if correct, otherwise analyze the reason and provide a brief conclusion",
-    "tool_used_status": []
-  }
-]
-```
-
 ## Notes:
-- **trajectory must be concise**: Express the complete process clearly with minimal words, avoid lengthy descriptions
 - Each trajectory must be an independent complete process
-- Multiple tools may be used in one trajectory, each tool is recorded independently in tool_used_status
-- If multiple trajectories have sequential dependencies, they should be considered as one trajectory
-- Only extract factual content, do not add any additional explanations or information
+- A trajectory may involve multiple tools, each recorded independently in tool_used_status
+- If no tool was called, tool_used_status is an empty array []
+- If multiple trajectories have sequential dependencies, treat them as one trajectory
+- Only extract factual content, do not add any explanations or extra information
 - Ensure the returned content is valid JSON format
+- The trajectory should be arranged according to the development order of messages
 
-Please analyze the following conversation messages and extract tool call trajectories:
-
+Please analyze the following conversation messages and extract tool call trajectories based on:
+<messages>
 {messages}
-
+</messages>
 """
