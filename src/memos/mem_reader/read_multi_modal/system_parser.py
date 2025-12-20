@@ -208,11 +208,11 @@ class SystemParser(BaseMessageParser):
                 processed_text = f"<tool_schema>{readable_schema}</tool_schema>"
                 content = content.replace(original_text, processed_text, 1)
 
-            parts = ["system: "]
-            if message.get("chat_time"):
-                parts.append(f"[{message.get('chat_time')}]: ")
-            prefix = "".join(parts)
-            line = f"{prefix}{content}\n"
+        parts = ["system: "]
+        if message.get("chat_time"):
+            parts.append(f"[{message.get('chat_time')}]: ")
+        prefix = "".join(parts)
+        line = f"{prefix}{content}\n"
 
         source = self.create_source(message, info)
 
