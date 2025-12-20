@@ -42,9 +42,10 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
     ) -> SourceMessage:
         """Create SourceMessage from system message."""
-        content = message["content"]
+
+        content = message.get("content", "")
         if isinstance(content, dict):
-            content = content["text"]
+            content = content.get("text", "")
 
         content_wo_tool_schema = re.sub(
             r"<tool_schema>(.*?)</tool_schema>",
@@ -84,9 +85,9 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        content = message["content"]
+        content = message.get("content", "")
         if isinstance(content, dict):
-            content = content["text"]
+            content = content.get("text", "")
 
         # Find first tool_schema block
         tool_schema_pattern = r"<tool_schema>(.*?)</tool_schema>"
@@ -166,9 +167,14 @@ class SystemParser(BaseMessageParser):
                     """Convert tool schema to readable format: tool_name: [param1 (type1), ...](required: ...)"""
                     lines = []
                     for tool in tool_schema:
+                        if not tool:
+                            continue
+
                         # Handle both new format and old-style OpenAI function format
                         if tool.get("type") == "function" and "function" in tool:
-                            tool_info = tool["function"]
+                            tool_info = tool.get("function")
+                            if not tool_info:
+                                continue
                         else:
                             tool_info = tool
 
@@ -183,14 +189,20 @@ class SystemParser(BaseMessageParser):
                             if isinstance(param_info, dict):
                                 param_type = param_info.get("type", "any")
                                 # Handle enum
-                                if "enum" in param_info:
-                                    param_type = f"{param_type}[{', '.join(param_info['enum'])}]"
+                                if "enum" in param_info and param_info["enum"] is not None:
+                                    # Ensure all enum values are strings
+                                    enum_values = [str(v) for v in param_info["enum"]]
+                                    param_type = f"{param_type}[{', '.join(enum_values)}]"
                                 param_strs.append(f"{param_name} ({param_type})")
                             else:
                                 param_strs.append(f"{param_name} (any)")
 
                         # Format required parameters
-                        required_str = f"(required: {', '.join(required)})" if required else ""
+                        # Ensure all required parameter names are strings
+                        required_strs = [str(r) for r in required] if required else []
+                        required_str = (
+                            f"(required: {', '.join(required_strs)})" if required_strs else ""
+                        )
 
                         # Construct the line
                         params_part = f"[{', '.join(param_strs)}]" if param_strs else "[]"
@@ -212,7 +224,7 @@ class SystemParser(BaseMessageParser):
         if message.get("chat_time"):
             parts.append(f"[{message.get('chat_time')}]: ")
         prefix = "".join(parts)
-        line = f"{prefix}{content}\n"
+        msg_line = f"{prefix}{content}\n"
 
         source = self.create_source(message, info)
 
@@ -222,7 +234,7 @@ class SystemParser(BaseMessageParser):
         session_id = info_.pop("session_id", "")
 
         # Split parsed text into chunks
-        content_chunks = self._split_text(line)
+        content_chunks = self._split_text(msg_line)
 
         memory_items = []
         for _chunk_idx, chunk_text in enumerate(content_chunks):
@@ -250,9 +262,9 @@ class SystemParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
-        content = message["content"]
+        content = message.get("content", "")
         if isinstance(content, dict):
-            content = content["text"]
+            content = content.get("text", "")
         try:
             tool_schema = json.loads(content)
             assert isinstance(tool_schema, list), "Tool schema must be a list[dict]"
