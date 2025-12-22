@@ -26,7 +26,7 @@ TOOL_TRAJECTORY_PROMPT_ZH = """
 [
   {
     "correctness": "success 或 failed",
-    "trajectory": "精炼完整的自然语言总结，包含：用户任务 -> 执行动作（调用的工具/直接回答） -> 执行结果 -> 最终回答",
+    "trajectory": "精炼完整的自然语言总结，包含：[任务（用户任务） -> 执行动作（调用的工具/直接回答） -> 执行结果] (可能多轮) -> 最终回答",
     "experience": "如果成功：总结有效的调用策略和最佳实践\n如果失败：按步骤3分析后，输出精简的结论，包含：错误原因 + 正确解法",
     "tool_used_status": [
       {
@@ -90,7 +90,7 @@ Return a JSON array in the following format:
 [
   {
     "correctness": "success or failed",
-    "trajectory": "Concise and complete natural language summary including: user task -> execution action (tool called/direct answer) -> execution result -> final answer",
+    "trajectory": "Concise and complete natural language summary including: [task (user task) -> execution action (tool called/direct answer) -> execution result] (possibly multiple rounds) -> final answer",
     "experience": "If success: summarize effective calling strategies and best practices\nIf failed: after Step 3 analysis, output concise conclusion including: error cause + correct solution",
     "tool_used_status": [
       {
