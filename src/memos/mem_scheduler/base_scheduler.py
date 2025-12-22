@@ -842,32 +842,24 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             messages = [messages]  # transform single message to list
 
         for message in messages:
-            logger.info(
-                f"[DIAGNOSTIC] base_scheduler._submit_web_logs called. Message to publish: {message.model_dump_json(indent=2)}"
-            )
+            try:
+                # Always call publish; the publisher now caches when offline and flushes after reconnect
+                logger.info(
+                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message.model_dump_json(indent=2)}"
+                )
+                self.rabbitmq_publish_message(message=message.to_dict())
+                logger.info(
+                    "[DIAGNOSTIC] base_scheduler._submit_web_logs: publish dispatched "
+                    "item_id=%s task_id=%s label=%s",
+                    message.item_id,
+                    message.task_id,
+                    message.label,
+                )
+            except Exception as e:
+                logger.error(
+                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs failed: {e}", exc_info=True
+                )
 
-        if self.rabbitmq_config is None:
-            logger.info(
-                "[DIAGNOSTIC] base_scheduler._submit_web_logs: RabbitMQ config not loaded; skipping publish."
-            )
-            return
-
-        for message in messages:
-            message_info = message.debug_info()
-            logger.info(f"[DIAGNOSTIC] base_scheduler._submit_web_logs: submitted {message_info}")
-
-            # Always call publish; the publisher now caches when offline and flushes after reconnect
-            logger.info(
-                f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message_info}"
-            )
-            self.rabbitmq_publish_message(message=message.to_dict())
-            logger.info(
-                "[DIAGNOSTIC] base_scheduler._submit_web_logs: publish dispatched "
-                "item_id=%s task_id=%s label=%s",
-                message.item_id,
-                message.task_id,
-                message.label,
-            )
         logger.debug(
             f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
         )
