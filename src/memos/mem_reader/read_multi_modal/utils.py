@@ -4,7 +4,7 @@ import json
 import os
 import re
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, TypeAlias
 from urllib.parse import urlparse
 
@@ -245,8 +245,8 @@ def coerce_scene_data(scene_data: SceneDataInput, scene_type: str) -> list[Messa
 
             # Default timestamp
             if chat_time_value is None:
-                session_date = datetime.now(timezone.utc)
-                date_format = "%I:%M %p on %d %B, %Y UTC"
+                session_date = datetime.now()
+                date_format = "%I:%M %p on %d %B, %Y"
                 chat_time_value = session_date.strftime(date_format)
 
             # Inject chat_time
