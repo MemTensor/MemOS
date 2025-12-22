@@ -217,9 +217,6 @@ class MultiModalParser:
                     "session_id": first_item.metadata.session_id,
                 }
 
-        # Extract custom_tags from kwargs (same as simple_struct.py)
-        custom_tags = kwargs.get("custom_tags")
-
         # Try to determine parser from source.type
         parser = None
         if source.type == "file":
@@ -243,9 +240,8 @@ class MultiModalParser:
             logger.error(f"[MultiModalParser] Error rebuilding message from source: {e}")
             return []
 
-        # Parse in fine mode (pass custom_tags to parse_fine)
+        # Parse in fine mode (pass context_items and custom_tags to parse_fine)
         try:
-            context_items = kwargs.pop("custom_tags", None)
             custom_tags = kwargs.pop("custom_tags", None)
             info = kwargs.pop("info", None)
             return parser.parse_fine(

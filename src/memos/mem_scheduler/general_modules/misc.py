@@ -217,19 +217,20 @@ class AutoDroppingQueue(Queue[T]):
             block: Ignored (kept for compatibility with Queue interface)
             timeout: Ignored (kept for compatibility with Queue interface)
         """
-        try:
-            # First try non-blocking put
-            super().put(item, block=block, timeout=timeout)
-        except Full:
-            # Remove the oldest item and mark it done to avoid leaking unfinished_tasks
-            with suppress(Empty):
-                _ = self.get_nowait()
-                # If the removed item had previously incremented unfinished_tasks,
-                # we must decrement here since it will never be processed.
-                with suppress(ValueError):
-                    self.task_done()
-            # Retry putting the new item
-            super().put(item, block=block, timeout=timeout)
+        while True:
+            try:
+                # First try non-blocking put
+                super().put(item, block=block, timeout=timeout)
+                return
+            except Full:
+                # Remove the oldest item and mark it done to avoid leaking unfinished_tasks
+                with suppress(Empty):
+                    _ = self.get_nowait()
+                    # If the removed item had previously incremented unfinished_tasks,
+                    # we must decrement here since it will never be processed.
+                    with suppress(ValueError):
+                        self.task_done()
+                # Continue loop to retry putting the item
 
     def get(
         self, block: bool = True, timeout: float | None = None, batch_size: int | None = None
