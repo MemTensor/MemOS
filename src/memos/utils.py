@@ -94,7 +94,7 @@ def timed_with_status(
     return decorator(func)
 
 
-def timed(func=None, *, log=False, log_prefix=""):
+def timed(func=None, *, log=True, log_prefix=""):
     def decorator(fn):
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
