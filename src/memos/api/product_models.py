@@ -874,6 +874,7 @@ class DeleteMessageData(BaseModel):
 
     success: bool = Field(..., description="Operation success status")
 
+
 class ChatMessageData(BaseModel):
     """Data model for chat  Message based on actual API."""
 
@@ -950,6 +951,7 @@ class MemOSDeleteMemoryResponse(BaseModel):
         """Convenient access to success status."""
         return self.data.success
 
+
 class MemOSChatResponse(BaseModel):
     """Response model for chat operation based on actual API."""
 
@@ -970,10 +972,6 @@ class MemOSGetTaskStatusResponse(BaseModel):
     message: str = Field(..., description="Response message")
     data: list[GetTaskStatusMessageData] = Field(..., description="delete results data")
 
-    @property
-    def data(self) -> list[GetTaskStatusMessageData]:
-        """Convenient access to task status."""
-        return self.data
 
 
 class MemOSCreateKnowledgebaseResponse(BaseModel):
@@ -1129,8 +1127,6 @@ class TaskQueueData(BaseModel):
     remaining_tasks_detail: list[str] = Field(
         ..., description="Per-stream remaining counts, formatted as '{stream_key}:{count}'"
     )
-
-
 
 
 class TaskQueueResponse(BaseResponse[TaskQueueData]):
