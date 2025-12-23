@@ -1,5 +1,4 @@
 import concurrent.futures
-import copy
 import difflib
 import json
 import re
@@ -17,7 +16,12 @@ from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.mem_feedback.base import BaseMemFeedback
-from memos.mem_feedback.utils import make_mem_item, should_keep_update, split_into_chunks
+from memos.mem_feedback.utils import (
+    general_split_into_chunks,
+    make_mem_item,
+    should_keep_update,
+    split_into_chunks,
+)
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import TextualMemoryItem
@@ -37,6 +41,8 @@ from memos.templates.mem_feedback_prompts import (
     FEEDBACK_JUDGEMENT_PROMPT_ZH,
     KEYWORDS_REPLACE,
     KEYWORDS_REPLACE_ZH,
+    OPERATION_UPDATE_JUDGEMENT,
+    OPERATION_UPDATE_JUDGEMENT_ZH,
     UPDATE_FORMER_MEMORIES,
     UPDATE_FORMER_MEMORIES_ZH,
 )
@@ -47,6 +53,7 @@ FEEDBACK_PROMPT_DICT = {
     "if_kw_replace": {"en": KEYWORDS_REPLACE, "zh": KEYWORDS_REPLACE_ZH},
     "judge": {"en": FEEDBACK_JUDGEMENT_PROMPT, "zh": FEEDBACK_JUDGEMENT_PROMPT_ZH},
     "compare": {"en": UPDATE_FORMER_MEMORIES, "zh": UPDATE_FORMER_MEMORIES_ZH},
+    "compare_judge": {"en": OPERATION_UPDATE_JUDGEMENT, "zh": OPERATION_UPDATE_JUDGEMENT_ZH},
     "generation": {"en": FEEDBACK_ANSWER_PROMPT, "zh": FEEDBACK_ANSWER_PROMPT_ZH},
 }
 
@@ -402,22 +409,8 @@ class MemFeedback(BaseMemFeedback):
                     except Exception as e:
                         logger.error(f"[Feedback Core: semantics_feedback] Operation failed: {e}")
 
-            operations = self.standard_operations(all_operations, current_memories)
-
-        add_texts = []
-        final_operations = []
-        for item in operations:
-            if item["operation"].lower() == "add" and "text" in item and item["text"]:
-                if item["text"] in add_texts:
-                    continue
-                final_operations.append(item)
-                add_texts.append(item["text"])
-            elif item["operation"].lower() == "update":
-                final_operations.append(item)
-        logger.info(
-            f"[Feedback Core: deduplicate add] {len(operations)} ->  {len(final_operations)} memories"
-        )
-        operations = copy.deepcopy(final_operations)
+            standard_operations = self.standard_operations(all_operations, current_memories)
+            operations = self.filter_fault_update(standard_operations)
 
         logger.info(f"[Feedback Core Operations]: {operations!s}")
 
@@ -552,7 +545,7 @@ class MemFeedback(BaseMemFeedback):
         retrieved_mems = self.searcher.search(
             query, info=info, user_name=user_name, top_k=top_k, full_recall=True
         )
-        retrieved_mems = [item[0] for item in retrieved_mems]
+        retrieved_mems = [item[0] for item in retrieved_mems if float(item[1]) > 0.01]
         return retrieved_mems
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
@@ -614,6 +607,52 @@ class MemFeedback(BaseMemFeedback):
             )
             response_json = None
         return response_json
+
+    def filter_fault_update(self, operations: list[dict]):
+        """To address the randomness of large model outputs, it is necessary to conduct validity evaluation on the texts used for memory override operations."""
+        updated_operations = [item for item in operations if item["operation"] == "UPDATE"]
+        if len(updated_operations) < 5:
+            return operations
+
+        lang = detect_lang("".join(updated_operations[0]["text"]))
+        template = FEEDBACK_PROMPT_DICT["compare_judge"][lang]
+
+        all_judge = []
+        operations_chunks = general_split_into_chunks(updated_operations)
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            future_to_chunk_idx = {}
+            for chunk in operations_chunks:
+                raw_operations_str = {"operations": chunk}
+                prompt = template.format(raw_operations=str(raw_operations_str))
+
+                future = executor.submit(self._get_llm_response, prompt)
+                future_to_chunk_idx[future] = chunk
+            for future in concurrent.futures.as_completed(future_to_chunk_idx):
+                try:
+                    judge_res = future.result()
+                    if (
+                        judge_res
+                        and "operations_judgement" in judge_res
+                        and isinstance(judge_res["operations_judgement"], list)
+                    ):
+                        all_judge.extend(judge_res["operations_judgement"])
+                except Exception as e:
+                    logger.error(f"[Feedback Core: filter_fault_update] Judgement failed: {e}")
+
+        logger.info(f"[Feedback Core: filter_fault_update] LLM judgement: {all_judge}")
+        id2op = {item["id"]: item for item in updated_operations}
+        valid_updates = []
+        for judge in all_judge:
+            valid_update = None
+            if judge["judgement"] == "UPDATE_APPROVED":
+                valid_update = id2op.get(judge["id"], None)
+            if valid_update:
+                valid_updates.append(valid_update)
+
+        logger.info(
+            f"[Feedback Core: filter_fault_update] {len(updated_operations)} -> {len(valid_updates)}"
+        )
+        return valid_updates + [item for item in operations if item["operation"] != "UPDATE"]
 
     def standard_operations(self, operations, current_memories):
         """
