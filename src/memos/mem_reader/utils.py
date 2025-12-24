@@ -1,16 +1,7 @@
 import json
-import os
 import re
 
-from typing import Any
-
 from memos import log
-from memos.api.config import APIConfig
-from memos.configs.graph_db import GraphDBConfigFactory
-from memos.configs.reranker import RerankerConfigFactory
-from memos.graph_dbs.factory import GraphStoreFactory
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.reranker.factory import RerankerFactory
 
 
 logger = log.get_logger(__name__)
@@ -164,47 +155,3 @@ def parse_keep_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
                 "reason": reason,
             }
     return (len(result) > 0), result
-
-
-def build_graph_db_config(user_id: str = "default") -> dict[str, Any]:
-    graph_db_backend_map = {
-        "neo4j-community": APIConfig.get_neo4j_community_config(user_id=user_id),
-        "neo4j": APIConfig.get_neo4j_config(user_id=user_id),
-        "nebular": APIConfig.get_nebular_config(user_id=user_id),
-        "polardb": APIConfig.get_polardb_config(user_id=user_id),
-    }
-
-    graph_db_backend = os.getenv("NEO4J_BACKEND", "nebular").lower()
-    return GraphDBConfigFactory.model_validate(
-        {
-            "backend": graph_db_backend,
-            "config": graph_db_backend_map[graph_db_backend],
-        }
-    )
-
-
-def build_reranker_config() -> dict[str, Any]:
-    return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
-
-
-def init_searcher(llm, embedder) -> Searcher:
-    """Initialize a Searcher instance for SimpleStructMemReader."""
-
-    # Build configs
-    graph_db_config = build_graph_db_config()
-    reranker_config = build_reranker_config()
-
-    # Create instances
-    graph_db = GraphStoreFactory.from_config(graph_db_config)
-    reranker = RerankerFactory.from_config(reranker_config)
-
-    # Create Searcher
-    searcher = Searcher(
-        dispatcher_llm=llm,
-        graph_store=graph_db,
-        embedder=embedder,
-        reranker=reranker,
-        manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-    )
-
-    return searcher

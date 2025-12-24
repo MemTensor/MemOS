@@ -561,6 +561,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self,
         messages: list[dict],
         memory_list: list[TextualMemoryItem],
+        user_name: str,
         info: dict[str, Any],
     ) -> list[TextualMemoryItem]:
         # Build input objects with memory text and metadata (timestamps, sources, etc.)
@@ -580,7 +581,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         for idx, mem in enumerate(memory_list):
             try:
                 related_memories = self.searcher.search(
-                    query=mem.memory, top_k=3, mode="fast", info=info
+                    query=mem.memory, top_k=3, mode="fast", user_nam=user_name, info=info
                 )
                 related_text = "None"
                 if related_memories:
