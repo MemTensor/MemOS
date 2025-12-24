@@ -309,6 +309,7 @@ def init_server() -> dict[str, Any]:
         mem_reader=mem_reader,
         searcher=searcher,
         reranker=feedback_reranker,
+        pref_mem=pref_mem,
     )
 
     # Initialize Scheduler
