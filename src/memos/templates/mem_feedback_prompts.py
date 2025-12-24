@@ -334,10 +334,11 @@ You must strictly return the response in the following JSON format:
 }}
 
 *Requirements*:
-1. If the new fact does not provide additional information to the existing memory item, the existing memory can override the new fact, and the operation is set to "NONE."
-2. If the new fact is similar to existing memory but the information is more accurate, complete, or requires correction, set operation to "UPDATE"
+1. If the new fact does not provide additional information to the existing memory item, or the existing memory can override the new fact, and the operation is set to "NONE."
+2. If the new fact is similar to existing memory **about the same entity** but the information is more accurate, complete, or requires correction, set operation to "UPDATE"
 3. If the new fact contradicts existing memory in key information (such as time, location, status, etc.), update the original memory based on the new fact and set operation to "UPDATE", only modifying the relevant error segments in the existing memory paragraphs while keeping other text completely unchanged.
-4. If there is no existing memory that requires updating, the new fact is added as entirely new information, and the operation is set to "ADD." Therefore, in the same operation list, ADD and UPDATE will not coexist.
+4. If there is no existing memory that requires updating **or if the new fact refers to a different entity**, the new fact is added as entirely new information, and the operation is set to "ADD." Therefore, in the same operation list, ADD and UPDATE will not coexist.
+5. Facts about different entities that were acknowledged by the user within the same time period can coexist and are not considered contradictory.
 
 *ID Management Rules*:
 - Update operation: Keep the original ID unchanged
@@ -408,16 +409,16 @@ Operation recommendations:
 
 Example2:
 Current Memories:
-"123": "The user works as a software engineer in Company A, mainly responsible for front-end development"
-"908": "The user likes to go fishing with friends on weekends"
+"123": "On December 22, 2025, the user claim that John works at Company X"
+"908": "On December 22, 2025, the user claim that Mary lives in New York"
 
 The background of the new fact being put forward:
-user: Guess where I live？
-assistant: Hehuan Community.
-user feedback: Wrong, update my address: Mingyue Community, Chaoyang District, Beijing
+user: Guess who am I？
+assistant: You are a teacher at School ABC.
+user feedback: No, I mean Peter is a teacher at School ABC.
 
 Newly facts:
-"The user's residential address is Mingyue Community, Chaoyang District, Beijing"
+"Peter is a teacher at School ABC."
 
 Operation recommendations:
 {{
@@ -425,17 +426,17 @@ Operation recommendations:
         [
             {{
                 "id": "123",
-                "text": "The user works as a software engineer at Company A, primarily responsible for front-end development",
+                "text": "On December 22, 2025, the user claim that John works at Company X",
                 "operation": "NONE"
             }},
             {{
                 "id": "908",
-                "text": "The user enjoys fishing with friends on weekends",
+                "text": "On December 22, 2025, the user claim that Mary lives in New York",
                 "operation": "NONE"
             }},
             {{
-                "id": "4567",
-                "text": "The user's residential address is Mingyue Community, Chaoyang District, Beijing",
+                "id": "001",
+                "text": "Peter is a teacher at School ABC.",
                 "operation": "ADD"
             }}
         ]
@@ -478,6 +479,7 @@ UPDATE_FORMER_MEMORIES_ZH = """请分析新获取的事实信息，并决定这�
 2. 若新事实与现有记忆相似但信息更准确、完整或需修正，操作设为"UPDATE"
 3. 若新事实在关键信息（如时间、地点、状态等）上与现有记忆矛盾，则根据新事实更新原记忆，操作设为"UPDATE"，仅修改现有记忆段落中的相关错误片段，其余文本完全保持不变
 4. 若无需要更新的现有记忆，则将新事实作为全新信息添加，操作设为"ADD"。因此在同一操作列表中，ADD与UPDATE不会同时存在
+5. 同一时间段内用户所确认的不同实体的相关事实可以并存，且不会被视作相互矛盾。
 
 ID管理规则：
 - 更新操作：保持原有ID不变
@@ -549,17 +551,16 @@ user feedback: 实际上，我在公司B工作，是一名高级全栈开发人�
 
 示例2：
 当前记忆：
-"123": "用户在公司A担任软件工程师，主要负责前端开发"
-"908": "用户周末喜欢和朋友一起钓鱼"
-
+"123": "2025年12月12日，用户声明约翰在 X 公司工作"
+"908": "2025年12月12日，用户声明玛丽住在纽约"
 
 提出新事实的背景：
-user: 猜猜我住在哪里？
+user: 猜猜刘青住在哪里？
 assistant: 合欢社区
-user feedback: 错了，请更新我的地址：北京市朝阳区明月社区
+user feedback: 错了，他住在明月小区
 
 新获取的事实：
-"用户的居住地址是北京市朝阳区明月小区"
+"用户声明刘青住在明月小区"
 
 操作建议：
 {{
@@ -577,7 +578,7 @@ user feedback: 错了，请更新我的地址：北京市朝阳区明月社区
             }},
             {{
                 "id": "4567",
-                "text": "用户的居住地址是北京市朝阳区明月小区",
+                "text": "用户声明刘青住在明月小区",
                 "operation": "ADD"
             }}
         ]
@@ -659,4 +660,163 @@ FEEDBACK_ANSWER_PROMPT_ZH = """
 {question}
 
 回答：
+"""
+
+
+OPERATION_UPDATE_JUDGEMENT = """
+# Batch UPDATE Safety Assessment Instruction
+
+**Background**:
+This instruction serves as a supplementary safety verification layer for the memory update instruction. It evaluates each UPDATE operation in the `operations` list to ensure safety and effectiveness, preventing erroneous data overwrites.
+
+**Input**: The `operations` list containing multiple UPDATE proposals generated by the main instruction
+**Output**: The final `operations_judgement` list after safety assessment and necessary corrections
+
+**Safety Assessment Process (for each UPDATE entry)**:
+1. **Entity Consistency Check**: Verify that the old and new texts of this UPDATE entry describe exactly the same core entity (same person, organization, event, etc.). This is the most important check.
+2. **Semantic Relevance Check**: Determine whether the new information directly corrects errors in or supplements missing information from the old information, rather than introducing completely unrelated new facts.
+3. **Context Preservation Check**: Ensure that the updated text of this UPDATE only modifies the parts that need correction, while completely preserving all other valid information from the original text.
+
+**Batch Assessment Rules**:
+- Independently assess each entry in the list and record the evaluation results
+
+**Key Decision Rules**:
+1. If the core entities of old and new texts are different → Set `judgement` to "INVALID" (completely invalid)
+2. If the core entities are the same but the information is completely unrelated → Set `judgement` to "NONE" (should not update)
+3. If all three checks pass → Set `judgement` to "UPDATE_APPROVED"
+
+**Output Format**:
+{{
+    "operations_judgement": [
+        {{
+            "id": "...",
+            "text": "...",
+            "old_memory": "...",
+            "judgement": "INVALID" | "NONE" | "UPDATE_APPROVED"
+        }},
+        ...
+    ]
+}}
+
+**Example 1**:
+Input operations list:
+{{
+    "operations": [
+        {{
+            "id": "275a",
+            "text": "On December 22, 2025 at 6:58 AM UTC, the user mentioned that Mission Terra is from Germany.",
+            "operation": "UPDATE",
+            "old_memory": "On December 13, 2025 at 4:02 PM UTC, the user mentioned that Mission Terra is a French national."
+        }},
+        {{
+            "id": "88a4",
+            "text": "On December 22, 2025 at 6:58 AM UTC, the user mentioned that Mission Terra is from Germany.",
+            "operation": "UPDATE",
+            "old_memory": "On December 22, 2025 at 6:52 AM UTC, the user confirmed that Gladys Liu is an Italian citizen."
+        }}
+    ]
+}}
+
+Safety assessment output:
+{{
+    "operations_judgement": [
+        {{
+            "id": "275a",
+            "text": "On December 22, 2025 at 6:58 AM UTC, the user mentioned that Mission Terra is from Germany.",
+            "old_memory": "On December 13, 2025 at 4:02 PM UTC, the user mentioned that Mission Terra is a French national.",
+            "judgement": "UPDATE_APPROVED"
+        }},
+        {{
+            "id": "88a4",
+            "text": "On December 22, 2025 at 6:58 AM UTC, the user mentioned that Mission Terra is from Germany.",
+            "old_memory": "On December 22, 2025 at 6:52 AM UTC, the user confirmed that Gladys Liu is an Italian citizen.",
+            "judgement": "INVALID"
+        }}
+    ]
+}}
+
+**For actual execution**:
+Input operations list:
+{raw_operations}
+
+Safety assessment output:"""
+
+
+OPERATION_UPDATE_JUDGEMENT_ZH = """## 批量UPDATE安全评估指令
+
+**背景说明**：
+本指令作为记忆更新指令的补充安全验证层。针对`operations`列表，评估每个UPDATE操作都安全有效，防止错误的数据覆盖。
+
+**输入**：主指令生成的包含多个UPDATE提议的`operations`列表
+**输出**：经过安全评估和必要修正后的最终`operations_judgement`列表
+
+**安全评估流程（针对每个UPDATE条目）**：
+1. **实体一致性检查**：确认该UPDATE条目的新旧文本是否描述完全相同的核心实体（同一人物、组织、事件等）。这是最重要的检查。
+2. **语义相关性检查**：判断该UPDATE的新信息是否直接修正旧信息中的错误部分或补充缺失信息，而非引入完全不相关的新事实。
+3. **上下文保留检查**：确保该UPDATE更新后的文本只修改需要纠正的部分，完全保留原始文本中其他所有有效信息。
+
+**批量评估规则**：
+- 对列表中的每个条目独立评估，记录评估结果
+
+**关键决策规则**：
+1. 如果新旧文本核心实体不同 → `judgement`置为"INVALID"（完全无效）
+2. 如果新旧文本核心实体相同但信息完全不相关 → `judgement`置为"NONE"（不应更新）
+3. 如果通过全部三项检查 → `judgement`置为"UPDATE_APPROVED"
+
+
+**输出格式**：
+{{
+    "operations_judgement": [
+        // 评估后的完整operations列表
+        {{
+            "id": "...",
+            "text": "...",
+            "old_memory": "...",
+            "judgement": "INVALID" | "NONE" | "UPDATE_APPROVED"
+        }},
+        ...
+    ]
+}}
+
+
+示例1：
+输入operations列表：
+{{
+    "operations": [
+        {{
+            "id": "275a",
+            "text": "2025年12月22日 UTC 时间6:58，用户提到Mission Terra 来自德国。",
+            "operation": "UPDATE",
+            "old_memory": "2025年12月13日 UTC 时间16:02，用户提及 Mission Terra 是法国国籍。"
+        }},
+        {{
+            "id": "88a4",
+            "text": "2025年12月22日 UTC 时间6:58，用户提到Mission Terra 来自德国。",
+            "operation": "UPDATE",
+            "old_memory": "2025年12月22日 UTC 时间6:52，用户确认 Gladys Liu 是意大利公民。"
+        }}
+    ]
+}}
+安全评估输出：
+{{
+    "operations_judgement": [
+        {{
+            "id": "275a",
+            "text": "2025年12月22日 UTC 时间6:58，用户提到Mission Terra 来自德国。",
+            "old_memory": "2025年12月13日 UTC 时间16:02，用户提及 Mission Terra 是法国国籍。",
+            "judgement": "UPDATE_APPROVED"
+        }},
+        {{
+            "id": "88a4",
+            "text": "2025年12月22日 UTC 时间6:58，用户提到Mission Terra 来自德国。",
+            "old_memory": "2025年12月22日 UTC 时间6:52，用户确认 Gladys Liu 是意大利公民。",
+            "judgement": "INVALID"
+        }}
+    ]
+}}
+
+输入operations列表：
+{raw_operations}
+
+安全评估输出：
 """

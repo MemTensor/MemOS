@@ -188,10 +188,9 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         """
         Check if the queue is full.
         Compatible with SchedulerRedisQueue.
-
-        Returns True if all internal queues are full.
-        If there are no queues, returns False.
         """
+        # Local queue limits are per-stream (max_internal_message_queue_size).
+        # It is considered full only if all streams are full.
         if not self.queue_streams:
             return False
 
