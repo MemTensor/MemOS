@@ -3,13 +3,15 @@
 MemOS is an open-source **Agent Memory framework** that empowers AI agents with **long-term memory, personality consistency, and contextual recall**. It enables agents to **remember past interactions**, **learn over time**, and **build evolving identities** across sessions.
 
 Designed for **AI companions, role-playing NPCs, and multi-agent systems**, MemOS provides a unified API for **memory representation, retrieval, and update** — making it the foundation for next-generation **memory-augmented AI agents**.
+
+🆕 **MemOS 2.0** introduces **knowledge base system**, **multi-modal memory** (images & documents), **tool memory** for Agent optimization, **memory feedback mechanism** for precise control, and **enterprise-grade architecture** with Redis Streams scheduler and advanced DB optimizations.
 <div align="center">
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/memos-banner.gif" alt="MemOS Banner">
   </a>
 
 <h1 align="center">
-  <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="50"/> MemOS 1.0: 星河 (Stellar)  <img src="https://img.shields.io/badge/status-Preview-blue" alt="Preview Badge"/>
+  <img src="https://statics.memtensor.com.cn/logo/memos_color_m.png" alt="MemOS Logo" width="50"/> MemOS 2.0: 星尘（Stardust） <img src="https://img.shields.io/badge/status-Preview-blue" alt="Preview Badge"/>
 </h1>
 
   <p>
@@ -60,7 +62,7 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 <img src="https://cdn.memtensor.com.cn/img/1762436050812_3tgird_compressed.png" alt="SOTA SCORE">
 
-**MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions.
+**MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions. **MemOS 2.0** features comprehensive knowledge base management, multi-modal memory support, tool memory for Agent enhancement, and enterprise-grade architecture optimizations.
 
 - **Website**: https://memos.openmem.net/
 - **Documentation**: https://memos-docs.openmem.net/home/overview/
@@ -71,7 +73,8 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 Stay up to date with the latest MemOS announcements, releases, and community highlights.
 
-
+- **2025-12-24** - 🎉 **MemOS v2.0: Stardust (星尘) Release**:
+  Major upgrade featuring comprehensive Knowledge Base system with automatic document/URL parsing and cross-project sharing; Memory feedback mechanism for correction and precise deletion; Multi-modal memory supporting images and charts; Tool Memory to enhance Agent planning; Full architecture upgrade with Redis Streams multi-level queue scheduler and DB optimizations; New streaming/non-streaming Chat interfaces; Complete MCP upgrade; Lightweight deployment modes (quick & full).
 - **2025-11-06** - 🎉 MemOS v1.1.3 (Async Memory & Preference):
   Millisecond-level async memory add (support plain-text-memory and
   preference memory); enhanced BM25, graph recall, and mixture search; full
@@ -114,7 +117,19 @@ showcasing its capabilities in **information extraction**, **temporal and cross-
     - **Textual Memory**: For storing and retrieving unstructured or structured text knowledge.
     - **Activation Memory**: Caches key-value pairs (`KVCacheMemory`) to accelerate LLM inference and context reuse.
     - **Parametric Memory**: Stores model adaptation parameters (e.g., LoRA weights).
+    - **Tool Memory** 🆕: Records Agent tool call trajectories and experiences to improve planning capabilities.
+- **📚 Knowledge Base System** 🆕: Build multi-dimensional knowledge bases with automatic document/URL parsing, splitting, and cross-project sharing capabilities.
+- **🔧 Memory Controllability** 🆕:
+    - **Feedback Mechanism**: Use `add_feedback` API to correct, supplement, or replace existing memories with natural language.
+    - **Precise Deletion**: Delete specific memories by User ID or Memory ID via API or MCP tools.
+- **👁️ Multi-Modal Support** 🆕: Support for image understanding and memory, including chart parsing in documents.
+- **⚡ Advanced Architecture**:
+    - **DB Optimization**: Enhanced connection management and batch insertion for high-concurrency scenarios.
+    - **Advanced Retrieval**: Custom tag and info field filtering with complex logical operations.
+    - **Redis Streams Scheduler**: Multi-level queue architecture with intelligent orchestration for fair multi-tenant scheduling.
+    - **Stream & Non-Stream Chat**: Ready-to-use streaming and non-streaming chat interfaces.
 - **🔌 Extensible**: Easily extend and customize memory modules, data sources, and LLM integrations.
+- **🏂 Lightweight Deployment** 🆕: Support for quick mode and complete mode deployment options.
 
 ## 🚀 Getting Started
 
