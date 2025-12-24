@@ -177,7 +177,11 @@ def init_server() -> dict[str, Any]:
         else None
     )
     llm = LLMFactory.from_config(llm_config)
-    chat_llms = _init_chat_llms(chat_llm_config)
+    chat_llms = (
+        _init_chat_llms(chat_llm_config)
+        if os.getenv("ENABLE_CHAT_API", "false") == "true"
+        else None
+    )
     embedder = EmbedderFactory.from_config(embedder_config)
     mem_reader = MemReaderFactory.from_config(mem_reader_config)
     reranker = RerankerFactory.from_config(reranker_config)

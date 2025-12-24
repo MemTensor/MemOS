@@ -15,7 +15,7 @@ import os
 import random as _random
 import socket
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
@@ -64,12 +64,16 @@ dependencies = HandlerDependencies.from_init_server(components)
 # Initialize all handlers with dependency injection
 search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
-chat_handler = ChatHandler(
-    dependencies,
-    components["chat_llms"],
-    search_handler,
-    add_handler,
-    online_bot=components.get("online_bot"),
+chat_handler = (
+    ChatHandler(
+        dependencies,
+        components["chat_llms"],
+        search_handler,
+        add_handler,
+        online_bot=components.get("online_bot"),
+    )
+    if os.getenv("ENABLE_CHAT_API", "false") == "true"
+    else None
 )
 feedback_handler = FeedbackHandler(dependencies)
 # Extract commonly used components for function-based handlers
@@ -201,6 +205,10 @@ def chat_complete(chat_req: APIChatCompleteRequest):
 
     This endpoint uses the class-based ChatHandler.
     """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
     return chat_handler.handle_chat_complete(chat_req)
 
 
@@ -212,6 +220,10 @@ def chat_stream(chat_req: ChatRequest):
     This endpoint uses the class-based ChatHandler which internally
     composes SearchHandler and AddHandler for a clean architecture.
     """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
     return chat_handler.handle_chat_stream(chat_req)
 
 
@@ -223,6 +235,10 @@ def chat_stream_playground(chat_req: ChatPlaygroundRequest):
     This endpoint uses the class-based ChatHandler which internally
     composes SearchHandler and AddHandler for a clean architecture.
     """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
     return chat_handler.handle_chat_stream_playground(chat_req)
 
 

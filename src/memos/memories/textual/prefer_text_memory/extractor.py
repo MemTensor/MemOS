@@ -69,6 +69,11 @@ class NaiveExtractor(BaseExtractor):
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            if not response:
+                logger.error(
+                    f"[prefer_extractor]: (Error) LLM response content is {response} when extracting explicit preference"
+                )
+                return None
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             for d in result:
@@ -92,6 +97,11 @@ class NaiveExtractor(BaseExtractor):
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            if not response:
+                logger.error(
+                    f"[prefer_extractor]: (Error) LLM response content is {response} when extracting implicit preference"
+                )
+                return None
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             for d in result:
