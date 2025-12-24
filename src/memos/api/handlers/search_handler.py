@@ -54,7 +54,9 @@ class SearchHandler(BaseHandler):
 
         results = cube_view.search_memories(search_req)
 
-        self.logger.info(f"[SearchHandler] Final search results count={len(results)}")
+        self.logger.info(
+            f"[SearchHandler] Final search results: count={len(results)} results={results}"
+        )
 
         return SearchResponse(
             message="Search completed successfully",
