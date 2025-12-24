@@ -4,7 +4,6 @@ import sys
 
 from datetime import datetime
 from pathlib import Path
-from queue import Queue
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
@@ -12,7 +11,6 @@ from memos.configs.mem_scheduler import AuthConfig
 from memos.log import get_logger
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_os.main import MOS
-from memos.mem_scheduler.general_scheduler import GeneralScheduler
 from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
@@ -160,42 +158,6 @@ def _format_entry(item: ScheduleLogForWebItem) -> tuple[str, str]:
     return title, _truncate_with_rules(_first_content())
 
 
-def show_web_logs(mem_scheduler: GeneralScheduler):
-    """Display all web log entries from the scheduler's log queue.
-
-    Args:
-        mem_scheduler: The scheduler instance containing web logs to display
-    """
-    if mem_scheduler._web_log_message_queue.empty():
-        print("Web log queue is currently empty.")
-        return
-
-    print("\n" + "=" * 50 + " WEB LOGS " + "=" * 50)
-
-    # Create a temporary queue to preserve the original queue contents
-    temp_queue = Queue()
-    collected: list[ScheduleLogForWebItem] = []
-
-    while not mem_scheduler._web_log_message_queue.empty():
-        log_item: ScheduleLogForWebItem = mem_scheduler._web_log_message_queue.get()
-        collected.append(log_item)
-        temp_queue.put(log_item)
-
-    for idx, log_item in enumerate(sorted(collected, key=lambda x: x.timestamp, reverse=True), 1):
-        title, content = _format_entry(log_item)
-        print(f"\nLog Entry #{idx}:")
-        print(title)
-        print(content)
-        print("-" * 50)
-
-    # Restore items back to the original queue
-    while not temp_queue.empty():
-        mem_scheduler._web_log_message_queue.put(temp_queue.get())
-
-    print(f"\nTotal {len(collected)} web log entries displayed.")
-    print("=" * 110 + "\n")
-
-
 def run_with_scheduler_init():
     print("==== run_with_automatic_scheduler_init ====")
     conversations, questions = init_task()
@@ -252,8 +214,6 @@ def run_with_scheduler_init():
         print(f"Query:\n {query}\n")
         response = mos.chat(query=query, user_id=user_id)
         print(f"Answer:\n {response}\n")
-
-    show_web_logs(mem_scheduler=mos.mem_scheduler)
 
     mos.mem_scheduler.stop()
 

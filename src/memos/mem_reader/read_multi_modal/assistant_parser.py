@@ -14,7 +14,8 @@ from memos.memories.textual.item import (
 )
 from memos.types.openai_chat_completion_types import ChatCompletionAssistantMessageParam
 
-from .base import BaseMessageParser, _derive_key, _extract_text_from_content
+from .base import BaseMessageParser, _add_lang_to_source, _derive_key, _extract_text_from_content
+from .utils import detect_lang
 
 
 logger = get_logger(__name__)
@@ -68,71 +69,90 @@ class AssistantParser(BaseMessageParser):
         sources = []
 
         if isinstance(raw_content, list):
-            # Multimodal: create one SourceMessage per part
+            # Multimodal: first collect all text content to detect overall language
+            text_contents = []
+            for part in raw_content:
+                if isinstance(part, dict):
+                    part_type = part.get("type", "")
+                    if part_type == "text":
+                        text_contents.append(part.get("text", ""))
+                    elif part_type == "refusal":
+                        text_contents.append(part.get("refusal", ""))
+
+            # Detect overall language from all text content
+            overall_lang = "en"  # default
+            if text_contents:
+                combined_text = " ".join(text_contents)
+                overall_lang = detect_lang(combined_text)
             # Note: Assistant messages only support "text" and "refusal" part types
             for part in raw_content:
                 if isinstance(part, dict):
                     part_type = part.get("type", "")
                     if part_type == "text":
-                        sources.append(
-                            SourceMessage(
-                                type="chat",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=part.get("text", ""),
-                            )
+                        text_content = part.get("text", "")
+                        source = SourceMessage(
+                            type="chat",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=text_content,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     elif part_type == "refusal":
-                        sources.append(
-                            SourceMessage(
-                                type="refusal",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=part.get("refusal", ""),
-                            )
+                        refusal_content = part.get("refusal", "")
+                        source = SourceMessage(
+                            type="refusal",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=refusal_content,
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
                     else:
                         # Unknown part type - log warning but still create SourceMessage
                         logger.warning(
                             f"[AssistantParser] Unknown part type `{part_type}`. "
                             f"Expected `text` or `refusal`. Creating SourceMessage with placeholder content."
                         )
-                        sources.append(
-                            SourceMessage(
-                                type="chat",
-                                role=role,
-                                chat_time=chat_time,
-                                message_id=message_id,
-                                content=f"[{part_type}]",
-                            )
+                        source = SourceMessage(
+                            type="chat",
+                            role=role,
+                            chat_time=chat_time,
+                            message_id=message_id,
+                            content=f"[{part_type}]",
                         )
+                        source.lang = overall_lang
+                        sources.append(source)
         elif raw_content is not None:
             # Simple message: single SourceMessage
             content = _extract_text_from_content(raw_content)
             if content:
-                sources.append(
-                    SourceMessage(
-                        type="chat",
-                        role=role,
-                        chat_time=chat_time,
-                        message_id=message_id,
-                        content=content,
-                    )
-                )
-
-        # Handle top-level refusal field
-        if refusal:
-            sources.append(
-                SourceMessage(
-                    type="refusal",
+                source = SourceMessage(
+                    type="chat",
                     role=role,
                     chat_time=chat_time,
                     message_id=message_id,
-                    content=refusal,
+                    content=content,
                 )
+                sources.append(_add_lang_to_source(source, content))
+
+        # Handle top-level refusal field
+        if refusal:
+            source = SourceMessage(
+                type="refusal",
+                role=role,
+                chat_time=chat_time,
+                message_id=message_id,
+                content=refusal,
             )
+            # Use overall_lang if we have sources from multimodal content, otherwise detect
+            if sources and hasattr(sources[0], "lang"):
+                source.lang = sources[0].lang
+            else:
+                source = _add_lang_to_source(source, refusal)
+            sources.append(source)
 
         # Handle tool_calls (when content is None or empty)
         if tool_calls:
@@ -141,34 +161,42 @@ class AssistantParser(BaseMessageParser):
                 if isinstance(tool_calls, list | dict)
                 else str(tool_calls)
             )
-            sources.append(
-                SourceMessage(
-                    type="tool_calls",
-                    role=role,
-                    chat_time=chat_time,
-                    message_id=message_id,
-                    content=f"[tool_calls]: {tool_calls_str}",
-                )
+            source = SourceMessage(
+                type="tool_calls",
+                role=role,
+                chat_time=chat_time,
+                message_id=message_id,
+                content=f"[tool_calls]: {tool_calls_str}",
             )
+            # Use overall_lang if we have sources from multimodal content, otherwise default
+            if sources and hasattr(sources[0], "lang"):
+                source.lang = sources[0].lang
+            else:
+                source = _add_lang_to_source(source, None)
+            sources.append(source)
 
         # Handle audio (optional)
         if audio:
             audio_id = audio.get("id", "") if isinstance(audio, dict) else str(audio)
-            sources.append(
-                SourceMessage(
-                    type="audio",
-                    role=role,
-                    chat_time=chat_time,
-                    message_id=message_id,
-                    content=f"[audio]: {audio_id}",
-                )
+            source = SourceMessage(
+                type="audio",
+                role=role,
+                chat_time=chat_time,
+                message_id=message_id,
+                content=f"[audio]: {audio_id}",
             )
+            # Use overall_lang if we have sources from multimodal content, otherwise default
+            if sources and hasattr(sources[0], "lang"):
+                source.lang = sources[0].lang
+            else:
+                source = _add_lang_to_source(source, None)
+            sources.append(source)
 
-        return (
-            sources
-            if len(sources) > 1
-            else (sources[0] if sources else SourceMessage(type="chat", role=role))
-        )
+        if not sources:
+            return _add_lang_to_source(SourceMessage(type="chat", role=role), None)
+        if len(sources) > 1:
+            return sources
+        return sources[0]
 
     def rebuild_from_source(
         self,

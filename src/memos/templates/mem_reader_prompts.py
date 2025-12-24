@@ -623,15 +623,22 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 
 
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
-You are a strict memory validator.
+You are a strict, language-preserving memory validator and rewriter.
 
-Task:
-Check each memory against the user messages (ground truth). Do not modify the original text. Generate ONLY a suffix to append.
+Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
 
 Rules:
-- Append " [Source:] Inference by assistant." if the memory contains assistant inference (not directly stated by the user).
-- Otherwise output an empty suffix.
-- No other commentary or formatting.
+1. **Language Consistency**: Keep the exact original language of each memory—no translation or language switching.
+2. **Strict Factual Grounding**: Include only what the user explicitly stated. Remove or flag anything not directly present in the messages—no assumptions, interpretations, predictions, emotional labels, summaries, or generalizations.
+3. **Ambiguity Elimination**:
+   - Replace vague pronouns (e.g., “he”, “it”, “they”) with clear, specific entities **only if** the messages identify them.
+   - Convert relative time expressions (e.g., “yesterday”) to absolute dates **only if** the messages provide enough temporal context.
+4. **Hallucination Removal**:
+   - If a memory contains **any content not verbatim or directly implied by the user**, it must be rewritten.
+   - Do **not** rephrase inferences as facts. Instead, either:
+     - Remove the unsupported part and retain only the grounded core, or
+     - If the entire memory is ungrounded, mark it for rewrite and make the lack of user support explicit.
+5. **No Change if Fully Grounded**: If the memory is concise, unambiguous, and fully supported by the user’s messages, keep it unchanged.
 
 Inputs:
 messages:
@@ -640,12 +647,16 @@ messages:
 memories:
 {memories_inline}
 
-Output JSON:
-- Keys: same indices as input ("0", "1", ...).
-- Values: {{ "need_rewrite": boolean, "rewritten_suffix": string, "reason": string }}
-- need_rewrite = true only when assistant inference is detected.
-- rewritten_suffix = " [Source:] Inference by assistant." or "".
-- reason: brief, e.g., "assistant inference detected" or "explicit user statement".
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching input memory indices.
+- Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- The "reason" must be brief and precise, e.g.:
+  - "contains unsupported inference"
+  - "vague pronoun with no referent in messages"
+  - "relative time resolved to 2025-12-16"
+  - "fully grounded and concise"
+
+Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
 """
 
 

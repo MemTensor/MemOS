@@ -1160,13 +1160,15 @@ class PolarDBGraphDB(BaseGraphDB):
                         properties = properties_json if properties_json else {}
 
                     # Parse embedding from JSONB if it exists
-                    if embedding_json is not None:
+                    if embedding_json is not None and kwargs.get("include_embedding"):
                         try:
                             # remove embedding
-                            """
-                            embedding = json.loads(embedding_json) if isinstance(embedding_json, str) else embedding_json
-                            # properties["embedding"] = embedding
-                            """
+                            embedding = (
+                                json.loads(embedding_json)
+                                if isinstance(embedding_json, str)
+                                else embedding_json
+                            )
+                            properties["embedding"] = embedding
                         except (json.JSONDecodeError, TypeError):
                             logger.warning(f"Failed to parse embedding for node {node_id}")
                     nodes.append(
@@ -3349,6 +3351,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+        batch_start_time = time.time()
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
@@ -3517,13 +3520,6 @@ class PolarDBGraphDB(BaseGraphDB):
                                 %s::vector
                             )
                         """
-                        logger.info(
-                            f"[add_nodes_batch] embedding_column Inserting insert_query:{insert_query}"
-                        )
-                        logger.info(
-                            f"[add_nodes_batch] embedding_column Inserting data_tuples:{data_tuples}"
-                        )
-
                         # Execute batch insert
                         execute_values(
                             cursor,
@@ -3571,6 +3567,10 @@ class PolarDBGraphDB(BaseGraphDB):
 
                     logger.info(
                         f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
+                    )
+                    elapsed_time = time.time() - batch_start_time
+                    logger.info(
+                        f"[add_nodes_batch] execute_values completed successfully in {elapsed_time:.2f}s"
                     )
 
         except Exception as e:
@@ -4763,7 +4763,7 @@ class PolarDBGraphDB(BaseGraphDB):
     @timed
     def delete_node_by_prams(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         memory_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
@@ -4772,7 +4772,8 @@ class PolarDBGraphDB(BaseGraphDB):
         Delete nodes by memory_ids, file_ids, or filter.
 
         Args:
-            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            writable_cube_ids (list[str], optional): List of cube IDs (user_name) to filter nodes.
+                If not provided, no user_name filter will be applied.
             memory_ids (list[str], optional): List of memory node IDs to delete.
             file_ids (list[str], optional): List of file node IDs to delete.
             filter (dict, optional): Filter dictionary to query matching nodes for deletion.
@@ -4780,49 +4781,45 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             int: Number of nodes deleted.
         """
+        batch_start_time = time.time()
         logger.info(
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
-        print(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
-        )
-
-        # Validate writable_cube_ids
-        if not writable_cube_ids or len(writable_cube_ids) == 0:
-            raise ValueError("writable_cube_ids is required and cannot be empty")
 
         # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        # Only add user_name filter if writable_cube_ids is provided
         user_name_conditions = []
-        for cube_id in writable_cube_ids:
-            # Escape single quotes in cube IDs
-            escaped_cube_id = str(cube_id).replace("'", "\\'")
-            user_name_conditions.append(f"n.user_name = '{escaped_cube_id}'")
+        if writable_cube_ids and len(writable_cube_ids) > 0:
+            for cube_id in writable_cube_ids:
+                # Use agtype_access_operator with VARIADIC ARRAY format for consistency
+                user_name_conditions.append(
+                    f"agtype_access_operator(VARIADIC ARRAY[properties, '\"user_name\"'::agtype]) = '\"{cube_id}\"'::agtype"
+                )
 
         # Build WHERE conditions separately for memory_ids and file_ids
         where_conditions = []
 
-        # Handle memory_ids: query n.id
+        # Handle memory_ids: query properties.id
         if memory_ids and len(memory_ids) > 0:
             memory_id_conditions = []
             for node_id in memory_ids:
-                # Escape single quotes in node IDs
-                escaped_id = str(node_id).replace("'", "\\'")
-                memory_id_conditions.append(f"'{escaped_id}'")
+                memory_id_conditions.append(
+                    f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
+                )
             if memory_id_conditions:
-                where_conditions.append(f"n.id IN [{', '.join(memory_id_conditions)}]")
+                where_conditions.append(f"({' OR '.join(memory_id_conditions)})")
 
-        # Handle file_ids: query n.file_ids field
-        # All file_ids must be present in the array field (AND relationship)
+        # Check if any file_id is in the file_ids array field (OR relationship)
         if file_ids and len(file_ids) > 0:
-            file_id_and_conditions = []
+            file_id_conditions = []
             for file_id in file_ids:
-                # Escape single quotes in file IDs
-                escaped_id = str(file_id).replace("'", "\\'")
-                # Check if this file_id is in the file_ids array field
-                file_id_and_conditions.append(f"'{escaped_id}' IN n.file_ids")
-            if file_id_and_conditions:
-                # Use AND to require all file_ids to be present
-                where_conditions.append(f"({' OR '.join(file_id_and_conditions)})")
+                # Format: agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '"file_ids"'::agtype]), '"file_id"'::agtype)
+                file_id_conditions.append(
+                    f"agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '\"file_ids\"'::agtype]), '\"{file_id}\"'::agtype)"
+                )
+            if file_id_conditions:
+                # Use OR to match any file_id in the array
+                where_conditions.append(f"({' OR '.join(file_id_conditions)})")
 
         # Query nodes by filter if provided
         filter_ids = set()
@@ -4848,11 +4845,11 @@ class PolarDBGraphDB(BaseGraphDB):
         if filter_ids:
             filter_id_conditions = []
             for node_id in filter_ids:
-                # Escape single quotes in node IDs
-                escaped_id = str(node_id).replace("'", "\\'")
-                filter_id_conditions.append(f"'{escaped_id}'")
+                filter_id_conditions.append(
+                    f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
+                )
             if filter_id_conditions:
-                where_conditions.append(f"n.id IN [{', '.join(filter_id_conditions)}]")
+                where_conditions.append(f"({' OR '.join(filter_id_conditions)})")
 
         # If no conditions (except user_name), return 0
         if not where_conditions:
@@ -4865,39 +4862,34 @@ class PolarDBGraphDB(BaseGraphDB):
         # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
         data_conditions = " OR ".join([f"({cond})" for cond in where_conditions])
 
-        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
-        user_name_where = " OR ".join(user_name_conditions)
-        ids_where = f"{user_name_where} AND ({data_conditions})"
+        # Build final WHERE clause
+        # If user_name_conditions exist, combine with data_conditions using AND
+        # Otherwise, use only data_conditions
+        if user_name_conditions:
+            user_name_where = " OR ".join(user_name_conditions)
+            where_clause = f"({user_name_where}) AND ({data_conditions})"
+        else:
+            where_clause = f"({data_conditions})"
 
-        # Use Cypher DELETE query
+        # Use SQL DELETE query for better performance
         # First count matching nodes to get accurate count
         count_query = f"""
-                SELECT * FROM cypher('{self.db_name}_graph', $$
-                MATCH (n:Memory)
-                WHERE {ids_where}
-                RETURN count(n) AS node_count
-                $$) AS (node_count agtype)
+                SELECT COUNT(*)
+                FROM "{self.db_name}_graph"."Memory"
+                WHERE {where_clause}
             """
         logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
 
         # Then delete nodes
         delete_query = f"""
-                SELECT * FROM cypher('{self.db_name}_graph', $$
-                MATCH (n:Memory)
-                WHERE {ids_where}
-                DETACH DELETE n
-                $$) AS (result agtype)
+                DELETE FROM "{self.db_name}_graph"."Memory"
+                WHERE {where_clause}
             """
 
         logger.info(
             f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
         )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
 
         conn = None
         deleted_count = 0
@@ -4906,24 +4898,114 @@ class PolarDBGraphDB(BaseGraphDB):
             with conn.cursor() as cursor:
                 # Count nodes before deletion
                 cursor.execute(count_query)
-                count_results = cursor.fetchall()
-                expected_count = 0
-                if count_results and len(count_results) > 0:
-                    count_str = str(count_results[0][0])
-                    count_str = count_str.strip('"').strip("'")
-                    expected_count = int(count_str) if count_str.isdigit() else 0
+                count_result = cursor.fetchone()
+                expected_count = count_result[0] if count_result else 0
+
+                logger.info(
+                    f"[delete_node_by_prams] Found {expected_count} nodes matching the criteria"
+                )
 
                 # Delete nodes
                 cursor.execute(delete_query)
-                # Use the count from before deletion as the actual deleted count
-                deleted_count = expected_count
-                conn.commit()
+                # Use rowcount to get actual deleted count
+                deleted_count = cursor.rowcount
+                elapsed_time = time.time() - batch_start_time
+                logger.info(
+                    f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, deleted {deleted_count} nodes"
+                )
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
-            conn.rollback()
             raise
         finally:
             self._return_connection(conn)
 
         logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
         return deleted_count
+
+    @timed
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, list[str]]:
+        """Get user names by memory ids.
+
+        Args:
+            memory_ids: List of memory node IDs to query.
+
+        Returns:
+            dict[str, list[str]]: Dictionary with one key:
+                - 'no_exist_memory_ids': List of memory_ids that do not exist (if any are missing)
+                - 'exist_user_names': List of distinct user names (if all memory_ids exist)
+        """
+        if not memory_ids:
+            return {"exist_user_names": []}
+
+        # Build OR conditions for each memory_id
+        id_conditions = []
+        for mid in memory_ids:
+            id_conditions.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{mid}\"'::agtype"
+            )
+
+        where_clause = f"({' OR '.join(id_conditions)})"
+
+        # Query to check which memory_ids exist
+        check_query = f"""
+            SELECT ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype)::text
+            FROM "{self.db_name}_graph"."Memory"
+            WHERE {where_clause}
+        """
+
+        logger.info(f"[get_user_names_by_memory_ids] check_query: {check_query}")
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn.cursor() as cursor:
+                # Check which memory_ids exist
+                cursor.execute(check_query)
+                check_results = cursor.fetchall()
+                existing_ids = set()
+                for row in check_results:
+                    node_id = row[0]
+                    # Remove quotes if present
+                    if isinstance(node_id, str):
+                        node_id = node_id.strip('"').strip("'")
+                    existing_ids.add(node_id)
+
+                # Check if any memory_ids are missing
+                no_exist_list = [mid for mid in memory_ids if mid not in existing_ids]
+
+                # If any memory_ids are missing, return no_exist_memory_ids
+                if no_exist_list:
+                    logger.info(
+                        f"[get_user_names_by_memory_ids] Found {len(no_exist_list)} non-existing memory_ids: {no_exist_list}"
+                    )
+                    return {"no_exist_memory_ids": no_exist_list}
+
+                # All memory_ids exist, query user_names
+                user_names_query = f"""
+                    SELECT DISTINCT ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype)::text
+                    FROM "{self.db_name}_graph"."Memory"
+                    WHERE {where_clause}
+                """
+                logger.info(f"[get_user_names_by_memory_ids] user_names_query: {user_names_query}")
+
+                cursor.execute(user_names_query)
+                results = cursor.fetchall()
+                user_names = []
+                for row in results:
+                    user_name = row[0]
+                    # Remove quotes if present
+                    if isinstance(user_name, str):
+                        user_name = user_name.strip('"').strip("'")
+                    user_names.append(user_name)
+
+                logger.info(
+                    f"[get_user_names_by_memory_ids] All memory_ids exist, found {len(user_names)} distinct user_names"
+                )
+
+                return {"exist_user_names": user_names}
+        except Exception as e:
+            logger.error(
+                f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
+            )
+            raise
+        finally:
+            self._return_connection(conn)

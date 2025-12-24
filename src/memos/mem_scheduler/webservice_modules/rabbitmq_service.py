@@ -108,8 +108,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 elif Path(config_path).exists():
                     auth_config = AuthConfig.from_local_config(config_path=config_path)
                 else:
-                    logger.error("Fail to initialize auth_config")
-                    return
+                    auth_config = AuthConfig.from_local_env()
                 self.rabbitmq_config = auth_config.rabbitmq
             elif isinstance(config, RabbitMQConfig):
                 self.rabbitmq_config = config
@@ -325,14 +324,14 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 f"[DIAGNOSTIC] Publishing {label} message in Cloud Env. "
                 f"Exchange: {exchange_name}, Routing Key: '{routing_key}'."
             )
-            logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")
+            logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}")
         elif label == "knowledgeBaseUpdate":
             # Original diagnostic logging for knowledgeBaseUpdate if NOT in cloud env
             logger.info(
                 f"[DIAGNOSTIC] Publishing knowledgeBaseUpdate message (Local Env). "
                 f"Current configured Exchange: {exchange_name}, Routing Key: '{routing_key}'."
             )
-            logger.info(f"  - Message Content: {json.dumps(message, indent=2)}")
+            logger.info(f"  - Message Content: {json.dumps(message, indent=2, ensure_ascii=False)}")
 
         with self._rabbitmq_lock:
             logger.info(
@@ -368,6 +367,15 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 logger.debug(f"Published message: {message}")
                 return True
             except Exception as e:
+                logger.error(
+                    "[DIAGNOSTIC] RabbitMQ publish error. label=%s item_id=%s exchange=%s "
+                    "routing_key=%s error=%s",
+                    label,
+                    message.get("item_id"),
+                    exchange_name,
+                    routing_key,
+                    e,
+                )
                 logger.error(f"Failed to publish message: {e}")
                 # Cache message for retry on next connection
                 self.rabbitmq_publish_cache.put(message)

@@ -798,6 +798,12 @@ class MemoryDetail(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class FileDetail(BaseModel):
+    """Individual file detail model based on actual API response."""
+
+    model_config = {"extra": "allow"}
+
+
 class GetMessagesData(BaseModel):
     """Data model for get messages response based on actual API."""
 
@@ -806,7 +812,45 @@ class GetMessagesData(BaseModel):
     )
 
 
+class GetCreateKnowledgebaseData(BaseModel):
+    """Data model for create knowledgebase response based on actual API."""
+
+    id: str = Field(..., description="Knowledgebase id")
+
+
 class SearchMemoryData(BaseModel):
+    """Data model for search memory response based on actual API."""
+
+    memory_detail_list: list[MemoryDetail] = Field(
+        default_factory=list, alias="memory_detail_list", description="List of memory details"
+    )
+    message_detail_list: list[MessageDetail] | None = Field(
+        None, alias="message_detail_list", description="List of message details (usually None)"
+    )
+    preference_detail_list: list[MessageDetail] | None = Field(
+        None,
+        alias="preference_detail_list",
+        description="List of preference details (usually None)",
+    )
+    tool_memory_detail_list: list[MessageDetail] | None = Field(
+        None,
+        alias="tool_memory_detail_list",
+        description="List of tool_memor details (usually None)",
+    )
+    preference_note: str = Field(
+        None, alias="preference_note", description="String of preference_note"
+    )
+
+
+class GetKnowledgebaseFileData(BaseModel):
+    """Data model for search memory response based on actual API."""
+
+    file_detail_list: list[FileDetail] = Field(
+        default_factory=list, alias="file_detail_list", description="List of files details"
+    )
+
+
+class GetMemoryData(BaseModel):
     """Data model for search memory response based on actual API."""
 
     memory_detail_list: list[MemoryDetail] = Field(
@@ -821,6 +865,26 @@ class AddMessageData(BaseModel):
     """Data model for add message response based on actual API."""
 
     success: bool = Field(..., description="Operation success status")
+    task_id: str = Field(..., description="Operation task_id")
+    status: str = Field(..., description="Operation task status")
+
+
+class DeleteMessageData(BaseModel):
+    """Data model for delete  Message based on actual API."""
+
+    success: bool = Field(..., description="Operation success status")
+
+
+class ChatMessageData(BaseModel):
+    """Data model for chat  Message based on actual API."""
+
+    response: str = Field(..., description="Operation response")
+
+
+class GetTaskStatusMessageData(BaseModel):
+    """Data model for task status Message based on actual API."""
+
+    status: str = Field(..., description="Operation task status")
 
 
 # ─── MemOS Response Models (Similar to OpenAI ChatCompletion) ──────────────────
@@ -851,6 +915,130 @@ class MemOSSearchResponse(BaseModel):
         """Convenient access to memory list."""
         return self.data.memory_detail_list
 
+    @property
+    def preferences(self) -> list[MemoryDetail]:
+        """Convenient access to preference list."""
+        return self.data.preference_detail_list
+
+    @property
+    def tool_memories(self) -> list[MemoryDetail]:
+        """Convenient access to tool_memory list."""
+        return self.data.tool_memory_detail_list
+
+
+class MemOSDeleteKnowledgebaseResponse(BaseModel):
+    """Response model for delete knowledgebase operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: DeleteMessageData = Field(..., description="delete results data")
+
+    @property
+    def success(self) -> bool:
+        """Convenient access to success status."""
+        return self.data.success
+
+
+class MemOSDeleteMemoryResponse(BaseModel):
+    """Response model for delete knowledgebase operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: DeleteMessageData = Field(..., description="delete results data")
+
+    @property
+    def success(self) -> bool:
+        """Convenient access to success status."""
+        return self.data.success
+
+
+class MemOSChatResponse(BaseModel):
+    """Response model for chat operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: ChatMessageData = Field(..., description="chat results data")
+
+    @property
+    def response(self) -> str:
+        """Convenient access to success status."""
+        return self.data.response
+
+
+class MemOSGetTaskStatusResponse(BaseModel):
+    """Response model for get task status operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: list[GetTaskStatusMessageData] = Field(..., description="Task status data")
+
+    @property
+    def messages(self) -> list[GetTaskStatusMessageData]:
+        """Convenient access to task status messages."""
+        return self.data
+
+
+class MemOSCreateKnowledgebaseResponse(BaseModel):
+    """Response model for create knowledgebase operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: GetCreateKnowledgebaseData = Field(..., description="Messages data")
+
+    @property
+    def knowledgebase_id(self) -> str:
+        """Convenient access to knowledgebase id."""
+        return self.data.id
+
+
+class MemOSAddKnowledgebaseFileResponse(BaseModel):
+    """Response model for add knowledgebase-file operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: list[dict[str, Any]]
+
+    @property
+    def memories(self) -> list[dict[str, Any]]:
+        """Convenient access to memory list."""
+        return self.data
+
+
+class MemOSGetMemoryResponse(BaseModel):
+    """Response model for get memory operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: SearchMemoryData = Field(..., description="Get results data")
+
+    @property
+    def memories(self) -> list[MemoryDetail]:
+        """Convenient access to memory list."""
+        return self.data.memory_detail_list
+
+    @property
+    def preferences(self) -> list[MemoryDetail]:
+        """Convenient access to preference list."""
+        return self.data.preference_detail_list
+
+    @property
+    def tool_memories(self) -> list[MemoryDetail]:
+        """Convenient access to tool_memory list."""
+        return self.data.tool_memory_detail_list
+
+
+class MemOSGetKnowledgebaseFileResponse(BaseModel):
+    """Response model for get KnowledgebaseFile operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: GetKnowledgebaseFileData = Field(..., description="Get results data")
+
+    @property
+    def files(self) -> list[FileDetail]:
+        """Convenient access to file list."""
+        return self.data.file_detail_list
+
 
 class MemOSAddResponse(BaseModel):
     """Response model for add message operation based on actual API."""
@@ -863,6 +1051,39 @@ class MemOSAddResponse(BaseModel):
     def success(self) -> bool:
         """Convenient access to success status."""
         return self.data.success
+
+    @property
+    def task_id(self) -> str:
+        """Convenient access to task_id status."""
+        return self.data.task_id
+
+    @property
+    def status(self) -> str:
+        """Convenient access to status status."""
+        return self.data.status
+
+
+class MemOSAddFeedBackResponse(BaseModel):
+    """Response model for add feedback operation based on actual API."""
+
+    code: int = Field(..., description="Response status code")
+    message: str = Field(..., description="Response message")
+    data: AddMessageData = Field(..., description="Add operation data")
+
+    @property
+    def success(self) -> bool:
+        """Convenient access to success status."""
+        return self.data.success
+
+    @property
+    def task_id(self) -> str:
+        """Convenient access to task_id status."""
+        return self.data.task_id
+
+    @property
+    def status(self) -> str:
+        """Convenient access to status status."""
+        return self.data.status
 
 
 # ─── Scheduler Status Models ───────────────────────────────────────────────────
