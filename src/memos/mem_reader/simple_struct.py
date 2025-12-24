@@ -561,6 +561,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self,
         messages: list[dict],
         memory_list: list[TextualMemoryItem],
+        info: dict[str, Any],
     ) -> list[TextualMemoryItem]:
         # Build input objects with memory text and metadata (timestamps, sources, etc.)
         template = PROMPT_MAPPING["add_before_search"]
@@ -579,7 +580,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         for idx, mem in enumerate(memory_list):
             try:
                 related_memories = self.searcher.search(
-                    query=mem.memory, top_k=3, mode="fast", info={"user_id": "", "session_id": ""}
+                    query=mem.memory, top_k=3, mode="fast", info=info
                 )
                 related_text = "None"
                 if related_memories:
