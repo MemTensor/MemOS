@@ -5,7 +5,6 @@ This module provides a Redis-based queue implementation that can replace
 the local memos_message_queue functionality in BaseScheduler.
 """
 
-import contextlib
 import os
 import re
 import threading
@@ -201,6 +200,20 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 recent_seconds=DEFAULT_STREAM_RECENT_ACTIVE_SECONDS,
                 now_sec=now_sec,
             )
+
+            # Ensure consumer groups for newly discovered active streams
+            with self._stream_keys_lock:
+                # Identify keys we haven't seen yet
+                new_streams = [k for k in active_stream_keys if k not in self.seen_streams]
+
+            # Create groups outside the lock to avoid blocking
+            for key in new_streams:
+                self._ensure_consumer_group(key)
+
+            if new_streams:
+                with self._stream_keys_lock:
+                    self.seen_streams.update(new_streams)
+
             deleted_count = self._delete_streams(keys_to_delete)
             self._update_stream_cache_with_log(
                 stream_key_prefix=stream_key_prefix,
@@ -560,10 +573,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             return {}
 
         # Pre-ensure consumer groups to avoid NOGROUP during batch reads
-        for stream_key in stream_keys:
-            with contextlib.suppress(Exception):
-                self._ensure_consumer_group(stream_key=stream_key)
-
+        # (Optimization: rely on put() and _refresh_stream_keys() to ensure groups)
         pipe = self._redis_conn.pipeline(transaction=False)
         for stream_key in stream_keys:
             pipe.xreadgroup(
@@ -1170,10 +1180,14 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 del_pipe.delete(key)
             del_pipe.execute()
             deleted_count = len(keys_to_delete)
-            # Clean up empty-tracking state for deleted keys
+            # Clean up empty-tracking state and seen_streams for deleted keys
             with self._empty_stream_seen_lock:
                 for key in keys_to_delete:
                     self._empty_stream_seen_times.pop(key, None)
+
+            with self._stream_keys_lock:
+                for key in keys_to_delete:
+                    self.seen_streams.discard(key)
         except Exception:
             for key in keys_to_delete:
                 try:
@@ -1181,6 +1195,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                     deleted_count += 1
                     with self._empty_stream_seen_lock:
                         self._empty_stream_seen_times.pop(key, None)
+                    with self._stream_keys_lock:
+                        self.seen_streams.discard(key)
                 except Exception:
                     pass
         return deleted_count
