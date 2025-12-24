@@ -1,5 +1,4 @@
 import concurrent.futures
-import copy
 import difflib
 import json
 import re
@@ -17,7 +16,12 @@ from memos.graph_dbs.factory import GraphStoreFactory, PolarDBGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.mem_feedback.base import BaseMemFeedback
-from memos.mem_feedback.utils import make_mem_item, should_keep_update, split_into_chunks
+from memos.mem_feedback.utils import (
+    general_split_into_chunks,
+    make_mem_item,
+    should_keep_update,
+    split_into_chunks,
+)
 from memos.mem_reader.factory import MemReaderFactory
 from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import TextualMemoryItem
@@ -37,6 +41,8 @@ from memos.templates.mem_feedback_prompts import (
     FEEDBACK_JUDGEMENT_PROMPT_ZH,
     KEYWORDS_REPLACE,
     KEYWORDS_REPLACE_ZH,
+    OPERATION_UPDATE_JUDGEMENT,
+    OPERATION_UPDATE_JUDGEMENT_ZH,
     UPDATE_FORMER_MEMORIES,
     UPDATE_FORMER_MEMORIES_ZH,
 )
@@ -47,6 +53,7 @@ FEEDBACK_PROMPT_DICT = {
     "if_kw_replace": {"en": KEYWORDS_REPLACE, "zh": KEYWORDS_REPLACE_ZH},
     "judge": {"en": FEEDBACK_JUDGEMENT_PROMPT, "zh": FEEDBACK_JUDGEMENT_PROMPT_ZH},
     "compare": {"en": UPDATE_FORMER_MEMORIES, "zh": UPDATE_FORMER_MEMORIES_ZH},
+    "compare_judge": {"en": OPERATION_UPDATE_JUDGEMENT, "zh": OPERATION_UPDATE_JUDGEMENT_ZH},
     "generation": {"en": FEEDBACK_ANSWER_PROMPT, "zh": FEEDBACK_ANSWER_PROMPT_ZH},
 }
 
@@ -108,7 +115,7 @@ class MemFeedback(BaseMemFeedback):
             return operation()
         except Exception as e:
             logger.error(
-                f"[Feedback Core: _retry_db_operation] DB operation failed: {e}", exc_info=True
+                f"[1223 Feedback Core: _retry_db_operation] DB operation failed: {e}", exc_info=True
             )
             raise
 
@@ -122,7 +129,7 @@ class MemFeedback(BaseMemFeedback):
                 results.extend(self._embed_once(batch))
             except Exception as e:
                 logger.error(
-                    f"[Feedback Core: process_feedback_core] Embedding batch failed, Cover with all zeros: {len(batch)} entries: {e}"
+                    f"[1223 Feedback Core: process_feedback_core] Embedding batch failed, Cover with all zeros: {len(batch)} entries: {e}"
                 )
                 results.extend([[0.0] * dim for _ in range(len(batch))])
         return results
@@ -138,7 +145,7 @@ class MemFeedback(BaseMemFeedback):
             lambda: self.memory_manager.add(to_add_memories, user_name=user_name, use_batch=False)
         )
         logger.info(
-            f"[Feedback Core: _pure_add] Pure added {len(added_ids)} memories for user {user_name}."
+            f"[1223 Feedback Core: _pure_add] Pure added {len(added_ids)} memories for user {user_name}."
         )
         return {
             "record": {
@@ -175,7 +182,7 @@ class MemFeedback(BaseMemFeedback):
             return judge_res
         else:
             logger.warning(
-                "[Feedback Core: _feedback_judgement] feedback judgement failed, return []"
+                "[1223 Feedback Core: _feedback_judgement] feedback judgement failed, return []"
             )
             return {}
 
@@ -200,7 +207,7 @@ class MemFeedback(BaseMemFeedback):
             return judge_res
         else:
             logger.warning(
-                "[Feedback Core: _feedback_judgement] feedback judgement failed, return []"
+                "[1223 Feedback Core: _feedback_judgement] feedback judgement failed, return []"
             )
             return []
 
@@ -327,11 +334,11 @@ class MemFeedback(BaseMemFeedback):
                 self.graph_store.delete_node(mid, user_name=user_name)
 
                 logger.info(
-                    f"[Feedback Core:_del_working_binding] Delete raw/working mem_ids: {delete_ids} for user_name: {user_name}"
+                    f"[1223 Feedback Core:_del_working_binding] Delete raw/working mem_ids: {delete_ids} for user_name: {user_name}"
                 )
             except Exception as e:
                 logger.warning(
-                    f"[Feedback Core:_del_working_binding] TreeTextMemory.delete_hard: failed to delete {mid}: {e}"
+                    f"[1223 Feedback Core:_del_working_binding] TreeTextMemory.delete_hard: failed to delete {mid}: {e}"
                 )
 
     def semantics_feedback(
@@ -400,24 +407,12 @@ class MemFeedback(BaseMemFeedback):
                         ):
                             all_operations.extend(chunk_operations["operations"])
                     except Exception as e:
-                        logger.error(f"[Feedback Core: semantics_feedback] Operation failed: {e}")
+                        logger.error(
+                            f"[1223 Feedback Core: semantics_feedback] Operation failed: {e}"
+                        )
 
-            operations = self.standard_operations(all_operations, current_memories)
-
-        add_texts = []
-        final_operations = []
-        for item in operations:
-            if item["operation"].lower() == "add" and "text" in item and item["text"]:
-                if item["text"] in add_texts:
-                    continue
-                final_operations.append(item)
-                add_texts.append(item["text"])
-            elif item["operation"].lower() == "update":
-                final_operations.append(item)
-        logger.info(
-            f"[Feedback Core: deduplicate add] {len(operations)} ->  {len(final_operations)} memories"
-        )
-        operations = copy.deepcopy(final_operations)
+            standard_operations = self.standard_operations(all_operations, current_memories)
+            operations = self.filter_fault_update(standard_operations)
 
         logger.info(f"[Feedback Core Operations]: {operations!s}")
 
@@ -463,7 +458,7 @@ class MemFeedback(BaseMemFeedback):
                         update_results.append(result)
                 except Exception as e:
                     logger.error(
-                        f"[Feedback Core: semantics_feedback] Operation failed for {original_op}: {e}",
+                        f"[1223 Feedback Core: semantics_feedback] Operation failed for {original_op}: {e}",
                         exc_info=True,
                     )
         if update_results:
@@ -491,7 +486,7 @@ class MemFeedback(BaseMemFeedback):
         ]
         if filterd_ids:
             logger.warning(
-                f"[Feedback Core: _feedback_memory] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
+                f"[1223 Feedback Core: _feedback_memory] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
             )
 
         current_memories = [
@@ -523,7 +518,7 @@ class MemFeedback(BaseMemFeedback):
                         results[i] = node
                 except Exception as e:
                     logger.error(
-                        f"[Feedback Core: _feedback_memory] Error processing memory index {i}: {e}",
+                        f"[1223 Feedback Core: _feedback_memory] Error processing memory index {i}: {e}",
                         exc_info=True,
                     )
             mem_res = [r for r in results if r]
@@ -552,7 +547,7 @@ class MemFeedback(BaseMemFeedback):
         retrieved_mems = self.searcher.search(
             query, info=info, user_name=user_name, top_k=top_k, full_recall=True
         )
-        retrieved_mems = [item[0] for item in retrieved_mems]
+        retrieved_mems = [item[0] for item in retrieved_mems if float(item[1]) > 0.01]
         return retrieved_mems
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
@@ -582,7 +577,7 @@ class MemFeedback(BaseMemFeedback):
 
         if not retrieved_ids:
             logger.info(
-                f"[Feedback Core: _vec_query] No similar memories found for embedding query for user {user_name}."
+                f"[1223 Feedback Core: _vec_query] No similar memories found for embedding query for user {user_name}."
             )
 
         filterd_ids = [
@@ -590,7 +585,7 @@ class MemFeedback(BaseMemFeedback):
         ]
         if filterd_ids:
             logger.warning(
-                f"[Feedback Core: _vec_query] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
+                f"[1223 Feedback Core: _vec_query] Since the tags mode is fast, no modifications are made to the following memory {filterd_ids}."
             )
         return [
             TextualMemoryItem(**item)
@@ -614,6 +609,52 @@ class MemFeedback(BaseMemFeedback):
             )
             response_json = None
         return response_json
+
+    def filter_fault_update(self, operations: list[dict]):
+        """To address the randomness of large model outputs, it is necessary to conduct validity evaluation on the texts used for memory override operations."""
+        updated_operations = [item for item in operations if item["operation"] == "UPDATE"]
+        if len(updated_operations) < 5:
+            return operations
+
+        lang = detect_lang("".join(updated_operations[0]["text"]))
+        template = FEEDBACK_PROMPT_DICT["compare_judge"][lang]
+
+        all_judge = []
+        operations_chunks = general_split_into_chunks(updated_operations)
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            future_to_chunk_idx = {}
+            for chunk in operations_chunks:
+                raw_operations_str = {"operations": chunk}
+                prompt = template.format(raw_operations=str(raw_operations_str))
+
+                future = executor.submit(self._get_llm_response, prompt)
+                future_to_chunk_idx[future] = chunk
+            for future in concurrent.futures.as_completed(future_to_chunk_idx):
+                try:
+                    judge_res = future.result()
+                    if (
+                        judge_res
+                        and "operations_judgement" in judge_res
+                        and isinstance(judge_res["operations_judgement"], list)
+                    ):
+                        all_judge.extend(judge_res["operations_judgement"])
+                except Exception as e:
+                    logger.error(f"[1223 Feedback Core: filter_fault_update] Judgement failed: {e}")
+
+        logger.info(f"[1223 Feedback Core: filter_fault_update] LLM judgement: {all_judge}")
+        id2op = {item["id"]: item for item in updated_operations}
+        valid_updates = []
+        for judge in all_judge:
+            valid_update = None
+            if judge["judgement"] == "UPDATE_APPROVED":
+                valid_update = id2op.get(judge["id"], None)
+            if valid_update:
+                valid_updates.append(valid_update)
+
+        logger.info(
+            f"[1223 Feedback Core: filter_fault_update] {len(updated_operations)} -> {len(valid_updates)}"
+        )
+        return valid_updates + [item for item in operations if item["operation"] != "UPDATE"]
 
     def standard_operations(self, operations, current_memories):
         """
@@ -643,7 +684,7 @@ class MemFeedback(BaseMemFeedback):
 
                 if not should_keep_update(data["text"], data["old_memory"]):
                     logger.warning(
-                        f"[Feedback Core: semantics_feedback] Due to the excessive proportion of changes, skip update: {data}"
+                        f"[1223 Feedback Core: semantics_feedback] Due to the excessive proportion of changes, skip update: {data}"
                     )
                     return None
 
@@ -663,14 +704,14 @@ class MemFeedback(BaseMemFeedback):
                     return data
             except Exception:
                 logger.error(
-                    f"[Feedback Core: standard_operations] Error processing operation item: {data}",
+                    f"[1223 Feedback Core: standard_operations] Error processing operation item: {data}",
                     exc_info=True,
                 )
             return None
 
         dehallu_res = [correct_item(item) for item in operations]
         dehalluded_operations = [item for item in dehallu_res if item]
-        logger.info(f"[Feedback Core: dehalluded_operations] {dehalluded_operations}")
+        logger.info(f"[1223 Feedback Core: dehalluded_operations] {dehalluded_operations}")
 
         # c add objects
         add_texts = []
@@ -684,7 +725,7 @@ class MemFeedback(BaseMemFeedback):
             elif item["operation"].lower() == "update":
                 llm_operations.append(item)
         logger.info(
-            f"[Feedback Core: deduplicate add] {len(dehalluded_operations)} ->  {len(llm_operations)} memories"
+            f"[1223 Feedback Core: deduplicate add] {len(dehalluded_operations)} ->  {len(llm_operations)} memories"
         )
 
         # Update takes precedence over add
@@ -698,7 +739,7 @@ class MemFeedback(BaseMemFeedback):
             ]
             if filtered_items:
                 logger.info(
-                    f"[Feedback Core: semantics_feedback] Due to have update objects, skip add: {filtered_items}"
+                    f"[1223 Feedback Core: semantics_feedback] Due to have update objects, skip add: {filtered_items}"
                 )
             return update_items
         else:
@@ -746,7 +787,7 @@ class MemFeedback(BaseMemFeedback):
             memid for inscope_file in inscope_docs for memid in filename2_memid[inscope_file]
         ]
         logger.info(
-            f"[Feedback Core: process_keyword_replace] These docs are in scope : {inscope_docs}, relared memids: {inscope_ids}"
+            f"[1223 Feedback Core: process_keyword_replace] These docs are in scope : {inscope_docs}, relared memids: {inscope_ids}"
         )
         filter_memories = [mem for mem in memories if mem.id in inscope_ids]
         return filter_memories
@@ -800,7 +841,7 @@ class MemFeedback(BaseMemFeedback):
             retrieved_memories = self._doc_filter(doc_scope, retrieved_memories)
 
         logger.info(
-            f"[Feedback Core: process_keyword_replace] Keywords recalled memory for user {user_name}: {len(retrieved_ids)} memories | After filtering: {len(retrieved_memories)} memories."
+            f"[1223 Feedback Core: process_keyword_replace] Keywords recalled memory for user {user_name}: {len(retrieved_ids)} memories | After filtering: {len(retrieved_memories)} memories."
         )
 
         if not retrieved_memories:
@@ -885,7 +926,7 @@ class MemFeedback(BaseMemFeedback):
                 info.update({"user_id": user_id, "user_name": user_name, "session_id": session_id})
 
             logger.info(
-                f"[Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
+                f"[1223 Feedback Core: process_feedback_core] Starting memory feedback process for user {user_name}"
             )
             # feedback keywords update
             kwp_judge = self._keyword_replace_judgement(feedback_content)
@@ -918,7 +959,7 @@ class MemFeedback(BaseMemFeedback):
 
                 if not valid_feedback:
                     logger.warning(
-                        f"[Feedback Core: process_feedback_core] No valid judgements for user {user_name}: {raw_judge}."
+                        f"[1223 Feedback Core: process_feedback_core] No valid judgements for user {user_name}: {raw_judge}."
                     )
                     return {"record": {"add": [], "update": []}}
 
@@ -966,12 +1007,14 @@ class MemFeedback(BaseMemFeedback):
                 add_memories = mem_record["record"]["add"]
                 update_memories = mem_record["record"]["update"]
                 logger.info(
-                    f"[Feedback Core: process_feedback_core] Processed {len(feedback_memories)} feedback | add {len(add_memories)} memories | update {len(update_memories)} memories for user {user_name}."
+                    f"[1223 Feedback Core: process_feedback_core] Processed {len(feedback_memories)} feedback | add {len(add_memories)} memories | update {len(update_memories)} memories for user {user_name}."
                 )
                 return mem_record
 
         except Exception as e:
-            logger.error(f"[Feedback Core: process_feedback_core] Error for user {user_name}: {e}")
+            logger.error(
+                f"[1223 Feedback Core: process_feedback_core] Error for user {user_name}: {e}"
+            )
             return {"record": {"add": [], "update": []}}
 
     def process_feedback(

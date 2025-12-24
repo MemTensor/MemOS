@@ -200,7 +200,6 @@ def init_server() -> dict[str, Any]:
     )
 
     logger.debug("Memory manager initialized")
-
     tokenizer = FastTokenizer()
     # Initialize text memory
     text_mem = SimpleTreeTextMemory(
