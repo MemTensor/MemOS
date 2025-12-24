@@ -679,11 +679,6 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         if not self._redis_conn or not claims_spec:
             return []
 
-        # Ensure consumer groups exist to avoid NOGROUP errors during batch claim
-        for stream_key, _need_count, _label in claims_spec:
-            with contextlib.suppress(Exception):
-                self._ensure_consumer_group(stream_key=stream_key)
-
         pipe = self._redis_conn.pipeline(transaction=False)
         for stream_key, need_count, label in claims_spec:
             pipe.xautoclaim(
@@ -696,26 +691,42 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 justid=False,
             )
 
-        results = []
         try:
-            results = pipe.execute()
-        except Exception:
-            # Fallback: attempt sequential xautoclaim for robustness
-            for stream_key, need_count, label in claims_spec:
-                try:
-                    self._ensure_consumer_group(stream_key=stream_key)
-                    res = self._redis_conn.xautoclaim(
-                        name=stream_key,
-                        groupname=self.consumer_group,
-                        consumername=self.consumer_name,
-                        min_idle_time=self.orchestrator.get_task_idle_min(task_label=label),
-                        start_id="0-0",
-                        count=need_count,
-                        justid=False,
-                    )
-                    results.append(res)
-                except Exception:
-                    continue
+            # Execute with raise_on_error=False so we get exceptions in the results list
+            # instead of aborting the whole batch.
+            results = pipe.execute(raise_on_error=False)
+        except Exception as e:
+            logger.error(f"Pipeline execution critical failure: {e}")
+            results = [e] * len(claims_spec)
+
+        # Handle individual failures (e.g. NOGROUP) by retrying just that stream
+        final_results = []
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                err_msg = str(res).lower()
+                if "nogroup" in err_msg or "no such key" in err_msg:
+                    stream_key, need_count, label = claims_spec[i]
+                    try:
+                        self._ensure_consumer_group(stream_key=stream_key)
+                        retry_res = self._redis_conn.xautoclaim(
+                            name=stream_key,
+                            groupname=self.consumer_group,
+                            consumername=self.consumer_name,
+                            min_idle_time=self.orchestrator.get_task_idle_min(task_label=label),
+                            start_id="0-0",
+                            count=need_count,
+                            justid=False,
+                        )
+                        final_results.append(retry_res)
+                    except Exception as retry_err:
+                        logger.warning(f"Retry xautoclaim failed for {stream_key}: {retry_err}")
+                        final_results.append(None)
+                else:
+                    final_results.append(None)
+            else:
+                final_results.append(res)
+
+        results = final_results
 
         claimed_pairs: list[tuple[str, list[tuple[str, dict]]]] = []
         for (stream_key, _need_count, _label), claimed_result in zip(
@@ -1189,9 +1200,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             self._stream_keys_cache = active_stream_keys
             self._stream_keys_last_refresh = time.time()
             cache_count = len(self._stream_keys_cache)
-        logger.info(
-            f"[REDIS_QUEUE] Stream keys refresh: prefix='{stream_key_prefix}', "
-            f"total={len(candidate_keys)}, active={len(active_stream_keys)}, cached={cache_count}, "
-            f"active_threshold_sec={int(active_threshold_sec)}, deleted={deleted_count}, "
-            f"inactive_threshold_sec={int(DEFAULT_STREAM_INACTIVITY_DELETE_SECONDS)}"
-        )
+            logger.info(
+                f"Refreshed stream keys cache: {cache_count} active keys, "
+                f"{deleted_count} deleted, {len(candidate_keys)} candidates examined."
+            )
