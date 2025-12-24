@@ -378,7 +378,7 @@ class APIConfig:
             return {
                 "backend": embedder_backend,
                 "config": {
-                    "url": os.getenv("MOS_RERANKER_URL"),
+                    "url": os.getenv("MOS_RERANKER_URL", "localhost:8000/v1/rerank"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
                     "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
@@ -404,7 +404,7 @@ class APIConfig:
             return {
                 "backend": embedder_backend,
                 "config": {
-                    "url": os.getenv("MOS_RERANKER_URL"),
+                    "url": os.getenv("MOS_RERANKER_URL", "localhost:8000/v1/rerank"),
                     "model": os.getenv("MOS_FEEDBACK_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
                     "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
@@ -671,7 +671,7 @@ class APIConfig:
     @staticmethod
     def is_default_cube_config_enabled() -> bool:
         """Check if default cube config is enabled via environment variable."""
-        return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "false").lower() == "true"
+        return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "true").lower() == "true"
 
     @staticmethod
     def is_dingding_bot_enabled() -> bool:
