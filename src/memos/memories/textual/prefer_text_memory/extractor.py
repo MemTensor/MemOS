@@ -69,6 +69,8 @@ class NaiveExtractor(BaseExtractor):
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            if not response:
+                return None
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             for d in result:
@@ -92,6 +94,8 @@ class NaiveExtractor(BaseExtractor):
 
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
+            if not response:
+                return None
             response = response.strip().replace("```json", "").replace("```", "").strip()
             result = json.loads(response)
             for d in result:

@@ -62,7 +62,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
             Exception: Any underlying error during queue.put() operation.
         """
         stream_key = self.get_stream_key(
-            user_id=message.user_id, mem_cube_id=message.mem_cube_id, task_label=message.task_label
+            user_id=message.user_id, mem_cube_id=message.mem_cube_id, task_label=message.label
         )
 
         message.stream_key = stream_key
@@ -108,34 +108,93 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         )
         return res
 
-    def get_nowait(self, batch_size: int | None = None) -> list[ScheduleMessageItem]:
+    def get_nowait(
+        self, stream_key: str, batch_size: int | None = None
+    ) -> list[ScheduleMessageItem]:
         """
-        Non-blocking version of get(). Equivalent to get(block=False, batch_size=batch_size).
+        Non-blocking version of get(). Equivalent to get(stream_key, block=False, batch_size=batch_size).
 
         Returns immediately with available messages or an empty list if queue is empty.
 
         Args:
+            stream_key (str): The stream/queue identifier.
             batch_size (int | None): Number of messages to retrieve in a batch.
                                    If None, retrieves one message.
 
         Returns:
             List[ScheduleMessageItem]: Retrieved messages or empty list if queue is empty.
         """
-        logger.debug(f"get_nowait() called with batch_size: {batch_size}")
-        return self.get(block=False, batch_size=batch_size)
+        logger.debug(f"get_nowait() called for {stream_key} with batch_size: {batch_size}")
+        return self.get(stream_key=stream_key, block=False, batch_size=batch_size)
+
+    def get_messages(self, batch_size: int) -> list[ScheduleMessageItem]:
+        """
+        Get messages from all streams in round-robin or sequential fashion.
+        Equivalent to SchedulerRedisQueue.get_messages.
+        """
+        messages = []
+        # Snapshot keys to avoid runtime modification issues
+        stream_keys = list(self.queue_streams.keys())
+
+        # Simple strategy: try to get up to batch_size messages across all streams
+        # We can just iterate and collect.
+
+        # Calculate how many to get per stream to be fair?
+        # Or just greedy? Redis implementation uses a complex logic.
+        # For local, let's keep it simple: just iterate and take what's available (non-blocking)
+
+        for stream_key in stream_keys:
+            if len(messages) >= batch_size:
+                break
+
+            needed = batch_size - len(messages)
+            # Use get_nowait to avoid blocking
+            fetched = self.get_nowait(stream_key=stream_key, batch_size=needed)
+            messages.extend(fetched)
+
+        return messages
 
     def qsize(self) -> dict:
         """
         Return the current size of all internal queues as a dictionary.
 
         Each key is the stream name, and each value is the number of messages in that queue.
+        Also includes 'total_size'.
 
         Returns:
             Dict[str, int]: Mapping from stream name to current queue size.
         """
         sizes = {stream: queue.qsize() for stream, queue in self.queue_streams.items()}
+        total_size = sum(sizes.values())
+        sizes["total_size"] = total_size
         logger.debug(f"Current queue sizes: {sizes}")
         return sizes
+
+    def size(self) -> int:
+        """
+        Get the current size of the queue (total message count).
+        Compatible with SchedulerRedisQueue.
+        """
+        return self.unfinished_tasks
+
+    def empty(self) -> bool:
+        """
+        Check if the queue is empty.
+        Compatible with SchedulerRedisQueue.
+        """
+        return self.size() == 0
+
+    def full(self) -> bool:
+        """
+        Check if the queue is full.
+        Compatible with SchedulerRedisQueue.
+        """
+        # Local queue limits are per-stream (max_internal_message_queue_size).
+        # It is considered full only if all streams are full.
+        if not self.queue_streams:
+            return False
+
+        return all(queue.full() for queue in self.queue_streams.values())
 
     def clear(self) -> None:
         for queue in self.queue_streams.values():
@@ -151,6 +210,9 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         Returns:
             int: Sum of all message counts in all internal queues.
         """
-        total = sum(self.qsize().values())
+        # qsize() now includes "total_size", so we need to be careful not to double count if we use qsize() values
+        # But qsize() implementation above sums values from queue_streams, then adds total_size.
+        # So sum(self.queue_streams.values().qsize()) is safer.
+        total = sum(queue.qsize() for queue in self.queue_streams.values())
         logger.debug(f"Total unfinished tasks across all queues: {total}")
         return total

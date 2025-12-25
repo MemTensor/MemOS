@@ -3,8 +3,6 @@
 MemOS is an open-source **Agent Memory framework** that empowers AI agents with **long-term memory, personality consistency, and contextual recall**. It enables agents to **remember past interactions**, **learn over time**, and **build evolving identities** across sessions.
 
 Designed for **AI companions, role-playing NPCs, and multi-agent systems**, MemOS provides a unified API for **memory representation, retrieval, and update** — making it the foundation for next-generation **memory-augmented AI agents**.
-
-🆕 **MemOS 2.0** introduces **knowledge base system**, **multi-modal memory** (images & documents), **tool memory** for Agent optimization, **memory feedback mechanism** for precise control, and **enterprise-grade architecture** with Redis Streams scheduler and advanced DB optimizations.
 <div align="center">
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/memos-banner.gif" alt="MemOS Banner">
@@ -117,19 +115,7 @@ showcasing its capabilities in **information extraction**, **temporal and cross-
     - **Textual Memory**: For storing and retrieving unstructured or structured text knowledge.
     - **Activation Memory**: Caches key-value pairs (`KVCacheMemory`) to accelerate LLM inference and context reuse.
     - **Parametric Memory**: Stores model adaptation parameters (e.g., LoRA weights).
-    - **Tool Memory** 🆕: Records Agent tool call trajectories and experiences to improve planning capabilities.
-- **📚 Knowledge Base System** 🆕: Build multi-dimensional knowledge bases with automatic document/URL parsing, splitting, and cross-project sharing capabilities.
-- **🔧 Memory Controllability** 🆕:
-    - **Feedback Mechanism**: Use `add_feedback` API to correct, supplement, or replace existing memories with natural language.
-    - **Precise Deletion**: Delete specific memories by User ID or Memory ID via API or MCP tools.
-- **👁️ Multi-Modal Support** 🆕: Support for image understanding and memory, including chart parsing in documents.
-- **⚡ Advanced Architecture**:
-    - **DB Optimization**: Enhanced connection management and batch insertion for high-concurrency scenarios.
-    - **Advanced Retrieval**: Custom tag and info field filtering with complex logical operations.
-    - **Redis Streams Scheduler**: Multi-level queue architecture with intelligent orchestration for fair multi-tenant scheduling.
-    - **Stream & Non-Stream Chat**: Ready-to-use streaming and non-streaming chat interfaces.
 - **🔌 Extensible**: Easily extend and customize memory modules, data sources, and LLM integrations.
-- **🏂 Lightweight Deployment** 🆕: Support for quick mode and complete mode deployment options.
 
 ## 🚀 Getting Started
 
@@ -153,62 +139,103 @@ pip install -r ./docker/requirements.txt
 uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 8
 ```
 
-### Local SDK
-Here's a quick example of how to create a **`MemCube`**, load it from a directory, access its memories, and save it.
+### Interface SDK
+#### Here is a quick example showing how to create all interface SDK
 
+This interface is used to add messages, supporting multiple types of content and batch additions. MemOS will automatically parse the messages and handle memory for reference in subsequent conversations.
 ```python
-from memos.mem_cube.general import GeneralMemCube
+# Please make sure MemoS is installed (pip install MemoryOS -U)
+from memos.api.client import MemOSClient
 
-# Initialize a MemCube from a local directory
-mem_cube = GeneralMemCube.init_from_dir("examples/data/mem_cube_2")
+# Initialize the client using the API Key
+client = MemOSClient(api_key="YOUR_API_KEY")
 
-# Access and print all memories
-print("--- Textual Memories ---")
-for item in mem_cube.text_mem.get_all():
-    print(item)
+messages = [
+  {"role": "user", "content": "I have planned to travel to Guangzhou during the summer vacation. What chain hotels are available for accommodation?"},
+  {"role": "assistant", "content": "You can consider [7 Days, All Seasons, Hilton], and so on."},
+  {"role": "user", "content": "I'll choose 7 Days"},
+  {"role": "assistant", "content": "Okay, ask me if you have any other questions."}
+]
+user_id = "memos_user_123"
+conversation_id = "0610"
+res = client.add_message(messages=messages, user_id=user_id, conversation_id=conversation_id)
 
-print("\n--- Activation Memories ---")
-for item in mem_cube.act_mem.get_all():
-    print(item)
-
-# Save the MemCube to a new directory
-mem_cube.dump("tmp/mem_cube")
+print(f"result: {res}")
 ```
 
-**`MOS`** (Memory Operating System) is a higher-level orchestration layer that manages multiple MemCubes and provides a unified API for memory operations. Here's a quick example of how to use MOS:
-
+This interface is used to retrieve the memories of a specified user, returning the memory fragments most relevant to the input query for Agent use. The recalled memory fragments include 'factual memory', 'preference memory', and 'tool memory'.
 ```python
-from memos.configs.mem_os import MOSConfig
-from memos.mem_os.main import MOS
+# Please make sure MemoS is installed (pip install MemoryOS -U)
+from memos.api.client import MemOSClient
 
+# Initialize the client using the API Key
+client = MemOSClient(api_key="YOUR_API_KEY")
 
-# init MOS
-mos_config = MOSConfig.from_json_file("examples/data/config/simple_memos_config.json")
-memory = MOS(mos_config)
+query = "I want to go out to play during National Day. Can you recommend a city I haven't been to and a hotel brand I haven't stayed at?"
+user_id = "memos_user_123"
+conversation_id = "0928"
+res = client.search_memory(query=query, user_id=user_id, conversation_id=conversation_id)
 
-# create user
-user_id = "b41a34d5-5cae-4b46-8c49-d03794d206f5"
-memory.create_user(user_id=user_id)
+print(f"result: {res}")
+```
 
-# register cube for user
-memory.register_mem_cube("examples/data/mem_cube_2", user_id=user_id)
+This interface is used to delete the memory of specified users and supports batch deletion.
+```python
+# Please make sure MemoS is installed (pip install MemoryOS -U)
+from memos.api.client import MemOSClient
 
-# add memory for user
-memory.add(
-    messages=[
-        {"role": "user", "content": "I like playing football."},
-        {"role": "assistant", "content": "I like playing football too."},
-    ],
+# Initialize the client using the API Key
+client = MemOSClient(api_key="YOUR_API_KEY")
+
+user_ids = ["memos_user_123"]
+# Replace with the memory ID
+memory_ids = ["6b23b583-f4c4-4a8f-b345-58d0c48fea04"]
+res = client.delete_memory(user_ids=user_ids, memory_ids=memory_ids)
+
+print(f"result: {res}")
+```
+
+This interface is used to add feedback to messages in the current session, allowing MemOS to correct its memory based on user feedback.
+```python
+# Please make sure MemoS is installed (pip install MemoryOS -U)
+from memos.api.client import MemOSClient
+
+# Initialize the client using the API Key
+client = MemOSClient(api_key="YOUR_API_KEY")
+
+user_id = "memos_user_123"
+conversation_id = "memos_feedback_conv"
+feedback_content = "No, let's change it now to a meal allowance of 150 yuan per day and a lodging subsidy of 700 yuan per day for first-tier cities; for second- and third-tier cities, it remains the same as before."
+# Replace with the knowledgebase ID
+allow_knowledgebase_ids = ["basee5ec9050-c964-484f-abf1-ce3e8e2aa5b7"]
+
+res = client.add_feedback(
     user_id=user_id,
+    conversation_id=conversation_id,
+    feedback_content=feedback_content,
+    allow_knowledgebase_ids=allow_knowledgebase_ids
 )
 
-# Later, when you want to retrieve memory for user
-retrieved_memories = memory.search(query="What do you like?", user_id=user_id)
-# output text_memories: I like playing football, act_memories, para_memories
-print(f"text_memories: {retrieved_memories['text_mem']}")
+print(f"result: {res}")
 ```
 
-For more detailed examples, please check out the [`examples`](./examples) directory.
+This interface is used to create a knowledgebase associated with a project
+```python
+# Please make sure MemoS is installed (pip install MemoryOS -U)
+from memos.api.client import MemOSClient
+
+# Initialize the client using the API Key
+client = MemOSClient(api_key="YOUR_API_KEY")
+
+knowledgebase_name = "Financial Reimbursement Knowledge Base"
+knowledgebase_description = "A compilation of all knowledge related to the company's financial reimbursements."
+
+res = client.create_knowledgebase(
+    knowledgebase_name=knowledgebase_name,
+    knowledgebase_description=knowledgebase_description
+)
+print(f"result: {res}")
+```
 
 ## 📦 Installation
 
