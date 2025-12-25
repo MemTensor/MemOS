@@ -23,6 +23,9 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
+    cosine_similarity_matrix,
+)
 from memos.multi_mem_cube.views import MemCubeView
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
@@ -263,6 +266,7 @@ class SingleCubeView(MemCubeView):
             moscube=search_req.moscube,
             search_filter=search_filter,
             info=info,
+            dedup=search_req.dedup,
         )
         formatted_memories = [format_memory_item(data) for data in enhanced_memories]
         return formatted_memories
@@ -328,6 +332,7 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             user_name=user_context.mem_cube_id,
             info=info,
+            dedup=search_req.dedup,
         )
 
         # Enhance with query
@@ -378,7 +383,24 @@ class SingleCubeView(MemCubeView):
                 unique_memories.append(mem)
             return unique_memories
 
-        deduped_memories = _dedup_by_content(enhanced_memories)
+        def _dedup_by_similarity(memories: list) -> list:
+            if len(memories) <= 1:
+                return memories
+            documents = [getattr(mem, "memory", "") for mem in memories]
+            embeddings = self.searcher.embedder.embed(documents)
+            similarity_matrix = cosine_similarity_matrix(embeddings)
+            selected_indices = []
+            for i in range(len(memories)):
+                if all(similarity_matrix[i][j] <= 0.85 for j in selected_indices):
+                    selected_indices.append(i)
+            return [memories[i] for i in selected_indices]
+
+        if search_req.dedup == "no":
+            deduped_memories = enhanced_memories
+        elif search_req.dedup == "sim":
+            deduped_memories = _dedup_by_similarity(enhanced_memories)
+        else:
+            deduped_memories = _dedup_by_content(enhanced_memories)
         formatted_memories = [format_memory_item(data) for data in deduped_memories]
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
@@ -463,6 +485,7 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            dedup=search_req.dedup,
         )
 
         formatted_memories = [format_memory_item(data) for data in search_results]

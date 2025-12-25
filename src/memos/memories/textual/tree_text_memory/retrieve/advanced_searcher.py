@@ -239,6 +239,7 @@ class AdvancedSearcher(Searcher):
         user_name: str | None = None,
         **kwargs,
     ):
+        dedup = kwargs.get("dedup")
         previous_retrieval_phrases = [query]
         retrieved_memories = self.retrieve(
             query=query,
@@ -254,6 +255,7 @@ class AdvancedSearcher(Searcher):
             top_k=top_k,
             user_name=user_name,
             info=info,
+            dedup=dedup,
         )
         if len(memories) == 0:
             logger.warning("Requirements not met; returning memories as-is.")

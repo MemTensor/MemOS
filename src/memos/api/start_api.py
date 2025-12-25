@@ -1,7 +1,7 @@
 import logging
 import os
 
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -144,6 +144,14 @@ class SearchRequest(BaseRequest):
         None,
         description="List of cube IDs to search in",
         json_schema_extra={"example": ["cube123", "cube456"]},
+    )
+    dedup: Literal["no", "sim"] | None = Field(
+        None,
+        description=(
+            "Optional dedup option for textual memories. "
+            "Use 'no' for no dedup, 'sim' for similarity dedup. "
+            "If None, default exact-text dedup is applied."
+        ),
     )
 
 
@@ -349,6 +357,7 @@ async def search_memories(search_req: SearchRequest):
         query=search_req.query,
         user_id=search_req.user_id,
         install_cube_ids=search_req.install_cube_ids,
+        dedup=search_req.dedup,
     )
     return SearchResponse(message="Search completed successfully", data=result)
 

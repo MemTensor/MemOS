@@ -319,6 +319,15 @@ class APISearchRequest(BaseRequest):
         description="Number of textual memories to retrieve (top-K). Default: 10.",
     )
 
+    dedup: Literal["no", "sim"] | None = Field(
+        None,
+        description=(
+            "Optional dedup option for textual memories. "
+            "Use 'no' for no dedup, 'sim' for similarity dedup. "
+            "If None, default exact-text dedup is applied."
+        ),
+    )
+
     pref_top_k: int = Field(
         6,
         ge=0,

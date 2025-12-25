@@ -119,9 +119,15 @@ class Searcher:
         info=None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         plugin=False,
     ):
-        deduped = self._deduplicate_results(retrieved_results)
+        if dedup == "no":
+            deduped = retrieved_results
+        elif dedup == "sim":
+            deduped = self._deduplicate_similar_results(retrieved_results)
+        else:
+            deduped = self._deduplicate_results(retrieved_results)
         final_results = self._sort_and_trim(
             deduped, top_k, plugin, search_tool_memory, tool_mem_top_k
         )
@@ -141,6 +147,7 @@ class Searcher:
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """
@@ -173,7 +180,11 @@ class Searcher:
         if kwargs.get("plugin", False):
             logger.info(f"[SEARCH] Retrieve from plugin: {query}")
             retrieved_results = self._retrieve_simple(
-                query=query, top_k=top_k, search_filter=search_filter, user_name=user_name
+                query=query,
+                top_k=top_k,
+                search_filter=search_filter,
+                user_name=user_name,
+                dedup=dedup,
             )
         else:
             retrieved_results = self.retrieve(
@@ -202,6 +213,7 @@ class Searcher:
             plugin=kwargs.get("plugin", False),
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            dedup=None if kwargs.get("plugin", False) and dedup == "sim" else dedup,
         )
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
@@ -291,6 +303,7 @@ class Searcher:
         top_k: int,
         search_filter: dict | None = None,
         user_name: str | None = None,
+        dedup: str | None = None,
         **kwargs,
     ):
         """Retrieve from by keywords and embedding"""
@@ -710,14 +723,17 @@ class Searcher:
             user_name=user_name,
         )
         logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
-        documents = [getattr(item, "memory", "") for item in items]
-        documents_embeddings = self.embedder.embed(documents)
-        similarity_matrix = cosine_similarity_matrix(documents_embeddings)
-        selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
-        selected_items = [items[i] for i in selected_indices]
-        logger.info(
-            f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
-        )
+        if dedup == "no":
+            selected_items = items
+        else:
+            documents = [getattr(item, "memory", "") for item in items]
+            documents_embeddings = self.embedder.embed(documents)
+            similarity_matrix = cosine_similarity_matrix(documents_embeddings)
+            selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)
+            selected_items = [items[i] for i in selected_indices]
+            logger.info(
+                f"[SIMPLESEARCH] after unrelated subgroup selection items count: {len(selected_items)}"
+            )
         return self.reranker.rerank(
             query=query,
             query_embedding=query_embeddings[0],
@@ -733,6 +749,26 @@ class Searcher:
             if item.memory not in deduped or score > deduped[item.memory][1]:
                 deduped[item.memory] = (item, score)
         return list(deduped.values())
+
+    @timed
+    def _deduplicate_similar_results(
+        self, results: list[tuple[TextualMemoryItem, float]], similarity_threshold: float = 0.85
+    ):
+        """Deduplicate results by semantic similarity while keeping higher scores."""
+        if len(results) <= 1:
+            return results
+
+        sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)
+        documents = [getattr(item, "memory", "") for item, _ in sorted_results]
+        embeddings = self.embedder.embed(documents)
+        similarity_matrix = cosine_similarity_matrix(embeddings)
+
+        selected_indices: list[int] = []
+        for i in range(len(sorted_results)):
+            if all(similarity_matrix[i][j] <= similarity_threshold for j in selected_indices):
+                selected_indices.append(i)
+
+        return [sorted_results[i] for i in selected_indices]
 
     @timed
     def _sort_and_trim(

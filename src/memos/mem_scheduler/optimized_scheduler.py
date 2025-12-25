@@ -186,6 +186,7 @@ class OptimizedScheduler(GeneralScheduler):
             info=info,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            dedup=search_req.dedup,
         )
         memories = merged_memories[: search_req.top_k]
 
