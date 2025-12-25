@@ -61,6 +61,9 @@ class SimplePreferenceTextMemory(PreferenceTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
+        if not isinstance(search_filter, dict):
+            search_filter = {}
+        search_filter.update({"status": "activated"})
         return self.retriever.retrieve(query, top_k, info, search_filter)
 
     def add(self, memories: list[TextualMemoryItem | dict[str, Any]]) -> list[str]:

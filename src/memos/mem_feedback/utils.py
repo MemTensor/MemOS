@@ -48,8 +48,11 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
     similarity = calculate_similarity(old_text, new_text)
     change_ratio = 1 - similarity
 
+    if change_ratio == float(0):
+        return False
+
     if old_len < 200:
-        return change_ratio < 0.5
+        return change_ratio < 0.7
     else:
         return change_ratio < 0.2
 

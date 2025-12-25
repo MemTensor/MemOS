@@ -1347,6 +1347,15 @@ class Neo4jGraphDB(BaseGraphDB):
             with self.driver.session(database="system") as session:
                 session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
         except ClientError as e:
+            if "Unsupported administration command" in str(
+                e
+            ) or "Unsupported administration" in str(e):
+                logger.warning(
+                    f"Could not create database '{self.db_name}' because this Neo4j instance "
+                    "(likely Community Edition) does not support administrative commands. "
+                    "Please ensure the database exists manually or use the default 'neo4j' database."
+                )
+                return
             if "ExistingDatabaseFound" in str(e):
                 pass  # Ignore, database already exists
             else:

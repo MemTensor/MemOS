@@ -7,16 +7,19 @@ import os
 import re
 import time
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from dotenv import load_dotenv
 
-from memos.configs.mem_cube import GeneralMemCubeConfig
-from memos.configs.mem_os import MOSConfig
 from memos.context.context import ContextThread
-from memos.mem_cube.general import GeneralMemCube
+
+
+if TYPE_CHECKING:
+    from memos.configs.mem_cube import GeneralMemCubeConfig
+    from memos.configs.mem_os import MOSConfig
+    from memos.mem_cube.general import GeneralMemCube
 
 
 # Load environment variables
@@ -805,8 +808,12 @@ class APIConfig:
         return config
 
     @staticmethod
-    def create_user_config(user_name: str, user_id: str) -> tuple[MOSConfig, GeneralMemCube]:
+    def create_user_config(user_name: str, user_id: str) -> tuple["MOSConfig", "GeneralMemCube"]:
         """Create configuration for a specific user."""
+        from memos.configs.mem_cube import GeneralMemCubeConfig
+        from memos.configs.mem_os import MOSConfig
+        from memos.mem_cube.general import GeneralMemCube
+
         openai_config = APIConfig.get_openai_config()
         qwen_config = APIConfig.qwen_config()
         vllm_config = APIConfig.vllm_config()
@@ -933,12 +940,14 @@ class APIConfig:
         return default_config, default_mem_cube
 
     @staticmethod
-    def get_default_cube_config() -> GeneralMemCubeConfig | None:
+    def get_default_cube_config() -> "GeneralMemCubeConfig | None":
         """Get default cube configuration for product initialization.
 
         Returns:
             GeneralMemCubeConfig | None: Default cube configuration if enabled, None otherwise.
         """
+        from memos.configs.mem_cube import GeneralMemCubeConfig
+
         if not APIConfig.is_default_cube_config_enabled():
             return None
 

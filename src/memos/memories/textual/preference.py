@@ -87,6 +87,9 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
+        if not isinstance(search_filter, dict):
+            search_filter = {}
+        search_filter.update({"status": "activated"})
         logger.info(f"search_filter for preference memory: {search_filter}")
         return self.retriever.retrieve(query, top_k, info, search_filter)
 

@@ -16,14 +16,88 @@ load_dotenv()
 
 
 def load_default_config(user_id="default_user"):
+    """
+    Load MOS configuration from environment variables.
+
+    IMPORTANT for Neo4j Community Edition:
+    Community Edition does not support administrative commands like 'CREATE DATABASE'.
+    To avoid errors, ensure the following environment variables are set correctly:
+    - NEO4J_DB_NAME=neo4j (Must use the default database)
+    - NEO4J_AUTO_CREATE=false (Disable automatic database creation)
+    - NEO4J_USE_MULTI_DB=false (Disable multi-tenant database mode)
+    """
+    # Define mapping between environment variables and configuration parameters
+    # We support both clean names and MOS_ prefixed names for compatibility
+    env_mapping = {
+        "OPENAI_API_KEY": "openai_api_key",
+        "OPENAI_API_BASE": "openai_api_base",
+        "MOS_TEXT_MEM_TYPE": "text_mem_type",
+        "NEO4J_URI": "neo4j_uri",
+        "NEO4J_USER": "neo4j_user",
+        "NEO4J_PASSWORD": "neo4j_password",
+        "NEO4J_DB_NAME": "neo4j_db_name",
+        "NEO4J_AUTO_CREATE": "neo4j_auto_create",
+        "NEO4J_USE_MULTI_DB": "use_multi_db",
+        "MOS_NEO4J_SHARED_DB": "mos_shared_db",  # Special handle later
+        "MODEL_NAME": "model_name",
+        "MOS_CHAT_MODEL": "model_name",
+        "EMBEDDER_MODEL": "embedder_model",
+        "MOS_EMBEDDER_MODEL": "embedder_model",
+        "CHUNK_SIZE": "chunk_size",
+        "CHUNK_OVERLAP": "chunk_overlap",
+        "ENABLE_MEM_SCHEDULER": "enable_mem_scheduler",
+        "MOS_ENABLE_SCHEDULER": "enable_mem_scheduler",
+        "ENABLE_ACTIVATION_MEMORY": "enable_activation_memory",
+        "TEMPERATURE": "temperature",
+        "MOS_CHAT_TEMPERATURE": "temperature",
+        "MAX_TOKENS": "max_tokens",
+        "MOS_MAX_TOKENS": "max_tokens",
+        "TOP_P": "top_p",
+        "MOS_TOP_P": "top_p",
+        "TOP_K": "top_k",
+        "MOS_TOP_K": "top_k",
+        "SCHEDULER_TOP_K": "scheduler_top_k",
+        "MOS_SCHEDULER_TOP_K": "scheduler_top_k",
+        "SCHEDULER_TOP_N": "scheduler_top_n",
+    }
+
+    kwargs = {"user_id": user_id}
+    for env_key, param_key in env_mapping.items():
+        val = os.getenv(env_key)
+        if val is not None:
+            # Strip quotes if they exist (sometimes happens with .env)
+            if (val.startswith('"') and val.endswith('"')) or (
+                val.startswith("'") and val.endswith("'")
+            ):
+                val = val[1:-1]
+
+            # Handle boolean conversions
+            if val.lower() in ("true", "false"):
+                kwargs[param_key] = val.lower() == "true"
+            else:
+                # Try numeric conversions (int first, then float)
+                try:
+                    if "." in val:
+                        kwargs[param_key] = float(val)
+                    else:
+                        kwargs[param_key] = int(val)
+                except ValueError:
+                    kwargs[param_key] = val
+
+    # Logic handle for MOS_NEO4J_SHARED_DB vs use_multi_db
+    if "mos_shared_db" in kwargs:
+        kwargs["use_multi_db"] = not kwargs.pop("mos_shared_db")
+
+    # Extract mandatory or special params
+    openai_api_key = kwargs.pop("openai_api_key", os.getenv("OPENAI_API_KEY"))
+    openai_api_base = kwargs.pop("openai_api_base", "https://api.openai.com/v1")
+    text_mem_type = kwargs.pop("text_mem_type", "tree_text")
+
     config, cube = get_default(
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        openai_api_base=os.getenv("OPENAI_API_BASE"),
-        text_mem_type=os.getenv("MOS_TEXT_MEM_TYPE"),
-        user_id=user_id,
-        neo4j_uri=os.getenv("NEO4J_URI"),
-        neo4j_user=os.getenv("NEO4J_USER"),
-        neo4j_password=os.getenv("NEO4J_PASSWORD"),
+        openai_api_key=openai_api_key,
+        openai_api_base=openai_api_base,
+        text_mem_type=text_mem_type,
+        **kwargs,
     )
     return config, cube
 
@@ -33,6 +107,7 @@ class MOSMCPStdioServer:
         self.mcp = FastMCP("MOS Memory System")
         config, cube = load_default_config()
         self.mos_core = MOS(config=config)
+        self.mos_core.register_mem_cube(cube)
         self._setup_tools()
 
     def _setup_tools(self):
@@ -132,11 +207,14 @@ class MOSMCPStdioServer:
             """
             try:
                 if not os.path.exists(cube_name_or_path):
-                    mos_config, cube_name_or_path = load_default_config(user_id=user_id)
+                    _, cube = load_default_config(user_id=user_id)
+                    cube_to_register = cube
+                else:
+                    cube_to_register = cube_name_or_path
                 self.mos_core.register_mem_cube(
-                    cube_name_or_path, mem_cube_id=cube_id, user_id=user_id
+                    cube_to_register, mem_cube_id=cube_id, user_id=user_id
                 )
-                return f"Cube registered successfully: {cube_id or cube_name_or_path}"
+                return f"Cube registered successfully: {cube_id or cube_to_register}"
             except Exception as e:
                 return f"Error registering cube: {e!s}"
 
@@ -488,14 +566,6 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000, help="Port for HTTP/SSE transport")
 
     args = parser.parse_args()
-
-    # Set environment variables
-    os.environ["OPENAI_API_BASE"] = os.getenv("OPENAI_API_BASE")
-    os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-    os.environ["MOS_TEXT_MEM_TYPE"] = "tree_text"  # "tree_text" need set neo4j
-    os.environ["NEO4J_URI"] = os.getenv("NEO4J_URI")
-    os.environ["NEO4J_USER"] = os.getenv("NEO4J_USER")
-    os.environ["NEO4J_PASSWORD"] = os.getenv("NEO4J_PASSWORD")
 
     # Create and run MCP server
     server = MOSMCPStdioServer()

@@ -32,4 +32,4 @@ ENV PYTHONPATH=/app/src
 EXPOSE 8000
 
 # Start the docker
-CMD ["uvicorn", "memos.api.product_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "memos.api.server_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
