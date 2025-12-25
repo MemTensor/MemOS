@@ -551,7 +551,6 @@ class MOSCore:
         internet_search: bool = False,
         moscube: bool = False,
         session_id: str | None = None,
-        dedup: str | None = None,
         **kwargs,
     ) -> MOSSearchResult:
         """
@@ -626,7 +625,6 @@ class MOSCore:
                         },
                         moscube=moscube,
                         search_filter=search_filter,
-                        dedup=dedup,
                     )
                     search_time_end = time.time()
                     logger.info(

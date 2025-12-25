@@ -23,9 +23,6 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
 )
-from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
-    cosine_similarity_matrix,
-)
 from memos.multi_mem_cube.views import MemCubeView
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
@@ -266,9 +263,11 @@ class SingleCubeView(MemCubeView):
             moscube=search_req.moscube,
             search_filter=search_filter,
             info=info,
-            dedup=search_req.dedup,
         )
-        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in enhanced_memories
+        ]
         return formatted_memories
 
     def _agentic_search(
@@ -277,7 +276,10 @@ class SingleCubeView(MemCubeView):
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
         )
-        formatted_memories = [format_memory_item(data) for data in deepsearch_results]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in deepsearch_results
+        ]
         return formatted_memories
 
     def _fine_search(
@@ -383,25 +385,13 @@ class SingleCubeView(MemCubeView):
                 unique_memories.append(mem)
             return unique_memories
 
-        def _dedup_by_similarity(memories: list) -> list:
-            if len(memories) <= 1:
-                return memories
-            documents = [getattr(mem, "memory", "") for mem in memories]
-            embeddings = self.searcher.embedder.embed(documents)
-            similarity_matrix = cosine_similarity_matrix(embeddings)
-            selected_indices = []
-            for i in range(len(memories)):
-                if all(similarity_matrix[i][j] <= 0.85 for j in selected_indices):
-                    selected_indices.append(i)
-            return [memories[i] for i in selected_indices]
-
-        if search_req.dedup == "no":
-            deduped_memories = enhanced_memories
-        elif search_req.dedup == "sim":
-            deduped_memories = _dedup_by_similarity(enhanced_memories)
-        else:
-            deduped_memories = _dedup_by_content(enhanced_memories)
-        formatted_memories = [format_memory_item(data) for data in deduped_memories]
+        deduped_memories = (
+            enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
+        )
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in deduped_memories
+        ]
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
 
@@ -488,7 +478,10 @@ class SingleCubeView(MemCubeView):
             dedup=search_req.dedup,
         )
 
-        formatted_memories = [format_memory_item(data) for data in search_results]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in search_results
+        ]
 
         return formatted_memories
 
