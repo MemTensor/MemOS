@@ -20,12 +20,25 @@ class SentenceChunker(BaseChunker):
         from chonkie import SentenceChunker as ChonkieSentenceChunker
 
         self.config = config
-        self.chunker = ChonkieSentenceChunker(
-            tokenizer=config.tokenizer_or_token_counter,
-            chunk_size=config.chunk_size,
-            chunk_overlap=config.chunk_overlap,
-            min_sentences_per_chunk=config.min_sentences_per_chunk,
-        )
+        
+        # Try new API first (v1.4.0+)
+        try:
+            self.chunker = ChonkieSentenceChunker(
+                tokenizer=config.tokenizer_or_token_counter,
+                chunk_size=config.chunk_size,
+                chunk_overlap=config.chunk_overlap,
+                min_sentences_per_chunk=config.min_sentences_per_chunk,
+            )
+        except (TypeError, AttributeError) as e:
+            # Fallback to old API (<v1.4.0)
+            logger.debug(f"Falling back to old chonkie API: {e}")
+            self.chunker = ChonkieSentenceChunker(
+                tokenizer_or_token_counter=config.tokenizer_or_token_counter,
+                chunk_size=config.chunk_size,
+                chunk_overlap=config.chunk_overlap,
+                min_sentences_per_chunk=config.min_sentences_per_chunk,
+            )
+        
         logger.info(f"Initialized SentenceChunker with config: {config}")
 
     def chunk(self, text: str) -> list[str] | list[Chunk]:
