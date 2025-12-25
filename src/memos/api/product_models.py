@@ -1168,3 +1168,16 @@ class AllStatusResponse(BaseResponse[AllStatusResponseData]):
     """Response model for full scheduler status operations."""
 
     message: str = "Scheduler status summary retrieved successfully"
+
+
+# ─── Internal API Endpoints Models (for internal use) ───────────────────────────────────────────────────
+
+
+class GetUserNamesByMemoryIdsRequest(BaseRequest):
+    """Request model for getting user names by memory ids."""
+
+    memory_ids: list[str] = Field(..., description="Memory IDs")
+
+
+class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, list[str]]]):
+    """Response model for getting user names by memory ids."""
