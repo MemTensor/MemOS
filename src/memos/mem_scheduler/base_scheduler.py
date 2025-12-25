@@ -1008,6 +1008,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             try:
                 q_sizes = self.memos_message_queue.qsize()
 
+                if not isinstance(q_sizes, dict):
+                    continue
+
                 for stream_key, queue_length in q_sizes.items():
                     # Skip aggregate keys like 'total_size'
                     if stream_key == "total_size":
