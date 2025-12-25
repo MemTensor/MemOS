@@ -29,11 +29,11 @@ from memos.mem_os.utils.reference_utils import (
     prepare_reference_data,
     process_streaming_references_complete,
 )
-from memos.mem_scheduler.schemas.general_schemas import (
-    ANSWER_LABEL,
-    QUERY_LABEL,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ANSWER_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
 from memos.mem_user.persistent_factory import PersistentUserManagerFactory
 from memos.mem_user.user_manager import UserRole
 from memos.memories.textual.item import (
@@ -641,7 +641,7 @@ class MOSProduct(MOSCore):
                 content=query,
                 timestamp=datetime.utcnow(),
             )
-            self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+            self.mem_scheduler.submit_messages(messages=[message_item])
 
     async def _post_chat_processing(
         self,
@@ -710,7 +710,7 @@ class MOSProduct(MOSCore):
                     logger.warning(f"Failed to send chat notification (async): {e}")
 
             self._send_message_to_scheduler(
-                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_LABEL
+                user_id=user_id, mem_cube_id=cube_id, query=clean_response, label=ANSWER_TASK_LABEL
             )
 
             self.add(
@@ -1151,7 +1151,7 @@ class MOSProduct(MOSCore):
             f"time chat: search text_mem time user_id: {user_id} time is: {search_time_end - time_start}"
         )
         self._send_message_to_scheduler(
-            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_LABEL
+            user_id=user_id, mem_cube_id=cube_id, query=query, label=QUERY_TASK_LABEL
         )
         if memories_result:
             memories_list = memories_result[0]["memories"]
@@ -1499,13 +1499,20 @@ class MOSProduct(MOSCore):
         source: str | None = None,
         user_profile: bool = False,
         session_id: str | None = None,
+        task_id: str | None = None,  # Add task_id parameter
     ):
         """Add memory for a specific user."""
 
         # Load user cubes if not already loaded
         self._load_user_cubes(user_id, self.default_cube_config)
         result = super().add(
-            messages, memory_content, doc_path, mem_cube_id, user_id, session_id=session_id
+            messages,
+            memory_content,
+            doc_path,
+            mem_cube_id,
+            user_id,
+            session_id=session_id,
+            task_id=task_id,
         )
         if user_profile:
             try:

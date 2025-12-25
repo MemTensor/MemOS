@@ -6,6 +6,7 @@ components used by the MemOS server. Each function constructs and validates
 a configuration dictionary using the appropriate ConfigFactory.
 """
 
+import json
 import os
 
 from typing import Any
@@ -81,6 +82,32 @@ def build_llm_config() -> dict[str, Any]:
     )
 
 
+def build_chat_llm_config() -> list[dict[str, Any]]:
+    """
+    Build chat LLM configuration.
+
+    Returns:
+        Validated chat LLM configuration dictionary
+    """
+    configs = json.loads(os.getenv("CHAT_MODEL_LIST"))
+    return [
+        {
+            "config_class": LLMConfigFactory.model_validate(
+                {
+                    "backend": cfg.get("backend", "openai"),
+                    "config": (
+                        {k: v for k, v in cfg.items() if k not in ["backend", "support_models"]}
+                    )
+                    if cfg
+                    else APIConfig.get_openai_config(),
+                }
+            ),
+            "support_models": cfg.get("support_models", None),
+        }
+        for cfg in configs
+    ]
+
+
 def build_embedder_config() -> dict[str, Any]:
     """
     Build embedder configuration.
@@ -111,6 +138,16 @@ def build_reranker_config() -> dict[str, Any]:
         Validated reranker configuration dictionary
     """
     return RerankerConfigFactory.model_validate(APIConfig.get_reranker_config())
+
+
+def build_feedback_reranker_config() -> dict[str, Any]:
+    """
+    Build reranker configuration.
+
+    Returns:
+        Validated reranker configuration dictionary
+    """
+    return RerankerConfigFactory.model_validate(APIConfig.get_feedback_reranker_config())
 
 
 def build_internet_retriever_config() -> dict[str, Any]:

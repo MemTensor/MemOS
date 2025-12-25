@@ -229,6 +229,7 @@ class MilvusVecDB(BaseVecDB):
             List of search results with distance scores and payloads.
         """
         # Convert filter to Milvus expression
+        logger.info(f"filter for milvus: {filter}")
         expr = self._dict_to_expr(filter) if filter else ""
 
         search_func_map = {
@@ -267,26 +268,174 @@ class MilvusVecDB(BaseVecDB):
         return items
 
     def _dict_to_expr(self, filter_dict: dict[str, Any]) -> str:
-        """Convert a dictionary filter to a Milvus expression string."""
+        """Convert a dictionary filter to a Milvus expression string.
+
+        Supports complex query syntax with logical operators, comparison operators,
+        arithmetic operators, array operators, and string pattern matching.
+
+        Args:
+            filter_dict: Dictionary containing filter conditions
+
+        Returns:
+            Milvus expression string
+        """
         if not filter_dict:
             return ""
 
+        return self._build_expression(filter_dict)
+
+    def _build_expression(self, condition: Any) -> str:
+        """Build expression from condition dict or value."""
+        if isinstance(condition, dict):
+            # Handle logical operators
+            if "and" in condition:
+                return self._handle_logical_and(condition["and"])
+            elif "or" in condition:
+                return self._handle_logical_or(condition["or"])
+            elif "not" in condition:
+                return self._handle_logical_not(condition["not"])
+            else:
+                # Handle field conditions
+                return self._handle_field_conditions(condition)
+        else:
+            # Simple value comparison
+            return f"{condition}"
+
+    def _handle_logical_and(self, conditions: list) -> str:
+        """Handle AND logical operator."""
+        if not conditions:
+            return ""
+        expressions = [self._build_expression(cond) for cond in conditions if cond is not None]
+        expressions = [expr for expr in expressions if expr]
+        if not expressions:
+            return ""
+        return f"({' and '.join(expressions)})"
+
+    def _handle_logical_or(self, conditions: list) -> str:
+        """Handle OR logical operator."""
+        if not conditions:
+            return ""
+        expressions = [self._build_expression(cond) for cond in conditions if cond is not None]
+        expressions = [expr for expr in expressions if expr]
+        if not expressions:
+            return ""
+        return f"({' or '.join(expressions)})"
+
+    def _handle_logical_not(self, condition: Any) -> str:
+        """Handle NOT logical operator."""
+        expr = self._build_expression(condition)
+        if not expr:
+            return ""
+        return f"(not {expr})"
+
+    def _handle_field_conditions(self, condition_dict: dict[str, Any]) -> str:
+        """Handle field-specific conditions."""
         conditions = []
-        for field, value in filter_dict.items():
-            # Skip None values as they cause Milvus query syntax errors
+
+        for field, value in condition_dict.items():
             if value is None:
                 continue
-            # For JSON fields, we need to use payload["field"] syntax
-            elif isinstance(value, str):
-                conditions.append(f"payload['{field}'] == '{value}'")
-            elif isinstance(value, list) and len(value) == 0:
-                # Skip empty lists as they cause Milvus query syntax errors
-                continue
-            elif isinstance(value, list) and len(value) > 0:
-                conditions.append(f"payload['{field}'] in {value}")
-            else:
-                conditions.append(f"payload['{field}'] == '{value}'")
+
+            field_expr = self._build_field_expression(field, value)
+            if field_expr:
+                conditions.append(field_expr)
+
+        if not conditions:
+            return ""
         return " and ".join(conditions)
+
+    def _build_field_expression(self, field: str, value: Any) -> str:
+        """Build expression for a single field."""
+        # Handle comparison operators
+        if isinstance(value, dict):
+            if len(value) == 1:
+                op, operand = next(iter(value.items()))
+                op_lower = op.lower()
+
+                if op_lower == "in":
+                    return self._handle_in_operator(field, operand)
+                elif op_lower == "contains":
+                    return self._handle_contains_operator(field, operand, case_sensitive=True)
+                elif op_lower == "icontains":
+                    return self._handle_contains_operator(field, operand, case_sensitive=False)
+                elif op_lower == "like":
+                    return self._handle_like_operator(field, operand)
+                elif op_lower in ["gte", "lte", "gt", "lt", "ne"]:
+                    return self._handle_comparison_operator(field, op_lower, operand)
+                else:
+                    # Unknown operator, treat as equality
+                    return f"payload['{field}'] == {self._format_value(operand)}"
+            else:
+                # Multiple operators, handle each one
+                sub_conditions = []
+                for op, operand in value.items():
+                    op_lower = op.lower()
+                    if op_lower in [
+                        "gte",
+                        "lte",
+                        "gt",
+                        "lt",
+                        "ne",
+                        "in",
+                        "contains",
+                        "icontains",
+                        "like",
+                    ]:
+                        sub_expr = self._build_field_expression(field, {op: operand})
+                        if sub_expr:
+                            sub_conditions.append(sub_expr)
+
+                if sub_conditions:
+                    return f"({' and '.join(sub_conditions)})"
+                return ""
+        else:
+            # Simple equality
+            return f"payload['{field}'] == {self._format_value(value)}"
+
+    def _handle_in_operator(self, field: str, values: list) -> str:
+        """Handle IN operator for arrays."""
+        if not isinstance(values, list) or not values:
+            return ""
+
+        formatted_values = [self._format_value(v) for v in values]
+        return f"payload['{field}'] in [{', '.join(formatted_values)}]"
+
+    def _handle_contains_operator(self, field: str, value: Any, case_sensitive: bool = True) -> str:
+        """Handle CONTAINS/ICONTAINS operator."""
+        formatted_value = self._format_value(value)
+        if case_sensitive:
+            return f"json_contains(payload['{field}'], {formatted_value})"
+        else:
+            # For case-insensitive contains, we need to use LIKE with lower case
+            return f"(not json_contains(payload['{field}'], {formatted_value}))"
+
+    def _handle_like_operator(self, field: str, pattern: str) -> str:
+        """Handle LIKE operator for string pattern matching."""
+        # Convert SQL-like pattern to Milvus-like pattern
+        return f"payload['{field}'] like '{pattern}'"
+
+    def _handle_comparison_operator(self, field: str, operator: str, value: Any) -> str:
+        """Handle comparison operators (gte, lte, gt, lt, ne)."""
+        milvus_op = {"gte": ">=", "lte": "<=", "gt": ">", "lt": "<", "ne": "!="}.get(operator, "==")
+
+        formatted_value = self._format_value(value)
+        return f"payload['{field}'] {milvus_op} {formatted_value}"
+
+    def _format_value(self, value: Any) -> str:
+        """Format value for Milvus expression."""
+        if isinstance(value, str):
+            return f"'{value}'"
+        elif isinstance(value, int | float):
+            return str(value)
+        elif isinstance(value, bool):
+            return str(value).lower()
+        elif isinstance(value, list):
+            formatted_items = [self._format_value(item) for item in value]
+            return f"[{', '.join(formatted_items)}]"
+        elif value is None:
+            return "null"
+        else:
+            return f"'{value!s}'"
 
     def _get_metric_type(self) -> str:
         """Get the metric type for search."""
@@ -439,9 +588,9 @@ class MilvusVecDB(BaseVecDB):
 
             # Prepare entity data
             entity = {
-                "id": item.id,
-                "memory": item.memory,
-                "original_text": item.original_text,
+                "id": item.id[:65000],
+                "memory": item.memory[:65000],
+                "original_text": item.original_text[:65000],
                 "vector": item.vector,
                 "payload": item.payload if item.payload else {},
             }

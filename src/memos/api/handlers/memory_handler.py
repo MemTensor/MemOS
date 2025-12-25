@@ -4,9 +4,16 @@ Memory handler for retrieving and managing memories.
 This module handles retrieving all memories or specific subgraphs based on queries.
 """
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from memos.api.product_models import DeleteMemoryRequest, DeleteMemoryResponse, MemoryResponse
+from memos.api.handlers.formatters_handler import format_memory_item
+from memos.api.product_models import (
+    DeleteMemoryRequest,
+    DeleteMemoryResponse,
+    GetMemoryRequest,
+    GetMemoryResponse,
+    MemoryResponse,
+)
 from memos.log import get_logger
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_os.utils.format_utils import (
@@ -16,6 +23,10 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.preference import TextualMemoryItem
 
 
 logger = get_logger(__name__)
@@ -152,7 +163,33 @@ def handle_get_subgraph(
         raise
 
 
+def handle_get_memories(
+    get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
+    # TODO: Implement get memory with filter
+    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
+    preferences: list[TextualMemoryItem] = []
+    if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
+        filter_params: dict[str, Any] = {}
+        if get_mem_req.user_id is not None:
+            filter_params["user_id"] = get_mem_req.user_id
+        if get_mem_req.mem_cube_id is not None:
+            filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
+        preferences = naive_mem_cube.pref_mem.get_memory_by_filter(filter_params)
+        preferences = [format_memory_item(mem) for mem in preferences]
+    return GetMemoryResponse(
+        message="Memories retrieved successfully",
+        data={
+            "text_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": memories}],
+            "pref_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": preferences}],
+        },
+    )
+
+
 def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
+    logger.info(
+        f"[Delete memory request] writable_cube_ids: {delete_mem_req.writable_cube_ids}, memory_ids: {delete_mem_req.memory_ids}"
+    )
     # Validate that only one of memory_ids, file_ids, or filter is provided
     provided_params = [
         delete_mem_req.memory_ids is not None,
@@ -172,12 +209,8 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
             if naive_mem_cube.pref_mem is not None:
                 naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
         elif delete_mem_req.file_ids is not None:
-            # TODO: Implement deletion by file_ids
-            # Need to find memory_ids associated with file_ids and delete them
-            logger.warning("Deletion by file_ids not implemented yet")
-            return DeleteMemoryResponse(
-                message="Deletion by file_ids not implemented yet",
-                data={"status": "failure"},
+            naive_mem_cube.text_mem.delete_by_filter(
+                writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
         elif delete_mem_req.filter is not None:
             # TODO: Implement deletion by filter

@@ -8,8 +8,12 @@ from typing import Any
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
-from memos.mem_reader.simple_struct import detect_lang
-from memos.memories.textual.item import PreferenceTextualMemoryMetadata, TextualMemoryItem
+from memos.mem_reader.read_multi_modal import detect_lang
+from memos.memories.textual.item import (
+    PreferenceTextualMemoryMetadata,
+    TextualMemoryItem,
+    list_all_fields,
+)
 from memos.memories.textual.prefer_text_memory.spliter import Splitter
 from memos.memories.textual.prefer_text_memory.utils import convert_messages_to_string
 from memos.templates.prefer_complete_prompt import (
@@ -114,7 +118,8 @@ class NaiveExtractor(BaseExtractor):
             vector_info = {
                 "embedding": self.embedder.embed([pref["context_summary"]])[0],
             }
-            extract_info = {**basic_info, **pref, **vector_info, **info}
+            user_info = {k: v for k, v in info.items() if k not in list_all_fields()}
+            extract_info = {**basic_info, **pref, **vector_info, **info, "info": user_info}
 
             metadata = PreferenceTextualMemoryMetadata(
                 type=msg_type, preference_type="explicit_preference", **extract_info
@@ -142,8 +147,8 @@ class NaiveExtractor(BaseExtractor):
             vector_info = {
                 "embedding": self.embedder.embed([pref["context_summary"]])[0],
             }
-
-            extract_info = {**basic_info, **pref, **vector_info, **info}
+            user_info = {k: v for k, v in info.items() if k not in list_all_fields()}
+            extract_info = {**basic_info, **pref, **vector_info, **info, "info": user_info}
 
             metadata = PreferenceTextualMemoryMetadata(
                 type=msg_type, preference_type="implicit_preference", **extract_info

@@ -12,6 +12,14 @@ class BaseEmbedderConfig(BaseConfig):
     embedding_dims: int | None = Field(
         default=None, description="Number of dimensions for the embedding"
     )
+    max_tokens: int | None = Field(
+        default=8192,
+        description="Maximum number of tokens per text. Texts exceeding this limit will be automatically truncated. Set to None to disable truncation.",
+    )
+    headers_extra: dict[str, Any] | None = Field(
+        default=None,
+        description="Extra headers for the embedding model, only for universal_api backend",
+    )
 
 
 class OllamaEmbedderConfig(BaseEmbedderConfig):

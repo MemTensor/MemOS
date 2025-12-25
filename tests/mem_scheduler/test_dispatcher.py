@@ -156,7 +156,12 @@ class TestSchedulerDispatcher(unittest.TestCase):
     def test_dispatch_serial(self):
         """Test dispatching messages in serial mode."""
         # Create a new dispatcher with parallel dispatch disabled
-        serial_dispatcher = SchedulerDispatcher(max_workers=2, enable_parallel_dispatch=False)
+        serial_dispatcher = SchedulerDispatcher(
+            max_workers=2,
+            memos_message_queue=self.dispatcher.memos_message_queue,
+            enable_parallel_dispatch=False,
+            metrics=MagicMock(),
+        )
 
         # Create fresh mock handlers for this test
         mock_handler1 = MagicMock()

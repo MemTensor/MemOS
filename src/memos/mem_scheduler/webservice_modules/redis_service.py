@@ -46,6 +46,8 @@ class RedisSchedulerModule(BaseSchedulerModule):
 
     @property
     def redis(self) -> Any:
+        if self._redis_conn is None:
+            self.auto_initialize_redis()
         return self._redis_conn
 
     @redis.setter
@@ -111,6 +113,16 @@ class RedisSchedulerModule(BaseSchedulerModule):
         Returns:
             bool: True if Redis connection is successfully established, False otherwise
         """
+        # Skip remote initialization in CI/pytest unless explicitly enabled
+        enable_env = os.getenv("MEMOS_ENABLE_REDIS", "").lower() == "true"
+        in_ci = os.getenv("CI", "").lower() == "true"
+        in_pytest = os.getenv("PYTEST_CURRENT_TEST") is not None
+        if (in_ci or in_pytest) and not enable_env:
+            logger.info(
+                "Skipping Redis auto-initialization in CI/test environment. Set MEMOS_ENABLE_REDIS=true to enable."
+            )
+            return False
+
         import redis
 
         # Strategy 1: Try to initialize from config

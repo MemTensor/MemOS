@@ -196,7 +196,7 @@ LOGGING_CONFIG = {
             "filters": ["package_tree_filter", "context_filter"],
         },
         "file": {
-            "level": "DEBUG",
+            "level": "INFO",
             "class": "concurrent_log_handler.ConcurrentTimedRotatingFileHandler",
             "when": "midnight",
             "interval": 1,

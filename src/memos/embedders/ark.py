@@ -49,6 +49,9 @@ class ArkEmbedder(BaseEmbedder):
             MultimodalEmbeddingContentPartTextParam,
         )
 
+        # Truncate texts if max_tokens is configured
+        texts = self._truncate_texts(texts)
+
         if self.config.multi_modal:
             texts_input = [
                 MultimodalEmbeddingContentPartTextParam(text=text, type="text") for text in texts

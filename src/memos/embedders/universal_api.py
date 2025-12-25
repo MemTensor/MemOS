@@ -4,7 +4,7 @@ from openai import OpenAI as OpenAIClient
 from memos.configs.embedder import UniversalAPIEmbedderConfig
 from memos.embedders.base import BaseEmbedder
 from memos.log import get_logger
-from memos.utils import timed
+from memos.utils import timed_with_status
 
 
 logger = get_logger(__name__)
@@ -16,7 +16,11 @@ class UniversalAPIEmbedder(BaseEmbedder):
         self.config = config
 
         if self.provider == "openai":
-            self.client = OpenAIClient(api_key=config.api_key, base_url=config.base_url)
+            self.client = OpenAIClient(
+                api_key=config.api_key,
+                base_url=config.base_url,
+                default_headers=config.headers_extra if config.headers_extra else None,
+            )
         elif self.provider == "azure":
             self.client = AzureClient(
                 azure_endpoint=config.base_url,
@@ -26,8 +30,14 @@ class UniversalAPIEmbedder(BaseEmbedder):
         else:
             raise ValueError(f"Embeddings unsupported provider: {self.provider}")
 
-    @timed(log=True, log_prefix="model_timed_embedding")
+    @timed_with_status(
+        log_prefix="model_timed_embedding",
+        log_extra_args={"model_name_or_path": "text-embedding-3-large"},
+    )
     def embed(self, texts: list[str]) -> list[list[float]]:
+        # Truncate texts if max_tokens is configured
+        texts = self._truncate_texts(texts)
+
         if self.provider == "openai" or self.provider == "azure":
             try:
                 response = self.client.embeddings.create(

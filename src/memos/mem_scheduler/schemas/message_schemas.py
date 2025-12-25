@@ -5,6 +5,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
+from memos.context.context import generate_trace_id
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
 from memos.mem_scheduler.utils.db_utils import get_utc_now
@@ -34,7 +35,9 @@ DEFAULT_MEMORY_CAPACITIES = {
 class ScheduleMessageItem(BaseModel, DictConversionMixin):
     item_id: str = Field(description="uuid", default_factory=lambda: str(uuid4()))
     redis_message_id: str = Field(default="", description="the message get from redis stream")
+    stream_key: str = Field("", description="stream_key for identifying the queue in line")
     user_id: str = Field(..., description="user id")
+    trace_id: str = Field(default_factory=generate_trace_id, description="trace id for logging")
     mem_cube_id: str = Field(..., description="memcube id")
     session_id: str = Field(default="", description="Session ID for soft-filtering memories")
     label: str = Field(..., description="Label of the schedule message")
@@ -45,6 +48,11 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     user_name: str = Field(
         default="",
         description="user name / display name (optional)",
+    )
+    info: dict | None = Field(default=None, description="user custom info")
+    task_id: str | None = Field(
+        default=None,
+        description="Optional business-level task ID. Multiple items can share the same task_id.",
     )
 
     # Pydantic V2 model configuration
@@ -74,11 +82,13 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "item_id": self.item_id,
             "user_id": self.user_id,
             "cube_id": self.mem_cube_id,
+            "trace_id": self.trace_id,
             "label": self.label,
             "cube": "Not Applicable",  # Custom cube serialization
             "content": self.content,
             "timestamp": self.timestamp.isoformat(),
             "user_name": self.user_name,
+            "task_id": self.task_id if self.task_id is not None else "",
         }
 
     @classmethod
@@ -88,10 +98,12 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             item_id=data.get("item_id", str(uuid4())),
             user_id=data["user_id"],
             mem_cube_id=data["cube_id"],
+            trace_id=data.get("trace_id", generate_trace_id()),
             label=data["label"],
             content=data["content"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
             user_name=data.get("user_name"),
+            task_id=data.get("task_id"),
         )
 
 
@@ -113,13 +125,14 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
     item_id: str = Field(
         description="Unique identifier for the log entry", default_factory=lambda: str(uuid4())
     )
+    task_id: str | None = Field(default=None, description="Identifier for the parent task")
     user_id: str = Field(..., description="Identifier for the user associated with the log")
     mem_cube_id: str = Field(
         ..., description="Identifier for the memcube associated with this log entry"
     )
     label: str = Field(..., description="Label categorizing the type of log")
-    from_memory_type: str = Field(..., description="Source memory type")
-    to_memory_type: str = Field(..., description="Destination memory type")
+    from_memory_type: str | None = Field(None, description="Source memory type")
+    to_memory_type: str | None = Field(None, description="Destination memory type")
     log_content: str = Field(..., description="Detailed content of the log entry")
     current_memory_sizes: MemorySizes = Field(
         default_factory=lambda: dict(DEFAULT_MEMORY_SIZES),
@@ -133,12 +146,24 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         default_factory=get_utc_now,
         description="Timestamp indicating when the log entry was created",
     )
+    memcube_log_content: list[dict] | None = Field(
+        default=None, description="Structured memcube log content list"
+    )
+    metadata: list[dict] | None = Field(
+        default=None, description="Structured metadata list for each log item"
+    )
+    memcube_name: str | None = Field(default=None, description="Display name for memcube")
+    memory_len: int | None = Field(default=None, description="Count of items involved in the event")
+    status: str | None = Field(
+        default=None, description="Completion status of the task (e.g., 'completed', 'failed')"
+    )
+    source_doc_id: str | None = Field(default=None, description="Source document ID")
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""
         return {
             "content_preview:": self.log_content[:50],
-            "log_id": self.item_id,
+            "item_id": self.item_id,
             "user_id": self.user_id,
             "mem_cube_id": self.mem_cube_id,
             "operation": f"{self.from_memory_type} → {self.to_memory_type}",

@@ -24,10 +24,11 @@ class SourceMessage(BaseModel):
         - type: Source kind (e.g., "chat", "doc", "web", "file", "system", ...).
             If not provided, upstream logic may infer it:
             presence of `role` ⇒ "chat"; otherwise ⇒ "doc".
-        - role: Conversation role ("user" | "assistant" | "system") when the
+        - role: Conversation role ("user" | "assistant" | "system" | "tool") when the
             source is a chat turn.
         - content: Minimal reproducible snippet from the source. If omitted,
             upstream may fall back to `doc_path` / `url` / `message_id`.
+        - file_info: File information for file source.
         - chat_time / message_id / doc_path: Locators for precisely pointing back
             to the original record (timestamp, message id, document path).
         - Extra fields: Allowed (`model_config.extra="allow"`) to carry arbitrary
@@ -35,12 +36,12 @@ class SourceMessage(BaseModel):
     """
 
     type: str | None = "chat"
-    role: Literal["user", "assistant", "system"] | None = None
+    role: Literal["user", "assistant", "system", "tool"] | None = None
     chat_time: str | None = None
     message_id: str | None = None
     content: str | None = None
     doc_path: str | None = None
-
+    file_info: dict | None = None
     model_config = ConfigDict(extra="allow")
 
 
@@ -83,8 +84,17 @@ class TextualMemoryMetadata(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="The timestamp of the last modification to the memory. Useful for tracking memory freshness or change history. Format: ISO 8601.",
     )
+    info: dict | None = Field(
+        default=None,
+        description="Arbitrary key-value pairs for additional metadata.",
+    )
 
     model_config = ConfigDict(extra="allow")
+
+    covered_history: Any | None = Field(
+        default=None,
+        description="Record the memory id covered by the update",
+    )
 
     def __str__(self) -> str:
         """Pretty string representation of the metadata."""
@@ -95,9 +105,14 @@ class TextualMemoryMetadata(BaseModel):
 class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     """Extended metadata for structured memory, layered retrieval, and lifecycle tracking."""
 
-    memory_type: Literal["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"] = Field(
-        default="WorkingMemory", description="Memory lifecycle type."
-    )
+    memory_type: Literal[
+        "WorkingMemory",
+        "LongTermMemory",
+        "UserMemory",
+        "OuterMemory",
+        "ToolSchemaMemory",
+        "ToolTrajectoryMemory",
+    ] = Field(default="WorkingMemory", description="Memory lifecycle type.")
     sources: list[SourceMessage] | None = Field(
         default=None, description="Multiple origins of the memory (e.g., URLs, notes)."
     )
@@ -117,6 +132,11 @@ class TreeNodeTextualMemoryMetadata(TextualMemoryMetadata):
     background: str | None = Field(
         default="",
         description="background of this node",
+    )
+
+    file_ids: list[str] | None = Field(
+        default_factory=list,
+        description="The ids of the files associated with the memory.",
     )
 
     @field_validator("sources", mode="before")
@@ -268,3 +288,17 @@ class TextualMemoryItem(BaseModel):
     def __str__(self) -> str:
         """Pretty string representation of the memory item."""
         return f"<ID: {self.id} | Memory: {self.memory} | Metadata: {self.metadata!s}>"
+
+
+def list_all_fields() -> list[str]:
+    """List all possible fields of the TextualMemoryItem model."""
+    top = list(TextualMemoryItem.model_fields.keys())
+    meta_models = [
+        TextualMemoryMetadata,
+        TreeNodeTextualMemoryMetadata,
+        SearchedTreeNodeTextualMemoryMetadata,
+        PreferenceTextualMemoryMetadata,
+    ]
+    meta_all = sorted(set().union(*[set(m.model_fields.keys()) for m in meta_models]))
+
+    return top + meta_all

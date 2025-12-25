@@ -237,10 +237,6 @@ class SchedulerDispatcherMonitor(BaseSchedulerModule):
         # If we got here, pool appears healthy
         pool_info["last_active"] = get_utc_now()
 
-        # Log health status with comprehensive information
-        if self.dispatcher:
-            max_workers = pool_info.get("max_workers", 0)
-
         return True, ""
 
     def _restart_pool(self, name: str, pool_info: dict) -> None:

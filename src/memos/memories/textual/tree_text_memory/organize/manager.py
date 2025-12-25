@@ -85,35 +85,164 @@ class MemoryManager:
         self._merged_threshold = merged_threshold
 
     def add(
-        self, memories: list[TextualMemoryItem], user_name: str | None = None, mode: str = "sync"
+        self,
+        memories: list[TextualMemoryItem],
+        user_name: str | None = None,
+        mode: str = "sync",
+        use_batch: bool = True,
     ) -> list[str]:
         """
-        Add new memories in parallel to different memory types.
+        Add new memories to different memory types.
+
+        Args:
+            memories: List of memory items to add.
+            user_name: Optional user name for the memories.
+            mode: "sync" to cleanup and refresh after adding, "async" to skip.
+            use_batch: If True, use batch database operations (more efficient for large batches).
+                       If False, use parallel single-node operations (original behavior).
+
+        Returns:
+            List of added memory IDs.
         """
         added_ids: list[str] = []
+        if use_batch:
+            added_ids = self._add_memories_batch(memories, user_name)
+        else:
+            added_ids = self._add_memories_parallel(memories, user_name)
 
-        with ContextThreadPoolExecutor(max_workers=200) as executor:
+        if mode == "sync":
+            self._cleanup_working_memory(user_name)
+            self._refresh_memory_size(user_name=user_name)
+
+        return added_ids
+
+    def _add_memories_parallel(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None
+    ) -> list[str]:
+        """
+        Add memories using parallel single-node operations (original behavior).
+        """
+        added_ids: list[str] = []
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(self._process_memory, m, user_name): m for m in memories}
-            for future in as_completed(futures, timeout=60):
+            for future in as_completed(futures, timeout=500):
                 try:
                     ids = future.result()
                     added_ids.extend(ids)
                 except Exception as e:
                     logger.exception("Memory processing error: ", exc_info=e)
-
-        if mode == "sync":
-            for mem_type in ["WorkingMemory", "LongTermMemory", "UserMemory"]:
-                try:
-                    self.graph_store.remove_oldest_memory(
-                        memory_type="WorkingMemory",
-                        keep_latest=self.memory_size[mem_type],
-                        user_name=user_name,
-                    )
-                except Exception:
-                    logger.warning(f"Remove {mem_type} error: {traceback.format_exc()}")
-
-            self._refresh_memory_size(user_name=user_name)
+        logger.info(f"[MemoryManager: _add_memories_parallel] Added {len(added_ids)} memories")
         return added_ids
+
+    def _add_memories_batch(
+        self, memories: list[TextualMemoryItem], user_name: str | None = None, batch_size: int = 5
+    ) -> list[str]:
+        """
+        Add memories using batch database operations (more efficient for large batches).
+
+        Args:
+            memories: List of memory items to add.
+            user_name: Optional user name for the memories.
+            batch_size: Number of nodes to insert per batch.
+
+        Returns:
+            List of added graph memory node IDs.
+        """
+        if not memories:
+            return []
+
+        added_ids: list[str] = []
+        working_nodes: list[dict] = []
+        graph_nodes: list[dict] = []
+        graph_node_ids: list[str] = []
+
+        for memory in memories:
+            working_id = str(uuid.uuid4())
+
+            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+                working_metadata = memory.metadata.model_copy(
+                    update={"memory_type": "WorkingMemory"}
+                ).model_dump(exclude_none=True)
+                working_metadata["updated_at"] = datetime.now().isoformat()
+                working_nodes.append(
+                    {
+                        "id": working_id,
+                        "memory": memory.memory,
+                        "metadata": working_metadata,
+                    }
+                )
+            if memory.metadata.memory_type in (
+                "LongTermMemory",
+                "UserMemory",
+                "ToolSchemaMemory",
+                "ToolTrajectoryMemory",
+            ):
+                graph_node_id = str(uuid.uuid4())
+                metadata_dict = memory.metadata.model_dump(exclude_none=True)
+                metadata_dict["updated_at"] = datetime.now().isoformat()
+
+                # Add working_binding for fast mode
+                tags = metadata_dict.get("tags") or []
+                if "mode:fast" in tags:
+                    prev_bg = metadata_dict.get("background", "") or ""
+                    binding_line = f"[working_binding:{working_id}] direct built from raw inputs"
+                    metadata_dict["background"] = (
+                        f"{prev_bg} || {binding_line}" if prev_bg else binding_line
+                    )
+
+                graph_nodes.append(
+                    {
+                        "id": graph_node_id,
+                        "memory": memory.memory,
+                        "metadata": metadata_dict,
+                    }
+                )
+                graph_node_ids.append(graph_node_id)
+                added_ids.append(graph_node_id)
+
+        def _submit_batches(nodes: list[dict], node_kind: str) -> None:
+            if not nodes:
+                return
+
+            max_workers = min(8, max(1, len(nodes) // max(1, batch_size)))
+            with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures: list[tuple[int, int, object]] = []
+                for batch_index, i in enumerate(range(0, len(nodes), batch_size), start=1):
+                    batch = nodes[i : i + batch_size]
+                    fut = executor.submit(
+                        self.graph_store.add_nodes_batch, batch, user_name=user_name
+                    )
+                    futures.append((batch_index, len(batch), fut))
+
+                for idx, size, fut in futures:
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        logger.exception(
+                            f"Batch add {node_kind} nodes error (batch {idx}, size {size}): ",
+                            exc_info=e,
+                        )
+
+        _submit_batches(working_nodes, "WorkingMemory")
+        _submit_batches(graph_nodes, "graph memory")
+
+        if graph_node_ids and self.is_reorganize:
+            self.reorganizer.add_message(QueueMessage(op="add", after_node=graph_node_ids))
+
+        return added_ids
+
+    def _cleanup_working_memory(self, user_name: str | None = None) -> None:
+        """
+        Remove oldest WorkingMemory nodes to keep within size limit.
+        """
+        try:
+            self.graph_store.remove_oldest_memory(
+                memory_type="WorkingMemory",
+                keep_latest=self.memory_size["WorkingMemory"],
+                user_name=user_name,
+            )
+        except Exception:
+            logger.warning(f"Remove WorkingMemory error: {traceback.format_exc()}")
 
     def replace_working_memory(
         self, memories: list[TextualMemoryItem], user_name: str | None = None
@@ -181,12 +310,18 @@ class MemoryManager:
         working_id = str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            f_working = ex.submit(
-                self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
-            )
-            futures.append(("working", f_working))
+            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+                f_working = ex.submit(
+                    self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
+                )
+                futures.append(("working", f_working))
 
-            if memory.metadata.memory_type in ("LongTermMemory", "UserMemory"):
+            if memory.metadata.memory_type in (
+                "LongTermMemory",
+                "UserMemory",
+                "ToolSchemaMemory",
+                "ToolTrajectoryMemory",
+            ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
                     memory=memory,

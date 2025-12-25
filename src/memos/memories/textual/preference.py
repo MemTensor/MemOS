@@ -76,7 +76,9 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         return self.extractor.extract(messages, type, info)
 
-    def search(self, query: str, top_k: int, info=None, **kwargs) -> list[TextualMemoryItem]:
+    def search(
+        self, query: str, top_k: int, info=None, search_filter=None, **kwargs
+    ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
         Args:
             query (str): The query to search for.
@@ -85,7 +87,8 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
-        return self.retriever.retrieve(query, top_k, info)
+        logger.info(f"search_filter for preference memory: {search_filter}")
+        return self.retriever.retrieve(query, top_k, info, search_filter)
 
     def load(self, dir: str) -> None:
         """Load memories from the specified directory.
@@ -165,7 +168,7 @@ class PreferenceTextMemory(BaseTextMemory):
         """Update a memory by memory_id."""
         raise NotImplementedError
 
-    def get(self, memory_id: str) -> TextualMemoryItem:
+    def get(self, memory_id: str, user_name: str | None = None) -> TextualMemoryItem:
         """Get a memory by its ID.
         Args:
             memory_id (str): The ID of the memory to retrieve.
@@ -190,7 +193,7 @@ class PreferenceTextMemory(BaseTextMemory):
                 return None
             return TextualMemoryItem(
                 id=res.id,
-                memory=res.payload.get("dialog_str", ""),
+                memory=res.memory,
                 metadata=PreferenceTextualMemoryMetadata(**res.payload),
             )
         except Exception as e:
@@ -225,7 +228,7 @@ class PreferenceTextMemory(BaseTextMemory):
             return [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in res
@@ -248,12 +251,34 @@ class PreferenceTextMemory(BaseTextMemory):
             all_memories[collection_name] = [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in items
             ]
         return all_memories
+
+    def get_memory_by_filter(self, filter: dict[str, Any] | None = None) -> list[TextualMemoryItem]:
+        """Get memories by filter.
+        Args:
+            filter (dict[str, Any]): Filter criteria.
+        Returns:
+            list[TextualMemoryItem]: List of memories that match the filter.
+        """
+        collection_list = self.vector_db.config.collection_name
+        all_db_items = []
+        for collection_name in collection_list:
+            db_items = self.vector_db.get_by_filter(collection_name=collection_name, filter=filter)
+            all_db_items.extend(db_items)
+        memories = [
+            TextualMemoryItem(
+                id=memo.id,
+                memory=memo.memory,
+                metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+            )
+            for memo in all_db_items
+        ]
+        return memories
 
     def delete(self, memory_ids: list[str]) -> None:
         """Delete memories.

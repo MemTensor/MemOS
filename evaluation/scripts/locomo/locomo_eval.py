@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 
 import nltk
@@ -47,6 +48,29 @@ class LLMGrade(BaseModel):
     llm_reasoning: str = Field(description="Explain why the answer is correct or incorrect.")
 
 
+def extract_label_json(text: str) -> str | None:
+    """
+    Extracts a JSON object of the form {"label": "VALUE"} from a given text string.
+    This function is designed to handle cases where the LLM response contains
+    natural language alongside a final JSON snippet, ensuring robust parsing.
+
+    Supports both single and double quotes around the label value.
+    Ignores surrounding whitespace and formatting.
+
+    Returns:
+        The full matching JSON string (e.g., '{"label": "CORRECT"}') if found.
+        None if no valid label JSON is found.
+    """
+    # Regex pattern to match: { "label": "value" } with optional whitespace
+    # Matches both single and double quotes, allows spaces around keys and values
+    pattern = r'\{\s*"label"\s*:\s*["\']([^"\']*)["\']\s*\}'
+    match = re.search(pattern, text)
+    if match:
+        # Return the complete matched JSON string for safe json.loads()
+        return match.group(0)
+    return None
+
+
 async def locomo_grader(llm_client, question: str, gold_answer: str, response: str) -> bool:
     system_prompt = """
         You are an expert grader that determines if answers to questions match a gold standard answer
@@ -77,20 +101,23 @@ async def locomo_grader(llm_client, question: str, gold_answer: str, response: s
 
     Just return the label CORRECT or WRONG in a json format with the key as "label".
     """
-
-    response = await llm_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": accuracy_prompt},
-        ],
-        temperature=0,
-    )
-    message_content = response.choices[0].message.content
-    label = json.loads(message_content)["label"]
-    parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
-
-    return parsed.llm_judgment.strip().lower() == "correct"
+    try:
+        response = await llm_client.chat.completions.create(
+            model=os.getenv("EVAL_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": accuracy_prompt},
+            ],
+            temperature=0,
+        )
+        message_content = response.choices[0].message.content
+        message_content = extract_label_json(text=message_content)
+        label = json.loads(message_content)["label"]
+        parsed = LLMGrade(llm_judgment=label, llm_reasoning="")
+        return parsed.llm_judgment.strip().lower() == "correct"
+    except Exception as e:
+        print(f"======== {e}, {response} ===========")
+        exit()
 
 
 def calculate_rouge_scores(gold_answer, response):

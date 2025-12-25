@@ -8,8 +8,8 @@ dependency injection and common functionality.
 from typing import Any
 
 from memos.log import get_logger
-from memos.mem_scheduler.base_scheduler import BaseScheduler
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
+from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
+from memos.memories.textual.tree_text_memory.retrieve.advanced_searcher import AdvancedSearcher
 
 
 logger = get_logger(__name__)
@@ -37,6 +37,7 @@ class HandlerDependencies:
         internet_retriever: Any | None = None,
         memory_manager: Any | None = None,
         mos_server: Any | None = None,
+        feedback_server: Any | None = None,
         **kwargs,
     ):
         """
@@ -68,6 +69,7 @@ class HandlerDependencies:
         self.internet_retriever = internet_retriever
         self.memory_manager = memory_manager
         self.mos_server = mos_server
+        self.feedback_server = feedback_server
 
         # Store any additional dependencies
         for key, value in kwargs.items():
@@ -127,12 +129,12 @@ class BaseHandler:
         return self.deps.mem_reader
 
     @property
-    def mem_scheduler(self) -> BaseScheduler:
+    def mem_scheduler(self) -> OptimizedScheduler:
         """Get scheduler instance."""
         return self.deps.mem_scheduler
 
     @property
-    def searcher(self) -> Searcher:
+    def searcher(self) -> AdvancedSearcher:
         """Get scheduler instance."""
         return self.deps.searcher
 
@@ -160,6 +162,16 @@ class BaseHandler:
     def mos_server(self):
         """Get MOS server instance."""
         return self.deps.mos_server
+
+    @property
+    def deepsearch_agent(self):
+        """Get deepsearch agent instance."""
+        return self.deps.deepsearch_agent
+
+    @property
+    def feedback_server(self):
+        """Get feedback server instance."""
+        return self.deps.feedback_server
 
     def _validate_dependencies(self, *required_deps: str) -> None:
         """

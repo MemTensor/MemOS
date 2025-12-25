@@ -20,8 +20,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
     MONITOR_ACTIVATION_MEMORY_TYPE,
     MONITOR_WORKING_MEMORY_TYPE,
-    MemCubeID,
-    UserID,
 )
 from memos.mem_scheduler.schemas.monitor_schemas import (
     MemoryMonitorItem,
@@ -31,6 +29,7 @@ from memos.mem_scheduler.schemas.monitor_schemas import (
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 from memos.memories.textual.tree import TreeTextMemory
+from memos.types import MemCubeID, UserID
 
 
 logger = get_logger(__name__)

@@ -1,36 +1,8 @@
-import os
-
-from enum import Enum
 from pathlib import Path
-from typing import NewType
-
-
-class SearchMode(str, Enum):
-    """Enumeration for search modes."""
-
-    FAST = "fast"
-    FINE = "fine"
-    MIXTURE = "mixture"
-
-
-class FineStrategy(str, Enum):
-    """Enumeration for fine strategies."""
-
-    REWRITE = "rewrite"
-    RECREATE = "recreate"
-    DEEP_SEARCH = "deep_search"
 
 
 FILE_PATH = Path(__file__).absolute()
 BASE_DIR = FILE_PATH.parent.parent.parent.parent.parent
-
-QUERY_LABEL = "query"
-ANSWER_LABEL = "answer"
-ADD_LABEL = "add"
-MEM_READ_LABEL = "mem_read"
-MEM_ORGANIZE_LABEL = "mem_organize"
-API_MIX_SEARCH_LABEL = "api_mix_search"
-PREF_ADD_LABEL = "pref_add"
 
 TreeTextMemory_SEARCH_METHOD = "tree_text_memory_search"
 TreeTextMemory_FINE_SEARCH_METHOD = "tree_text_memory_fine_search"
@@ -42,12 +14,12 @@ DEFAULT_ACTIVATION_MEM_MONITOR_SIZE_LIMIT = 20
 DEFAULT_ACT_MEM_DUMP_PATH = f"{BASE_DIR}/outputs/mem_scheduler/mem_cube_scheduler_test.kv_cache"
 DEFAULT_THREAD_POOL_MAX_WORKERS = 50
 DEFAULT_CONSUME_INTERVAL_SECONDS = 0.01
-DEFAULT_CONSUME_BATCH = 1
+DEFAULT_CONSUME_BATCH = 3
 DEFAULT_DISPATCHER_MONITOR_CHECK_INTERVAL = 300
 DEFAULT_DISPATCHER_MONITOR_MAX_FAILURES = 2
 DEFAULT_STUCK_THREAD_TOLERANCE = 10
 DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE = -1
-DEFAULT_TOP_K = 10
+DEFAULT_TOP_K = 5
 DEFAULT_CONTEXT_WINDOW_SIZE = 5
 DEFAULT_USE_REDIS_QUEUE = True
 DEFAULT_MULTI_TASK_RUNNING_TIMEOUT = 30
@@ -79,22 +51,3 @@ MONITOR_ACTIVATION_MEMORY_TYPE = "MonitorActivationMemoryType"
 DEFAULT_MAX_QUERY_KEY_WORDS = 1000
 DEFAULT_WEIGHT_VECTOR_FOR_RANKING = [0.9, 0.05, 0.05]
 DEFAULT_MAX_WEB_LOG_QUEUE_SIZE = 50
-
-
-# new types
-UserID = NewType("UserID", str)
-MemCubeID = NewType("CubeID", str)
-
-# algorithm strategies
-DEFAULT_FINE_STRATEGY = FineStrategy.REWRITE
-
-# Read fine strategy from environment variable `FINE_STRATEGY`.
-# If provided and valid, use it; otherwise fall back to default.
-_env_fine_strategy = os.getenv("FINE_STRATEGY")
-if _env_fine_strategy:
-    try:
-        FINE_STRATEGY = FineStrategy(_env_fine_strategy)
-    except ValueError:
-        FINE_STRATEGY = DEFAULT_FINE_STRATEGY
-else:
-    FINE_STRATEGY = DEFAULT_FINE_STRATEGY

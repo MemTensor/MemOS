@@ -328,7 +328,9 @@ class APIConfig:
                 "top_p": 0.95,
                 "top_k": 20,
                 "api_key": os.getenv("MEMRADER_API_KEY", "EMPTY"),
-                "api_base": os.getenv("MEMRADER_API_BASE"),
+                # Default to OpenAI base URL when env var is not provided to satisfy pydantic
+                # validation requirements during tests/import.
+                "api_base": os.getenv("MEMRADER_API_BASE", "https://api.openai.com/v1"),
                 "remove_think_prefix": True,
                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
             },
@@ -376,10 +378,36 @@ class APIConfig:
             return {
                 "backend": embedder_backend,
                 "config": {
-                    "url": os.getenv("MOS_RERANKER_URL"),
+                    "url": os.getenv("MOS_RERANKER_URL", "localhost:8000/v1/rerank"),
                     "model": os.getenv("MOS_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
-                    "headers_extra": os.getenv("MOS_RERANKER_HEADERS_EXTRA"),
+                    "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
+                    "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
+                    "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
+                },
+            }
+        else:
+            return {
+                "backend": "cosine_local",
+                "config": {
+                    "level_weights": {"topic": 1.0, "concept": 1.0, "fact": 1.0},
+                    "level_field": "background",
+                },
+            }
+
+    @staticmethod
+    def get_feedback_reranker_config() -> dict[str, Any]:
+        """Get embedder configuration."""
+        embedder_backend = os.getenv("MOS_FEEDBACK_RERANKER_BACKEND", "http_bge")
+
+        if embedder_backend in ["http_bge", "http_bge_strategy"]:
+            return {
+                "backend": embedder_backend,
+                "config": {
+                    "url": os.getenv("MOS_RERANKER_URL", "localhost:8000/v1/rerank"),
+                    "model": os.getenv("MOS_FEEDBACK_RERANKER_MODEL", "bge-reranker-v2-m3"),
+                    "timeout": 10,
+                    "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
                     "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
                 },
@@ -405,6 +433,7 @@ class APIConfig:
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
                     "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
+                    "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
                 },
             }
@@ -423,7 +452,7 @@ class APIConfig:
     def get_reader_config() -> dict[str, Any]:
         """Get reader configuration."""
         return {
-            "backend": os.getenv("MEM_READER_BACKEND", "simple_struct"),
+            "backend": os.getenv("MEM_READER_BACKEND", "multimodal_struct"),
             "config": {
                 "chunk_type": os.getenv("MEM_READER_CHAT_CHUNK_TYPE", "default"),
                 "chunk_length": int(os.getenv("MEM_READER_CHAT_CHUNK_TOKEN_SIZE", 1600)),
@@ -439,7 +468,7 @@ class APIConfig:
         return {
             "backend": "bocha",
             "config": {
-                "api_key": os.getenv("BOCHA_API_KEY"),
+                "api_key": os.getenv("BOCHA_API_KEY", "bocha"),
                 "max_results": 15,
                 "num_per_request": 10,
                 "reader": {
@@ -497,6 +526,9 @@ class APIConfig:
                     "distance_metric": "cosine",
                     "host": os.getenv("QDRANT_HOST", "localhost"),
                     "port": int(os.getenv("QDRANT_PORT", "6333")),
+                    "path": os.getenv("QDRANT_PATH"),
+                    "url": os.getenv("QDRANT_URL"),
+                    "api_key": os.getenv("QDRANT_API_KEY"),
                 },
             },
         }
@@ -584,6 +616,7 @@ class APIConfig:
             "user": os.getenv("POLAR_DB_USER", "root"),
             "password": os.getenv("POLAR_DB_PASSWORD", "123456"),
             "db_name": db_name,
+            "maxconn": int(os.getenv("POLARDB_POOL_MAX_CONN", "100")),
             "user_name": user_name,
             "use_multi_db": use_multi_db,
             "auto_create": True,
@@ -638,7 +671,7 @@ class APIConfig:
     @staticmethod
     def is_default_cube_config_enabled() -> bool:
         """Check if default cube config is enabled via environment variable."""
-        return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "false").lower() == "true"
+        return os.getenv("MOS_ENABLE_DEFAULT_CUBE_CONFIG", "true").lower() == "true"
 
     @staticmethod
     def is_dingding_bot_enabled() -> bool:
@@ -701,6 +734,13 @@ class APIConfig:
                         },
                     },
                     "chat_chunker": reader_config,
+                    "direct_markdown_hostnames": [
+                        h.strip()
+                        for h in os.getenv(
+                            "FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES", "139.196.232.20"
+                        ).split(",")
+                        if h.strip()
+                    ],
                 },
             },
             "enable_textual_memory": True,
@@ -873,6 +913,9 @@ class APIConfig:
                                 "bm25": bool(os.getenv("BM25_CALL", "false") == "true"),
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
+                            "include_embedding": bool(
+                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                            ),
                         },
                     },
                     "act_mem": {}
@@ -946,6 +989,9 @@ class APIConfig:
                                 "cot": bool(os.getenv("VEC_COT_CALL", "false") == "true"),
                             },
                             "mode": os.getenv("ASYNC_MODE", "sync"),
+                            "include_embedding": bool(
+                                os.getenv("INCLUDE_EMBEDDING", "false") == "true"
+                            ),
                         },
                     },
                     "act_mem": {}

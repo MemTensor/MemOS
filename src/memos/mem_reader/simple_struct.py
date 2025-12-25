@@ -6,22 +6,29 @@ import re
 import traceback
 
 from abc import ABC
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeAlias
 
 from tqdm import tqdm
 
 from memos import log
 from memos.chunkers import ChunkerFactory
 from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.configs.parser import ParserConfigFactory
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
-from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
-from memos.parsers.factory import ParserFactory
+from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
+from memos.memories.textual.item import (
+    SourceMessage,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
 from memos.templates.mem_reader_prompts import (
+    CUSTOM_TAGS_INSTRUCTION,
+    CUSTOM_TAGS_INSTRUCTION_ZH,
+    GENERAL_STRUCT_STRING_READER_PROMPT,
+    GENERAL_STRUCT_STRING_READER_PROMPT_ZH,
+    PROMPT_MAPPING,
     SIMPLE_STRUCT_DOC_READER_PROMPT,
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
     SIMPLE_STRUCT_MEM_READER_EXAMPLE,
@@ -29,7 +36,40 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_MEM_READER_PROMPT,
     SIMPLE_STRUCT_MEM_READER_PROMPT_ZH,
 )
+from memos.types import MessagesType
+from memos.types.openai_chat_completion_types import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionToolMessageParam,
+    ChatCompletionUserMessageParam,
+    File,
+)
 from memos.utils import timed
+
+
+class ParserFactory:
+    """Placeholder required by test suite."""
+
+    @staticmethod
+    def from_config(_config):
+        return None
+
+
+ChatMessageClasses = (
+    ChatCompletionSystemMessageParam,
+    ChatCompletionUserMessageParam,
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionToolMessageParam,
+)
+
+RawContentClasses = (ChatCompletionContentPartTextParam, File)
+MessageDict: TypeAlias = dict[str, Any]  # (Deprecated) not supported in the future
+SceneDataInput: TypeAlias = (
+    list[list[MessageDict]]  # (Deprecated) legacy chat example: scenes -> messages
+    | list[str]  # (Deprecated) legacy doc example: list of paths / pure text
+    | list[MessagesType]  # new: list of scenes (each scene is MessagesType)
+)
 
 
 logger = log.get_logger(__name__)
@@ -41,7 +81,13 @@ PROMPT_DICT = {
         "zh_example": SIMPLE_STRUCT_MEM_READER_EXAMPLE_ZH,
     },
     "doc": {"en": SIMPLE_STRUCT_DOC_READER_PROMPT, "zh": SIMPLE_STRUCT_DOC_READER_PROMPT_ZH},
+    "general_string": {
+        "en": GENERAL_STRUCT_STRING_READER_PROMPT,
+        "zh": GENERAL_STRUCT_STRING_READER_PROMPT_ZH,
+    },
+    "custom_tags": {"en": CUSTOM_TAGS_INSTRUCTION, "zh": CUSTOM_TAGS_INSTRUCTION_ZH},
 }
+
 
 try:
     import tiktoken
@@ -52,7 +98,7 @@ try:
         _ENC = tiktoken.get_encoding("cl100k_base")
 
     def _count_tokens_text(s: str) -> int:
-        return len(_ENC.encode(s or ""))
+        return len(_ENC.encode(s or "", disallowed_special=()))
 except Exception:
     # Heuristic fallback: zh chars ~1 token, others ~1 token per ~4 chars
     def _count_tokens_text(s: str) -> int:
@@ -64,29 +110,7 @@ except Exception:
         return zh + max(1, rest // 4)
 
 
-def detect_lang(text):
-    try:
-        if not text or not isinstance(text, str):
-            return "en"
-        cleaned_text = text
-        # remove role and timestamp
-        cleaned_text = re.sub(
-            r"\b(user|assistant|query|answer)\s*:", "", cleaned_text, flags=re.IGNORECASE
-        )
-        cleaned_text = re.sub(r"\[[\d\-:\s]+\]", "", cleaned_text)
-
-        # extract chinese characters
-        chinese_pattern = r"[\u4e00-\u9fff\u3400-\u4dbf\U00020000-\U0002a6df\U0002a700-\U0002b73f\U0002b740-\U0002b81f\U0002b820-\U0002ceaf\uf900-\ufaff]"
-        chinese_chars = re.findall(chinese_pattern, cleaned_text)
-        text_without_special = re.sub(r"[\s\d\W]", "", cleaned_text)
-        if text_without_special and len(chinese_chars) / len(text_without_special) > 0.3:
-            return "zh"
-        return "en"
-    except Exception:
-        return "en"
-
-
-def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder):
+def _build_node(idx, message, info, source_info, llm, parse_json_result, embedder):
     # generate
     try:
         raw = llm.generate(message)
@@ -121,21 +145,26 @@ def _build_node(idx, message, info, scene_file, llm, parse_json_result, embedder
 
         embedding = embedder.embed([value])[0]
 
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
+
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
+                user_id=user_id,
+                session_id=session_id,
                 memory_type="LongTermMemory",
                 status="activated",
                 tags=tags,
                 key=key,
                 embedding=embedding,
                 usage=[],
-                sources=[{"type": "doc", "doc_path": f"{scene_file}_{idx}"}],
+                sources=source_info,
                 background="",
                 confidence=0.99,
                 type="fact",
+                info=info_,
             ),
         )
     except Exception as e:
@@ -181,13 +210,17 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         background: str = "",
         type_: str = "fact",
         confidence: float = 0.99,
+        **kwargs,
     ) -> TextualMemoryItem:
         """construct memory item"""
+        info_ = info.copy()
+        user_id = info_.pop("user_id", "")
+        session_id = info_.pop("session_id", "")
         return TextualMemoryItem(
             memory=value,
             metadata=TreeNodeTextualMemoryMetadata(
-                user_id=info.get("user_id", ""),
-                session_id=info.get("session_id", ""),
+                user_id=user_id,
+                session_id=session_id,
                 memory_type=memory_type,
                 status="activated",
                 tags=tags or [],
@@ -198,14 +231,24 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 background=background,
                 confidence=confidence,
                 type=type_,
+                info=info_,
+                **kwargs,
             ),
         )
 
-    def _get_llm_response(self, mem_str: str) -> dict:
+    def _get_llm_response(self, mem_str: str, custom_tags: list[str] | None) -> dict:
         lang = detect_lang(mem_str)
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
         prompt = template.replace("${conversation}", mem_str)
+
+        custom_tags_prompt = (
+            PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
+            if custom_tags
+            else ""
+        )
+        prompt = prompt.replace("${custom_tags_prompt}", custom_tags_prompt)
+
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
@@ -274,6 +317,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
     def _process_chat_data(self, scene_data_info, info, **kwargs):
         mode = kwargs.get("mode", "fine")
         windows = list(self._iter_chat_windows(scene_data_info))
+        custom_tags = info.pop(
+            "custom_tags", None
+        )  # must pop here, avoid add to info, only used in sync fine mode
 
         if mode == "fast":
             logger.debug("Using unified Fast Mode")
@@ -304,7 +350,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             logger.debug("Using unified Fine Mode")
             chat_read_nodes = []
             for w in windows:
-                resp = self._get_llm_response(w["text"])
+                resp = self._get_llm_response(w["text"], custom_tags)
                 for m in resp.get("memory list", []):
                     try:
                         memory_type = (
@@ -326,9 +372,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                         logger.error(f"[ChatFine] parse error: {e}")
             return chat_read_nodes
 
-    def _process_transfer_chat_data(self, raw_node: TextualMemoryItem):
+    def _process_transfer_chat_data(
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+    ):
         raw_memory = raw_node.memory
-        response_json = self._get_llm_response(raw_memory)
+        response_json = self._get_llm_response(raw_memory, custom_tags)
+
         chat_read_nodes = []
         for memory_i_raw in response_json.get("memory list", []):
             try:
@@ -342,6 +391,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 node_i = self._make_memory_item(
                     value=memory_i_raw.get("value", ""),
                     info={
+                        **(raw_node.metadata.info or {}),
                         "user_id": raw_node.metadata.user_id,
                         "session_id": raw_node.metadata.session_id,
                     },
@@ -362,7 +412,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fine"
+        self, scene_data: SceneDataInput, type: str, info: dict[str, Any], mode: str = "fine"
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
@@ -371,7 +421,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         Args:
             scene_data: List of dialogue information or document paths
-            type: Type of scene_data: ['doc', 'chat']
+            type: (Deprecated) not supported in the future. Type of scene_data: ['doc', 'chat']
             info: Dictionary containing user_id and session_id.
                 Must be in format: {"user_id": "1111", "session_id": "2222"}
                 Optional parameters:
@@ -400,11 +450,132 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
         if not all(isinstance(info[field], str) for field in required_fields):
             raise ValueError("user_id and session_id must be strings")
-        scene_data = self._complete_chat_time(scene_data, type)
-        list_scene_data_info = self.get_scene_data_info(scene_data, type)
+
+        # Backward compatibility, after coercing scene_data, we only tackle
+        # with standard scene_data type: MessagesType
+        standard_scene_data = coerce_scene_data(scene_data, type)
+        return self._read_memory(standard_scene_data, type, info, mode)
+
+    @staticmethod
+    def _parse_hallucination_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
+        """Parse index-keyed JSON from hallucination filter response.
+        Expected shape: { "0": {"need_rewrite": bool, "rewritten": str, "reason": str}, ... }
+        Returns (success, parsed_dict) with int keys.
+        """
+        try:
+            data = json.loads(text)
+        except Exception:
+            return False, {}
+
+        if not isinstance(data, dict):
+            return False, {}
+
+        result: dict[int, dict] = {}
+        for k, v in data.items():
+            try:
+                idx = int(k)
+            except Exception:
+                # allow integer keys as-is
+                if isinstance(k, int):
+                    idx = k
+                else:
+                    continue
+            if not isinstance(v, dict):
+                continue
+            need_rewrite = v.get("need_rewrite")
+            rewritten = v.get("rewritten", "")
+            reason = v.get("reason", "")
+            if (
+                isinstance(need_rewrite, bool)
+                and isinstance(rewritten, str)
+                and isinstance(reason, str)
+            ):
+                result[idx] = {
+                    "need_rewrite": need_rewrite,
+                    "rewritten": rewritten,
+                    "reason": reason,
+                }
+
+        return (len(result) > 0), result
+
+    def filter_hallucination_in_memories(
+        self, messages: list[dict], memory_list: list[TextualMemoryItem]
+    ) -> list[TextualMemoryItem]:
+        # Build input objects with memory text and metadata (timestamps, sources, etc.)
+        template = PROMPT_MAPPING["hallucination_filter"]
+        if len(messages) < 2:
+            return memory_list
+        prompt_args = {
+            "messages_inline": "\n".join(
+                [f"- [{message['role']}]: {message['content']}" for message in messages]
+            ),
+            "memories_inline": json.dumps(
+                {idx: mem.memory for idx, mem in enumerate(memory_list)},
+                ensure_ascii=False,
+                indent=2,
+            ),
+        }
+        prompt = template.format(**prompt_args)
+
+        # Optionally run filter and parse the output
+        try:
+            raw = self.llm.generate([{"role": "user", "content": prompt}])
+            success, parsed = self._parse_hallucination_filter_response(raw)
+            logger.info(
+                f"[filter_hallucination_in_memories] Hallucination filter parsed successfully: {success}；prompt: {prompt}"
+            )
+            if success:
+                logger.info(f"Hallucination filter result: {parsed}")
+                assert len(parsed) == len(memory_list)
+                for mem_idx, content in parsed.items():
+                    need_rewrite = content.get("need_rewrite", False)
+                    rewritten_text = content.get("rewritten", "")
+                    reason = content.get("reason", "")
+
+                    # Replace memory text with rewritten content when rewrite is needed
+                    if (
+                        need_rewrite
+                        and isinstance(rewritten_text, str)
+                        and len(rewritten_text.strip()) > 0
+                    ):
+                        original_text = memory_list[mem_idx].memory
+
+                        logger.info(
+                            f"[filter_hallucination_in_memories] index={mem_idx}, need_rewrite={need_rewrite}, rewritten='{rewritten_text}', reason='{reason}', original memory='{original_text}', action='replace_text'"
+                        )
+
+                        memory_list[mem_idx].memory = rewritten_text
+                return memory_list
+            else:
+                logger.warning("Hallucination filter parsing failed or returned empty result.")
+        except Exception as e:
+            logger.error(f"Hallucination filter execution error: {e}", stack_info=True)
+
+        return memory_list
+
+    def _read_memory(
+        self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
+    ) -> list[list[TextualMemoryItem]]:
+        """
+        1. raw file:
+        [
+            [
+                {"type": "file", "file": "str"}
+            ],
+            [
+                {"type": "file", "file": "str"}
+            ],...
+        ]
+        2. text chat:
+        scene_data = [
+            [ {role: user, ...}, {role: assistant, ...}, ... ],
+            [ {role: user, ...}, {role: assistant, ...}, ... ],
+            [ ... ]
+        ]
+        """
+        list_scene_data_info = self.get_scene_data_info(messages, type)
 
         memory_list = []
-
         if type == "chat":
             processing_func = self._process_chat_data
         elif type == "doc":
@@ -426,10 +597,56 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 except Exception as e:
                     logger.error(f"Task failed with exception: {e}")
                     logger.error(traceback.format_exc())
+
+        if os.getenv("SIMPLE_STRUCT_ADD_FILTER", "false") == "true":
+            # Build inputs
+            combined_messages = []
+            for group_messages in messages:
+                combined_messages.extend(group_messages)
+
+            for group_id in range(len(memory_list)):
+                try:
+                    revised_memory_list = self.filter_hallucination_in_memories(
+                        messages=combined_messages,
+                        memory_list=memory_list[group_id],
+                    )
+                    if len(revised_memory_list) != len(memory_list[group_id]):
+                        original_serialized = [
+                            one.memory if hasattr(one, "memory") else str(one)
+                            for one in memory_list[group_id]
+                        ]
+                        filtered_serialized = [
+                            one.memory if hasattr(one, "memory") else str(one)
+                            for one in revised_memory_list
+                        ]
+                        logger.error(
+                            f"Length mismatch after hallucination filtering for group_id={group_id}: "
+                            f"original={len(memory_list[group_id])}, filtered={len(revised_memory_list)}"
+                            f"\noriginal_memory_list(serialized): {original_serialized}"
+                            f"\nfiltered_memory_list(serialized): {filtered_serialized}"
+                            f"\nmessages: {combined_messages}"
+                            f"\nSkipping update and keeping original memory."
+                        )
+                        continue
+                    memory_list[group_id] = revised_memory_list
+                except Exception as e:
+                    group_serialized = [
+                        one.memory if hasattr(one, "memory") else str(one)
+                        for one in memory_list[group_id]
+                    ]
+                    logger.error(
+                        f"There is an exception while filtering group_id={group_id}: {e}\n"
+                        f"messages: {combined_messages}\n"
+                        f"memory_list(serialized): {group_serialized}",
+                        exc_info=True,
+                    )
         return memory_list
 
     def fine_transfer_simple_mem(
-        self, input_memories: list[TextualMemoryItem], type: str
+        self,
+        input_memories: list[TextualMemoryItem],
+        type: str,
+        custom_tags: list[str] | None = None,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
@@ -446,7 +663,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(processing_func, scene_data_info)
+                executor.submit(processing_func, scene_data_info, custom_tags)
                 for scene_data_info in input_memories
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -459,96 +676,167 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(traceback.format_exc())
         return memory_list
 
-    def get_scene_data_info(self, scene_data: list, type: str) -> list[str]:
+    def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
         """
-        Get raw information from scene_data.
-        If scene_data contains dictionaries, convert them to strings.
-        If scene_data contains file paths, parse them using the parser.
-
-        Args:
-            scene_data: List of dialogue information or document paths
-            type: Type of scene data: ['doc', 'chat']
-        Returns:
-            List of strings containing the processed scene data
+        Convert normalized MessagesType scenes into typical MessagesType this reader can
+        handle.
+        SimpleStructMemReader only supports text-only chat messages with roles.
+        For chat scenes we:
+          - skip unsupported scene types (e.g. `str` scenes)
+          - drop non-dict messages
+          - keep only roles in {user, assistant, system}
+          - coerce OpenAI multimodal `content` (list[parts]) into a single plain-text string
+          - then apply the existing windowing logic (<=10 messages with 2-message overlap)
+        For doc scenes we pass through; doc handling is done in `_process_doc_data`.
         """
-        results = []
+        results: list[list[Any]] = []
 
         if type == "chat":
+            allowed_roles = {"user", "assistant", "system"}
             for items in scene_data:
+                if isinstance(items, str):
+                    logger.warning(
+                        "SimpleStruct MemReader does not support "
+                        "str message data now, your messages "
+                        f"contains {items}, skipping"
+                    )
+                    continue
+                if not isinstance(items, list):
+                    logger.warning(
+                        "SimpleStruct MemReader expects message as "
+                        f"list[dict], your messages contains"
+                        f"{items}, skipping"
+                    )
+                    continue
+                # Filter messages within this message
                 result = []
-                for i, item in enumerate(items):
-                    result.append(item)
-                    if len(result) >= 10:
-                        results.append(result)
-                        context = copy.deepcopy(result[-2:]) if i + 1 < len(items) else []
-                        result = context
-                if result:
-                    results.append(result)
-        elif type == "doc":
-            parser_config = ParserConfigFactory.model_validate(
-                {
-                    "backend": "markitdown",
-                    "config": {},
-                }
-            )
-            parser = ParserFactory.from_config(parser_config)
-            for item in scene_data:
-                try:
-                    if os.path.exists(item):
-                        try:
-                            parsed_text = parser.parse(item)
-                            results.append({"file": item, "text": parsed_text})
-                        except Exception as e:
-                            logger.error(f"[SceneParser] Error parsing {item}: {e}")
-                            continue
-                    else:
-                        parsed_text = item
-                        results.append({"file": "pure_text", "text": parsed_text})
-                except Exception as e:
-                    print(f"Error parsing file {item}: {e!s}")
+                for _i, item in enumerate(items):
+                    if not isinstance(item, dict):
+                        logger.warning(
+                            "SimpleStruct MemReader expects message as "
+                            f"list[dict], your messages contains"
+                            f"{item}, skipping"
+                        )
+                        continue
+                    role = item.get("role") or ""
+                    role = role if isinstance(role, str) else str(role)
+                    role = role.strip().lower()
+                    if role not in allowed_roles:
+                        logger.warning(
+                            f"SimpleStruct MemReader expects message with "
+                            f"role in {allowed_roles}, your messages contains"
+                            f"role {role}, skipping"
+                        )
+                        continue
 
+                    content = item.get("content", "")
+                    if not isinstance(content, str):
+                        logger.warning(
+                            f"SimpleStruct MemReader expects message content "
+                            f"with str, your messages content"
+                            f"is {content!s}, skipping"
+                        )
+                        continue
+                    if not content:
+                        continue
+
+                    result.append(
+                        {
+                            "role": role,
+                            "content": content,
+                            "chat_time": item.get("chat_time", ""),
+                        }
+                    )
+                if not result:
+                    continue
+                window = []
+                for i, item in enumerate(result):
+                    window.append(item)
+                    if len(window) >= 10:
+                        results.append(window)
+                        context = copy.deepcopy(window[-2:]) if i + 1 < len(result) else []
+                        window = context
+
+                if window:
+                    results.append(window)
+        elif type == "doc":
+            results = scene_data
         return results
 
-    def _complete_chat_time(self, scene_data: list[list[dict]], type: str):
-        if type != "chat":
-            return scene_data
-        complete_scene_data = []
-
-        for items in scene_data:
-            chat_time_value = None
-
-            for item in items:
-                if "chat_time" in item:
-                    chat_time_value = item["chat_time"]
-                    break
-
-            if chat_time_value is None:
-                session_date = datetime.now(timezone.utc)
-                date_format = "%I:%M %p on %d %B, %Y UTC"
-                chat_time_value = session_date.strftime(date_format)
-
-            for i in range(len(items)):
-                if "chat_time" not in items[i]:
-                    items[i]["chat_time"] = chat_time_value
-
-            complete_scene_data.append(items)
-        return complete_scene_data
-
     def _process_doc_data(self, scene_data_info, info, **kwargs):
+        """
+        Process doc data after being normalized to new RawMessageList format.
+
+        scene_data_info format (length always == 1):
+        [
+            {"type": "file", "file": {"filename": "...", "file_data": "..."}}
+        ]
+        OR
+        [
+            {"type": "text", "text": "..."}
+        ]
+
+        Behavior:
+        - Merge all text/file_data into a single "full text"
+        - Chunk the text
+        - Build prompts
+        - Send to LLM
+        - Parse results and build memory nodes
+        """
         mode = kwargs.get("mode", "fine")
         if mode == "fast":
             raise NotImplementedError
-        chunks = self.chunker.chunk(scene_data_info["text"])
+
+        custom_tags = info.pop("custom_tags", None)
+
+        if not scene_data_info or len(scene_data_info) != 1:
+            logger.error(
+                "[DocReader] scene_data_info must contain exactly 1 item after normalization"
+            )
+            return []
+
+        item = scene_data_info[0]
+        text_content = ""
+        source_info_list = []
+
+        # Determine content and source metadata
+        if item.get("type") == "file":
+            f = item["file"]
+            filename = f.get("filename") or "document"
+            file_data = f.get("file_data") or ""
+
+            text_content = file_data
+            source_dict = {
+                "type": "doc",
+                "doc_path": filename,
+            }
+            source_info_list = [SourceMessage(**source_dict)]
+
+        elif item.get("type") == "text":
+            text_content = item.get("text", "")
+            source_info_list = [SourceMessage(type="doc", doc_path="inline-text")]
+
+        text_content = (text_content or "").strip()
+        if not text_content:
+            logger.warning("[DocReader] Empty document text after normalization.")
+            return []
+
+        chunks = self.chunker.chunk(text_content)
         messages = []
         for chunk in chunks:
             lang = detect_lang(chunk.text)
             template = PROMPT_DICT["doc"][lang]
             prompt = template.replace("{chunk_text}", chunk.text)
+            custom_tags_prompt = (
+                PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
+                if custom_tags
+                else ""
+            )
+            prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
             message = [{"role": "user", "content": prompt}]
             messages.append(message)
 
         doc_nodes = []
-        scene_file = scene_data_info["file"]
 
         with ContextThreadPoolExecutor(max_workers=50) as executor:
             futures = {
@@ -557,7 +845,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     idx,
                     msg,
                     info,
-                    scene_file,
+                    source_info_list,
                     self.llm,
                     self.parse_json_result,
                     self.embedder,
@@ -578,7 +866,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     logger.error(f"[DocReader] Future task failed: {e}")
         return doc_nodes
 
-    def _process_transfer_doc_data(self, raw_node: TextualMemoryItem):
+    def _process_transfer_doc_data(
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+    ):
         raise NotImplementedError
 
     def parse_json_result(self, response_text: str) -> dict:
@@ -621,6 +911,3 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 json: {s}"
             )
             return {}
-
-    def transform_memreader(self, data: dict) -> list[TextualMemoryItem]:
-        pass

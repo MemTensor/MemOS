@@ -220,7 +220,7 @@ class MOS(MOSCore):
                         content=enhanced_response,
                         timestamp=datetime.now().isoformat(),
                     )
-                    self.mem_scheduler.memos_message_queue.submit_messages(messages=[message_item])
+                    self.mem_scheduler.submit_messages(messages=[message_item])
 
             return enhanced_response
 

@@ -9,8 +9,8 @@ from uuid import uuid4
 from memos.configs.mem_scheduler import SchedulerConfigFactory
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
-from memos.mem_scheduler.schemas.general_schemas import QUERY_LABEL
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import QUERY_TASK_LABEL
 
 
 if TYPE_CHECKING:
@@ -55,7 +55,7 @@ def service_run():
         message_item = ScheduleMessageItem(
             user_id=user_id,
             mem_cube_id="mem_cube_2",
-            label=QUERY_LABEL,
+            label=QUERY_TASK_LABEL,
             mem_cube=mem_cube,
             content=query,
             timestamp=datetime.now(),

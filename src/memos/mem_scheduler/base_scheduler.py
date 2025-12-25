@@ -4,23 +4,33 @@ import threading
 import time
 
 from collections.abc import Callable
-from datetime import datetime
+from contextlib import suppress
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 from sqlalchemy.engine import Engine
 
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
-from memos.context.context import ContextThread
+from memos.context.context import (
+    ContextThread,
+    RequestContext,
+    get_current_context,
+    get_current_trace_id,
+    set_request_context,
+)
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
+from memos.mem_feedback.simple_feedback import SimpleMemFeedback
+from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
+from memos.mem_scheduler.monitors.task_schedule_monitor import TaskScheduleMonitor
 from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_ACT_MEM_DUMP_PATH,
     DEFAULT_CONSUME_BATCH,
@@ -33,22 +43,33 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_TOP_K,
     DEFAULT_USE_REDIS_QUEUE,
     STARTUP_BY_PROCESS,
-    MemCubeID,
     TreeTextMemory_SEARCH_METHOD,
-    UserID,
 )
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleLogForWebItem,
     ScheduleMessageItem,
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
+from memos.mem_scheduler.schemas.task_schemas import (
+    ADD_TASK_LABEL,
+    ANSWER_TASK_LABEL,
+    MEM_ARCHIVE_TASK_LABEL,
+    MEM_ORGANIZE_TASK_LABEL,
+    MEM_UPDATE_TASK_LABEL,
+    QUERY_TASK_LABEL,
+    TaskPriorityLevel,
+)
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
-from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
+from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
+from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
 )
+from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
+from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to_iso
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 from memos.memories.activation.kv import KVCacheMemory
@@ -56,9 +77,15 @@ from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
+from memos.types.general_types import (
+    MemCubeID,
+    UserID,
+)
 
 
 if TYPE_CHECKING:
+    import redis
+
     from memos.reranker.http_bge import HTTPBGEReranker
 
 
@@ -113,23 +140,40 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.max_internal_message_queue_size = self.config.get(
             "max_internal_message_queue_size", DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE
         )
-        self.memos_message_queue = ScheduleTaskQueue(
-            use_redis_queue=self.use_redis_queue,
-            maxsize=self.max_internal_message_queue_size,
-            disabled_handlers=self.disabled_handlers,
-        )
+        self.orchestrator = SchedulerOrchestrator()
+
         self.searcher: Searcher | None = None
         self.retriever: SchedulerRetriever | None = None
         self.db_engine: Engine | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.mem_reader = None  # Will be set by MOSCore
+        self._status_tracker: TaskStatusTracker | None = None
+        self.metrics = metrics
+        self._monitor_thread = None
+        self.memos_message_queue = ScheduleTaskQueue(
+            use_redis_queue=self.use_redis_queue,
+            maxsize=self.max_internal_message_queue_size,
+            disabled_handlers=self.disabled_handlers,
+            orchestrator=self.orchestrator,
+            status_tracker=self._status_tracker,
+        )
         self.dispatcher = SchedulerDispatcher(
             config=self.config,
             memos_message_queue=self.memos_message_queue,
-            use_redis_queue=self.use_redis_queue,
             max_workers=self.thread_pool_max_workers,
             enable_parallel_dispatch=self.enable_parallel_dispatch,
+            status_tracker=self._status_tracker,
+            metrics=self.metrics,
+            submit_web_logs=self._submit_web_logs,
+            orchestrator=self.orchestrator,
+        )
+        # Task schedule monitor: initialize with underlying queue implementation
+        self.get_status_parallel = self.config.get("get_status_parallel", True)
+        self.task_schedule_monitor = TaskScheduleMonitor(
+            memos_message_queue=self.memos_message_queue.memos_message_queue,
+            dispatcher=self.dispatcher,
+            get_status_parallel=self.get_status_parallel,
         )
 
         # other attributes
@@ -137,15 +181,21 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.current_user_id: UserID | str | None = None
         self.current_mem_cube_id: MemCubeID | str | None = None
         self.current_mem_cube: BaseMemCube | None = None
+
+        self._mem_cubes: dict[str, BaseMemCube] = {}
         self.auth_config_path: str | Path | None = self.config.get("auth_config_path", None)
         self.auth_config = None
         self.rabbitmq_config = None
+        self.feedback_server = None
 
     def init_mem_cube(
         self,
         mem_cube: BaseMemCube,
         searcher: Searcher | None = None,
+        feedback_server: SimpleMemFeedback | None = None,
     ):
+        if mem_cube is None:
+            logger.error("mem_cube is None, cannot initialize", stack_info=True)
         self.mem_cube = mem_cube
         self.text_mem: TreeTextMemory = self.mem_cube.text_mem
         self.reranker: HTTPBGEReranker = self.text_mem.reranker
@@ -153,9 +203,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.searcher: Searcher = self.text_mem.get_searcher(
                 manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
                 moscube=False,
+                process_llm=self.process_llm,
             )
         else:
             self.searcher = searcher
+        self.feedback_server = feedback_server
 
     def initialize_modules(
         self,
@@ -163,11 +215,19 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         process_llm: BaseLLM | None = None,
         db_engine: Engine | None = None,
         mem_reader=None,
+        redis_client: Union["redis.Redis", None] = None,
     ):
         if process_llm is None:
             process_llm = chat_llm
 
         try:
+            if redis_client:
+                self.status_tracker = TaskStatusTracker(redis_client)
+                if self.dispatcher:
+                    self.dispatcher.status_tracker = self.status_tracker
+                if self.memos_message_queue:
+                    # Use the setter to propagate to the inner queue (e.g. SchedulerRedisQueue)
+                    self.memos_message_queue.set_status_tracker(self.status_tracker)
             # initialize submodules
             self.chat_llm = chat_llm
             self.process_llm = process_llm
@@ -211,11 +271,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self._cleanup_on_init_failure()
             raise
 
-        # start queue monitor if enabled and a bot is set later
-
-    def debug_mode_on(self):
-        self.memos_message_queue.debug_mode_on()
-
     def _cleanup_on_init_failure(self):
         """Clean up resources if initialization fails."""
         try:
@@ -227,13 +282,109 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
     @property
     def mem_cube(self) -> BaseMemCube:
         """The memory cube associated with this MemChat."""
+        if self.current_mem_cube is None:
+            logger.error("mem_cube is None when accessed", stack_info=True)
+            try:
+                self.components = init_components()
+                self.current_mem_cube: BaseMemCube = self.components["naive_mem_cube"]
+            except Exception:
+                logger.info(
+                    "No environment available to initialize mem cube. Using fallback naive_mem_cube."
+                )
         return self.current_mem_cube
+
+    @property
+    def status_tracker(self) -> TaskStatusTracker | None:
+        """Lazy-initialized TaskStatusTracker.
+
+        If the tracker is None, attempt to initialize from the Redis client
+        available via RedisSchedulerModule. This mirrors the lazy pattern used
+        by `mem_cube` so downstream modules can safely access the tracker.
+        """
+        if self._status_tracker is None:
+            try:
+                self._status_tracker = TaskStatusTracker(self.redis)
+                # Propagate to submodules when created lazily
+                if self.dispatcher:
+                    self.dispatcher.status_tracker = self._status_tracker
+                if self.memos_message_queue:
+                    self.memos_message_queue.set_status_tracker(self._status_tracker)
+            except Exception as e:
+                logger.warning(f"Failed to lazily initialize status_tracker: {e}", exc_info=True)
+        return self._status_tracker
+
+    @status_tracker.setter
+    def status_tracker(self, value: TaskStatusTracker | None) -> None:
+        """Setter that also propagates tracker to dependent modules."""
+        self._status_tracker = value
+        try:
+            if self.dispatcher:
+                self.dispatcher.status_tracker = value
+            if self.memos_message_queue and value is not None:
+                self.memos_message_queue.set_status_tracker(value)
+        except Exception as e:
+            logger.warning(f"Failed to propagate status_tracker: {e}", exc_info=True)
+
+    @property
+    def feedback_server(self) -> SimpleMemFeedback:
+        """The memory cube associated with this MemChat."""
+        if self._feedback_server is None:
+            logger.error("feedback_server is None when accessed", stack_info=True)
+            try:
+                self.components = init_components()
+                self._feedback_server: SimpleMemFeedback = self.components["feedback_server"]
+            except Exception:
+                logger.info(
+                    "No environment available to initialize feedback_server. Using fallback feedback_server."
+                )
+        return self._feedback_server
+
+    @feedback_server.setter
+    def feedback_server(self, value: SimpleMemFeedback) -> None:
+        self._feedback_server = value
 
     @mem_cube.setter
     def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
         self.current_mem_cube = value
         self.retriever.mem_cube = value
+
+    @property
+    def mem_cubes(self) -> dict[str, BaseMemCube]:
+        """All available memory cubes registered to the scheduler.
+
+        Setting this property will also initialize `current_mem_cube` if it is not
+        already set, following the initialization pattern used in component_init.py
+        (i.e., calling `init_mem_cube(...)`), without introducing circular imports.
+        """
+        return self._mem_cubes
+
+    @mem_cubes.setter
+    def mem_cubes(self, value: dict[str, BaseMemCube]) -> None:
+        self._mem_cubes = value or {}
+
+        # Initialize current_mem_cube if not set yet and mem_cubes are available
+        try:
+            if self.current_mem_cube is None and self._mem_cubes:
+                selected_cube: BaseMemCube | None = None
+
+                # Prefer the cube matching current_mem_cube_id if provided
+                if self.current_mem_cube_id and self.current_mem_cube_id in self._mem_cubes:
+                    selected_cube = self._mem_cubes[self.current_mem_cube_id]
+                else:
+                    # Fall back to the first available cube deterministically
+                    first_id, first_cube = next(iter(self._mem_cubes.items()))
+                    self.current_mem_cube_id = first_id
+                    selected_cube = first_cube
+
+                if selected_cube is not None:
+                    # Use init_mem_cube to mirror component_init.py behavior
+                    # This sets self.mem_cube (and retriever.mem_cube), text_mem, and searcher.
+                    self.init_mem_cube(mem_cube=selected_cube)
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize current_mem_cube from mem_cubes: {e}", exc_info=True
+            )
 
     def transform_working_memories_to_monitors(
         self, query_keywords, memories: list[TextualMemoryItem]
@@ -301,6 +452,26 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             query_db_manager.sync_with_orm()
 
             query_history = query_db_manager.obj.get_queries_with_timesort()
+
+            original_count = len(original_memory)
+            # Filter out memories tagged with "mode:fast"
+            filtered_original_memory = []
+            for origin_mem in original_memory:
+                if "mode:fast" not in origin_mem.metadata.tags:
+                    filtered_original_memory.append(origin_mem)
+                else:
+                    logger.debug(
+                        f"Filtered out memory - ID: {getattr(origin_mem, 'id', 'unknown')}, Tags: {origin_mem.metadata.tags}"
+                    )
+            # Calculate statistics
+            filtered_count = original_count - len(filtered_original_memory)
+            remaining_count = len(filtered_original_memory)
+
+            logger.info(
+                f"Filtering complete. Removed {filtered_count} memories with tag 'mode:fast'. Remaining memories: {remaining_count}"
+            )
+            original_memory = filtered_original_memory
+
             memories_with_new_order, rerank_success_flag = (
                 self.retriever.process_and_rerank_memories(
                     queries=query_history,
@@ -533,53 +704,224 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
-        self.memos_message_queue.submit_messages(messages=messages)
+        """Submit messages for processing, with priority-aware dispatch.
+
+        - LEVEL_1 tasks dispatch immediately to the appropriate handler.
+        - Lower-priority tasks are enqueued via the configured message queue.
+        """
+        if isinstance(messages, ScheduleMessageItem):
+            messages = [messages]
+
+        if not messages:
+            return
+
+        current_trace_id = get_current_trace_id()
+
+        immediate_msgs: list[ScheduleMessageItem] = []
+        queued_msgs: list[ScheduleMessageItem] = []
+
+        for msg in messages:
+            # propagate request trace_id when available so monitor logs align with request logs
+            if current_trace_id:
+                msg.trace_id = current_trace_id
+
+            # basic metrics and status tracking
+            with suppress(Exception):
+                self.metrics.task_enqueued(user_id=msg.user_id, task_type=msg.label)
+
+            # ensure timestamp exists for monitoring
+            if getattr(msg, "timestamp", None) is None:
+                msg.timestamp = get_utc_now()
+
+            if self.status_tracker:
+                try:
+                    self.status_tracker.task_submitted(
+                        task_id=msg.item_id,
+                        user_id=msg.user_id,
+                        task_type=msg.label,
+                        mem_cube_id=msg.mem_cube_id,
+                        business_task_id=msg.task_id,
+                    )
+                except Exception:
+                    logger.warning("status_tracker.task_submitted failed", exc_info=True)
+
+            # honor disabled handlers
+            if self.disabled_handlers and msg.label in self.disabled_handlers:
+                logger.info(f"Skipping disabled handler: {msg.label} - {msg.content}")
+                continue
+
+            # decide priority path
+            task_priority = self.orchestrator.get_task_priority(task_label=msg.label)
+            if task_priority == TaskPriorityLevel.LEVEL_1:
+                immediate_msgs.append(msg)
+            else:
+                queued_msgs.append(msg)
+
+        # Dispatch high-priority tasks immediately
+        if immediate_msgs:
+            # emit enqueue events for consistency
+            for m in immediate_msgs:
+                emit_monitor_event(
+                    "enqueue",
+                    m,
+                    {
+                        "enqueue_ts": to_iso(getattr(m, "timestamp", None)),
+                        "event_duration_ms": 0,
+                        "total_duration_ms": 0,
+                    },
+                )
+
+            # simulate dequeue for immediately dispatched messages so monitor logs stay complete
+            for m in immediate_msgs:
+                try:
+                    now = time.time()
+                    enqueue_ts_obj = getattr(m, "timestamp", None)
+                    enqueue_epoch = None
+                    if isinstance(enqueue_ts_obj, int | float):
+                        enqueue_epoch = float(enqueue_ts_obj)
+                    elif hasattr(enqueue_ts_obj, "timestamp"):
+                        dt = enqueue_ts_obj
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        enqueue_epoch = dt.timestamp()
+
+                    queue_wait_ms = None
+                    if enqueue_epoch is not None:
+                        queue_wait_ms = max(0.0, now - enqueue_epoch) * 1000
+
+                    object.__setattr__(m, "_dequeue_ts", now)
+                    emit_monitor_event(
+                        "dequeue",
+                        m,
+                        {
+                            "enqueue_ts": to_iso(enqueue_ts_obj),
+                            "dequeue_ts": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                            "queue_wait_ms": queue_wait_ms,
+                            "event_duration_ms": queue_wait_ms,
+                            "total_duration_ms": queue_wait_ms,
+                        },
+                    )
+                    self.metrics.task_dequeued(user_id=m.user_id, task_type=m.label)
+                except Exception:
+                    logger.debug("Failed to emit dequeue for immediate task", exc_info=True)
+
+            user_cube_groups = group_messages_by_user_and_mem_cube(immediate_msgs)
+            for user_id, cube_groups in user_cube_groups.items():
+                for mem_cube_id, user_cube_msgs in cube_groups.items():
+                    label_groups: dict[str, list[ScheduleMessageItem]] = {}
+                    for m in user_cube_msgs:
+                        label_groups.setdefault(m.label, []).append(m)
+
+                    for label, msgs_by_label in label_groups.items():
+                        handler = self.dispatcher.handlers.get(
+                            label, self.dispatcher._default_message_handler
+                        )
+                        self.dispatcher.execute_task(
+                            user_id=user_id,
+                            mem_cube_id=mem_cube_id,
+                            task_label=label,
+                            msgs=msgs_by_label,
+                            handler_call_back=handler,
+                        )
+
+        # Enqueue lower-priority tasks
+        if queued_msgs:
+            self.memos_message_queue.submit_messages(messages=queued_msgs)
 
     def _submit_web_logs(
-        self, messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem]
+        self,
+        messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem],
+        additional_log_info: str | None = None,
     ) -> None:
         """Submit log messages to the web log queue and optionally to RabbitMQ.
 
         Args:
             messages: Single log message or list of log messages
         """
-        if self.rabbitmq_config is None:
-            return
-
         if isinstance(messages, ScheduleLogForWebItem):
             messages = [messages]  # transform single message to list
 
         for message in messages:
-            if not isinstance(message, ScheduleLogForWebItem):
-                error_msg = f"Invalid message type: {type(message)}, expected ScheduleLogForWebItem"
-                logger.error(error_msg)
-                raise TypeError(error_msg)
-
-            self._web_log_message_queue.put(message)
-            message_info = message.debug_info()
-            logger.debug(f"Submitted Scheduling log for web: {message_info}")
-
-            if self.is_rabbitmq_connected():
-                logger.info(f"Submitted Scheduling log to rabbitmq: {message_info}")
+            try:
+                # Always call publish; the publisher now caches when offline and flushes after reconnect
+                logger.info(
+                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message.model_dump_json(indent=2)}"
+                )
                 self.rabbitmq_publish_message(message=message.to_dict())
-        logger.debug(f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue.")
+                logger.info(
+                    "[DIAGNOSTIC] base_scheduler._submit_web_logs: publish dispatched "
+                    "item_id=%s task_id=%s label=%s",
+                    message.item_id,
+                    message.task_id,
+                    message.label,
+                )
+            except Exception as e:
+                logger.error(
+                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs failed: {e}", exc_info=True
+                )
+
+        logger.debug(
+            f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
+        )
 
     def get_web_log_messages(self) -> list[dict]:
         """
-        Retrieves all web log messages from the queue and returns them as a list of JSON-serializable dictionaries.
-
-        Returns:
-            List[dict]: A list of dictionaries representing ScheduleLogForWebItem objects,
-                       ready for JSON serialization. The list is ordered from oldest to newest.
+        Retrieve structured log messages from the queue and return JSON-serializable dicts.
         """
-        messages = []
+        raw_items: list[ScheduleLogForWebItem] = []
         while True:
             try:
-                item = self._web_log_message_queue.get_nowait()  # Thread-safe get
-                messages.append(item.to_dict())
+                raw_items.append(self._web_log_message_queue.get_nowait())
             except Exception:
                 break
-        return messages
+
+        def _map_label(label: str) -> str:
+            mapping = {
+                QUERY_TASK_LABEL: "addMessage",
+                ANSWER_TASK_LABEL: "addMessage",
+                ADD_TASK_LABEL: "addMemory",
+                MEM_UPDATE_TASK_LABEL: "updateMemory",
+                MEM_ORGANIZE_TASK_LABEL: "mergeMemory",
+                MEM_ARCHIVE_TASK_LABEL: "archiveMemory",
+            }
+            return mapping.get(label, label)
+
+        def _normalize_item(item: ScheduleLogForWebItem) -> dict:
+            data = item.to_dict()
+            data["label"] = _map_label(data.get("label"))
+            memcube_content = getattr(item, "memcube_log_content", None) or []
+            metadata = getattr(item, "metadata", None) or []
+
+            memcube_name = getattr(item, "memcube_name", None)
+            if not memcube_name and hasattr(self, "_map_memcube_name"):
+                memcube_name = self._map_memcube_name(item.mem_cube_id)
+            data["memcube_name"] = memcube_name
+
+            memory_len = getattr(item, "memory_len", None)
+            if memory_len is None:
+                if data["label"] == "mergeMemory":
+                    memory_len = len([c for c in memcube_content if c.get("type") != "postMerge"])
+                elif memcube_content:
+                    memory_len = len(memcube_content)
+                else:
+                    memory_len = 1 if item.log_content else 0
+
+            data["memcube_log_content"] = memcube_content
+            data["memory_len"] = memory_len
+
+            def _with_memory_time(meta: dict) -> dict:
+                enriched = dict(meta)
+                if "memory_time" not in enriched:
+                    enriched["memory_time"] = enriched.get("updated_at") or enriched.get(
+                        "update_at"
+                    )
+                return enriched
+
+            data["metadata"] = [_with_memory_time(m) for m in metadata]
+            data["log_title"] = ""
+            return data
+
+        return [_normalize_item(it) for it in raw_items]
 
     def _message_consumer(self) -> None:
         """
@@ -597,6 +939,50 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 messages = self.memos_message_queue.get_messages(batch_size=self.consume_batch)
 
                 if messages:
+                    now = time.time()
+                    for msg in messages:
+                        prev_context = get_current_context()
+                        try:
+                            # Set context for this message
+                            msg_context = RequestContext(
+                                trace_id=msg.trace_id,
+                                user_name=msg.user_name,
+                            )
+                            set_request_context(msg_context)
+
+                            enqueue_ts_obj = getattr(msg, "timestamp", None)
+                            enqueue_epoch = None
+                            if isinstance(enqueue_ts_obj, int | float):
+                                enqueue_epoch = float(enqueue_ts_obj)
+                            elif hasattr(enqueue_ts_obj, "timestamp"):
+                                dt = enqueue_ts_obj
+                                if dt.tzinfo is None:
+                                    dt = dt.replace(tzinfo=timezone.utc)
+                                enqueue_epoch = dt.timestamp()
+
+                            queue_wait_ms = None
+                            if enqueue_epoch is not None:
+                                queue_wait_ms = max(0.0, now - enqueue_epoch) * 1000
+
+                            # Avoid pydantic field enforcement by using object.__setattr__
+                            object.__setattr__(msg, "_dequeue_ts", now)
+                            emit_monitor_event(
+                                "dequeue",
+                                msg,
+                                {
+                                    "enqueue_ts": to_iso(enqueue_ts_obj),
+                                    "dequeue_ts": datetime.fromtimestamp(
+                                        now, tz=timezone.utc
+                                    ).isoformat(),
+                                    "queue_wait_ms": queue_wait_ms,
+                                    "event_duration_ms": queue_wait_ms,
+                                    "total_duration_ms": queue_wait_ms,
+                                },
+                            )
+                            self.metrics.task_dequeued(user_id=msg.user_id, task_type=msg.label)
+                        finally:
+                            # Restore the prior context of the consumer thread
+                            set_request_context(prev_context)
                     try:
                         import contextlib
 
@@ -614,8 +1000,28 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             except Exception as e:
                 # Don't log error for "No messages available in Redis queue" as it's expected
                 if "No messages available in Redis queue" not in str(e):
-                    logger.error(f"Unexpected error in message consumer: {e!s}")
+                    logger.error(f"Unexpected error in message consumer: {e!s}", exc_info=True)
                 time.sleep(self._consume_interval)  # Prevent tight error loops
+
+    def _monitor_loop(self):
+        while self._running:
+            try:
+                q_sizes = self.memos_message_queue.qsize()
+
+                for stream_key, queue_length in q_sizes.items():
+                    # Expected format: "memos:stream:{user_id}:{mem_cube_id}" or "{user_id}"
+                    parts = stream_key.split(":")
+                    if len(parts) >= 3:
+                        user_id = parts[2]
+                        self.metrics.update_queue_length(queue_length, user_id)
+                    elif not self.use_redis_queue:  # local queue
+                        user_id = stream_key
+                        self.metrics.update_queue_length(queue_length, user_id)
+
+            except Exception as e:
+                logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)
+
+            time.sleep(15)  # 每 15 秒采样一次
 
     def start(self) -> None:
         """
@@ -632,6 +1038,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
 
         self.start_consumer()
+        self.start_background_monitor()
+
+    def start_background_monitor(self):
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            return
+        self._monitor_thread = ContextThread(
+            target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor"
+        )
+        self._monitor_thread.start()
+        logger.info("Scheduler metrics monitor thread started.")
 
     def start_consumer(self) -> None:
         """
@@ -719,6 +1135,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Stop consumer first
         self.stop_consumer()
 
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=2.0)
+
         # Shutdown dispatcher
         if self.dispatcher:
             logger.info("Shutting down dispatcher...")
@@ -801,169 +1220,29 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
         return result
 
-    def mem_scheduler_wait(
-        self, timeout: float = 180.0, poll: float = 0.1, log_every: float = 0.01
-    ) -> bool:
-        """
-        Uses EWMA throughput, detects leaked `unfinished_tasks`, and waits for dispatcher.
-        """
-        deadline = time.monotonic() + timeout
+    def get_tasks_status(self):
+        """Delegate status collection to TaskScheduleMonitor."""
+        return self.task_schedule_monitor.get_tasks_status()
 
-        # --- helpers (local, no external deps) ---
-        def _unfinished() -> int:
-            """Prefer `unfinished_tasks`; fallback to `qsize()`."""
-            try:
-                u = getattr(self.memos_message_queue, "unfinished_tasks", None)
-                if u is not None:
-                    return int(u)
-            except Exception:
-                pass
-            try:
-                return int(self.memos_message_queue.qsize())
-            except Exception:
-                return 0
-
-        def _fmt_eta(seconds: float | None) -> str:
-            """Format seconds to human-readable string."""
-            if seconds is None or seconds != seconds or seconds == float("inf"):
-                return "unknown"
-            s = max(0, int(seconds))
-            h, s = divmod(s, 3600)
-            m, s = divmod(s, 60)
-            if h > 0:
-                return f"{h:d}h{m:02d}m{s:02d}s"
-            if m > 0:
-                return f"{m:d}m{s:02d}s"
-            return f"{s:d}s"
-
-        # --- EWMA throughput state (tasks/s) ---
-        alpha = 0.3
-        rate = 0.0
-        last_t = None  # type: float | None
-        last_done = 0
-
-        # --- dynamic totals & stuck detection ---
-        init_unfinished = _unfinished()
-        done_total = 0
-        last_unfinished = None
-        stuck_ticks = 0
-        next_log = 0.0
-
-        while True:
-            # 1) read counters
-            curr_unfinished = _unfinished()
-            try:
-                qsz = int(self.memos_message_queue.qsize())
-            except Exception:
-                qsz = -1
-
-            pend = run = 0
-            stats_fn = getattr(self.dispatcher, "stats", None)
-            if self.enable_parallel_dispatch and self.dispatcher is not None and callable(stats_fn):
-                try:
-                    st = (
-                        stats_fn()
-                    )  # expected: {'pending':int,'running':int,'done':int?,'rate':float?}
-                    run = int(st.get("running", 0))
-
-                except Exception:
-                    pass
-
-            if isinstance(self.memos_message_queue, SchedulerRedisQueue):
-                # For Redis queue, prefer XINFO GROUPS to compute pending
-                groups_info = self.memos_message_queue.redis.xinfo_groups(
-                    self.memos_message_queue.stream_key_prefix
-                )
-                if groups_info:
-                    for group in groups_info:
-                        if group.get("name") == self.memos_message_queue.consumer_group:
-                            pend = int(group.get("pending", pend))
-                            break
-            else:
-                pend = run
-
-            # 2) dynamic total (allows new tasks queued while waiting)
-            total_now = max(init_unfinished, done_total + curr_unfinished)
-            done_total = max(0, total_now - curr_unfinished)
-
-            # 3) update EWMA throughput
-            now = time.monotonic()
-            if last_t is None:
-                last_t = now
-            else:
-                dt = max(1e-6, now - last_t)
-                dc = max(0, done_total - last_done)
-                inst = dc / dt
-                rate = inst if rate == 0.0 else alpha * inst + (1 - alpha) * rate
-                last_t = now
-                last_done = done_total
-
-            eta = None if rate <= 1e-9 else (curr_unfinished / rate)
-
-            # 4) progress log (throttled)
-            if now >= next_log:
-                print(
-                    f"[mem_scheduler_wait] remaining≈{curr_unfinished} | throughput≈{rate:.2f} msg/s | ETA≈{_fmt_eta(eta)} "
-                    f"| qsize={qsz} pending={pend} running={run}"
-                )
-                next_log = now + max(0.2, log_every)
-
-            # 5) exit / stuck detection
-            idle_dispatcher = (
-                (pend == 0 and run == 0)
-                if (self.enable_parallel_dispatch and self.dispatcher is not None)
-                else True
-            )
-            if curr_unfinished == 0:
-                break
-            if curr_unfinished > 0 and qsz == 0 and idle_dispatcher:
-                if last_unfinished == curr_unfinished:
-                    stuck_ticks += 1
-                else:
-                    stuck_ticks = 0
-            else:
-                stuck_ticks = 0
-            last_unfinished = curr_unfinished
-
-            if stuck_ticks >= 3:
-                logger.warning(
-                    "mem_scheduler_wait: detected leaked 'unfinished_tasks' -> treating queue as drained"
-                )
-                break
-
-            if now >= deadline:
-                logger.warning("mem_scheduler_wait: queue did not drain before timeout")
-                return False
-
-            time.sleep(poll)
-
-        # 6) wait dispatcher (second stage)
-        remaining = max(0.0, deadline - time.monotonic())
-        if self.enable_parallel_dispatch and self.dispatcher is not None:
-            try:
-                ok = self.dispatcher.join(timeout=remaining if remaining > 0 else 0)
-            except TypeError:
-                ok = self.dispatcher.join()
-            if not ok:
-                logger.warning("mem_scheduler_wait: dispatcher did not complete before timeout")
-                return False
-
-        return True
+    def print_tasks_status(self, tasks_status: dict | None = None) -> None:
+        """Delegate pretty printing to TaskScheduleMonitor."""
+        self.task_schedule_monitor.print_tasks_status(tasks_status=tasks_status)
 
     def _gather_queue_stats(self) -> dict:
         """Collect queue/dispatcher stats for reporting."""
+        memos_message_queue = self.memos_message_queue.memos_message_queue
         stats: dict[str, int | float | str] = {}
         stats["use_redis_queue"] = bool(self.use_redis_queue)
         # local queue metrics
         if not self.use_redis_queue:
             try:
-                stats["qsize"] = int(self.memos_message_queue.qsize())
+                stats["qsize"] = int(memos_message_queue.qsize())
             except Exception:
                 stats["qsize"] = -1
             # unfinished_tasks if available
             try:
                 stats["unfinished_tasks"] = int(
-                    getattr(self.memos_message_queue, "unfinished_tasks", 0) or 0
+                    getattr(memos_message_queue, "unfinished_tasks", 0) or 0
                 )
             except Exception:
                 stats["unfinished_tasks"] = -1
