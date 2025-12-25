@@ -1,4 +1,5 @@
 import json
+import time
 
 from collections.abc import Generator
 
@@ -89,9 +90,28 @@ class OpenAILLM(BaseLLM):
         response = self.client.chat.completions.create(**request_body)
 
         reasoning_started = False
+        first_token_time = None
+        start_time = time.perf_counter()
 
         for chunk in response:
             delta = chunk.choices[0].delta
+
+            # Calculate TTFT on first token
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+                ttft_ms = (first_token_time - start_time) * 1000.0
+
+                # 尝试从响应中获取实际模型信息
+                actual_model = getattr(chunk, "model", None) or self.config.model_name_or_path
+                requested_model = self.config.model_name_or_path
+
+                # Print TTFT info - 显示请求模型和实际模型(如果不一致)
+                if actual_model != requested_model:
+                    logger.info(
+                        f"TTFT: {ttft_ms:.2f}ms | Requested: {requested_model} | Actual: {actual_model}"
+                    )
+                else:
+                    logger.info(f"TTFT: {ttft_ms:.2f}ms | {requested_model}")
 
             # Support for custom 'reasoning_content' (if present in OpenAI-compatible models like Qwen, DeepSeek)
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
