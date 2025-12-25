@@ -215,3 +215,12 @@ cython_debug/
 outputs
 
 evaluation/data/temporal_locomo
+
+# 忽略所有的依赖锁定文件
+*.lock
+
+# 忽略所有的配置文件
+*.toml
+
+# 忽略所有的 Shell 脚本文件
+*.sh

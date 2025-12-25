@@ -48,6 +48,8 @@ dependencies = [
     "python-dateutil (>=2.9.0.post0,<3.0.0)",
     "prometheus-client (>=0.23.1,<0.24.0)",
     "concurrent-log-handler (>=0.9.28,<1.0.0)",  # Process-safe rotating file handler
+    "langchain-text-splitters==1.0.0",
+    "psycopg2-binary>=2.9.11",
 ]
 
 [project.urls]
@@ -185,9 +187,9 @@ langgraph = "^0.5.1"
 pymysql = "^1.1.2"
 
 [[tool.poetry.source]]
-name = "mirrors"
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/"
-priority = "supplemental"
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+priority = "primary"
 
 
 [tool.pytest.ini_options]
