@@ -83,6 +83,7 @@ llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
 redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
+embedder = components["embedder"]
 
 
 # =============================================================================
@@ -294,6 +295,7 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
             ),
             memory_type=memory_req.memory_type or "text_mem",
             naive_mem_cube=naive_mem_cube,
+            embedder=embedder,
         )
 
 
