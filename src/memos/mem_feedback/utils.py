@@ -54,6 +54,38 @@ def should_keep_update(new_text: str, old_text: str) -> bool:
         return change_ratio < 0.2
 
 
+def general_split_into_chunks(items: list[dict], max_tokens_per_chunk: int = 500):
+    chunks = []
+    current_chunk = []
+    current_tokens = 0
+
+    for item in items:
+        item_text = str(item)
+        item_tokens = estimate_tokens(item_text)
+
+        if item_tokens > max_tokens_per_chunk:
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+
+            chunks.append([item])
+            current_tokens = 0
+
+        elif current_tokens + item_tokens <= max_tokens_per_chunk:
+            current_chunk.append(item)
+            current_tokens += item_tokens
+        else:
+            if current_chunk:
+                chunks.append(current_chunk)
+            current_chunk = [item]
+            current_tokens = item_tokens
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
 def split_into_chunks(memories: list[TextualMemoryItem], max_tokens_per_chunk: int = 500):
     chunks = []
     current_chunk = []

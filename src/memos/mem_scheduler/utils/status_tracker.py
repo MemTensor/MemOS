@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 class TaskStatusTracker:
     @require_python_package(import_name="redis", install_command="pip install redis")
-    def __init__(self, redis_client: "redis.Redis"):
+    def __init__(self, redis_client: "redis.Redis | None"):
         self.redis = redis_client
 
     def _get_key(self, user_id: str) -> str:
@@ -41,6 +41,9 @@ class TaskStatusTracker:
             mem_cube_id: Memory cube identifier
             business_task_id: Optional business-level task ID (one task_id can have multiple item_ids)
         """
+        if not self.redis:
+            return
+
         key = self._get_key(user_id)
         payload = {
             "status": "waiting",
@@ -61,6 +64,9 @@ class TaskStatusTracker:
         self.redis.expire(key, timedelta(days=7))
 
     def task_started(self, task_id: str, user_id: str):
+        if not self.redis:
+            return
+
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
         if not existing_data_json:
@@ -77,6 +83,9 @@ class TaskStatusTracker:
         self.redis.expire(key, timedelta(days=7))
 
     def task_completed(self, task_id: str, user_id: str):
+        if not self.redis:
+            return
+
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
         if not existing_data_json:
@@ -91,6 +100,9 @@ class TaskStatusTracker:
         self.redis.expire(key, timedelta(days=7))
 
     def task_failed(self, task_id: str, user_id: str, error_message: str):
+        if not self.redis:
+            return
+
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
         if not existing_data_json:
@@ -108,11 +120,17 @@ class TaskStatusTracker:
         self.redis.expire(key, timedelta(days=7))
 
     def get_task_status(self, task_id: str, user_id: str) -> dict | None:
+        if not self.redis:
+            return None
+
         key = self._get_key(user_id)
         data = self.redis.hget(key, task_id)
         return json.loads(data) if data else None
 
     def get_all_tasks_for_user(self, user_id: str) -> dict[str, dict]:
+        if not self.redis:
+            return {}
+
         key = self._get_key(user_id)
         all_tasks = self.redis.hgetall(key)
         return {tid: json.loads(t_data) for tid, t_data in all_tasks.items()}
@@ -132,6 +150,9 @@ class TaskStatusTracker:
             - If any item is 'failed' → 'failed'
             Returns None if task_id not found.
         """
+        if not self.redis:
+            return None
+
         # Get all item_ids for this task_id
         task_items_key = self._get_task_items_key(user_id, business_task_id)
         item_ids = self.redis.smembers(task_items_key)
@@ -180,6 +201,9 @@ class TaskStatusTracker:
         Returns:
             dict: {user_id: {task_id: task_data, ...}, ...}
         """
+        if not self.redis:
+            return {}
+
         all_users_tasks = {}
         cursor: int | str = 0
         while True:
