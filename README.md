@@ -117,6 +117,57 @@ showcasing its capabilities in **information extraction**, **temporal and cross-
     - **Parametric Memory**: Stores model adaptation parameters (e.g., LoRA weights).
 - **🔌 Extensible**: Easily extend and customize memory modules, data sources, and LLM integrations.
 
+
+## 📦 Installation
+
+### Install via pip
+
+```bash
+pip install MemoryOS
+```
+
+### Optional Dependencies
+
+MemOS provides several optional dependency groups for different features. You can install them based on your needs.
+
+| Feature               | Package Name              |
+| --------------------- | ------------------------- |
+| Tree Memory           | `MemoryOS[tree-mem]`      |
+| Memory Reader         | `MemoryOS[mem-reader]`    |
+| Memory Scheduler      | `MemoryOS[mem-scheduler]` |
+
+Example installation commands:
+
+```bash
+pip install MemoryOS[tree-mem]
+pip install MemoryOS[tree-mem,mem-reader]
+pip install MemoryOS[mem-scheduler]
+pip install MemoryOS[tree-mem,mem-reader,mem-scheduler]
+```
+
+### External Dependencies
+
+#### Ollama Support
+
+To use MemOS with [Ollama](https://ollama.com/), first install the Ollama CLI:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+#### Transformers Support
+
+To use functionalities based on the `transformers` library, ensure you have [PyTorch](https://pytorch.org/get-started/locally/) installed (CUDA version recommended for GPU acceleration).
+
+#### Download Examples
+
+To download example code, data and configurations, run the following command:
+
+```bash
+memos download_examples
+```
+
+
 ## 🚀 Getting Started
 
 ### ⭐️ MemOS online API
@@ -235,55 +286,6 @@ res = client.create_knowledgebase(
     knowledgebase_description=knowledgebase_description
 )
 print(f"result: {res}")
-```
-
-## 📦 Installation
-
-### Install via pip
-
-```bash
-pip install MemoryOS
-```
-
-### Optional Dependencies
-
-MemOS provides several optional dependency groups for different features. You can install them based on your needs.
-
-| Feature               | Package Name              |
-| --------------------- | ------------------------- |
-| Tree Memory           | `MemoryOS[tree-mem]`      |
-| Memory Reader         | `MemoryOS[mem-reader]`    |
-| Memory Scheduler      | `MemoryOS[mem-scheduler]` |
-
-Example installation commands:
-
-```bash
-pip install MemoryOS[tree-mem]
-pip install MemoryOS[tree-mem,mem-reader]
-pip install MemoryOS[mem-scheduler]
-pip install MemoryOS[tree-mem,mem-reader,mem-scheduler]
-```
-
-### External Dependencies
-
-#### Ollama Support
-
-To use MemOS with [Ollama](https://ollama.com/), first install the Ollama CLI:
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-#### Transformers Support
-
-To use functionalities based on the `transformers` library, ensure you have [PyTorch](https://pytorch.org/get-started/locally/) installed (CUDA version recommended for GPU acceleration).
-
-#### Download Examples
-
-To download example code, data and configurations, run the following command:
-
-```bash
-memos download_examples
 ```
 
 ## 💬 Community & Support
