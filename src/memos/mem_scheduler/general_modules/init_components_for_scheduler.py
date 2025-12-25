@@ -418,6 +418,7 @@ def init_components() -> dict[str, Any]:
         mem_reader=mem_reader,
         searcher=searcher,
         reranker=feedback_reranker,
+        pref_mem=pref_mem,
     )
     # Return all components as a dictionary for easy access and extension
     return {"naive_mem_cube": naive_mem_cube, "feedback_server": feedback_server}
