@@ -55,12 +55,19 @@ class SearchHandler(BaseHandler):
         """
         self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
 
+        # Increase recall pool if deduplication is enabled to ensure diversity
+        original_top_k = search_req.top_k
+        if search_req.dedup == "sim":
+            search_req.top_k = original_top_k * 5
+
         cube_view = self._build_cube_view(search_req)
 
         results = cube_view.search_memories(search_req)
         if search_req.dedup == "sim":
-            results = self._dedup_text_memories(results, search_req.top_k)
+            results = self._dedup_text_memories(results, original_top_k)
             self._strip_embeddings(results)
+            # Restore original top_k for downstream logic or response metadata
+            search_req.top_k = original_top_k
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
@@ -104,35 +111,18 @@ class SearchHandler(BaseHandler):
             bucket_idx = flat[idx][0]
             if len(selected_by_bucket[bucket_idx]) >= target_top_k:
                 continue
-            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.85):
+            # Use 0.92 threshold strictly
+            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.92):
                 selected_by_bucket[bucket_idx].append(idx)
                 selected_global.append(idx)
 
-        for bucket_idx in range(len(buckets)):
-            if len(selected_by_bucket[bucket_idx]) >= min(
-                target_top_k, len(indices_by_bucket[bucket_idx])
-            ):
-                continue
-            remaining_indices = [
-                idx
-                for idx in indices_by_bucket.get(bucket_idx, [])
-                if idx not in selected_by_bucket[bucket_idx]
-            ]
-            if not remaining_indices:
-                continue
-            # Fill to target_top_k with the least-similar candidates to preserve diversity.
-            remaining_indices.sort(
-                key=lambda idx: self._max_similarity(idx, selected_global, similarity_matrix)
-            )
-            for idx in remaining_indices:
-                if len(selected_by_bucket[bucket_idx]) >= target_top_k:
-                    break
-                selected_by_bucket[bucket_idx].append(idx)
-                selected_global.append(idx)
+        # Removed the 'filling' logic that was pulling back similar items.
+        # Now it will only return items that truly pass the 0.92 threshold,
+        # up to target_top_k.
 
         for bucket_idx, bucket in enumerate(buckets):
             selected_indices = selected_by_bucket.get(bucket_idx, [])
-            bucket["memories"] = [flat[i][1] for i in selected_indices[:target_top_k]]
+            bucket["memories"] = [flat[i][1] for i in selected_indices]
         return results
 
     @staticmethod
