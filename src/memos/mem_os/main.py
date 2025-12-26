@@ -310,7 +310,7 @@ class MOS(MOSCore):
         # Handle activation memory if enabled (same as core method)
         past_key_values = None
         if self.config.enable_activation_memory:
-            if self.config.chat_model.backend != "huggingface":
+            if self.config.chat_model.backend not in ["huggingface", "huggingface_singleton"]:
                 logger.error(
                     "Activation memory only used for huggingface backend. Skipping activation memory."
                 )

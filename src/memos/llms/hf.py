@@ -1,6 +1,8 @@
 from collections.abc import Generator
 from typing import Any
 
+import torch
+
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -37,9 +39,14 @@ class HFLLM(BaseLLM):
             self.config.model_name_or_path = "Qwen/Qwen3-1.7B"
 
         # Initialize hf model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
-        )
+        if torch.backends.mps.is_available():
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name_or_path, torch_dtype="auto"
+            ).to("mps")
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config.model_name_or_path, use_fast=True
         )

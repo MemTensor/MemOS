@@ -787,7 +787,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             Total number of messages across all matching streams.
         """
         if not self._redis_conn:
-            return 0
+            return {}
 
         total_size = 0
         try:

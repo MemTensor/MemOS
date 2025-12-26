@@ -2,9 +2,7 @@ import os
 import pickle
 
 from datetime import datetime
-from importlib.metadata import version
 
-from packaging.version import Version
 from transformers import DynamicCache
 
 from memos.configs.memory import KVCacheMemoryConfig
@@ -211,10 +209,24 @@ class KVCacheMemory(BaseActMemory):
             return caches[0]
 
         merged = DynamicCache()
-        num_layers = len(caches[0].key_cache)
 
-        if Version(version("transformers")) >= Version("4.54.0"):
-            merged.append_new_layers(num_layers - 1)
+        # Check for new structure (layers)
+        if hasattr(caches[0], "layers"):
+            num_layers = len(caches[0].layers)
+
+            # Ensure merged has layers attribute and populate it
+            if not hasattr(merged, "layers"):
+                merged.layers = []
+
+            if num_layers > 0:
+                # Get the class of the layer from the first cache
+                # We assume all caches use the same layer class
+                layer_cls = type(caches[0].layers[0])
+
+                # Populate merged.layers
+                while len(merged.layers) < num_layers:
+                    merged.layers.append(layer_cls())
+
             for layer in range(num_layers):
                 # gather all K and V for this layer
                 keys = [c.layers[layer].keys for c in caches]
@@ -223,7 +235,10 @@ class KVCacheMemory(BaseActMemory):
                 merged.layers[layer].keys = torch.cat(keys, dim=-2)
                 merged.layers[layer].values = torch.cat(vals, dim=-2)
 
-        else:
+        # Check for old structure (key_cache)
+        elif hasattr(caches[0], "key_cache"):
+            num_layers = len(caches[0].key_cache)
+
             for layer in range(num_layers):
                 # gather all K and V for this layer
                 keys = [c.key_cache[layer] for c in caches]
@@ -231,6 +246,11 @@ class KVCacheMemory(BaseActMemory):
                 # single concat per layer
                 merged.key_cache.append(torch.cat(keys, dim=-2))
                 merged.value_cache.append(torch.cat(vals, dim=-2))
+
+        else:
+            raise AttributeError(
+                "DynamicCache object has neither 'layers' nor 'key_cache' attributes"
+            )
 
         return merged
 
