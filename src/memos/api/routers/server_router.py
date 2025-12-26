@@ -36,6 +36,8 @@ from memos.api.product_models import (
     GetMemoryPlaygroundRequest,
     GetMemoryRequest,
     GetMemoryResponse,
+    GetUserNamesByMemoryIdsRequest,
+    GetUserNamesByMemoryIdsResponse,
     MemoryResponse,
     SearchResponse,
     StatusResponse,
@@ -43,6 +45,7 @@ from memos.api.product_models import (
     SuggestionResponse,
     TaskQueueResponse,
 )
+from memos.graph_dbs.polardb import PolarDBGraphDB
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
@@ -83,6 +86,8 @@ llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
 redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
+embedder = components["embedder"]
+graph_db = components["graph_db"]
 
 
 # =============================================================================
@@ -294,6 +299,7 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
             ),
             memory_type=memory_req.memory_type or "text_mem",
             naive_mem_cube=naive_mem_cube,
+            embedder=embedder,
         )
 
 
@@ -327,3 +333,27 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
     This endpoint uses the class-based FeedbackHandler for better code organization.
     """
     return feedback_handler.handle_feedback_memories(feedback_req)
+
+
+# =============================================================================
+# Other API Endpoints (for internal use)
+# =============================================================================
+
+
+@router.get(
+    "/get_user_names_by_memory_ids",
+    summary="Get user names by memory ids",
+    response_model=GetUserNamesByMemoryIdsResponse,
+)
+def get_user_names_by_memory_ids(memory_ids: GetUserNamesByMemoryIdsRequest):
+    """Get user names by memory ids."""
+    if not isinstance(graph_db, PolarDBGraphDB):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "graph_db must be an instance of PolarDBGraphDB to use "
+                "get_user_names_by_memory_ids"
+                f"current graph_db is: {graph_db.__class__.__name__}"
+            ),
+        )
+    return graph_db.get_user_names_by_memory_ids(memory_ids=memory_ids)
