@@ -13,7 +13,13 @@ from io import BytesIO
 
 def export_openapi(output: str) -> bool:
     """Export OpenAPI schema to JSON file."""
-    from memos.api.start_api import app
+    from fastapi import FastAPI
+
+    from memos.api.routers.server_router import router
+
+    # Create a temporary FastAPI app to generate OpenAPI schema from router
+    app = FastAPI(title="MemOS API", version="1.0.0")
+    app.include_router(router)
 
     # Create directory if it doesn't exist
     if os.path.dirname(output):
