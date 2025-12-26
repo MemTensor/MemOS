@@ -311,7 +311,7 @@ class MOSCore:
         past_key_values = None
 
         if self.config.enable_activation_memory:
-            if self.config.chat_model.backend != "huggingface":
+            if self.config.chat_model.backend not in ["huggingface", "huggingface_singleton"]:
                 logger.error(
                     "Activation memory only used for huggingface backend. Skipping activation memory."
                 )
@@ -498,7 +498,9 @@ class MOSCore:
         existing_cube = self.user_manager.get_cube(mem_cube_id)
 
         # check the embedder is it consistent with MOSConfig
-        if self.config.mem_reader.config.embedder != (
+        if hasattr(
+            self.mem_cubes[mem_cube_id].text_mem.config, "embedder"
+        ) and self.config.mem_reader.config.embedder != (
             cube_embedder := self.mem_cubes[mem_cube_id].text_mem.config.embedder
         ):
             logger.warning(
