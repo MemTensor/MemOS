@@ -24,6 +24,7 @@ def timed_with_status(
     - log_extra_args:
         - can be a dict: fixed contextual fields that are always attached to logs;
         - or a callable: like `fn(*args, **kwargs) -> dict`, used to dynamically generate contextual fields at runtime.
+    - target_models: list of target models to filter performance tracking
     """
 
     if isinstance(log_args, str):
@@ -54,6 +55,7 @@ def timed_with_status(
                     return result
             finally:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
+                total_time = elapsed_ms / 1000.0  # Convert to seconds
 
                 ctx_parts = []
                 # 1) Collect parameters from kwargs by name
@@ -85,12 +87,32 @@ def timed_with_status(
                         f", error_type: {exc_type.__name__}, error_message: {exc_message}"
                     )
 
-                msg = (
-                    f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
-                    f"took {elapsed_ms:.0f} ms{status_info}, args: {ctx_str}"
-                )
+                # Enhanced logging with content metrics for LLM calls
+                if success_flag and result:
+                    # Calculate content metrics
+                    content_length = len(result) if isinstance(result, str) else 0
+                    speed = content_length / total_time if total_time > 0 else 0
 
-                logger.info(msg)
+                    # Get model name from self.config
+                    self = args[0] if args else None
+                    model_name = (
+                        getattr(self, "config", {}).get("model_name_or_path", "unknown")
+                        if self
+                        else "unknown"
+                    )
+
+                    # Console output for target models with performance metrics
+                    logger.info(
+                        f"{model_name}: {log_prefix or fn.__name__} finished | Total time: {total_time:.2f}s | Speed: {speed:.2f} chars/s | Length: {content_length}"
+                    )
+                elif (
+                    success_flag
+                ):  # Standard logging for non-target models or when not tracking metrics
+                    msg = (
+                        f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
+                        f"took {elapsed_ms:.0f} ms{status_info}, args: {ctx_str}"
+                    )
+                    logger.info(msg)
 
         return wrapper
 
