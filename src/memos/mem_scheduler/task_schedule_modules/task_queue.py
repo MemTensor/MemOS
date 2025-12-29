@@ -153,28 +153,7 @@ class ScheduleTaskQueue:
                         )
 
     def get_messages(self, batch_size: int) -> list[ScheduleMessageItem]:
-        if isinstance(self.memos_message_queue, SchedulerRedisQueue):
-            return self.memos_message_queue.get_messages(batch_size=batch_size)
-        stream_keys = self.get_stream_keys()
-
-        if len(stream_keys) == 0:
-            return []
-
-        messages: list[ScheduleMessageItem] = []
-
-        for stream_key in stream_keys:
-            fetched = self.memos_message_queue.get(
-                stream_key=stream_key,
-                block=False,
-                batch_size=batch_size,
-            )
-
-            messages.extend(fetched)
-        if len(messages) > 0:
-            logger.debug(
-                f"Fetched {len(messages)} messages across users with per-user batch_size={batch_size}"
-            )
-        return messages
+        return self.memos_message_queue.get_messages(batch_size=batch_size)
 
     def clear(self):
         self.memos_message_queue.clear()

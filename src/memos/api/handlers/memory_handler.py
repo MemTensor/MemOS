@@ -23,6 +23,10 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
+    cosine_similarity_matrix,
+    find_best_unrelated_subgroup,
+)
 
 
 if TYPE_CHECKING:
@@ -37,6 +41,7 @@ def handle_get_all_memories(
     mem_cube_id: str,
     memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"],
     naive_mem_cube: Any,
+    embedder: Any,
 ) -> MemoryResponse:
     """
     Main handler for getting all memories.
@@ -58,6 +63,14 @@ def handle_get_all_memories(
         if memory_type == "text_mem":
             # Get all text memories from the graph database
             memories = naive_mem_cube.text_mem.get_all(user_name=mem_cube_id)
+
+            mems = [mem.get("memory", "") for mem in memories.get("nodes", [])]
+            embeddings = embedder.embed(mems)
+            similarity_matrix = cosine_similarity_matrix(embeddings)
+            selected_indices, _ = find_best_unrelated_subgroup(
+                embeddings, similarity_matrix, bar=0.9
+            )
+            memories["nodes"] = [memories["nodes"][i] for i in selected_indices]
 
             # Format and convert to tree structure
             memories_cleaned = remove_embedding_recursive(memories)
@@ -167,7 +180,12 @@ def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
     # TODO: Implement get memory with filter
-    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
+    memories = naive_mem_cube.text_mem.get_all(
+        user_name=get_mem_req.mem_cube_id,
+        user_id=get_mem_req.user_id,
+        page=get_mem_req.page,
+        page_size=get_mem_req.page_size,
+    )["nodes"]
     preferences: list[TextualMemoryItem] = []
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}

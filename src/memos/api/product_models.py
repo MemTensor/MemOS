@@ -319,6 +319,15 @@ class APISearchRequest(BaseRequest):
         description="Number of textual memories to retrieve (top-K). Default: 10.",
     )
 
+    dedup: Literal["no", "sim"] | None = Field(
+        None,
+        description=(
+            "Optional dedup option for textual memories. "
+            "Use 'no' for no dedup, 'sim' for similarity dedup. "
+            "If None, default exact-text dedup is applied."
+        ),
+    )
+
     pref_top_k: int = Field(
         6,
         ge=0,
@@ -763,6 +772,13 @@ class GetMemoryRequest(BaseRequest):
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
+    page: int | None = Field(
+        None,
+        description="Page number (starts from 1). If None, exports all data without pagination.",
+    )
+    page_size: int | None = Field(
+        None, description="Number of items per page. If None, exports all data without pagination."
+    )
 
 
 class DeleteMemoryRequest(BaseRequest):
@@ -1168,3 +1184,16 @@ class AllStatusResponse(BaseResponse[AllStatusResponseData]):
     """Response model for full scheduler status operations."""
 
     message: str = "Scheduler status summary retrieved successfully"
+
+
+# ─── Internal API Endpoints Models (for internal use) ───────────────────────────────────────────────────
+
+
+class GetUserNamesByMemoryIdsRequest(BaseRequest):
+    """Request model for getting user names by memory ids."""
+
+    memory_ids: list[str] = Field(..., description="Memory IDs")
+
+
+class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, list[str]]]):
+    """Response model for getting user names by memory ids."""
