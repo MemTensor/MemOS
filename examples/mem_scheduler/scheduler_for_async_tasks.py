@@ -25,7 +25,7 @@ def my_test_handler(messages: list[ScheduleMessageItem]):
         task_id = str(msg.item_id)
         file_path = tmp_dir / f"{task_id}.txt"
         try:
-            sleep(1)
+            sleep(5)
             file_path.write_text(f"Task {task_id} processed.\n")
             print(f"writing {file_path} done")
         except Exception as e:
@@ -58,7 +58,7 @@ TEST_HANDLER_LABEL = "test_handler"
 mem_scheduler.register_handlers({TEST_HANDLER_LABEL: my_test_handler})
 
 # 10s to restart
-mem_scheduler.orchestrator.tasks_min_idle_ms[TEST_HANDLER_LABEL] = 10_000
+mem_scheduler.orchestrator.tasks_min_idle_ms[TEST_HANDLER_LABEL] = 5_000
 
 tmp_dir = Path("./tmp")
 tmp_dir.mkdir(exist_ok=True)
@@ -88,6 +88,6 @@ while (
 print(f"[Result] Final files in tmp: {len(list(tmp_dir.glob('*.txt')))})")
 
 # 7. Stop the scheduler
+sleep(20)
 print("Stopping the scheduler...")
-sleep(5)
 mem_scheduler.stop()

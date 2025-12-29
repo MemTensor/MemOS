@@ -1,4 +1,3 @@
-import json
 import unittest
 
 from unittest.mock import MagicMock, patch
@@ -8,6 +7,7 @@ from memos.configs.mem_reader import SimpleStructMemReaderConfig
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.simple_struct import SimpleStructMemReader
+from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem
 
 
@@ -57,7 +57,6 @@ class TestSimpleStructMemReader(unittest.TestCase):
             '"summary": "Tom is currently focused on managing a new project with a tight schedule."}'
         )
         self.reader.llm.generate.return_value = mock_response
-        self.reader.parse_json_result = lambda x: json.loads(x)
 
         result = self.reader._process_chat_data(scene_data_info, info)
 
@@ -105,7 +104,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
     def test_parse_json_result_success(self):
         """Test successful JSON parsing."""
         raw_response = '{"summary": "Test summary", "tags": ["test"]}'
-        result = self.reader.parse_json_result(raw_response)
+        result = parse_json_result(raw_response)
 
         self.assertIsInstance(result, dict)
         self.assertIn("summary", result)
@@ -113,7 +112,7 @@ class TestSimpleStructMemReader(unittest.TestCase):
     def test_parse_json_result_failure(self):
         """Test failure in JSON parsing."""
         raw_response = "Invalid JSON string"
-        result = self.reader.parse_json_result(raw_response)
+        result = parse_json_result(raw_response)
 
         self.assertEqual(result, {})
 

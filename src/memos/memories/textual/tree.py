@@ -161,6 +161,7 @@ class TreeTextMemory(BaseTextMemory):
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -207,6 +208,7 @@ class TreeTextMemory(BaseTextMemory):
             user_name=user_name,
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            dedup=dedup,
             **kwargs,
         )
 
