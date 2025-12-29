@@ -622,7 +622,7 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 专注于从图像中提取事实性、可观察的信息。除非与用户记忆明显相关，否则避免推测。"""
 
 
-SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT = """
+SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT_BACKUP = """
 You are a strict, language-preserving memory validator and rewriter.
 
 Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
@@ -651,6 +651,39 @@ Output Format:
 - The "reason" must be brief and precise, e.g.:
   - "contains unsupported inference ...."
   - "fully grounded and concise"
+
+Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
+"""
+
+SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT = """
+You are a strict, language-preserving memory validator and rewriter.
+
+Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
+
+Rules:
+1. **Language Consistency**: Keep the exact original language of each memory—no translation or language switching.
+2. **Strict Factual Grounding**: Include only what is explicitly stated by the user in messages marked as [user]. Remove or flag anything not directly present in the user’s utterances—no assumptions, interpretations, predictions, generalizations, or content originating solely from [assistant].
+3. **Source Attribution Requirement**:
+   - Every memory must be clearly traceable to its source:
+     - If a fact appears **only in [assistant] messages** and **is not affirmed by [user]**, label it as “[assistant] memory”.
+     - If [assistant] states something and [user] explicitly contradicts or denies it, label it as “[assistant] memory, but [user] [brief quote or summary of denial]”.
+     - If a fact is stated by [user] —whether or not [assistant] also mentions it— it is attributed to “[user]” and may be retained without qualification.
+4. **Timestamp Exception**: Memories may include timestamps (e.g., "On December 19, 2026") derived from conversation metadata. If such a date likely reflects the conversation time (even if not in the `messages` list), do NOT treat it as hallucinated—but still attribute it to “[user]” only if the user mentioned or confirmed the date.
+
+Inputs:
+messages:
+{messages_inline}
+
+memories:
+{memories_inline}
+
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching input memory indices.
+- Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- The "reason" must be brief and precise, e.g.:
+  - "contains unsupported inference from [assistant]"
+  - "[assistant] memory, but [user] said 'I don't have a dog'"
+  - "fully grounded in [user]"
 
 Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
 """
