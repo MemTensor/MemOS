@@ -772,6 +772,13 @@ class GetMemoryRequest(BaseRequest):
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
+    page: int | None = Field(
+        None,
+        description="Page number (starts from 1). If None, exports all data without pagination.",
+    )
+    page_size: int | None = Field(
+        None, description="Number of items per page. If None, exports all data without pagination."
+    )
 
 
 class DeleteMemoryRequest(BaseRequest):
