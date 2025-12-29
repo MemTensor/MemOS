@@ -321,12 +321,20 @@ class TreeTextMemory(BaseTextMemory):
     ) -> list[TextualMemoryItem]:
         raise NotImplementedError
 
-    def get_all(self, user_name: str | None = None) -> dict:
+    def get_all(
+        self,
+        user_name: str,
+        user_id: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph(user_name=user_name)
+        all_items = self.graph_store.export_graph(
+            user_name=user_name, user_id=user_id, page=page, page_size=page_size
+        )
         return all_items
 
     def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
