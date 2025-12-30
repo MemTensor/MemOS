@@ -18,6 +18,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_UPDATE_TASK_LABEL,
     QUERY_TASK_LABEL,
 )
+from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import parse_yaml
 from memos.memories.activation.item import KVCacheItem
 from memos.memories.factory import MemoryFactory
@@ -186,17 +187,27 @@ def run_scheduler_example():
 
     def custom_answer_handler(messages: list[ScheduleMessageItem]):
         for msg in messages:
+            mem_cube = mos.mem_cubes.get(msg.mem_cube_id)
+            kv_mem = mem_cube.act_mem
+            for cache_item in kv_mem.get_all():
+                print(
+                    f"[scheduler] act memory:  {get_cache_info(cache_item.memory)} ({cache_item.records})"
+                )
             print(f"\n[scheduler] LLM回复了answer：{msg.content}")
 
     def custom_mem_update_handler(messages: list[ScheduleMessageItem]):
         for msg in messages:
             mem_cube = mos.mem_cubes.get(msg.mem_cube_id)
+            kv_mem = mem_cube.act_mem
             if mem_cube and mem_cube.text_mem:
                 results = mem_cube.text_mem.search(msg.content, top_k=3)
                 for mem in results:
-                    print(
-                        f"\n[scheduler] transform {mem.metadata.type} to working memory: {mem.memory} "
-                    )
+                    print(f"\n[scheduler] searched memories: {mem.memory}")
+
+                    cache_item = kv_mem.extract(mem.memory)
+                    cache_item.records.text_memories = [mem.memory]
+                    cache_item.records.timestamp = get_utc_now()
+                    kv_mem.add([cache_item])
 
     # Register custom handlers
     mos.mem_scheduler.dispatcher.register_handlers(
@@ -237,4 +248,6 @@ def run_scheduler_example():
 
 
 if __name__ == "__main__":
+    kv_cache_only()
+
     run_scheduler_example()
