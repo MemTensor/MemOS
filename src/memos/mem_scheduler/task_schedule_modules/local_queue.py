@@ -4,9 +4,18 @@ This module provides a local-based queue implementation that can replace
 the local memos_message_queue functionality in BaseScheduler.
 """
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+from memos.mem_scheduler.schemas.task_schemas import DEFAULT_STREAM_KEY_PREFIX
+from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
+from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 
 
@@ -16,26 +25,38 @@ logger = get_logger(__name__)
 class SchedulerLocalQueue(RedisSchedulerModule):
     def __init__(
         self,
-        maxsize: int,
+        maxsize: int = 0,
+        stream_key_prefix: str = DEFAULT_STREAM_KEY_PREFIX,
+        orchestrator: SchedulerOrchestrator | None = None,
+        status_tracker: TaskStatusTracker | None = None,
     ):
         """
         Initialize the SchedulerLocalQueue with a maximum queue size limit.
+        Arguments match SchedulerRedisQueue for compatibility.
 
         Args:
-            maxsize (int): Maximum number of messages allowed
-                                                 in each individual queue.
-                                                 If exceeded, subsequent puts will block
-                                                 or raise an exception based on `block` parameter.
+            maxsize (int): Maximum number of messages allowed in each individual queue.
+            stream_key_prefix (str): Prefix for stream keys (simulated).
+            orchestrator: SchedulerOrchestrator instance (ignored).
+            status_tracker: TaskStatusTracker instance (ignored).
         """
         super().__init__()
 
-        self.stream_key_prefix = "local_queue"
+        self.stream_key_prefix = stream_key_prefix or "local_queue"
 
         self.max_internal_message_queue_size = maxsize
+
         # Dictionary to hold per-stream queues: key = stream_key, value = Queue[ScheduleMessageItem]
         self.queue_streams: dict[str, Queue[ScheduleMessageItem]] = {}
+
+        self.orchestrator = orchestrator
+        self.status_tracker = status_tracker
+
+        self._is_listening = False
+        self._message_handler: Callable[[ScheduleMessageItem], None] | None = None
+
         logger.info(
-            f"SchedulerLocalQueue initialized with max_internal_message_queue_size={maxsize}"
+            f"SchedulerLocalQueue initialized with max_internal_message_queue_size={self.max_internal_message_queue_size}"
         )
 
     def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
@@ -86,7 +107,7 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         stream_key: str,
         block: bool = True,
         timeout: float | None = None,
-        batch_size: int | None = None,
+        batch_size: int | None = 1,
     ) -> list[ScheduleMessageItem]:
         if batch_size is not None and batch_size <= 0:
             logger.warning(
@@ -99,18 +120,19 @@ class SchedulerLocalQueue(RedisSchedulerModule):
             logger.error(f"Stream {stream_key} does not exist when trying to get messages.")
             return []
 
+        # Ensure we always request a batch so we get a list back
+        effective_batch_size = batch_size if batch_size is not None else 1
+
         # Note: Assumes custom Queue implementation supports batch_size parameter
         res = self.queue_streams[stream_key].get(
-            block=block, timeout=timeout, batch_size=batch_size
+            block=block, timeout=timeout, batch_size=effective_batch_size
         )
         logger.debug(
             f"Retrieved {len(res)} messages from queue '{stream_key}'. Current size: {self.queue_streams[stream_key].qsize()}"
         )
         return res
 
-    def get_nowait(
-        self, stream_key: str, batch_size: int | None = None
-    ) -> list[ScheduleMessageItem]:
+    def get_nowait(self, stream_key: str, batch_size: int | None = 1) -> list[ScheduleMessageItem]:
         """
         Non-blocking version of get(). Equivalent to get(stream_key, block=False, batch_size=batch_size).
 
@@ -170,35 +192,13 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         logger.debug(f"Current queue sizes: {sizes}")
         return sizes
 
-    def size(self) -> int:
-        """
-        Get the current size of the queue (total message count).
-        Compatible with SchedulerRedisQueue.
-        """
-        return self.unfinished_tasks
-
-    def empty(self) -> bool:
-        """
-        Check if the queue is empty.
-        Compatible with SchedulerRedisQueue.
-        """
-        return self.size() == 0
-
-    def full(self) -> bool:
-        """
-        Check if the queue is full.
-        Compatible with SchedulerRedisQueue.
-        """
-        # Local queue limits are per-stream (max_internal_message_queue_size).
-        # It is considered full only if all streams are full.
-        if not self.queue_streams:
-            return False
-
-        return all(queue.full() for queue in self.queue_streams.values())
-
-    def clear(self) -> None:
-        for queue in self.queue_streams.values():
-            queue.clear()
+    def clear(self, stream_key: str | None = None) -> None:
+        if stream_key:
+            if stream_key in self.queue_streams:
+                self.queue_streams[stream_key].clear()
+        else:
+            for queue in self.queue_streams.values():
+                queue.clear()
 
     @property
     def unfinished_tasks(self) -> int:
@@ -216,3 +216,32 @@ class SchedulerLocalQueue(RedisSchedulerModule):
         total = sum(queue.qsize() for queue in self.queue_streams.values())
         logger.debug(f"Total unfinished tasks across all queues: {total}")
         return total
+
+    def get_stream_keys(self, stream_key_prefix: str | None = None) -> list[str]:
+        """
+        Return list of active stream keys.
+        """
+        prefix = stream_key_prefix or self.stream_key_prefix
+        return [k for k in self.queue_streams if k.startswith(prefix)]
+
+    def size(self) -> int:
+        """
+        Total size of all queues.
+        """
+        return sum(q.qsize() for q in self.queue_streams.values())
+
+    def empty(self) -> bool:
+        """
+        Check if all queues are empty.
+        """
+        return self.size() == 0
+
+    def full(self) -> bool:
+        """
+        Check if any queue is full (approximate).
+        """
+        if self.max_internal_message_queue_size <= 0:
+            return False
+        return any(
+            q.qsize() >= self.max_internal_message_queue_size for q in self.queue_streams.values()
+        )
