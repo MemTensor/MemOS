@@ -1,6 +1,7 @@
 import json
 import os
 
+from datetime import datetime
 from typing import Any
 
 from memos.configs.memory import PreferenceTextMemoryConfig
@@ -262,8 +263,11 @@ class PreferenceTextMemory(BaseTextMemory):
         return all_memories
 
     def get_memory_by_filter(
-        self, filter: dict[str, Any] | None = None, **kwargs
-    ) -> list[TextualMemoryItem]:
+        self,
+        filter: dict[str, Any] | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ):
         """Get memories by filter.
         Args:
             filter (dict[str, Any]): Filter criteria.
@@ -272,14 +276,9 @@ class PreferenceTextMemory(BaseTextMemory):
         """
         collection_list = self.vector_db.config.collection_name
 
-        memories = {}
-        total_explicit_nodes = 0
-        total_implicit_nodes = 0
+        memories = []
         for collection_name in collection_list:
-            memories[collection_name] = []
-            db_items, total_count = self.vector_db.get_by_filter(
-                collection_name=collection_name, filter=filter, count_total=True, **kwargs
-            )
+            db_items = self.vector_db.get_by_filter(collection_name=collection_name, filter=filter)
             db_items_memory = [
                 TextualMemoryItem(
                     id=memo.id,
@@ -288,16 +287,23 @@ class PreferenceTextMemory(BaseTextMemory):
                 )
                 for memo in db_items
             ]
-            memories[collection_name].extend(db_items_memory)
+            memories.extend(db_items_memory)
 
-            if collection_name == "explicit_preference":
-                total_explicit_nodes = total_count
-            if collection_name == "implicit_preference":
-                total_implicit_nodes = total_count
-        memories["total_explicit_nodes"] = total_explicit_nodes
-        memories["total_implicit_nodes"] = total_implicit_nodes
+        # sort
+        sorted_memories = sorted(
+            memories,
+            key=lambda item: datetime.fromisoformat(item.metadata.created_at),
+            reverse=True,
+        )
+        if page and page_size:
+            if page < 1:
+                page = 1
+            if page_size < 1:
+                page_size = 10
+            pick_memories = sorted_memories[(page - 1) * page_size : page * page_size]
+            return pick_memories, len(sorted_memories)
 
-        return memories
+        return sorted_memories, len(sorted_memories)
 
     def delete(self, memory_ids: list[str]) -> None:
         """Delete memories.

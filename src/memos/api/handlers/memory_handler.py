@@ -192,26 +192,17 @@ def handle_get_memories(
     del memories["total_edges"]
 
     preferences: list[TextualMemoryItem] = []
-    total_explicit_nodes, total_implicit_nodes = 0, 0
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
             filter_params["user_id"] = get_mem_req.user_id
         if get_mem_req.mem_cube_id is not None:
             filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
-        preferences = naive_mem_cube.pref_mem.get_memory_by_filter(
+
+        preferences, total_pref = naive_mem_cube.pref_mem.get_memory_by_filter(
             filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
         )
-
-        for key, value_list in preferences.items():
-            if key in ["explicit_preference", "implicit_preference"]:
-                formatted_list = [format_memory_item(item) for item in value_list]
-                preferences[key] = formatted_list
-
-        total_explicit_nodes = preferences["total_explicit_nodes"]
-        total_implicit_nodes = preferences["total_implicit_nodes"]
-        del preferences["total_explicit_nodes"]
-        del preferences["total_implicit_nodes"]
+        format_preferences = [format_memory_item(item) for item in preferences]
 
     return GetMemoryResponse(
         message="Memories retrieved successfully",
@@ -227,9 +218,8 @@ def handle_get_memories(
             "pref_mem": [
                 {
                     "cube_id": get_mem_req.mem_cube_id,
-                    "memories": preferences,
-                    "total_explicit_nodes": total_explicit_nodes,
-                    "total_implicit_nodes": total_implicit_nodes,
+                    "memories": format_preferences,
+                    "total_nodes": total_pref,
                 }
             ],
         },
