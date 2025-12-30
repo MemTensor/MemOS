@@ -128,9 +128,6 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if self._status_tracker is None:
             try:
                 self._status_tracker = TaskStatusTracker(self.redis)
-                # Propagate to submodules when created lazily
-                if self.dispatcher:
-                    self.dispatcher.status_tracker = self._status_tracker
                 if self.memos_message_queue:
                     self.memos_message_queue.set_status_tracker(self._status_tracker)
             except Exception as e:
