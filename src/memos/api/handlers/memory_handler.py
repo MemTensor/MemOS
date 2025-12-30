@@ -192,6 +192,7 @@ def handle_get_memories(
     del memories["total_edges"]
 
     preferences: list[TextualMemoryItem] = []
+
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
