@@ -493,14 +493,7 @@ class MilvusVecDB(BaseVecDB):
         return items
 
     def get_by_filter(
-        self,
-        collection_name: str,
-        filter: dict[str, Any],
-        scroll_limit: int = 100,
-        page: int | None = None,
-        page_size: int | None = None,
-        count_total=False,
-        **kwargs,
+        self, collection_name: str, filter: dict[str, Any], scroll_limit: int = 100
     ) -> list[MilvusVecDBItem]:
         """
         Retrieve all items that match the given filter criteria using query_iterator.
@@ -513,74 +506,47 @@ class MilvusVecDB(BaseVecDB):
             List of items including vectors and payload that match the filter
         """
         expr = self._dict_to_expr(filter) if filter else ""
-        if count_total:
-            total_count = 0
-            count_iterator = self.client.query_iterator(
-                collection_name=collection_name,
-                filter=expr,
-                batch_size=scroll_limit,
-                output_fields=["id"],
-            )
-            try:
-                while True:
-                    batch = count_iterator.next()
-                    if not batch:
-                        break
-                    total_count += len(batch)
-            finally:
-                count_iterator.close()
+        all_items = []
 
-        result = []
-        skipped = 0
-        needed = page_size
-
+        # Use query_iterator for efficient pagination
         iterator = self.client.query_iterator(
             collection_name=collection_name,
             filter=expr,
             batch_size=scroll_limit,
-            output_fields=["*"],
+            output_fields=["*"],  # Include all fields including payload
         )
 
+        # Iterate through all batches
         try:
-            while needed > 0:
-                batch = iterator.next()
-                if not batch:
+            while True:
+                batch_results = iterator.next()
+
+                if not batch_results:
                     break
 
-                for entity in batch:
-                    skipped += 1
-
-                    if skipped <= (page - 1) * page_size:
-                        continue
-
+                # Convert batch results to MilvusVecDBItem objects
+                for entity in batch_results:
+                    # Extract the actual payload from Milvus entity
                     payload = entity.get("payload", {})
-                    item = MilvusVecDBItem(
-                        id=entity["id"],
-                        memory=entity.get("memory"),
-                        original_text=entity.get("original_text"),
-                        vector=entity.get("vector"),
-                        payload=payload,
+                    all_items.append(
+                        MilvusVecDBItem(
+                            id=entity["id"],
+                            memory=entity.get("memory"),
+                            original_text=entity.get("original_text"),
+                            vector=entity.get("vector"),
+                            payload=payload,
+                        )
                     )
-                    result.append(item)
-                    needed -= 1
-
-                    if needed <= 0:
-                        if count_total:
-                            return result, total_count
-                        return result
-
         except Exception as e:
-            logger.warning(f"Error during iteration: {e}")
+            logger.warning(
+                f"Error during Milvus query iteration: {e}. Returning {len(all_items)} items found so far."
+            )
         finally:
+            # Close the iterator
             iterator.close()
 
-        logger.info(
-            f"Milvus retrieve by filter completed - "
-            f"page {page}, page_size {page_size}, got {len(result)} items."
-        )
-        if count_total:
-            return result, total_count
-        return result
+        logger.info(f"Milvus retrieve by filter completed with {len(all_items)} results.")
+        return all_items
 
     def get_all(self, collection_name: str, scroll_limit=100) -> list[MilvusVecDBItem]:
         """Retrieve all items in the vector database."""
