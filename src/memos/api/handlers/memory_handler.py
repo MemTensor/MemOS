@@ -185,7 +185,10 @@ def handle_get_memories(
         user_id=get_mem_req.user_id,
         page=get_mem_req.page,
         page_size=get_mem_req.page_size,
-    )["nodes"]
+    )
+    memory_nodes = memories["nodes"]
+    memory_edges = memories["edges"]
+
     preferences: list[TextualMemoryItem] = []
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
@@ -198,8 +201,21 @@ def handle_get_memories(
     return GetMemoryResponse(
         message="Memories retrieved successfully",
         data={
-            "text_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": memories}],
-            "pref_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": preferences}],
+            "text_mem": [
+                {
+                    "cube_id": get_mem_req.mem_cube_id,
+                    "memories": memories,
+                    "total_nodes": len(memory_nodes),
+                    "total_edges": len(memory_edges),
+                }
+            ],
+            "pref_mem": [
+                {
+                    "cube_id": get_mem_req.mem_cube_id,
+                    "memories": preferences,
+                    "total_nodes": len(preferences),
+                }
+            ],
         },
     )
 
