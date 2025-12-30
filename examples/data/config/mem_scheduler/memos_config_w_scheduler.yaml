@@ -10,16 +10,12 @@ mem_reader:
   backend: "simple_struct"
   config:
     llm:
-      backend: "openai"
+      backend: "huggingface_singleton"
       config:
-        model_name_or_path: "gpt-4o-mini"
-        temperature: 0.8
-        max_tokens: 4096
-        top_p: 0.9
-        top_k: 50
+        model_name_or_path: "Qwen/Qwen3-1.7B"
+        temperature: 0.1
         remove_think_prefix: true
-        api_key: "sk-xxxxxx"
-        api_base: "https://api.openai.com/v1"
+        max_tokens: 4096
     embedder:
       backend: "ollama"
       config:

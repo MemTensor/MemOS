@@ -1150,10 +1150,16 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
 
         # Determine if pagination is needed
         use_pagination = page is not None and page_size is not None
@@ -1167,28 +1173,38 @@ class Neo4jGraphDB(BaseGraphDB):
             skip = (page - 1) * page_size
 
         with self.driver.session(database=self.db_name) as session:
-            # Export nodes
-            node_query = "MATCH (n:Memory)"
-            edge_query = "MATCH (a:Memory)-[r]->(b:Memory)"
+            # Build base queries
+            node_base_query = "MATCH (n:Memory)"
+            edge_base_query = "MATCH (a:Memory)-[r]->(b:Memory)"
             params = {}
 
             if not self.config.use_multi_db and (self.config.user_name or user_name):
-                node_query += " WHERE n.user_name = $user_name"
-                edge_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
+                node_base_query += " WHERE n.user_name = $user_name"
+                edge_base_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
                 params["user_name"] = user_name
 
-            # Add ORDER BY and pagination for nodes
-            node_query += " RETURN n ORDER BY n.id"
+            # Get total count of nodes before pagination
+            count_node_query = node_base_query + " RETURN COUNT(n) AS count"
+            count_node_result = session.run(count_node_query, params)
+            total_nodes = count_node_result.single()["count"]
+
+            # Export nodes with ORDER BY created_at DESC
+            node_query = node_base_query + " RETURN n ORDER BY n.created_at DESC, n.id DESC"
             if use_pagination:
                 node_query += f" SKIP {skip} LIMIT {page_size}"
 
             node_result = session.run(node_query, params)
             nodes = [self._parse_node(dict(record["n"])) for record in node_result]
 
-            # Export edges
-            # Add ORDER BY and pagination for edges
-            edge_query += (
-                " RETURN a.id AS source, b.id AS target, type(r) AS type ORDER BY a.id, b.id"
+            # Get total count of edges before pagination
+            count_edge_query = edge_base_query + " RETURN COUNT(r) AS count"
+            count_edge_result = session.run(count_edge_query, params)
+            total_edges = count_edge_result.single()["count"]
+
+            # Export edges with ORDER BY created_at DESC
+            edge_query = (
+                edge_base_query
+                + " RETURN a.id AS source, b.id AS target, type(r) AS type ORDER BY a.created_at DESC, b.created_at DESC, a.id DESC, b.id DESC"
             )
             if use_pagination:
                 edge_query += f" SKIP {skip} LIMIT {page_size}"
@@ -1199,7 +1215,12 @@ class Neo4jGraphDB(BaseGraphDB):
                 for record in edge_result
             ]
 
-            return {"nodes": nodes, "edges": edges}
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "total_nodes": total_nodes,
+                "total_edges": total_edges,
+            }
 
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
         """

@@ -261,7 +261,9 @@ class PreferenceTextMemory(BaseTextMemory):
             ]
         return all_memories
 
-    def get_memory_by_filter(self, filter: dict[str, Any] | None = None) -> list[TextualMemoryItem]:
+    def get_memory_by_filter(
+        self, filter: dict[str, Any] | None = None, **kwargs
+    ) -> list[TextualMemoryItem]:
         """Get memories by filter.
         Args:
             filter (dict[str, Any]): Filter criteria.
@@ -269,18 +271,32 @@ class PreferenceTextMemory(BaseTextMemory):
             list[TextualMemoryItem]: List of memories that match the filter.
         """
         collection_list = self.vector_db.config.collection_name
-        all_db_items = []
+
+        memories = {}
+        total_explicit_nodes = 0
+        total_implicit_nodes = 0
         for collection_name in collection_list:
-            db_items = self.vector_db.get_by_filter(collection_name=collection_name, filter=filter)
-            all_db_items.extend(db_items)
-        memories = [
-            TextualMemoryItem(
-                id=memo.id,
-                memory=memo.memory,
-                metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+            memories[collection_name] = []
+            db_items, total_count = self.vector_db.get_by_filter(
+                collection_name=collection_name, filter=filter, count_total=True, **kwargs
             )
-            for memo in all_db_items
-        ]
+            db_items_memory = [
+                TextualMemoryItem(
+                    id=memo.id,
+                    memory=memo.memory,
+                    metadata=PreferenceTextualMemoryMetadata(**memo.payload),
+                )
+                for memo in db_items
+            ]
+            memories[collection_name].extend(db_items_memory)
+
+            if collection_name == "explicit_preference":
+                total_explicit_nodes = total_count
+            if collection_name == "implicit_preference":
+                total_implicit_nodes = total_count
+        memories["total_explicit_nodes"] = total_explicit_nodes
+        memories["total_implicit_nodes"] = total_implicit_nodes
+
         return memories
 
     def delete(self, memory_ids: list[str]) -> None:
