@@ -94,6 +94,7 @@ class FileContentParser(BaseMessageParser):
 
             response = requests.get(url_str, timeout=30)
             response.raise_for_status()
+            response.encoding = 'utf-8'
 
             if not filename:
                 filename = os.path.basename(parsed_url.path) or "downloaded_file"
