@@ -2522,13 +2522,19 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
         logger.info(
             f"[export_graph] include_embedding: {include_embedding}, user_name: {user_name}, user_id: {user_id}, page: {page}, page_size: {page_size}"
         )
         user_id = user_id if user_id else self._get_config_value("user_id")
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
 
         # Determine if pagination is needed
         use_pagination = page is not None and page_size is not None
@@ -2546,12 +2552,6 @@ class PolarDBGraphDB(BaseGraphDB):
         conn = None
         try:
             conn = self._get_connection()
-            # Export nodes
-            # Build pagination clause if needed
-            pagination_clause = ""
-            if use_pagination:
-                pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
-
             # Build WHERE conditions
             where_conditions = []
             if user_name:
@@ -2567,12 +2567,30 @@ class PolarDBGraphDB(BaseGraphDB):
             if where_conditions:
                 where_clause = f"WHERE {' AND '.join(where_conditions)}"
 
+            # Get total count of nodes before pagination
+            count_node_query = f"""
+                SELECT COUNT(*)
+                FROM "{self.db_name}_graph"."Memory"
+                {where_clause}
+            """
+            logger.info(f"[export_graph nodes count] Query: {count_node_query}")
+            with conn.cursor() as cursor:
+                cursor.execute(count_node_query)
+                total_nodes = cursor.fetchone()[0]
+
+            # Export nodes
+            # Build pagination clause if needed
+            pagination_clause = ""
+            if use_pagination:
+                pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
+
             if include_embedding:
                 node_query = f"""
                     SELECT id, properties, embedding
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
-                    ORDER BY id
+                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                             id DESC
                     {pagination_clause}
                 """
             else:
@@ -2580,7 +2598,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     SELECT id, properties
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
-                    ORDER BY id
+                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                             id DESC
                     {pagination_clause}
                 """
             logger.info(f"[export_graph nodes] Query: {node_query}")
@@ -2591,9 +2610,11 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 for row in node_results:
                     if include_embedding:
-                        properties_json, embedding_json = row
+                        """row is (id, properties, embedding)"""
+                        _, properties_json, embedding_json = row
                     else:
-                        properties_json = row
+                        """row is (id, properties)"""
+                        _, properties_json = row
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -2605,20 +2626,13 @@ class PolarDBGraphDB(BaseGraphDB):
                     else:
                         properties = properties_json if properties_json else {}
 
-                    # # Build node data
-
-                    """
-                    # node_data = {
-                    #     "id": properties.get("id", node_id),
-                    #     "memory": properties.get("memory", ""),
-                    #     "metadata": properties
-                    # }
-                    """
-
-                    if include_embedding and embedding_json is not None:
+                    # Remove embedding field if include_embedding is False
+                    if not include_embedding:
+                        properties.pop("embedding", None)
+                    elif include_embedding and embedding_json is not None:
                         properties["embedding"] = embedding_json
 
-                    nodes.append(self._parse_node(json.loads(properties[1])))
+                    nodes.append(self._parse_node(properties))
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - NODES] Exception: {e}", exc_info=True)
@@ -2629,13 +2643,6 @@ class PolarDBGraphDB(BaseGraphDB):
         conn = None
         try:
             conn = self._get_connection()
-            # Export edges using cypher query
-            # Note: Apache AGE Cypher may not support SKIP, so we use SQL LIMIT/OFFSET on the subquery
-            # Build pagination clause if needed
-            edge_pagination_clause = ""
-            if use_pagination:
-                edge_pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
-
             # Build Cypher WHERE conditions for edges
             cypher_where_conditions = []
             if user_name:
@@ -2649,13 +2656,38 @@ class PolarDBGraphDB(BaseGraphDB):
             if cypher_where_conditions:
                 cypher_where_clause = f"WHERE {' AND '.join(cypher_where_conditions)}"
 
+            # Get total count of edges before pagination
+            count_edge_query = f"""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT * FROM cypher('{self.db_name}_graph', $$
+                    MATCH (a:Memory)-[r]->(b:Memory)
+                    {cypher_where_clause}
+                    RETURN a.id AS source, b.id AS target, type(r) as edge
+                    $$) AS (source agtype, target agtype, edge agtype)
+                ) AS edges
+            """
+            logger.info(f"[export_graph edges count] Query: {count_edge_query}")
+            with conn.cursor() as cursor:
+                cursor.execute(count_edge_query)
+                total_edges = cursor.fetchone()[0]
+
+            # Export edges using cypher query
+            # Note: Apache AGE Cypher may not support SKIP, so we use SQL LIMIT/OFFSET on the subquery
+            # Build pagination clause if needed
+            edge_pagination_clause = ""
+            if use_pagination:
+                edge_pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
+
             edge_query = f"""
                 SELECT source, target, edge FROM (
                     SELECT * FROM cypher('{self.db_name}_graph', $$
                     MATCH (a:Memory)-[r]->(b:Memory)
                     {cypher_where_clause}
                     RETURN a.id AS source, b.id AS target, type(r) as edge
-                    ORDER BY a.id, b.id
+                    ORDER BY COALESCE(a.created_at, '1970-01-01T00:00:00') DESC,
+                             COALESCE(b.created_at, '1970-01-01T00:00:00') DESC,
+                             a.id DESC, b.id DESC
                     $$) AS (source agtype, target agtype, edge agtype)
                 ) AS edges
                 {edge_pagination_clause}
@@ -2726,7 +2758,12 @@ class PolarDBGraphDB(BaseGraphDB):
         finally:
             self._return_connection(conn)
 
-        return {"nodes": nodes, "edges": edges}
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "total_nodes": total_nodes,
+            "total_edges": total_edges,
+        }
 
     @timed
     def count_nodes(self, scope: str, user_name: str | None = None) -> int:
@@ -5065,86 +5102,104 @@ class PolarDBGraphDB(BaseGraphDB):
         return total_deleted_count
 
     @timed
-    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, list[str]]:
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
         """Get user names by memory ids.
 
         Args:
             memory_ids: List of memory node IDs to query.
 
         Returns:
-            dict[str, list[str]]: Dictionary with one key:
-                - 'no_exist_memory_ids': List of memory_ids that do not exist (if any are missing)
-                - 'exist_user_names': List of distinct user names (if all memory_ids exist)
+            dict[str, str | None]: Dictionary mapping memory_id to user_name.
+                - Key: memory_id
+                - Value: user_name if exists, None if memory_id does not exist
+                Example: {"4918d700-6f01-4f4c-a076-75cc7b0e1a7c": "zhangsan", "2222222": None}
         """
         logger.info(f"[get_user_names_by_memory_ids] Querying memory_ids {memory_ids}")
         if not memory_ids:
-            return {"exist_user_names": []}
+            return {}
+
+        # Validate and normalize memory_ids
+        # Ensure all items are strings
+        normalized_memory_ids = []
+        for mid in memory_ids:
+            if not isinstance(mid, str):
+                mid = str(mid)
+            # Remove any whitespace
+            mid = mid.strip()
+            if mid:
+                normalized_memory_ids.append(mid)
+
+        if not normalized_memory_ids:
+            return {}
+
+        # Escape special characters for JSON string format in agtype
+        def escape_memory_id(mid: str) -> str:
+            """Escape special characters in memory_id for JSON string format."""
+            # Escape backslashes first, then double quotes
+            mid_str = mid.replace("\\", "\\\\")
+            mid_str = mid_str.replace('"', '\\"')
+            return mid_str
 
         # Build OR conditions for each memory_id
         id_conditions = []
-        for mid in memory_ids:
+        for mid in normalized_memory_ids:
+            # Escape special characters
+            escaped_mid = escape_memory_id(mid)
             id_conditions.append(
-                f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{mid}\"'::agtype"
+                f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{escaped_mid}\"'::agtype"
             )
 
         where_clause = f"({' OR '.join(id_conditions)})"
 
-        # Query to check which memory_ids exist
-        check_query = f"""
-            SELECT ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype)::text
+        # Query to get memory_id and user_name pairs
+        query = f"""
+            SELECT
+                ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype)::text AS memory_id,
+                ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype)::text AS user_name
             FROM "{self.db_name}_graph"."Memory"
             WHERE {where_clause}
         """
 
-        logger.info(f"[get_user_names_by_memory_ids] check_query: {check_query}")
+        logger.info(f"[get_user_names_by_memory_ids] query: {query}")
         conn = None
+        result_dict = {}
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                # Check which memory_ids exist
-                cursor.execute(check_query)
-                check_results = cursor.fetchall()
-                existing_ids = set()
-                for row in check_results:
-                    node_id = row[0]
-                    # Remove quotes if present
-                    if isinstance(node_id, str):
-                        node_id = node_id.strip('"').strip("'")
-                    existing_ids.add(node_id)
-
-                # Check if any memory_ids are missing
-                no_exist_list = [mid for mid in memory_ids if mid not in existing_ids]
-
-                # If any memory_ids are missing, return no_exist_memory_ids
-                if no_exist_list:
-                    logger.info(
-                        f"[get_user_names_by_memory_ids] Found {len(no_exist_list)} non-existing memory_ids: {no_exist_list}"
-                    )
-                    return {"no_exist_memory_ids": no_exist_list}
-
-                # All memory_ids exist, query user_names
-                user_names_query = f"""
-                    SELECT DISTINCT ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype)::text
-                    FROM "{self.db_name}_graph"."Memory"
-                    WHERE {where_clause}
-                """
-                logger.info(f"[get_user_names_by_memory_ids] user_names_query: {user_names_query}")
-
-                cursor.execute(user_names_query)
+                cursor.execute(query)
                 results = cursor.fetchall()
-                user_names = []
+
+                # Build result dictionary from query results
                 for row in results:
-                    user_name = row[0]
+                    memory_id_raw = row[0]
+                    user_name_raw = row[1]
+
                     # Remove quotes if present
-                    if isinstance(user_name, str):
-                        user_name = user_name.strip('"').strip("'")
-                    user_names.append(user_name)
+                    if isinstance(memory_id_raw, str):
+                        memory_id = memory_id_raw.strip('"').strip("'")
+                    else:
+                        memory_id = str(memory_id_raw).strip('"').strip("'")
+
+                    if isinstance(user_name_raw, str):
+                        user_name = user_name_raw.strip('"').strip("'")
+                    else:
+                        user_name = (
+                            str(user_name_raw).strip('"').strip("'") if user_name_raw else None
+                        )
+
+                    result_dict[memory_id] = user_name if user_name else None
+
+                # Set None for memory_ids that were not found
+                for mid in normalized_memory_ids:
+                    if mid not in result_dict:
+                        result_dict[mid] = None
 
                 logger.info(
-                    f"[get_user_names_by_memory_ids] All memory_ids exist, found {len(user_names)} distinct user_names"
+                    f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
+                    f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
                 )
 
-                return {"exist_user_names": user_names}
+                return result_dict
         except Exception as e:
             logger.error(
                 f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True

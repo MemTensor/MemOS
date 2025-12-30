@@ -1150,10 +1150,16 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
 
         # Determine if pagination is needed
         use_pagination = page is not None and page_size is not None
@@ -1167,28 +1173,38 @@ class Neo4jGraphDB(BaseGraphDB):
             skip = (page - 1) * page_size
 
         with self.driver.session(database=self.db_name) as session:
-            # Export nodes
-            node_query = "MATCH (n:Memory)"
-            edge_query = "MATCH (a:Memory)-[r]->(b:Memory)"
+            # Build base queries
+            node_base_query = "MATCH (n:Memory)"
+            edge_base_query = "MATCH (a:Memory)-[r]->(b:Memory)"
             params = {}
 
             if not self.config.use_multi_db and (self.config.user_name or user_name):
-                node_query += " WHERE n.user_name = $user_name"
-                edge_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
+                node_base_query += " WHERE n.user_name = $user_name"
+                edge_base_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
                 params["user_name"] = user_name
 
-            # Add ORDER BY and pagination for nodes
-            node_query += " RETURN n ORDER BY n.id"
+            # Get total count of nodes before pagination
+            count_node_query = node_base_query + " RETURN COUNT(n) AS count"
+            count_node_result = session.run(count_node_query, params)
+            total_nodes = count_node_result.single()["count"]
+
+            # Export nodes with ORDER BY created_at DESC
+            node_query = node_base_query + " RETURN n ORDER BY n.created_at DESC, n.id DESC"
             if use_pagination:
                 node_query += f" SKIP {skip} LIMIT {page_size}"
 
             node_result = session.run(node_query, params)
             nodes = [self._parse_node(dict(record["n"])) for record in node_result]
 
-            # Export edges
-            # Add ORDER BY and pagination for edges
-            edge_query += (
-                " RETURN a.id AS source, b.id AS target, type(r) AS type ORDER BY a.id, b.id"
+            # Get total count of edges before pagination
+            count_edge_query = edge_base_query + " RETURN COUNT(r) AS count"
+            count_edge_result = session.run(count_edge_query, params)
+            total_edges = count_edge_result.single()["count"]
+
+            # Export edges with ORDER BY created_at DESC
+            edge_query = (
+                edge_base_query
+                + " RETURN a.id AS source, b.id AS target, type(r) AS type ORDER BY a.created_at DESC, b.created_at DESC, a.id DESC, b.id DESC"
             )
             if use_pagination:
                 edge_query += f" SKIP {skip} LIMIT {page_size}"
@@ -1199,7 +1215,12 @@ class Neo4jGraphDB(BaseGraphDB):
                 for record in edge_result
             ]
 
-            return {"nodes": nodes, "edges": edges}
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "total_nodes": total_nodes,
+                "total_edges": total_edges,
+            }
 
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
         """
@@ -1811,67 +1832,53 @@ class Neo4jGraphDB(BaseGraphDB):
         logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
         return deleted_count
 
-    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, list[str]]:
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
         """Get user names by memory ids.
 
         Args:
             memory_ids: List of memory node IDs to query.
 
         Returns:
-            dict[str, list[str]]: Dictionary with one key:
-                - 'no_exist_memory_ids': List of memory_ids that do not exist (if any are missing)
-                - 'exist_user_names': List of distinct user names (if all memory_ids exist)
+            dict[str, str | None]: Dictionary mapping memory_id to user_name.
+                - Key: memory_id
+                - Value: user_name if exists, None if memory_id does not exist
+                Example: {"4918d700-6f01-4f4c-a076-75cc7b0e1a7c": "zhangsan", "2222222": None}
         """
         if not memory_ids:
-            return {"exist_user_names": []}
+            return {}
 
-        logger.info(f"[get_user_names_by_memory_ids] Checking {len(memory_ids)} memory_ids")
+        logger.info(f"[get_user_names_by_memory_ids] Querying memory_ids {memory_ids}")
 
         try:
             with self.driver.session(database=self.db_name) as session:
-                # Query to check which memory_ids exist
-                check_query = """
+                # Query to get memory_id and user_name pairs
+                query = """
                     MATCH (n:Memory)
                     WHERE n.id IN $memory_ids
-                    RETURN n.id AS id
+                    RETURN n.id AS memory_id, n.user_name AS user_name
                 """
+                logger.info(f"[get_user_names_by_memory_ids] query: {query}")
 
-                check_result = session.run(check_query, memory_ids=memory_ids)
-                existing_ids = set()
-                for record in check_result:
-                    node_id = record["id"]
-                    existing_ids.add(node_id)
+                result = session.run(query, memory_ids=memory_ids)
+                result_dict = {}
 
-                # Check if any memory_ids are missing
-                no_exist_list = [mid for mid in memory_ids if mid not in existing_ids]
-
-                # If any memory_ids are missing, return no_exist_memory_ids
-                if no_exist_list:
-                    logger.info(
-                        f"[get_user_names_by_memory_ids] Found {len(no_exist_list)} non-existing memory_ids: {no_exist_list}"
-                    )
-                    return {"no_exist_memory_ids": no_exist_list}
-
-                # All memory_ids exist, query user_names
-                user_names_query = """
-                    MATCH (n:Memory)
-                    WHERE n.id IN $memory_ids
-                    RETURN DISTINCT n.user_name AS user_name
-                """
-                logger.info(f"[get_user_names_by_memory_ids] user_names_query: {user_names_query}")
-
-                user_names_result = session.run(user_names_query, memory_ids=memory_ids)
-                user_names = []
-                for record in user_names_result:
+                # Build result dictionary from query results
+                for record in result:
+                    memory_id = record["memory_id"]
                     user_name = record["user_name"]
-                    if user_name:
-                        user_names.append(user_name)
+                    result_dict[memory_id] = user_name if user_name else None
+
+                # Set None for memory_ids that were not found
+                for mid in memory_ids:
+                    if mid not in result_dict:
+                        result_dict[mid] = None
 
                 logger.info(
-                    f"[get_user_names_by_memory_ids] All memory_ids exist, found {len(user_names)} distinct user_names"
+                    f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
+                    f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
                 )
 
-                return {"exist_user_names": user_names}
+                return result_dict
         except Exception as e:
             logger.error(
                 f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
