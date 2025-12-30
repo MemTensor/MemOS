@@ -2522,13 +2522,19 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
         logger.info(
             f"[export_graph] include_embedding: {include_embedding}, user_name: {user_name}, user_id: {user_id}, page: {page}, page_size: {page_size}"
         )
         user_id = user_id if user_id else self._get_config_value("user_id")
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
 
         # Determine if pagination is needed
         use_pagination = page is not None and page_size is not None
@@ -2546,12 +2552,6 @@ class PolarDBGraphDB(BaseGraphDB):
         conn = None
         try:
             conn = self._get_connection()
-            # Export nodes
-            # Build pagination clause if needed
-            pagination_clause = ""
-            if use_pagination:
-                pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
-
             # Build WHERE conditions
             where_conditions = []
             if user_name:
@@ -2567,12 +2567,30 @@ class PolarDBGraphDB(BaseGraphDB):
             if where_conditions:
                 where_clause = f"WHERE {' AND '.join(where_conditions)}"
 
+            # Get total count of nodes before pagination
+            count_node_query = f"""
+                SELECT COUNT(*)
+                FROM "{self.db_name}_graph"."Memory"
+                {where_clause}
+            """
+            logger.info(f"[export_graph nodes count] Query: {count_node_query}")
+            with conn.cursor() as cursor:
+                cursor.execute(count_node_query)
+                total_nodes = cursor.fetchone()[0]
+
+            # Export nodes
+            # Build pagination clause if needed
+            pagination_clause = ""
+            if use_pagination:
+                pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
+
             if include_embedding:
                 node_query = f"""
                     SELECT id, properties, embedding
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
-                    ORDER BY id
+                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                             id DESC
                     {pagination_clause}
                 """
             else:
@@ -2580,7 +2598,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     SELECT id, properties
                     FROM "{self.db_name}_graph"."Memory"
                     {where_clause}
-                    ORDER BY id
+                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                             id DESC
                     {pagination_clause}
                 """
             logger.info(f"[export_graph nodes] Query: {node_query}")
@@ -2591,9 +2610,11 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 for row in node_results:
                     if include_embedding:
-                        properties_json, embedding_json = row
+                        """row is (id, properties, embedding)"""
+                        _, properties_json, embedding_json = row
                     else:
-                        properties_json = row
+                        """row is (id, properties)"""
+                        _, properties_json = row
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -2605,20 +2626,13 @@ class PolarDBGraphDB(BaseGraphDB):
                     else:
                         properties = properties_json if properties_json else {}
 
-                    # # Build node data
-
-                    """
-                    # node_data = {
-                    #     "id": properties.get("id", node_id),
-                    #     "memory": properties.get("memory", ""),
-                    #     "metadata": properties
-                    # }
-                    """
-
-                    if include_embedding and embedding_json is not None:
+                    # Remove embedding field if include_embedding is False
+                    if not include_embedding:
+                        properties.pop("embedding", None)
+                    elif include_embedding and embedding_json is not None:
                         properties["embedding"] = embedding_json
 
-                    nodes.append(self._parse_node(json.loads(properties[1])))
+                    nodes.append(self._parse_node(properties))
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - NODES] Exception: {e}", exc_info=True)
@@ -2629,13 +2643,6 @@ class PolarDBGraphDB(BaseGraphDB):
         conn = None
         try:
             conn = self._get_connection()
-            # Export edges using cypher query
-            # Note: Apache AGE Cypher may not support SKIP, so we use SQL LIMIT/OFFSET on the subquery
-            # Build pagination clause if needed
-            edge_pagination_clause = ""
-            if use_pagination:
-                edge_pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
-
             # Build Cypher WHERE conditions for edges
             cypher_where_conditions = []
             if user_name:
@@ -2649,13 +2656,38 @@ class PolarDBGraphDB(BaseGraphDB):
             if cypher_where_conditions:
                 cypher_where_clause = f"WHERE {' AND '.join(cypher_where_conditions)}"
 
+            # Get total count of edges before pagination
+            count_edge_query = f"""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT * FROM cypher('{self.db_name}_graph', $$
+                    MATCH (a:Memory)-[r]->(b:Memory)
+                    {cypher_where_clause}
+                    RETURN a.id AS source, b.id AS target, type(r) as edge
+                    $$) AS (source agtype, target agtype, edge agtype)
+                ) AS edges
+            """
+            logger.info(f"[export_graph edges count] Query: {count_edge_query}")
+            with conn.cursor() as cursor:
+                cursor.execute(count_edge_query)
+                total_edges = cursor.fetchone()[0]
+
+            # Export edges using cypher query
+            # Note: Apache AGE Cypher may not support SKIP, so we use SQL LIMIT/OFFSET on the subquery
+            # Build pagination clause if needed
+            edge_pagination_clause = ""
+            if use_pagination:
+                edge_pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
+
             edge_query = f"""
                 SELECT source, target, edge FROM (
                     SELECT * FROM cypher('{self.db_name}_graph', $$
                     MATCH (a:Memory)-[r]->(b:Memory)
                     {cypher_where_clause}
                     RETURN a.id AS source, b.id AS target, type(r) as edge
-                    ORDER BY a.id, b.id
+                    ORDER BY COALESCE(a.created_at, '1970-01-01T00:00:00') DESC,
+                             COALESCE(b.created_at, '1970-01-01T00:00:00') DESC,
+                             a.id DESC, b.id DESC
                     $$) AS (source agtype, target agtype, edge agtype)
                 ) AS edges
                 {edge_pagination_clause}
@@ -2726,7 +2758,12 @@ class PolarDBGraphDB(BaseGraphDB):
         finally:
             self._return_connection(conn)
 
-        return {"nodes": nodes, "edges": edges}
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "total_nodes": total_nodes,
+            "total_edges": total_edges,
+        }
 
     @timed
     def count_nodes(self, scope: str, user_name: str | None = None) -> int:
