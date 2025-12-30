@@ -332,10 +332,10 @@ class TreeTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph(
+        graph_output = self.graph_store.export_graph(
             user_name=user_name, user_id=user_id, page=page, page_size=page_size
         )
-        return all_items
+        return graph_output
 
     def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
