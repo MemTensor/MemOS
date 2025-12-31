@@ -318,7 +318,7 @@ class GraphMemoryRetriever:
         query_embedding: list[list[float]],
         memory_scope: str,
         top_k: int = 20,
-        max_num: int = 5,
+        max_num: int = 20,
         status: str = "activated",
         cube_name: str | None = None,
         search_filter: dict | None = None,

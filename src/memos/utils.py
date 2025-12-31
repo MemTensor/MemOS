@@ -1,13 +1,11 @@
 import functools
 import time
+import traceback
 
 from memos.log import get_logger
 
 
 logger = get_logger(__name__)
-
-# Global threshold (seconds) for timing logs
-DEFAULT_TIME_BAR = 10.0
 
 
 def timed_with_status(
@@ -38,6 +36,7 @@ def timed_with_status(
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
             exc_type = None
+            exc_message = None
             result = None
             success_flag = False
 
@@ -47,6 +46,7 @@ def timed_with_status(
                 return result
             except Exception as e:
                 exc_type = type(e)
+                exc_message = traceback.format_exc()
                 success_flag = False
 
                 if fallback is not None and callable(fallback):
@@ -81,7 +81,9 @@ def timed_with_status(
                 status_info = f", status: {status}"
 
                 if not success_flag and exc_type is not None:
-                    status_info += f", error: {exc_type.__name__}"
+                    status_info += (
+                        f", error_type: {exc_type.__name__}, error_message: {exc_message}"
+                    )
 
                 msg = (
                     f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
@@ -97,7 +99,7 @@ def timed_with_status(
     return decorator(func)
 
 
-def timed(func=None, *, log=False, log_prefix=""):
+def timed(func=None, *, log=True, log_prefix=""):
     def decorator(fn):
         def wrapper(*args, **kwargs):
             start = time.perf_counter()
@@ -107,7 +109,8 @@ def timed(func=None, *, log=False, log_prefix=""):
             if log is not True:
                 return result
 
-            if elapsed_ms >= (DEFAULT_TIME_BAR * 1000.0):
+            # 100ms threshold
+            if elapsed_ms >= 100.0:
                 logger.info(f"[TIMER] {log_prefix or fn.__name__} took {elapsed_ms:.0f} ms")
 
             return result

@@ -119,9 +119,13 @@ class Searcher:
         info=None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         plugin=False,
     ):
-        deduped = self._deduplicate_results(retrieved_results)
+        if dedup == "no":
+            deduped = retrieved_results
+        else:
+            deduped = self._deduplicate_results(retrieved_results)
         final_results = self._sort_and_trim(
             deduped, top_k, plugin, search_tool_memory, tool_mem_top_k
         )
@@ -141,6 +145,7 @@ class Searcher:
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """
@@ -202,6 +207,7 @@ class Searcher:
             plugin=kwargs.get("plugin", False),
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            dedup=dedup,
         )
 
         logger.info(f"[SEARCH] Done. Total {len(final_results)} results.")
@@ -367,7 +373,6 @@ class Searcher:
                         mode=mode,
                     )
                 )
-
             results = []
             for t in tasks:
                 results.extend(t.result())

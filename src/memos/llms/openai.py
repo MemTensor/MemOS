@@ -31,21 +31,23 @@ class OpenAILLM(BaseLLM):
     @timed_with_status(
         log_prefix="OpenAI LLM",
         log_extra_args=lambda self, messages, **kwargs: {
-            "model_name_or_path": kwargs.get("model_name_or_path", self.config.model_name_or_path)
+            "model_name_or_path": kwargs.get("model_name_or_path", self.config.model_name_or_path),
+            "messages": messages,
         },
     )
     def generate(self, messages: MessageList, **kwargs) -> str:
         """Generate a response from OpenAI LLM, optionally overriding generation params."""
-        response = self.client.chat.completions.create(
-            model=kwargs.get("model_name_or_path", self.config.model_name_or_path),
-            messages=messages,
-            temperature=kwargs.get("temperature", self.config.temperature),
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-            top_p=kwargs.get("top_p", self.config.top_p),
-            extra_body=kwargs.get("extra_body", self.config.extra_body),
-            tools=kwargs.get("tools", NOT_GIVEN),
-            timeout=kwargs.get("timeout", 30),
-        )
+        request_body = {
+            "model": kwargs.get("model_name_or_path", self.config.model_name_or_path),
+            "messages": messages,
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "top_p": kwargs.get("top_p", self.config.top_p),
+            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+            "tools": kwargs.get("tools", NOT_GIVEN),
+        }
+        logger.info(f"OpenAI LLM Request body: {request_body}")
+        response = self.client.chat.completions.create(**request_body)
         logger.info(f"Response from OpenAI: {response.model_dump_json()}")
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)
         if isinstance(tool_calls, list) and len(tool_calls) > 0:
@@ -57,11 +59,11 @@ class OpenAILLM(BaseLLM):
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         if reasoning_content:
-            return reasoning_content + response_content
-        return response_content
+            return reasoning_content + (response_content or "")
+        return response_content or ""
 
     @timed_with_status(
-        log_prefix="OpenAI LLM",
+        log_prefix="OpenAI LLM Stream",
         log_extra_args=lambda self, messages, **kwargs: {
             "model_name_or_path": self.config.model_name_or_path
         },
@@ -72,16 +74,19 @@ class OpenAILLM(BaseLLM):
             logger.info("stream api not support tools")
             return
 
-        response = self.client.chat.completions.create(
-            model=self.config.model_name_or_path,
-            messages=messages,
-            stream=True,
-            temperature=kwargs.get("temperature", self.config.temperature),
-            max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-            top_p=kwargs.get("top_p", self.config.top_p),
-            extra_body=kwargs.get("extra_body", self.config.extra_body),
-            tools=kwargs.get("tools", NOT_GIVEN),
-        )
+        request_body = {
+            "model": self.config.model_name_or_path,
+            "messages": messages,
+            "stream": True,
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "top_p": kwargs.get("top_p", self.config.top_p),
+            "extra_body": kwargs.get("extra_body", self.config.extra_body),
+            "tools": kwargs.get("tools", NOT_GIVEN),
+        }
+
+        logger.info(f"OpenAI LLM Stream Request body: {request_body}")
+        response = self.client.chat.completions.create(**request_body)
 
         reasoning_started = False
 
@@ -146,7 +151,7 @@ class AzureLLM(BaseLLM):
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         else:
-            return response_content
+            return response_content or ""
 
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from Azure OpenAI LLM with optional reasoning support."""

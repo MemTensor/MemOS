@@ -1087,38 +1087,64 @@ def convert_activation_memory_to_serializable(
     serializable_items = []
 
     for item in act_mem_items:
+        key_layers = 0
+        val_layers = 0
+        device = "unknown"
+        dtype = "unknown"
+        key_shapes = []
+        value_shapes = []
+
+        if item.memory:
+            if hasattr(item.memory, "layers"):
+                key_layers = len(item.memory.layers)
+                val_layers = len(item.memory.layers)
+                if key_layers > 0:
+                    l0 = item.memory.layers[0]
+                    k0 = getattr(l0, "key_cache", getattr(l0, "keys", None))
+                    if k0 is not None:
+                        device = str(k0.device)
+                        dtype = str(k0.dtype)
+
+                for i, layer in enumerate(item.memory.layers):
+                    k = getattr(layer, "key_cache", getattr(layer, "keys", None))
+                    v = getattr(layer, "value_cache", getattr(layer, "values", None))
+                    if k is not None:
+                        key_shapes.append({"layer": i, "shape": list(k.shape)})
+                    if v is not None:
+                        value_shapes.append({"layer": i, "shape": list(v.shape)})
+
+            elif hasattr(item.memory, "key_cache"):
+                key_layers = len(item.memory.key_cache)
+                val_layers = len(item.memory.value_cache)
+                if key_layers > 0 and item.memory.key_cache[0] is not None:
+                    device = str(item.memory.key_cache[0].device)
+                    dtype = str(item.memory.key_cache[0].dtype)
+
+                for i, key_tensor in enumerate(item.memory.key_cache):
+                    if key_tensor is not None:
+                        key_shapes.append({"layer": i, "shape": list(key_tensor.shape)})
+
+                for i, val_tensor in enumerate(item.memory.value_cache):
+                    if val_tensor is not None:
+                        value_shapes.append({"layer": i, "shape": list(val_tensor.shape)})
+
         # Extract basic information that can be serialized
         serializable_item = {
             "id": item.id,
             "metadata": item.metadata,
             "memory_info": {
                 "type": "DynamicCache",
-                "key_cache_layers": len(item.memory.key_cache) if item.memory else 0,
-                "value_cache_layers": len(item.memory.value_cache) if item.memory else 0,
-                "device": str(item.memory.key_cache[0].device)
-                if item.memory and item.memory.key_cache
-                else "unknown",
-                "dtype": str(item.memory.key_cache[0].dtype)
-                if item.memory and item.memory.key_cache
-                else "unknown",
+                "key_cache_layers": key_layers,
+                "value_cache_layers": val_layers,
+                "device": device,
+                "dtype": dtype,
             },
         }
 
         # Add tensor shape information if available
-        if item.memory and item.memory.key_cache:
-            key_shapes = []
-            value_shapes = []
-
-            for i, key_tensor in enumerate(item.memory.key_cache):
-                if key_tensor is not None:
-                    key_shapes.append({"layer": i, "shape": list(key_tensor.shape)})
-
-                if i < len(item.memory.value_cache) and item.memory.value_cache[i] is not None:
-                    value_shapes.append(
-                        {"layer": i, "shape": list(item.memory.value_cache[i].shape)}
-                    )
-
+        if key_shapes:
             serializable_item["memory_info"]["key_shapes"] = key_shapes
+        if value_shapes:
             serializable_item["memory_info"]["value_shapes"] = value_shapes
 
         serializable_items.append(serializable_item)
@@ -1144,7 +1170,19 @@ def convert_activation_memory_summary(act_mem_items: list[KVCacheItem]) -> dict[
     total_parameters = 0
 
     for item in act_mem_items:
-        if item.memory and item.memory.key_cache:
+        if not item.memory:
+            continue
+
+        if hasattr(item.memory, "layers"):
+            total_layers += len(item.memory.layers)
+            for layer in item.memory.layers:
+                k = getattr(layer, "key_cache", getattr(layer, "keys", None))
+                v = getattr(layer, "value_cache", getattr(layer, "values", None))
+                if k is not None:
+                    total_parameters += k.numel()
+                if v is not None:
+                    total_parameters += v.numel()
+        elif hasattr(item.memory, "key_cache"):
             total_layers += len(item.memory.key_cache)
 
             # Calculate approximate parameter count

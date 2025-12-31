@@ -29,7 +29,7 @@ def to_iter(running: Any) -> list[Any]:
     return list(running) if running else []
 
 
-def format_memory_item(memory_data: Any) -> dict[str, Any]:
+def format_memory_item(memory_data: Any, include_embedding: bool = False) -> dict[str, Any]:
     """
     Format a single memory item for API response.
 
@@ -47,7 +47,8 @@ def format_memory_item(memory_data: Any) -> dict[str, Any]:
     ref_id = f"[{memory_id.split('-')[0]}]"
 
     memory["ref_id"] = ref_id
-    memory["metadata"]["embedding"] = []
+    if not include_embedding:
+        memory["metadata"]["embedding"] = []
     memory["metadata"]["sources"] = []
     memory["metadata"]["usage"] = []
     memory["metadata"]["ref_id"] = ref_id

@@ -2502,38 +2502,107 @@ class PolarDBGraphDB(BaseGraphDB):
 
     @timed
     def export_graph(
-        self, include_embedding: bool = False, user_name: str | None = None
+        self,
+        include_embedding: bool = False,
+        user_name: str | None = None,
+        user_id: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+        **kwargs,
     ) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
         Args:
         include_embedding (bool): Whether to include the large embedding field.
         user_name (str, optional): User name for filtering in non-multi-db mode
+        user_id (str, optional): User ID for filtering
+        page (int, optional): Page number (starts from 1). If None, exports all data without pagination.
+        page_size (int, optional): Number of items per page. If None, exports all data without pagination.
 
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
-        user_name = user_name if user_name else self._get_config_value("user_name")
+        logger.info(
+            f"[export_graph] include_embedding: {include_embedding}, user_name: {user_name}, user_id: {user_id}, page: {page}, page_size: {page_size}"
+        )
+        user_id = user_id if user_id else self._get_config_value("user_id")
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
+
+        # Determine if pagination is needed
+        use_pagination = page is not None and page_size is not None
+
+        # Validate pagination parameters if pagination is enabled
+        if use_pagination:
+            if page < 1:
+                page = 1
+            if page_size < 1:
+                page_size = 10
+            offset = (page - 1) * page_size
+        else:
+            offset = None
+
         conn = None
         try:
             conn = self._get_connection()
+            # Build WHERE conditions
+            where_conditions = []
+            if user_name:
+                where_conditions.append(
+                    f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{user_name}\"'::agtype"
+                )
+            if user_id:
+                where_conditions.append(
+                    f"ag_catalog.agtype_access_operator(properties, '\"user_id\"'::agtype) = '\"{user_id}\"'::agtype"
+                )
+
+            where_clause = ""
+            if where_conditions:
+                where_clause = f"WHERE {' AND '.join(where_conditions)}"
+
+            # Get total count of nodes before pagination
+            count_node_query = f"""
+                SELECT COUNT(*)
+                FROM "{self.db_name}_graph"."Memory"
+                {where_clause}
+            """
+            logger.info(f"[export_graph nodes count] Query: {count_node_query}")
+            with conn.cursor() as cursor:
+                cursor.execute(count_node_query)
+                total_nodes = cursor.fetchone()[0]
+
             # Export nodes
+            # Build pagination clause if needed
+            pagination_clause = ""
+            if use_pagination:
+                pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
+
             if include_embedding:
                 node_query = f"""
                     SELECT id, properties, embedding
                     FROM "{self.db_name}_graph"."Memory"
-                    WHERE ag_catalog.agtype_access_operator(properties, '"user_name"'::agtype) = '\"{user_name}\"'::agtype
+                    {where_clause}
+                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                             id DESC
+                    {pagination_clause}
                 """
             else:
                 node_query = f"""
                     SELECT id, properties
                     FROM "{self.db_name}_graph"."Memory"
-                    WHERE ag_catalog.agtype_access_operator(properties, '"user_name"'::agtype) = '\"{user_name}\"'::agtype
+                    {where_clause}
+                    ORDER BY ag_catalog.agtype_access_operator(properties, '"created_at"'::agtype) DESC NULLS LAST,
+                             id DESC
+                    {pagination_clause}
                 """
-
+            logger.info(f"[export_graph nodes] Query: {node_query}")
             with conn.cursor() as cursor:
                 cursor.execute(node_query)
                 node_results = cursor.fetchall()
@@ -2541,9 +2610,11 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 for row in node_results:
                     if include_embedding:
-                        properties_json, embedding_json = row
+                        """row is (id, properties, embedding)"""
+                        _, properties_json, embedding_json = row
                     else:
-                        properties_json = row
+                        """row is (id, properties)"""
+                        _, properties_json = row
                         embedding_json = None
 
                     # Parse properties from JSONB if it's a string
@@ -2555,20 +2626,13 @@ class PolarDBGraphDB(BaseGraphDB):
                     else:
                         properties = properties_json if properties_json else {}
 
-                    # # Build node data
-
-                    """
-                    # node_data = {
-                    #     "id": properties.get("id", node_id),
-                    #     "memory": properties.get("memory", ""),
-                    #     "metadata": properties
-                    # }
-                    """
-
-                    if include_embedding and embedding_json is not None:
+                    # Remove embedding field if include_embedding is False
+                    if not include_embedding:
+                        properties.pop("embedding", None)
+                    elif include_embedding and embedding_json is not None:
                         properties["embedding"] = embedding_json
 
-                    nodes.append(self._parse_node(json.loads(properties[1])))
+                    nodes.append(self._parse_node(properties))
 
         except Exception as e:
             logger.error(f"[EXPORT GRAPH - NODES] Exception: {e}", exc_info=True)
@@ -2579,15 +2643,56 @@ class PolarDBGraphDB(BaseGraphDB):
         conn = None
         try:
             conn = self._get_connection()
-            # Export edges using cypher query
-            edge_query = f"""
-                SELECT * FROM cypher('{self.db_name}_graph', $$
-                MATCH (a:Memory)-[r]->(b:Memory)
-                WHERE a.user_name = '{user_name}' AND b.user_name = '{user_name}'
-                RETURN a.id AS source, b.id AS target, type(r) as edge
-                $$) AS (source agtype, target agtype, edge agtype)
-            """
+            # Build Cypher WHERE conditions for edges
+            cypher_where_conditions = []
+            if user_name:
+                cypher_where_conditions.append(f"a.user_name = '{user_name}'")
+                cypher_where_conditions.append(f"b.user_name = '{user_name}'")
+            if user_id:
+                cypher_where_conditions.append(f"a.user_id = '{user_id}'")
+                cypher_where_conditions.append(f"b.user_id = '{user_id}'")
 
+            cypher_where_clause = ""
+            if cypher_where_conditions:
+                cypher_where_clause = f"WHERE {' AND '.join(cypher_where_conditions)}"
+
+            # Get total count of edges before pagination
+            count_edge_query = f"""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT * FROM cypher('{self.db_name}_graph', $$
+                    MATCH (a:Memory)-[r]->(b:Memory)
+                    {cypher_where_clause}
+                    RETURN a.id AS source, b.id AS target, type(r) as edge
+                    $$) AS (source agtype, target agtype, edge agtype)
+                ) AS edges
+            """
+            logger.info(f"[export_graph edges count] Query: {count_edge_query}")
+            with conn.cursor() as cursor:
+                cursor.execute(count_edge_query)
+                total_edges = cursor.fetchone()[0]
+
+            # Export edges using cypher query
+            # Note: Apache AGE Cypher may not support SKIP, so we use SQL LIMIT/OFFSET on the subquery
+            # Build pagination clause if needed
+            edge_pagination_clause = ""
+            if use_pagination:
+                edge_pagination_clause = f"LIMIT {page_size} OFFSET {offset}"
+
+            edge_query = f"""
+                SELECT source, target, edge FROM (
+                    SELECT * FROM cypher('{self.db_name}_graph', $$
+                    MATCH (a:Memory)-[r]->(b:Memory)
+                    {cypher_where_clause}
+                    RETURN a.id AS source, b.id AS target, type(r) as edge
+                    ORDER BY COALESCE(a.created_at, '1970-01-01T00:00:00') DESC,
+                             COALESCE(b.created_at, '1970-01-01T00:00:00') DESC,
+                             a.id DESC, b.id DESC
+                    $$) AS (source agtype, target agtype, edge agtype)
+                ) AS edges
+                {edge_pagination_clause}
+            """
+            logger.info(f"[export_graph edges] Query: {edge_query}")
             with conn.cursor() as cursor:
                 cursor.execute(edge_query)
                 edge_results = cursor.fetchall()
@@ -2653,7 +2758,12 @@ class PolarDBGraphDB(BaseGraphDB):
         finally:
             self._return_connection(conn)
 
-        return {"nodes": nodes, "edges": edges}
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "total_nodes": total_nodes,
+            "total_edges": total_edges,
+        }
 
     @timed
     def count_nodes(self, scope: str, user_name: str | None = None) -> int:
@@ -3356,7 +3466,7 @@ class PolarDBGraphDB(BaseGraphDB):
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
 
-        logger.info(f"[add_nodes_batch] Adding {len(nodes)} nodes")
+        logger.info(f"[add_nodes_batch] Processing only first node (total nodes: {len(nodes)})")
 
         # user_name comes from parameter; fallback to config if missing
         effective_user_name = user_name if user_name else self.config.user_name
@@ -3485,92 +3595,89 @@ class PolarDBGraphDB(BaseGraphDB):
                         if graph_id:
                             node["properties"]["graph_id"] = str(graph_id)
 
-                    # Batch insert using VALUES with multiple rows
-                    # Use psycopg2.extras.execute_values for efficient batch insert
-                    from psycopg2.extras import execute_values
+                    # Use PREPARE/EXECUTE for efficient batch insert
+                    # Generate unique prepare statement name to avoid conflicts
+                    prepare_name = f"insert_mem_{embedding_column or 'no_embedding'}_{int(time.time() * 1000000)}"
 
-                    if embedding_column and any(node["embedding_vector"] for node in nodes_group):
-                        # Prepare data tuples for batch insert with embedding
-                        data_tuples = []
-                        for node in nodes_group:
-                            # Each tuple: (id, properties_json, embedding_json)
-                            data_tuples.append(
-                                (
-                                    node["id"],
-                                    json.dumps(node["properties"]),
+                    try:
+                        if embedding_column and any(
+                            node["embedding_vector"] for node in nodes_group
+                        ):
+                            # PREPARE statement for insert with embedding
+                            prepare_query = f"""
+                                PREPARE {prepare_name} AS
+                                INSERT INTO {self.db_name}_graph."Memory"(id, properties, {embedding_column})
+                                VALUES (
+                                    ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, $1::text::cstring),
+                                    $2::text::agtype,
+                                    $3::vector
+                                )
+                            """
+                            logger.info(
+                                f"[add_nodes_batch] embedding Preparing prepare_name: {prepare_name}"
+                            )
+                            logger.info(
+                                f"[add_nodes_batch] embedding Preparing prepare_query: {prepare_query}"
+                            )
+
+                            cursor.execute(prepare_query)
+
+                            # Execute prepared statement for each node
+                            for node in nodes_group:
+                                properties_json = json.dumps(node["properties"])
+                                embedding_json = (
                                     json.dumps(node["embedding_vector"])
                                     if node["embedding_vector"]
-                                    else None,
+                                    else None
                                 )
-                            )
 
-                        # Build the INSERT query template
-                        insert_query = f"""
-                            INSERT INTO {self.db_name}_graph."Memory"(id, properties, {embedding_column})
-                            VALUES %s
-                        """
-
-                        # Build the VALUES template for execute_values
-                        # Each row: (graph_id_function, agtype, vector)
-                        # Note: properties column is agtype, not jsonb
-                        template = f"""
-                            (
-                                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, %s::text::cstring),
-                                %s::text::agtype,
-                                %s::vector
-                            )
-                        """
-                        # Execute batch insert
-                        execute_values(
-                            cursor,
-                            insert_query,
-                            data_tuples,
-                            template=template,
-                            page_size=100,  # Insert in batches of 100
-                        )
-                    else:
-                        # Prepare data tuples for batch insert without embedding
-                        data_tuples = []
-                        for node in nodes_group:
-                            # Each tuple: (id, properties_json)
-                            data_tuples.append(
-                                (
-                                    node["id"],
-                                    json.dumps(node["properties"]),
+                                cursor.execute(
+                                    f"EXECUTE {prepare_name}(%s, %s, %s)",
+                                    (node["id"], properties_json, embedding_json),
                                 )
+                        else:
+                            # PREPARE statement for insert without embedding
+                            prepare_query = f"""
+                                PREPARE {prepare_name} AS
+                                INSERT INTO {self.db_name}_graph."Memory"(id, properties)
+                                VALUES (
+                                    ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, $1::text::cstring),
+                                    $2::text::agtype
+                                )
+                            """
+                            logger.info(
+                                f"[add_nodes_batch] without embedding Preparing prepare_name: {prepare_name}"
                             )
-
-                        # Build the INSERT query template
-                        insert_query = f"""
-                            INSERT INTO {self.db_name}_graph."Memory"(id, properties)
-                            VALUES %s
-                        """
-
-                        # Build the VALUES template for execute_values
-                        # Note: properties column is agtype, not jsonb
-                        template = f"""
-                            (
-                                ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, %s::text::cstring),
-                                %s::text::agtype
+                            logger.info(
+                                f"[add_nodes_batch] without embedding Preparing prepare_query: {prepare_query}"
                             )
-                        """
-                        logger.info(f"[add_nodes_batch] Inserting insert_query:{insert_query}")
-                        logger.info(f"[add_nodes_batch] Inserting data_tuples:{data_tuples}")
-                        # Execute batch insert
-                        execute_values(
-                            cursor,
-                            insert_query,
-                            data_tuples,
-                            template=template,
-                            page_size=100,  # Insert in batches of 100
-                        )
+                            cursor.execute(prepare_query)
+
+                            # Execute prepared statement for each node
+                            for node in nodes_group:
+                                properties_json = json.dumps(node["properties"])
+
+                                cursor.execute(
+                                    f"EXECUTE {prepare_name}(%s, %s)", (node["id"], properties_json)
+                                )
+                    finally:
+                        # DEALLOCATE prepared statement (always execute, even on error)
+                        try:
+                            cursor.execute(f"DEALLOCATE {prepare_name}")
+                            logger.info(
+                                f"[add_nodes_batch] Deallocated prepared statement: {prepare_name}"
+                            )
+                        except Exception as dealloc_error:
+                            logger.warning(
+                                f"[add_nodes_batch] Failed to deallocate {prepare_name}: {dealloc_error}"
+                            )
 
                     logger.info(
                         f"[add_nodes_batch] Inserted {len(nodes_group)} nodes with embedding_column={embedding_column}"
                     )
                     elapsed_time = time.time() - batch_start_time
                     logger.info(
-                        f"[add_nodes_batch] execute_values completed successfully in {elapsed_time:.2f}s"
+                        f"[add_nodes_batch] PREPARE/EXECUTE batch insert completed successfully in {elapsed_time:.2f}s"
                     )
 
         except Exception as e:
@@ -4580,28 +4687,105 @@ class PolarDBGraphDB(BaseGraphDB):
                                                 f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {op_value}::agtype"
                                             )
                             elif op == "contains":
-                                # Handle contains operator (for string fields only)
-                                # Check if agtype contains value (using @> operator)
-                                if not isinstance(op_value, str):
+                                # Handle contains operator
+                                # For array fields: check if array contains the value using @> operator
+                                # For string fields: check if string contains the value using @> operator
+                                # Check if key starts with "info." prefix
+                                if key.startswith("info."):
+                                    info_field = key[5:]  # Remove "info." prefix
+                                    escaped_value = escape_sql_string(str(op_value))
+                                    # For array fields, use @> with array format: '["value"]'::agtype
+                                    # For string fields, use @> with string format: '"value"'::agtype
+                                    # We'll use array format for contains to check if array contains the value
+                                    condition_parts.append(
+                                        f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> '[\"{escaped_value}\"]'::agtype"
+                                    )
+                                else:
+                                    # Direct property access
+                                    escaped_value = escape_sql_string(str(op_value))
+                                    # For array fields, use @> with array format
+                                    condition_parts.append(
+                                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '[\"{escaped_value}\"]'::agtype"
+                                    )
+                            elif op == "in":
+                                # Handle in operator (for checking if field value is in a list)
+                                # Supports array format: {"field": {"in": ["value1", "value2"]}}
+                                if not isinstance(op_value, list):
                                     raise ValueError(
-                                        f"contains operator only supports string format. "
-                                        f"Use {{'{key}': {{'contains': '{op_value}'}}}} instead of {{'{key}': {{'contains': {op_value}}}}}"
+                                        f"in operator only supports array format. "
+                                        f"Use {{'{key}': {{'in': ['{op_value}']}}}} instead of {{'{key}': {{'in': '{op_value}'}}}}"
                                     )
                                 # Check if key starts with "info." prefix
                                 if key.startswith("info."):
                                     info_field = key[5:]  # Remove "info." prefix
-                                    # String contains: use @> operator for agtype contains
-                                    escaped_value = escape_sql_string(op_value)
-                                    condition_parts.append(
-                                        f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) @> '\"{escaped_value}\"'::agtype"
-                                    )
+                                    # Build OR conditions for nested properties
+                                    if len(op_value) == 0:
+                                        # Empty list means no match
+                                        condition_parts.append("false")
+                                    elif len(op_value) == 1:
+                                        # Single value, use equality
+                                        item = op_value[0]
+                                        if isinstance(item, str):
+                                            escaped_value = escape_sql_string(item)
+                                            condition_parts.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) = '\"{escaped_value}\"'::agtype"
+                                            )
+                                        else:
+                                            condition_parts.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) = {item}::agtype"
+                                            )
+                                    else:
+                                        # Multiple values, use OR conditions
+                                        or_conditions = []
+                                        for item in op_value:
+                                            if isinstance(item, str):
+                                                escaped_value = escape_sql_string(item)
+                                                or_conditions.append(
+                                                    f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) = '\"{escaped_value}\"'::agtype"
+                                                )
+                                            else:
+                                                or_conditions.append(
+                                                    f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) = {item}::agtype"
+                                                )
+                                        if or_conditions:
+                                            condition_parts.append(
+                                                f"({' OR '.join(or_conditions)})"
+                                            )
                                 else:
                                     # Direct property access
-                                    # String contains: use @> operator for agtype contains
-                                    escaped_value = escape_sql_string(op_value)
-                                    condition_parts.append(
-                                        f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) @> '\"{escaped_value}\"'::agtype"
-                                    )
+                                    # Build OR conditions
+                                    if len(op_value) == 0:
+                                        # Empty list means no match
+                                        condition_parts.append("false")
+                                    elif len(op_value) == 1:
+                                        # Single value, use equality
+                                        item = op_value[0]
+                                        if isinstance(item, str):
+                                            escaped_value = escape_sql_string(item)
+                                            condition_parts.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
+                                            )
+                                        else:
+                                            condition_parts.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {item}::agtype"
+                                            )
+                                    else:
+                                        # Multiple values, use OR conditions
+                                        or_conditions = []
+                                        for item in op_value:
+                                            if isinstance(item, str):
+                                                escaped_value = escape_sql_string(item)
+                                                or_conditions.append(
+                                                    f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = '\"{escaped_value}\"'::agtype"
+                                                )
+                                            else:
+                                                or_conditions.append(
+                                                    f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) = {item}::agtype"
+                                                )
+                                        if or_conditions:
+                                            condition_parts.append(
+                                                f"({' OR '.join(or_conditions)})"
+                                            )
                             elif op == "like":
                                 # Handle like operator (for fuzzy matching, similar to SQL LIKE '%value%')
                                 # Check if key starts with "info." prefix
@@ -4763,7 +4947,7 @@ class PolarDBGraphDB(BaseGraphDB):
     @timed
     def delete_node_by_prams(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         memory_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
@@ -4772,10 +4956,12 @@ class PolarDBGraphDB(BaseGraphDB):
         Delete nodes by memory_ids, file_ids, or filter.
 
         Args:
-            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            writable_cube_ids (list[str], optional): List of cube IDs (user_name) to filter nodes.
+                If not provided, no user_name filter will be applied.
             memory_ids (list[str], optional): List of memory node IDs to delete.
             file_ids (list[str], optional): List of file node IDs to delete.
-            filter (dict, optional): Filter dictionary to query matching nodes for deletion.
+            filter (dict, optional): Filter dictionary for metadata filtering.
+                Filter conditions are directly used in DELETE WHERE clause without pre-querying.
 
         Returns:
             int: Number of nodes deleted.
@@ -4785,129 +4971,90 @@ class PolarDBGraphDB(BaseGraphDB):
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
 
-        # Validate writable_cube_ids
-        if not writable_cube_ids or len(writable_cube_ids) == 0:
-            raise ValueError("writable_cube_ids is required and cannot be empty")
-
         # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        # Only add user_name filter if writable_cube_ids is provided
         user_name_conditions = []
-        for cube_id in writable_cube_ids:
-            # Use agtype_access_operator with VARIADIC ARRAY format for consistency
-            user_name_conditions.append(
-                f"agtype_access_operator(VARIADIC ARRAY[properties, '\"user_name\"'::agtype]) = '\"{cube_id}\"'::agtype"
-            )
-
-        # Build WHERE conditions separately for memory_ids and file_ids
-        where_conditions = []
-
-        # Handle memory_ids: query properties.id
-        if memory_ids and len(memory_ids) > 0:
-            memory_id_conditions = []
-            for node_id in memory_ids:
-                memory_id_conditions.append(
-                    f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
+        if writable_cube_ids and len(writable_cube_ids) > 0:
+            for cube_id in writable_cube_ids:
+                # Use agtype_access_operator with VARIADIC ARRAY format for consistency
+                user_name_conditions.append(
+                    f"agtype_access_operator(VARIADIC ARRAY[properties, '\"user_name\"'::agtype]) = '\"{cube_id}\"'::agtype"
                 )
-            if memory_id_conditions:
-                where_conditions.append(f"({' OR '.join(memory_id_conditions)})")
 
-        # Check if any file_id is in the file_ids array field (OR relationship)
-        if file_ids and len(file_ids) > 0:
-            file_id_conditions = []
-            for file_id in file_ids:
-                # Format: agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '"file_ids"'::agtype]), '"file_id"'::agtype)
-                file_id_conditions.append(
-                    f"agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '\"file_ids\"'::agtype]), '\"{file_id}\"'::agtype)"
-                )
-            if file_id_conditions:
-                # Use OR to match any file_id in the array
-                where_conditions.append(f"({' OR '.join(file_id_conditions)})")
-
-        # Query nodes by filter if provided
-        filter_ids = set()
+        # Build filter conditions using common method (no query, direct use in WHERE clause)
+        filter_conditions = []
         if filter:
-            # Parse filter to validate and transform field names (e.g., add "info." prefix if needed)
-            parsed_filter = self.parse_filter(filter)
-            if parsed_filter:
-                # Use get_by_metadata with empty filters list and parsed filter
-                filter_ids = set(
-                    self.get_by_metadata(
-                        filters=[],
-                        user_name=None,
-                        filter=parsed_filter,
-                        knowledgebase_ids=writable_cube_ids,
-                    )
-                )
-            else:
-                logger.warning(
-                    "[delete_node_by_prams] Filter parsed to None, skipping filter query"
-                )
+            filter_conditions = self._build_filter_conditions_sql(filter)
+            logger.info(f"[delete_node_by_prams] filter_conditions: {filter_conditions}")
 
-        # If filter returned IDs, add condition for them
-        if filter_ids:
-            filter_id_conditions = []
-            for node_id in filter_ids:
-                filter_id_conditions.append(
-                    f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
-                )
-            if filter_id_conditions:
-                where_conditions.append(f"({' OR '.join(filter_id_conditions)})")
-
-        # If no conditions (except user_name), return 0
-        if not where_conditions:
+        # If no conditions to delete, return 0
+        if not memory_ids and not file_ids and not filter_conditions:
             logger.warning(
                 "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
             )
             return 0
 
-        # Build WHERE clause
-        # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
-        data_conditions = " OR ".join([f"({cond})" for cond in where_conditions])
-
-        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
-        user_name_where = " OR ".join(user_name_conditions)
-        where_clause = f"({user_name_where}) AND ({data_conditions})"
-
-        # Use SQL DELETE query for better performance
-        # First count matching nodes to get accurate count
-        count_query = f"""
-                SELECT COUNT(*)
-                FROM "{self.db_name}_graph"."Memory"
-                WHERE {where_clause}
-            """
-        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-
-        # Then delete nodes
-        delete_query = f"""
-                DELETE FROM "{self.db_name}_graph"."Memory"
-                WHERE {where_clause}
-            """
-
-        logger.info(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
-        logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-
         conn = None
-        deleted_count = 0
+        total_deleted_count = 0
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                # Count nodes before deletion
-                cursor.execute(count_query)
-                count_result = cursor.fetchone()
-                expected_count = count_result[0] if count_result else 0
+                # Build WHERE conditions list
+                where_conditions = []
 
-                logger.info(
-                    f"[delete_node_by_prams] Found {expected_count} nodes matching the criteria"
-                )
+                # Add memory_ids conditions
+                if memory_ids:
+                    logger.info(f"[delete_node_by_prams] Processing {len(memory_ids)} memory_ids")
+                    id_conditions = []
+                    for node_id in memory_ids:
+                        id_conditions.append(
+                            f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{node_id}\"'::agtype"
+                        )
+                    where_conditions.append(f"({' OR '.join(id_conditions)})")
 
-                # Delete nodes
+                # Add file_ids conditions
+                if file_ids:
+                    logger.info(f"[delete_node_by_prams] Processing {len(file_ids)} file_ids")
+                    file_id_conditions = []
+                    for file_id in file_ids:
+                        file_id_conditions.append(
+                            f"agtype_in_operator(agtype_access_operator(VARIADIC ARRAY[properties, '\"file_ids\"'::agtype]), '\"{file_id}\"'::agtype)"
+                        )
+                    where_conditions.append(f"({' OR '.join(file_id_conditions)})")
+
+                # Add filter conditions
+                if filter_conditions:
+                    logger.info("[delete_node_by_prams] Processing filter conditions")
+                    where_conditions.extend(filter_conditions)
+
+                # Add user_name filter if provided
+                if user_name_conditions:
+                    user_name_where = " OR ".join(user_name_conditions)
+                    where_conditions.append(f"({user_name_where})")
+
+                # Build final WHERE clause
+                if not where_conditions:
+                    logger.warning("[delete_node_by_prams] No WHERE conditions to delete")
+                    return 0
+
+                where_clause = " AND ".join(where_conditions)
+
+                # Delete directly without counting
+                delete_query = f"""
+                    DELETE FROM "{self.db_name}_graph"."Memory"
+                    WHERE {where_clause}
+                """
+                logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
+
                 cursor.execute(delete_query)
-                # Use rowcount to get actual deleted count
                 deleted_count = cursor.rowcount
+                total_deleted_count = deleted_count
+
+                logger.info(f"[delete_node_by_prams] Deleted {deleted_count} nodes")
+
                 elapsed_time = time.time() - batch_start_time
                 logger.info(
-                    f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, deleted {deleted_count} nodes"
+                    f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, total deleted {total_deleted_count} nodes"
                 )
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
@@ -4915,5 +5062,112 @@ class PolarDBGraphDB(BaseGraphDB):
         finally:
             self._return_connection(conn)
 
-        logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
-        return deleted_count
+        logger.info(f"[delete_node_by_prams] Successfully deleted {total_deleted_count} nodes")
+        return total_deleted_count
+
+    @timed
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
+        """Get user names by memory ids.
+
+        Args:
+            memory_ids: List of memory node IDs to query.
+
+        Returns:
+            dict[str, str | None]: Dictionary mapping memory_id to user_name.
+                - Key: memory_id
+                - Value: user_name if exists, None if memory_id does not exist
+                Example: {"4918d700-6f01-4f4c-a076-75cc7b0e1a7c": "zhangsan", "2222222": None}
+        """
+        logger.info(f"[get_user_names_by_memory_ids] Querying memory_ids {memory_ids}")
+        if not memory_ids:
+            return {}
+
+        # Validate and normalize memory_ids
+        # Ensure all items are strings
+        normalized_memory_ids = []
+        for mid in memory_ids:
+            if not isinstance(mid, str):
+                mid = str(mid)
+            # Remove any whitespace
+            mid = mid.strip()
+            if mid:
+                normalized_memory_ids.append(mid)
+
+        if not normalized_memory_ids:
+            return {}
+
+        # Escape special characters for JSON string format in agtype
+        def escape_memory_id(mid: str) -> str:
+            """Escape special characters in memory_id for JSON string format."""
+            # Escape backslashes first, then double quotes
+            mid_str = mid.replace("\\", "\\\\")
+            mid_str = mid_str.replace('"', '\\"')
+            return mid_str
+
+        # Build OR conditions for each memory_id
+        id_conditions = []
+        for mid in normalized_memory_ids:
+            # Escape special characters
+            escaped_mid = escape_memory_id(mid)
+            id_conditions.append(
+                f"ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = '\"{escaped_mid}\"'::agtype"
+            )
+
+        where_clause = f"({' OR '.join(id_conditions)})"
+
+        # Query to get memory_id and user_name pairs
+        query = f"""
+            SELECT
+                ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype)::text AS memory_id,
+                ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype)::text AS user_name
+            FROM "{self.db_name}_graph"."Memory"
+            WHERE {where_clause}
+        """
+
+        logger.info(f"[get_user_names_by_memory_ids] query: {query}")
+        conn = None
+        result_dict = {}
+        try:
+            conn = self._get_connection()
+            with conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
+
+                # Build result dictionary from query results
+                for row in results:
+                    memory_id_raw = row[0]
+                    user_name_raw = row[1]
+
+                    # Remove quotes if present
+                    if isinstance(memory_id_raw, str):
+                        memory_id = memory_id_raw.strip('"').strip("'")
+                    else:
+                        memory_id = str(memory_id_raw).strip('"').strip("'")
+
+                    if isinstance(user_name_raw, str):
+                        user_name = user_name_raw.strip('"').strip("'")
+                    else:
+                        user_name = (
+                            str(user_name_raw).strip('"').strip("'") if user_name_raw else None
+                        )
+
+                    result_dict[memory_id] = user_name if user_name else None
+
+                # Set None for memory_ids that were not found
+                for mid in normalized_memory_ids:
+                    if mid not in result_dict:
+                        result_dict[mid] = None
+
+                logger.info(
+                    f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
+                    f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
+                )
+
+                return result_dict
+        except Exception as e:
+            logger.error(
+                f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
+            )
+            raise
+        finally:
+            self._return_connection(conn)
