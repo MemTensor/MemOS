@@ -20,7 +20,7 @@ class SentenceChunker(BaseChunker):
         from chonkie import SentenceChunker as ChonkieSentenceChunker
 
         self.config = config
-        
+
         # Try new API first (v1.4.0+)
         try:
             self.chunker = ChonkieSentenceChunker(
@@ -38,7 +38,7 @@ class SentenceChunker(BaseChunker):
                 chunk_overlap=config.chunk_overlap,
                 min_sentences_per_chunk=config.min_sentences_per_chunk,
             )
-        
+
         logger.info(f"Initialized SentenceChunker with config: {config}")
 
     def chunk(self, text: str) -> list[str] | list[Chunk]:
