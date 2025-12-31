@@ -180,21 +180,50 @@ def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
     # TODO: Implement get memory with filter
-    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
+    memories = naive_mem_cube.text_mem.get_all(
+        user_name=get_mem_req.mem_cube_id,
+        user_id=get_mem_req.user_id,
+        page=get_mem_req.page,
+        page_size=get_mem_req.page_size,
+    )
+    total_nodes = memories["total_nodes"]
+    total_edges = memories["total_edges"]
+    del memories["total_nodes"]
+    del memories["total_edges"]
+
     preferences: list[TextualMemoryItem] = []
+    total_pref = 0
+
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
             filter_params["user_id"] = get_mem_req.user_id
         if get_mem_req.mem_cube_id is not None:
             filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
-        preferences = naive_mem_cube.pref_mem.get_memory_by_filter(filter_params)
-        preferences = [format_memory_item(mem) for mem in preferences]
+
+        preferences, total_pref = naive_mem_cube.pref_mem.get_memory_by_filter(
+            filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
+        )
+        format_preferences = [format_memory_item(item) for item in preferences]
+
     return GetMemoryResponse(
         message="Memories retrieved successfully",
         data={
-            "text_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": memories}],
-            "pref_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": preferences}],
+            "text_mem": [
+                {
+                    "cube_id": get_mem_req.mem_cube_id,
+                    "memories": memories,
+                    "total_nodes": total_nodes,
+                    "total_edges": total_edges,
+                }
+            ],
+            "pref_mem": [
+                {
+                    "cube_id": get_mem_req.mem_cube_id,
+                    "memories": format_preferences,
+                    "total_nodes": total_pref,
+                }
+            ],
         },
     )
 

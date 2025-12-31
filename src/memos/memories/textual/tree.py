@@ -161,6 +161,7 @@ class TreeTextMemory(BaseTextMemory):
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -207,6 +208,7 @@ class TreeTextMemory(BaseTextMemory):
             user_name=user_name,
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            dedup=dedup,
             **kwargs,
         )
 
@@ -319,13 +321,21 @@ class TreeTextMemory(BaseTextMemory):
     ) -> list[TextualMemoryItem]:
         raise NotImplementedError
 
-    def get_all(self, user_name: str | None = None) -> dict:
+    def get_all(
+        self,
+        user_name: str,
+        user_id: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph(user_name=user_name)
-        return all_items
+        graph_output = self.graph_store.export_graph(
+            user_name=user_name, user_id=user_id, page=page, page_size=page_size
+        )
+        return graph_output
 
     def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
