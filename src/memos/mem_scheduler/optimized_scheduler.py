@@ -186,10 +186,14 @@ class OptimizedScheduler(GeneralScheduler):
             info=info,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            dedup=search_req.dedup,
         )
         memories = merged_memories[: search_req.top_k]
 
-        formatted_memories = [format_textual_memory_item(item) for item in memories]
+        formatted_memories = [
+            format_textual_memory_item(item, include_embedding=search_req.dedup == "sim")
+            for item in memories
+        ]
         self.submit_memory_history_async_task(
             search_req=search_req,
             user_context=user_context,
@@ -233,7 +237,10 @@ class OptimizedScheduler(GeneralScheduler):
                     mem_cube=self.mem_cube,
                     mode=SearchMode.FAST,
                 )
-                formatted_memories = [format_textual_memory_item(data) for data in memories]
+                formatted_memories = [
+                    format_textual_memory_item(data, include_embedding=search_req.dedup == "sim")
+                    for data in memories
+                ]
             else:
                 memories = [
                     TextualMemoryItem.from_dict(one) for one in memories_to_store["memories"]
