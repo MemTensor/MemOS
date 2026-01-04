@@ -59,8 +59,8 @@ class OpenAILLM(BaseLLM):
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         if reasoning_content:
-            return reasoning_content + response_content
-        return response_content
+            return reasoning_content + (response_content or "")
+        return response_content or ""
 
     @timed_with_status(
         log_prefix="OpenAI LLM Stream",
@@ -151,7 +151,7 @@ class AzureLLM(BaseLLM):
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         else:
-            return response_content
+            return response_content or ""
 
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from Azure OpenAI LLM with optional reasoning support."""
