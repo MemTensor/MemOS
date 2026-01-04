@@ -345,7 +345,7 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
     summary="Get user names by memory ids",
     response_model=GetUserNamesByMemoryIdsResponse,
 )
-def get_user_names_by_memory_ids(memory_ids: GetUserNamesByMemoryIdsRequest):
+def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     """Get user names by memory ids."""
     if not isinstance(graph_db, PolarDBGraphDB):
         raise HTTPException(
@@ -356,4 +356,9 @@ def get_user_names_by_memory_ids(memory_ids: GetUserNamesByMemoryIdsRequest):
                 f"current graph_db is: {graph_db.__class__.__name__}"
             ),
         )
-    return graph_db.get_user_names_by_memory_ids(memory_ids=memory_ids)
+    result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
+    return GetUserNamesByMemoryIdsResponse(
+        code=200,
+        message="Successfully",
+        data=result,
+    )

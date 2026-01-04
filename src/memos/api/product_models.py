@@ -1195,5 +1195,5 @@ class GetUserNamesByMemoryIdsRequest(BaseRequest):
     memory_ids: list[str] = Field(..., description="Memory IDs")
 
 
-class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, list[str]]]):
+class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, str | None]]):
     """Response model for getting user names by memory ids."""
