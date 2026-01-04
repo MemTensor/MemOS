@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from memos.context.context import ContextThreadPoolExecutor
 from memos.multi_mem_cube.views import MemCubeView
 
 
@@ -52,7 +53,7 @@ class CompositeCubeView(MemCubeView):
             return view.search_memories(search_req)
 
         # parallel search for each cube
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
             future_to_view = {
                 executor.submit(_search_single_cube, view): view for view in self.cube_views
             }
