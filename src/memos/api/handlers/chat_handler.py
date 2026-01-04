@@ -138,6 +138,13 @@ class ChatHandler(BaseHandler):
                 if text_mem_results and text_mem_results[0].get("memories"):
                     memories_list = text_mem_results[0]["memories"]
 
+            # Drop internet memories forced
+            memories_list = [
+                mem
+                for mem in memories_list
+                if mem.get("metadata", {}).get("memory_type") != "OuterMemory"
+            ]
+
             # Filter memories by threshold
             filtered_memories = self._filter_memories_by_threshold(
                 memories_list, chat_req.threshold or 0.5
@@ -276,6 +283,13 @@ class ChatHandler(BaseHandler):
                         text_mem_results = search_response.data["text_mem"]
                         if text_mem_results and text_mem_results[0].get("memories"):
                             memories_list = text_mem_results[0]["memories"]
+
+                    # Drop internet memories forced
+                    memories_list = [
+                        mem
+                        for mem in memories_list
+                        if mem.get("metadata", {}).get("memory_type") != "OuterMemory"
+                    ]
 
                     # Filter memories by threshold
                     filtered_memories = self._filter_memories_by_threshold(memories_list)

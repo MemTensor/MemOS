@@ -77,7 +77,7 @@ Notes:
   * **Contextual signals**: What do the user's choices, comparisons, exclusions, or scenario selections reveal about their deeper preferences?
 - Do not treat explicitly stated preferences as implicit preferences; this prompt is only for inferring preferences that are not directly mentioned.
 - Go beyond surface-level facts to understand the user's hidden possibilities and underlying logic.
-- **Important**: For Assistant's responses or suggestions, they can only be extracted as the user's implicit preferences if there is evidence in subsequent conversation that the user implicitly accepted them (e.g., adoption, agreement, acting on the suggestion, etc.). Assistant suggestions alone do not constitute user preferences.
+- For Assistant's responses or suggestions, they can only be extracted as the user's implicit preferences if there is evidence in subsequent conversation that the user implicitly accepted them (e.g., adoption, agreement, acting on the suggestion, etc.). Assistant suggestions alone do not constitute user preferences.
 
 Requirements:
 1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
@@ -118,7 +118,7 @@ NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
   * **情境信号**：用户的选择、比较、排除或场景选择揭示了什么样的深层偏好？
 - 不要将明确陈述的偏好视为隐式偏好；此提示仅用于推断未直接提及的偏好。
 - 超越表面事实，理解用户的隐藏可能性和背后的逻辑。
-- **特别注意**：对于Assistant的回答内容或建议，只有在后续对话中用户表现出隐含接受（如采纳、认同、按建议行动等）的情况下，才能将相关内容提取为用户的隐式偏好。单纯的Assistant建议本身不构成用户偏好。
+- 对于Assistant的回答内容或建议，只有在后续对话中用户表现出隐含接受（如采纳、认同、按建议行动等）的情况下，才能将相关内容提取为用户的隐式偏好。单纯的Assistant建议本身不构成用户偏好。
 
 要求：
 1. 仅在对话中有充分证据时进行推断；避免无根据或牵强的猜测。
