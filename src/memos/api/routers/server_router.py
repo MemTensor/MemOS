@@ -340,7 +340,7 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
 # =============================================================================
 
 
-@router.get(
+@router.post(
     "/get_user_names_by_memory_ids",
     summary="Get user names by memory ids",
     response_model=GetUserNamesByMemoryIdsResponse,

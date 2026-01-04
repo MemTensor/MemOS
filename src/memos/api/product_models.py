@@ -784,7 +784,7 @@ class GetMemoryRequest(BaseRequest):
 class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
-    writable_cube_ids: list[str] = Field(..., description="Writable cube IDs")
+    writable_cube_ids: list[str] = Field(None, description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
