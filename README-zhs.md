@@ -92,17 +92,18 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 ## 🚀 Quickstart Guide
 
-### ☁️ Cloud API (Hosted)
+### ☁️ 1、Cloud API (Hosted)
 #### Get API Key
-- Sign up and get started on [`MemOS dashboard`](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing)
-- Open **API Keys** in the dashboard, then copy the API Key into the initialization code below
-#### Install via pip
+- Sign up on the [MemOS dashboard](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing)
+- Go to **API Keys** and copy your key
 
-```bash
-pip install MemoryOS -U
-```
+#### Next Steps
+- **Getting Started (Docs)**: [MemOS Cloud Getting Started Guide](https://memos-docs.openmem.net/cn/memos_cloud/quick_start/)  
+  Follow the step-by-step guide to connect to MemOS Cloud and enable memory in your app.
+- **MemOS Cloud Overview**: [MemOS Cloud Overview](https://memos.openmem.net/cn/?from=/cn/quickstart/)  
+  Browse product features, workflows, and platform capabilities.
 
-### 🖥️ Self-Hosted (Local/Private)
+### 🖥️ 2、Self-Hosted (Local/Private)
 1. Get the repository.
     ```bash
     git clone https://github.com/MemTensor/MemOS.git
