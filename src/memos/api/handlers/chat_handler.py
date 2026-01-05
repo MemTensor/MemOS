@@ -482,7 +482,7 @@ class ChatHandler(BaseHandler):
                     # get preference string
                     pref_string = search_response.data.get("pref_string", "")
 
-                    yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+                    yield f"data: {json.dumps({'type': 'reference', 'data': reference}, ensure_ascii=False)}\n\n"
 
                     # Prepare preference markdown string
                     if chat_req.include_preference:
@@ -586,7 +586,7 @@ class ChatHandler(BaseHandler):
                     internet_reference = self._get_internet_reference(
                         search_response.data.get("text_mem")[0]["memories"]
                     )
-                    yield f"data: {json.dumps({'type': 'reference', 'data': reference})}\n\n"
+                    yield f"data: {json.dumps({'type': 'reference', 'data': reference}, ensure_ascii=False)}\n\n"
 
                     # Step 2: Build system prompt with memories
                     lang = detect_lang(chat_req.query)
@@ -684,7 +684,7 @@ class ChatHandler(BaseHandler):
 
                     if chat_req.internet_search or parsed_goal.internet_search:
                         # Yield internet reference after text response
-                        yield f"data: {json.dumps({'type': 'internet_reference', 'data': internet_reference})}\n\n"
+                        yield f"data: {json.dumps({'type': 'internet_reference', 'data': internet_reference}, ensure_ascii=False)}\n\n"
 
                     # Calculate timing
                     time_end = time.time()
@@ -697,7 +697,7 @@ class ChatHandler(BaseHandler):
                     current_messages.append({"role": "assistant", "content": full_response})
                     further_suggestion = self._get_further_suggestion(current_messages)
                     self.logger.info(f"[PLAYGROUND CHAT] further_suggestion: {further_suggestion}")
-                    yield f"data: {json.dumps({'type': 'suggestion', 'data': further_suggestion})}\n\n"
+                    yield f"data: {json.dumps({'type': 'suggestion', 'data': further_suggestion}, ensure_ascii=False)}\n\n"
 
                     yield f"data: {json.dumps({'type': 'end'})}\n\n"
 
