@@ -44,9 +44,11 @@
 
 <p align="center">
   <strong>🎯 +43.70% Accuracy vs. OpenAI Memory</strong><br/>
-  <strong>⚡ SOTA on LoCoMo</strong><br/>
-  <strong>💰 35.24% Saved Tokens</strong>
+  <strong>🏆 Top-tier long-term memory + personalization<br/>
+  <strong>💰 Saves 35.24% memory tokens</strong><br/>
+  <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
 </p>
+
 
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
@@ -57,62 +59,36 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 ---
 
-## MemOS: Memory Operating System for AI Agents
+## 📌MemOS: Memory Operating System for AI Agents
 
-**MemOS** is a Memory Operating System for LLMs and AI agents that provides long-term memory through unified **store / retrieve / manage** workflows, enabling more **context-aware, consistent, and personalized** interactions, with built-in **knowledge base management**, **multi-modal memory**, **tool memory** for agent enhancement, and **enterprise-grade** architecture optimizations.
-
-
-## ✨ Key Features
-
-- **🧠 Memory-Augmented Generation (MAG)**: One unified API to add/search/edit memory and plug it into LLM chats and reasoning via contextual retrieval.
-- **📦 Modular Memory Architecture (MemCube)**: A modular MemCube design that cleanly integrates and manages different memory modules and backends.
-- **💾 Multiple Memory Types**: Multi-type memory in one system—textual knowledge, KV-cache activations, parametric adapters, plus tool-usage traces for agents.
-    - **Textual Memory**: Store and retrieve structured/unstructured text knowledge for long-term context and personalization.
-    - **Activation Memory**: Cache LLM key-value pairs (`KVCacheMemory`) to reuse context and speed up inference.
-    - **Parametric Memory**: Persist model adaptation parameters (e.g., LoRA weights) as memories for fast capability reuse.
-    - **Tool Memory** 🆕: Save agent tool-call trajectories and outcomes to improve planning and execution over time.
-- **📚 Knowledge Base System** 🆕: Build multi-dimensional knowledge bases with automatic doc/URL ingestion, parsing, chunking, and cross-project sharing.
-- **🔧 Memory Controllability** 🆕: Actively control memory quality with natural-language feedback edits and precise deletion by user or memory identifiers.
-    - **Feedback Mechanism**: Use `add_feedback` to correct, supplement, or replace existing memories using natural language instructions.
-    - **Precise Deletion**: Delete targeted memories by User ID or Memory ID through API endpoints or MCP tools.
-- **👁️ Multi-Modal Support** 🆕: Support image/document understanding as memories, including chart parsing from documents for richer retrieval.
-- **⚡ Advanced Architecture**: A production-ready stack with database tuning, advanced filtering retrieval, fair multi-tenant scheduling, and streaming chat interfaces.
-    - **DB Optimization**: Improve high-concurrency stability with better connection management and batch insertion.
-    - **Advanced Retrieval**: Filter by custom tags and info fields with complex logical expressions for precise memory search.
-    - **Redis Streams Scheduler**: Orchestrate multi-level queues via Redis Streams for fair, intelligent multi-tenant scheduling.
-    - **Stream & Non-Stream Chat**: Provide ready-to-use streaming and non-streaming chat interfaces out of the box.
-- **🔌 Extensible**: Extend memory modules, data sources, and LLM integrations with minimal changes and clean interfaces.
-- **🏂 Lightweight Deployment** 🆕: Deploy fast with quick mode or go full-featured with complete mode based on your environment.
+**MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
 
 ---
 
-## 📈 Performance Benchmark
+### Key Features
 
-MemOS demonstrates significant improvements over baseline memory solutions in multiple memory tasks,
-showcasing its capabilities in **information extraction**, **temporal and cross-session reasoning**, and **personalized preference responses**.
+- ** Unified Memory API**: A single API to add, retrieve, edit, and delete memory—structured as a graph, inspectable and editable by design, not a black-box embedding store.
+- ** Multi-Modal Memory**: Natively supports text, images, tool traces, and personas, retrieved and reasoned together in one memory system.
+- ** Multi-Cube Knowledge Base Management**: Manage multiple knowledge bases as composable memory cubes, enabling isolation, controlled sharing, and dynamic composition across users, projects, and agents.
+- ** Asynchronous Ingestion via MemScheduler**: Run memory operations asynchronously with millisecond-level latency for production stability under high concurrency.
+- ** Memory Feedback & Correction**: Refine memory with natural-language feedback—correcting, supplementing, or replacing existing memories over time.
 
-| Model           | LOCOMO      | LongMemEval | PrefEval-10 | PersonaMem  |
-|-----------------|-------------|-------------|-------------|-------------|
-| **GPT-4o-mini** | 52.75       | 55.4        | 2.8         | 43.46       |
-| **MemOS**       | **75.80**   | **77.80**   | **71.90**   | **61.17**   |
-| **Improvement** | **+43.70%** | **+40.43%** | **+2568%**  | **+40.75%** |
+---
 
-### Detailed Evaluation Results
-- We use gpt-4o-mini as the processing and judging LLM and bge-m3 as embedding model in MemOS evaluation.
-- The evaluation was conducted under conditions that align various settings as closely as possible. Reproduce the results with our scripts at [`evaluation`](./evaluation).
-- Check the full search and response details at huggingface https://huggingface.co/datasets/MemTensor/MemOS_eval_result.
-> 💡 **MemOS outperforms all other methods (Mem0, Zep, Memobase, SuperMemory et al.) across all benchmarks!**
+### News
 
-## 📰 News
+- **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**  
+  Comprehensive KB (doc/URL parsing + cross-project sharing), memory feedback & precise deletion, multi-modal (images/charts), Tool Memory for agent planning, Redis Streams scheduler + DB optimizations, streaming/non-streaming chat, MCP upgrade, and lightweight quick/full deployment.
 
-Stay up to date with the latest MemOS announcements, releases, and community highlights.
+- **2025-08-07** · 🎉 *MemOS v1.0.0 (MemCube Release)*  
+  First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
 
-- **2025-12-24** - 🎉 **MemOS v2.0: Stardust (星尘) Release**:
-  Major upgrade featuring comprehensive Knowledge Base system with automatic document/URL parsing and cross-project sharing; Memory feedback mechanism for correction and precise deletion; Multi-modal memory supporting images and charts; Tool Memory to enhance Agent planning; Full architecture upgrade with Redis Streams multi-level queue scheduler and DB optimizations; New streaming/non-streaming Chat interfaces; Complete MCP upgrade; Lightweight deployment modes (quick & full).
-- **2025-08-07** - 🎉 *MemOS v1.0.0 (MemCube Release)*: First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
-- **2025-07-04** – 🎉 *MemOS Paper Released*: [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
-- **2024-07-04** – 🎉 *Memory3 Model Released at WAIC 2024*: The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
-- **2024-07-01** – 🎉 *Memory3 Paper Released*: [Memory3: Language Modeling with Explicit Memory](https://arxiv.org/abs/2407.01178) introduces the new approach to structured memory in LLMs.
+- **2025-07-04** · 🎉 *MemOS Paper Released*  
+  [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
+
+- **2024-07-04** · 🎉 *Memory3 Model Released at WAIC 2024*  
+  The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
+
 
 
 ## 🚀 Quickstart Guide
