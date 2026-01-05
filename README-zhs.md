@@ -190,6 +190,7 @@ Join our community to ask questions, share your projects, and connect with other
 <div style="text-align:center;">
   <img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="300">
 </div>
+
 ## 📜 Citation
 
 > [!NOTE]
