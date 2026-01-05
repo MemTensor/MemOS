@@ -44,7 +44,7 @@
 
 <p align="center">
   <strong>🎯 +43.70% Accuracy vs. OpenAI Memory</strong><br/>
-  <strong>🏆 Top-tier long-term memory + personalization<br/>
+  <strong>🏆 Top-tier long-term memory + personalization</strong><br/>
   <strong>💰 Saves 35.24% memory tokens</strong><br/>
   <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
 </p>
