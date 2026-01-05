@@ -48,8 +48,6 @@
   <strong>💰 Saves 35.24% memory tokens</strong><br/>
   <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
 </p>
-
-
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
   </a>
@@ -73,23 +71,20 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - **Asynchronous Ingestion via MemScheduler**: Run memory operations asynchronously with millisecond-level latency for production stability under high concurrency.
 - **Memory Feedback & Correction**: Refine memory with natural-language feedback—correcting, supplementing, or replacing existing memories over time.
 
-
 ---
 
 ### News
 
 - **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**  
-  Comprehensive KB (doc/URL parsing + cross-project sharing), memory feedback & precise deletion, multi-modal (images/charts), Tool Memory for agent planning, Redis Streams scheduler + DB optimizations, streaming/non-streaming chat, MCP upgrade, and lightweight quick/full deployment.
-
-- **2025-08-07** · 🎉 *MemOS v1.0.0 (MemCube Release)*  
-  First MemCube with word game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, enhanced search capabilities, and official Playground launch.
-
-- **2025-07-04** · 🎉 *MemOS Paper Released*  
-  [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) was published on arXiv.
-
-- **2024-07-04** · 🎉 *Memory3 Model Released at WAIC 2024*  
-  The new memory-layered architecture model was unveiled at the 2024 World Artificial Intelligence Conference.
-
+  Comprehensive KB (doc/URL parsing + cross-project sharing), memory feedback & precise deletion, multi-modal memory (images/charts), tool memory for agent planning, Redis Streams scheduling + DB optimizations, streaming/non-streaming chat, MCP upgrade, and lightweight quick/full deployment.
+- **2025-08-07** · 🎉 **MemOS v1.0.0 (MemCube) Release**  
+  First MemCube release with a word-game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, improved search capabilities, and the official Playground launch.
+- **2025-07-07** · 🎉 **MemOS v1.0: Stellar (星河) Preview Release**  
+  A SOTA Memory OS for LLMs is now open-sourced.
+- **2025-07-04** · 🎉 **MemOS Paper Release**  
+  [MemOS: A Memory OS for AI System](https://arxiv.org/abs/2507.03724) is available on arXiv.
+- **2024-07-04** · 🎉 **Memory3 Model Release at WAIC 2024**  
+  The Memory3 model, featuring a memory-layered architecture, was unveiled at the 2024 World Artificial Intelligence Conference.
 
 
 ## 🚀 Quickstart Guide
