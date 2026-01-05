@@ -57,6 +57,8 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 ---
 
+<br>
+
 ## 📌 MemOS: Memory Operating System for AI Agents
 
 **MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
@@ -86,55 +88,21 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - **2024-07-04** · 🎉 **Memory3 Model Release at WAIC 2024**  
   The Memory3 model, featuring a memory-layered architecture, was unveiled at the 2024 World Artificial Intelligence Conference.
 
+<br>
 
 ## 🚀 Quickstart Guide
 
-### Get API Key
+### ☁️ Cloud API (Hosted)
+#### Get API Key
 - Sign up and get started on [`MemOS dashboard`](https://memos-dashboard.openmem.net/cn/quickstart/?source=landing)
 - Open **API Keys** in the dashboard, then copy the API Key into the initialization code below
-### Install via pip
+#### Install via pip
 
 ```bash
 pip install MemoryOS -U
 ```
 
-### Basic Usage(Cloud API)
-
-- Initialize MemOS client with API Key to start sending requests
-```python
-# Please make sure MemoS is installed (pip install MemoryOS -U)
-from memos.api.client import MemOSClient
-
-# Initialize the client using the API Key
-client = MemOSClient(api_key="YOUR_API_KEY")
-```
-
-- Add messages to a conversation to let MemOS transform them into retrievable memories (supports real-time chat, bulk import, and preference/behavior enrichment).
-```python
-messages = [
-  {"role": "user", "content": "I have planned to travel to Guangzhou during the summer vacation. What chain hotels are available for accommodation?"},
-  {"role": "assistant", "content": "You can consider [7 Days, All Seasons, Hilton], and so on."},
-  {"role": "user", "content": "I'll choose 7 Days"},
-  {"role": "assistant", "content": "Okay, ask me if you have any other questions."}
-]
-user_id = "memos_user_123"
-conversation_id = "0610"
-res = client.add_message(messages=messages, user_id=user_id, conversation_id=conversation_id)
-
-print(f"result: {res}")
-```
-
-- Search a user’s memory to retrieve the most relevant fragments for grounding the next response (now supports both Fact Memory and Preference Memory).
-```python
-query = "I want to go out to play during National Day. Can you recommend a city I haven't been to and a hotel brand I haven't stayed at?"
-user_id = "memos_user_123"
-conversation_id = "0610"
-res = client.search_memory(query=query, user_id=user_id, conversation_id=conversation_id)
-
-print(f"result: {res}")
-```
-
-### Self-Hosted Server
+### 🖥️ Self-Hosted (Local/Private)
 1. Get the repository.
     ```bash
     git clone https://github.com/MemTensor/MemOS.git
@@ -163,7 +131,7 @@ print(f"result: {res}")
 
 
 
-### Example
+### Basic Usage (Self-Hosted)
   - Add User Message
     ```python
     import requests
@@ -207,6 +175,8 @@ print(f"result: {res}")
     print(f"result: {res.json()}")
     ```
 
+<br>
+
 ## 💬 Community & Support
 
 Join our community to ask questions, share your projects, and connect with other developers.
@@ -217,8 +187,9 @@ Join our community to ask questions, share your projects, and connect with other
 - **Discord**: Join our <a href="https://discord.gg/Txbx3gebZR" target="_blank">Discord Server</a>.
 - **WeChat**: Scan the QR code to join our WeChat group.
 
-<img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="600">
-
+<div style="text-align:center;">
+  <img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="300">
+</div>
 ## 📜 Citation
 
 > [!NOTE]
@@ -258,9 +229,13 @@ url = {https://global-sci.com/article/91443/memory3-language-modeling-with-expli
 }
 ```
 
+<br>
+
 ## 🙌 Contributing
 
 We welcome contributions from the community! Please read our [contribution guidelines](https://memos-docs.openmem.net/contribution/overview) to get started.
+
+<br>
 
 ## 📄 License
 
