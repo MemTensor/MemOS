@@ -187,9 +187,11 @@ Join our community to ask questions, share your projects, and connect with other
 - **Discord**: Join our <a href="https://discord.gg/Txbx3gebZR" target="_blank">Discord Server</a>.
 - **WeChat**: Scan the QR code to join our WeChat group.
 
-<div style="text-align:center;">
-  <img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="300">
+<div align="center">
+  <img src="https://statics.memtensor.com.cn/memos/qr-code.png" alt="QR Code" width="300" />
 </div>
+
+<br>
 
 ## 📜 Citation
 
