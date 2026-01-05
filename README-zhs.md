@@ -61,7 +61,7 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 **MemOS** is a Memory Operating System for LLMs and AI agents that unifies **store / retrieve / manage** for long-term memory, enabling **context-aware and personalized** interactions with **KB**, **multi-modal**, **tool memory**, and **enterprise-grade** optimizations built in.
 
----
+
 
 ### Key Features
 
@@ -71,7 +71,7 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - **Asynchronous Ingestion via MemScheduler**: Run memory operations asynchronously with millisecond-level latency for production stability under high concurrency.
 - **Memory Feedback & Correction**: Refine memory with natural-language feedback—correcting, supplementing, or replacing existing memories over time.
 
----
+
 
 ### News
 
