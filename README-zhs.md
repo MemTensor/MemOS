@@ -98,10 +98,10 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - Go to **API Keys** and copy your key
 
 #### Next Steps
-- **Getting Started (Docs)**: [MemOS Cloud Getting Started Guide](https://memos-docs.openmem.net/cn/memos_cloud/quick_start/)  
-  Follow the step-by-step guide to connect to MemOS Cloud and enable memory in your app.
-- **MemOS Cloud Overview**: [MemOS Cloud Overview](https://memos.openmem.net/cn/?from=/cn/quickstart/)  
-  Browse product features, workflows, and platform capabilities.
+- [MemOS Cloud Getting Started](https://memos-docs.openmem.net/cn/memos_cloud/quick_start/)  
+  Connect to MemOS Cloud and enable memory in minutes.
+- [MemOS Cloud Platform](https://memos.openmem.net/cn/?from=/cn/quickstart/)  
+  Explore the Cloud dashboard, features, and workflows.
 
 ### 🖥️ 2、Self-Hosted (Local/Private)
 1. Get the repository.
