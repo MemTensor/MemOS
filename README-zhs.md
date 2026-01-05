@@ -59,7 +59,8 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 
 ## MemOS: Memory Operating System for AI Agents
 
-**MemOS** is an operating system for Large Language Models (LLMs) that enhances them with long-term memory capabilities. It allows LLMs to store, retrieve, and manage information, enabling more context-aware, consistent, and personalized interactions. **MemOS 2.0** features comprehensive knowledge base management, multi-modal memory support, tool memory for Agent enhancement, and enterprise-grade architecture optimizations.
+**MemOS** is a Memory Operating System for LLMs and AI agents that provides long-term memory through unified **store / retrieve / manage** workflows, enabling more **context-aware, consistent, and personalized** interactions, with built-in **knowledge base management**, **multi-modal memory**, **tool memory** for agent enhancement, and **enterprise-grade** architecture optimizations.
+
 
 ## ✨ Key Features
 
