@@ -5328,7 +5328,7 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         logger.info(f"[exist_user_name] Querying user_name {user_name}")
         if not user_name:
-            return False
+            return {user_name: False}
 
         # Escape special characters for JSON string format in agtype
         def escape_user_name(un: str) -> str:

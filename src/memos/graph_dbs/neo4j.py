@@ -1884,3 +1884,40 @@ class Neo4jGraphDB(BaseGraphDB):
                 f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
             )
             raise
+
+    def exist_user_name(self, user_name: str) -> dict[str, bool]:
+        """Check if user name exists in the graph.
+
+        Args:
+            user_name: User name to check.
+
+        Returns:
+            dict[str, bool]: Dictionary with user_name as key and bool as value indicating existence.
+        """
+        logger.info(f"[exist_user_name] Querying user_name {user_name}")
+        if not user_name:
+            return {user_name: False}
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Query to check if user_name exists
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $user_name
+                    RETURN COUNT(n) AS count
+                """
+                logger.info(f"[exist_user_name] query: {query}")
+
+                result = session.run(query, user_name=user_name)
+                count = result.single()["count"]
+                result_dict = {user_name: count > 0}
+
+                logger.info(
+                    f"[exist_user_name] user_name {user_name} exists: {result_dict[user_name]}"
+                )
+                return result_dict
+        except Exception as e:
+            logger.error(
+                f"[exist_user_name] Failed to check user_name existence: {e}", exc_info=True
+            )
+            raise
