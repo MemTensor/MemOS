@@ -5316,3 +5316,49 @@ class PolarDBGraphDB(BaseGraphDB):
             raise
         finally:
             self._return_connection(conn)
+
+    def exist_user_name(self, user_name: str) -> bool:
+        """Check if user name exists in the graph.
+
+        Args:
+            user_name: User name to check.
+
+        Returns:
+            bool: True if user name exists, False otherwise.
+        """
+        logger.info(f"[exist_user_name] Querying user_name {user_name}")
+        if not user_name:
+            return False
+
+        # Escape special characters for JSON string format in agtype
+        def escape_user_name(un: str) -> str:
+            """Escape special characters in user_name for JSON string format."""
+            # Escape backslashes first, then double quotes
+            un_str = un.replace("\\", "\\\\")
+            un_str = un_str.replace('"', '\\"')
+            return un_str
+
+        # Escape special characters
+        escaped_un = escape_user_name(user_name)
+
+        # Query to check if user_name exists
+        query = f"""
+            SELECT COUNT(*)
+            FROM "{self.db_name}_graph"."Memory"
+            WHERE ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{escaped_un}\"'::agtype
+        """
+        logger.info(f"[exist_user_name] query: {query}")
+        conn = None
+        try:
+            conn = self._get_connection()
+            with conn.cursor() as cursor:
+                cursor.execute(query)
+                count = cursor.fetchone()[0]
+                return count > 0
+        except Exception as e:
+            logger.error(
+                f"[exist_user_name] Failed to check user_name existence: {e}", exc_info=True
+            )
+            raise
+        finally:
+            self._return_connection(conn)
