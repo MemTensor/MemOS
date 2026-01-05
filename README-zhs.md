@@ -47,10 +47,13 @@
   <strong>🏆 Top-tier long-term memory + personalization</strong><br/>
   <strong>💰 Saves 35.24% memory tokens</strong><br/>
   <sub>LoCoMo 75.80 • LongMemEval +40.43% • PrefEval-10 +2568% • PersonaMem +40.75%</sub>
-</p>
+  
   <a href="https://memos.openmem.net/">
     <img src="https://statics.memtensor.com.cn/memos/github_api_free_banner.gif" alt="MemOS Free API Banner">
   </a>
+
+</p>
+  
 </div>
 
 Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=github)
