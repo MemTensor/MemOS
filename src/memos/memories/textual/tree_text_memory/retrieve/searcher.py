@@ -674,6 +674,8 @@ class Searcher:
         )
         logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
         documents = [getattr(item, "memory", "") for item in items]
+        if not documents:
+            return []
         documents_embeddings = self.embedder.embed(documents)
         similarity_matrix = cosine_similarity_matrix(documents_embeddings)
         selected_indices, _ = find_best_unrelated_subgroup(documents, similarity_matrix)

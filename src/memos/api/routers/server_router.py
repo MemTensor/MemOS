@@ -33,6 +33,8 @@ from memos.api.product_models import (
     ChatRequest,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
+    ExistMemCubeIdRequest,
+    ExistMemCubeIdResponse,
     GetMemoryPlaygroundRequest,
     GetMemoryRequest,
     GetMemoryResponse,
@@ -340,12 +342,12 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
 # =============================================================================
 
 
-@router.get(
+@router.post(
     "/get_user_names_by_memory_ids",
     summary="Get user names by memory ids",
     response_model=GetUserNamesByMemoryIdsResponse,
 )
-def get_user_names_by_memory_ids(memory_ids: GetUserNamesByMemoryIdsRequest):
+def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     """Get user names by memory ids."""
     if not isinstance(graph_db, PolarDBGraphDB):
         raise HTTPException(
@@ -356,4 +358,23 @@ def get_user_names_by_memory_ids(memory_ids: GetUserNamesByMemoryIdsRequest):
                 f"current graph_db is: {graph_db.__class__.__name__}"
             ),
         )
-    return graph_db.get_user_names_by_memory_ids(memory_ids=memory_ids)
+    result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
+    return GetUserNamesByMemoryIdsResponse(
+        code=200,
+        message="Successfully",
+        data=result,
+    )
+
+
+@router.post(
+    "/exist_mem_cube_id",
+    summary="Check if mem cube id exists",
+    response_model=ExistMemCubeIdResponse,
+)
+def exist_mem_cube_id(request: ExistMemCubeIdRequest):
+    """Check if mem cube id exists."""
+    return ExistMemCubeIdResponse(
+        code=200,
+        message="Successfully",
+        data=graph_db.exist_user_name(user_name=request.mem_cube_id),
+    )

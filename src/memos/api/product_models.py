@@ -784,7 +784,7 @@ class GetMemoryRequest(BaseRequest):
 class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
-    writable_cube_ids: list[str] = Field(..., description="Writable cube IDs")
+    writable_cube_ids: list[str] = Field(None, description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
@@ -1195,5 +1195,15 @@ class GetUserNamesByMemoryIdsRequest(BaseRequest):
     memory_ids: list[str] = Field(..., description="Memory IDs")
 
 
-class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, list[str]]]):
+class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, str | None]]):
     """Response model for getting user names by memory ids."""
+
+
+class ExistMemCubeIdRequest(BaseRequest):
+    """Request model for checking if mem cube id exists."""
+
+    mem_cube_id: str = Field(..., description="Mem cube ID")
+
+
+class ExistMemCubeIdResponse(BaseResponse[dict[str, bool]]):
+    """Response model for checking if mem cube id exists."""

@@ -646,3 +646,11 @@ class MilvusVecDB(BaseVecDB):
             collection_name=collection_name,
             ids=ids,
         )
+
+    def delete_by_filter(self, collection_name: str, filter: dict[str, Any]) -> None:
+        """Delete items from the vector database by filter."""
+        expr = self._dict_to_expr(filter) if filter else ""
+        self.client.delete(
+            collection_name=collection_name,
+            filter=expr,
+        )
