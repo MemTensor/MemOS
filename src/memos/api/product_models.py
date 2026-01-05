@@ -1197,3 +1197,13 @@ class GetUserNamesByMemoryIdsRequest(BaseRequest):
 
 class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, str | None]]):
     """Response model for getting user names by memory ids."""
+
+
+class ExistMemCubeIdRequest(BaseRequest):
+    """Request model for checking if mem cube id exists."""
+
+    mem_cube_id: str = Field(..., description="Mem cube ID")
+
+
+class ExistMemCubeIdResponse(BaseResponse[dict[str, bool]]):
+    """Response model for checking if mem cube id exists."""

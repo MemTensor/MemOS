@@ -33,6 +33,8 @@ from memos.api.product_models import (
     ChatRequest,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
+    ExistMemCubeIdRequest,
+    ExistMemCubeIdResponse,
     GetMemoryPlaygroundRequest,
     GetMemoryRequest,
     GetMemoryResponse,
@@ -361,4 +363,18 @@ def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
         code=200,
         message="Successfully",
         data=result,
+    )
+
+
+@router.post(
+    "/exist_mem_cube_id",
+    summary="Check if mem cube id exists",
+    response_model=ExistMemCubeIdResponse,
+)
+def exist_mem_cube_id(request: ExistMemCubeIdRequest):
+    """Check if mem cube id exists."""
+    return ExistMemCubeIdResponse(
+        code=200,
+        message="Successfully",
+        data=graph_db.exist_user_name(user_name=request.mem_cube_id),
     )
