@@ -1025,10 +1025,6 @@ class MemOSGetMemoryResponse(BaseModel):
 
     code: int = Field(..., description="Response status code")
     message: str = Field(..., description="Response message")
-    total: int = Field(..., description="Response total")
-    size: int = Field(..., description="Response size")
-    current: int = Field(..., description="Response current")
-    pages: int = Field(..., description="Response pages")
     data: GetMemoryData = Field(..., description="Get results data")
 
     @property
