@@ -90,7 +90,7 @@ class SimplePreferenceTextMemory(PreferenceTextMemory):
                 return None
             return TextualMemoryItem(
                 id=res.id,
-                memory=res.payload.get("dialog_str", ""),
+                memory=res.memory,
                 metadata=PreferenceTextualMemoryMetadata(**res.payload),
             )
         except Exception as e:
@@ -116,7 +116,7 @@ class SimplePreferenceTextMemory(PreferenceTextMemory):
             return [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in res
@@ -132,14 +132,14 @@ class SimplePreferenceTextMemory(PreferenceTextMemory):
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_collections = self.vector_db.list_collections()
+        all_collections = ["explicit_preference", "implicit_preference"]
         all_memories = {}
         for collection_name in all_collections:
             items = self.vector_db.get_all(collection_name)
             all_memories[collection_name] = [
                 TextualMemoryItem(
                     id=memo.id,
-                    memory=memo.payload.get("dialog_str", ""),
+                    memory=memo.memory,
                     metadata=PreferenceTextualMemoryMetadata(**memo.payload),
                 )
                 for memo in items

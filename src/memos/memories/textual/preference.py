@@ -248,7 +248,7 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_collections = self.vector_db.list_collections()
+        all_collections = ["explicit_preference", "implicit_preference"]
         all_memories = {}
         for collection_name in all_collections:
             items = self.vector_db.get_all(collection_name)
