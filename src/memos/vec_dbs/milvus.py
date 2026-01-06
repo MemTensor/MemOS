@@ -457,14 +457,13 @@ class MilvusVecDB(BaseVecDB):
             return None
 
         entity = results[0]
-        payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
 
         return MilvusVecDBItem(
             id=entity["id"],
             memory=entity.get("memory"),
             original_text=entity.get("original_text"),
             vector=entity.get("vector"),
-            payload=payload,
+            payload=entity.get("payload", {}),
         )
 
     def get_by_ids(self, collection_name: str, ids: list[str]) -> list[MilvusVecDBItem]:
@@ -479,14 +478,13 @@ class MilvusVecDB(BaseVecDB):
 
         items = []
         for entity in results:
-            payload = {k: v for k, v in entity.items() if k not in ["id", "vector", "score"]}
             items.append(
                 MilvusVecDBItem(
                     id=entity["id"],
                     memory=entity.get("memory"),
                     original_text=entity.get("original_text"),
                     vector=entity.get("vector"),
-                    payload=payload,
+                    payload=entity.get("payload", {}),
                 )
             )
 
