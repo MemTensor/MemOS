@@ -1,6 +1,7 @@
 import json
 
 from collections.abc import Generator
+from time import time
 
 import openai
 
@@ -46,9 +47,16 @@ class OpenAILLM(BaseLLM):
             "extra_body": kwargs.get("extra_body", self.config.extra_body),
             "tools": kwargs.get("tools", NOT_GIVEN),
         }
+        start_time = time.perf_counter()
         logger.info(f"OpenAI LLM Request body: {request_body}")
+
         response = self.client.chat.completions.create(**request_body)
-        logger.info(f"Response from OpenAI: {response.model_dump_json()}")
+
+        cost_time = time.perf_counter() - start_time
+        logger.info(
+            f"Request body: {request_body}, Response from OpenAI: {response.model_dump_json()}, Cost time: {cost_time}"
+        )
+
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)
         if isinstance(tool_calls, list) and len(tool_calls) > 0:
             return self.tool_call_parser(tool_calls)
