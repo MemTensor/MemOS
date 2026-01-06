@@ -872,8 +872,8 @@ class GetMemoryData(BaseModel):
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )
-    message_detail_list: list[MessageDetail] | None = Field(
-        None, alias="message_detail_list", description="List of message details (usually None)"
+    preference_detail_list: list[MessageDetail] | None = Field(
+        None, alias="preference_detail_list", description="List of preference detail"
     )
 
 
@@ -1025,7 +1025,7 @@ class MemOSGetMemoryResponse(BaseModel):
 
     code: int = Field(..., description="Response status code")
     message: str = Field(..., description="Response message")
-    data: SearchMemoryData = Field(..., description="Get results data")
+    data: GetMemoryData = Field(..., description="Get results data")
 
     @property
     def memories(self) -> list[MemoryDetail]:
@@ -1033,14 +1033,9 @@ class MemOSGetMemoryResponse(BaseModel):
         return self.data.memory_detail_list
 
     @property
-    def preferences(self) -> list[MemoryDetail]:
+    def preferences(self) -> list[MessageDetail] | None:
         """Convenient access to preference list."""
         return self.data.preference_detail_list
-
-    @property
-    def tool_memories(self) -> list[MemoryDetail]:
-        """Convenient access to tool_memory list."""
-        return self.data.tool_memory_detail_list
 
 
 class MemOSGetKnowledgebaseFileResponse(BaseModel):

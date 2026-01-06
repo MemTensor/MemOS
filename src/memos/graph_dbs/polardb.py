@@ -4333,15 +4333,29 @@ class PolarDBGraphDB(BaseGraphDB):
                                 cypher_op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
                                 cypher_op = cypher_op_map[op]
 
+                                # Check if key is a datetime field
+                                is_datetime = key in ("created_at", "updated_at") or key.endswith(
+                                    "_at"
+                                )
+
                                 # Check if key starts with "info." prefix (for nested fields like info.A, info.B)
                                 if key.startswith("info."):
                                     # Nested field access: n.info.field_name
                                     info_field = key[5:]  # Remove "info." prefix
+                                    is_info_datetime = info_field in (
+                                        "created_at",
+                                        "updated_at",
+                                    ) or info_field.endswith("_at")
                                     if isinstance(op_value, str):
                                         escaped_value = escape_cypher_string(op_value)
-                                        condition_parts.append(
-                                            f"n.info.{info_field} {cypher_op} '{escaped_value}'"
-                                        )
+                                        if is_info_datetime:
+                                            condition_parts.append(
+                                                f"n.info.{info_field}::timestamp {cypher_op} '{escaped_value}'::timestamp"
+                                            )
+                                        else:
+                                            condition_parts.append(
+                                                f"n.info.{info_field} {cypher_op} '{escaped_value}'"
+                                            )
                                     else:
                                         condition_parts.append(
                                             f"n.info.{info_field} {cypher_op} {op_value}"
@@ -4350,9 +4364,14 @@ class PolarDBGraphDB(BaseGraphDB):
                                     # Direct property access (e.g., "created_at" is directly in n, not in n.info)
                                     if isinstance(op_value, str):
                                         escaped_value = escape_cypher_string(op_value)
-                                        condition_parts.append(
-                                            f"n.{key} {cypher_op} '{escaped_value}'"
-                                        )
+                                        if is_datetime:
+                                            condition_parts.append(
+                                                f"n.{key}::timestamp {cypher_op} '{escaped_value}'::timestamp"
+                                            )
+                                        else:
+                                            condition_parts.append(
+                                                f"n.{key} {cypher_op} '{escaped_value}'"
+                                            )
                                     else:
                                         condition_parts.append(f"n.{key} {cypher_op} {op_value}")
                             elif op == "=":
@@ -4676,15 +4695,29 @@ class PolarDBGraphDB(BaseGraphDB):
                                 sql_op_map = {"gt": ">", "lt": "<", "gte": ">=", "lte": "<="}
                                 sql_op = sql_op_map[op]
 
+                                # Check if key is a datetime field
+                                is_datetime = key in ("created_at", "updated_at") or key.endswith(
+                                    "_at"
+                                )
+
                                 # Check if key starts with "info." prefix (for nested fields like info.A, info.B)
                                 if key.startswith("info."):
                                     # Nested field access: properties->'info'->'field_name'
                                     info_field = key[5:]  # Remove "info." prefix
+                                    is_info_datetime = info_field in (
+                                        "created_at",
+                                        "updated_at",
+                                    ) or info_field.endswith("_at")
                                     if isinstance(op_value, str):
                                         escaped_value = escape_sql_string(op_value)
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) {sql_op} '\"{escaped_value}\"'::agtype"
-                                        )
+                                        if is_info_datetime:
+                                            condition_parts.append(
+                                                f"TRIM(BOTH '\"' FROM ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype)::text)::timestamp {sql_op} '{escaped_value}'::timestamp"
+                                            )
+                                        else:
+                                            condition_parts.append(
+                                                f"ag_catalog.agtype_access_operator(VARIADIC ARRAY[properties, '\"info\"'::ag_catalog.agtype, '\"{info_field}\"'::ag_catalog.agtype]) {sql_op} '\"{escaped_value}\"'::agtype"
+                                            )
                                     else:
                                         # For non-string values (numbers, booleans, etc.), convert to JSON string and then to agtype
                                         value_json = json.dumps(op_value)
@@ -4695,9 +4728,14 @@ class PolarDBGraphDB(BaseGraphDB):
                                     # Direct property access (e.g., "created_at" is directly in properties, not in properties.info)
                                     if isinstance(op_value, str):
                                         escaped_value = escape_sql_string(op_value)
-                                        condition_parts.append(
-                                            f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) {sql_op} '\"{escaped_value}\"'::agtype"
-                                        )
+                                        if is_datetime:
+                                            condition_parts.append(
+                                                f"TRIM(BOTH '\"' FROM ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype)::text)::timestamp {sql_op} '{escaped_value}'::timestamp"
+                                            )
+                                        else:
+                                            condition_parts.append(
+                                                f"ag_catalog.agtype_access_operator(properties, '\"{key}\"'::agtype) {sql_op} '\"{escaped_value}\"'::agtype"
+                                            )
                                     else:
                                         # For non-string values (numbers, booleans, etc.), convert to JSON string and then to agtype
                                         value_json = json.dumps(op_value)
