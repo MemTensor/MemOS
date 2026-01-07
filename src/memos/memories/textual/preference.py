@@ -248,7 +248,7 @@ class PreferenceTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_collections = self.vector_db.list_collections()
+        all_collections = ["explicit_preference", "implicit_preference"]
         all_memories = {}
         for collection_name in all_collections:
             items = self.vector_db.get_all(collection_name)
@@ -313,6 +313,15 @@ class PreferenceTextMemory(BaseTextMemory):
         collection_list = self.vector_db.config.collection_name
         for collection_name in collection_list:
             self.vector_db.delete(collection_name, memory_ids)
+
+    def delete_by_filter(self, filter: dict[str, Any]) -> None:
+        """Delete memories by filter.
+        Args:
+            filter (dict[str, Any]): Filter criteria.
+        """
+        collection_list = self.vector_db.config.collection_name
+        for collection_name in collection_list:
+            self.vector_db.delete_by_filter(collection_name=collection_name, filter=filter)
 
     def delete_with_collection_name(self, collection_name: str, memory_ids: list[str]) -> None:
         """Delete memories by their IDs and collection name.

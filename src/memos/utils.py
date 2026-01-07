@@ -79,7 +79,6 @@ def timed_with_status(
 
                 status = "SUCCESS" if success_flag else "FAILED"
                 status_info = f", status: {status}"
-
                 if not success_flag and exc_type is not None:
                     status_info += (
                         f", error_type: {exc_type.__name__}, error_message: {exc_message}"
@@ -88,6 +87,7 @@ def timed_with_status(
                 msg = (
                     f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
                     f"took {elapsed_ms:.0f} ms{status_info}, args: {ctx_str}"
+                    f", result: {result}"
                 )
 
                 logger.info(msg)

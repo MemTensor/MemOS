@@ -108,7 +108,9 @@ python $LIB_SCRIPT search \
     --input $IDS_FILE \
     --output $SEARCH_FILE \
     --top-k $TOP_K \
-    --max-workers $WORKERS
+    --max-workers $WORKERS \
+    --lib $LIB \
+    --version $VERSION
 
 if [ $? -ne 0 ]; then
     echo "Error: $LIB_SCRIPT 'search' mode failed."
@@ -121,7 +123,9 @@ echo "Running $LIB_SCRIPT in 'response' mode..."
 python $LIB_SCRIPT response \
     --input $SEARCH_FILE \
     --output $RESPONSE_FILE \
-    --max-workers $WORKERS
+    --max-workers $WORKERS \
+    --lib $LIB \
+    --version $VERSION
 
 if [ $? -ne 0 ]; then
     echo "Error: $LIB_SCRIPT 'response' mode failed."
