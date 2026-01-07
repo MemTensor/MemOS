@@ -614,11 +614,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                     serialized_origin_memories = json.dumps(
                         [one.memory for one in original_memory_group], indent=2
                     )
-                    revised_memory_list = self.rewrite_memories(
+                    revised_memory_list = self.filter_hallucination_in_memories(
                         messages=combined_messages,
                         memory_list=original_memory_group,
-                        user_only=os.getenv("SIMPLE_STRUCT_REWRITE_USER_ONLY", "true").lower()
-                        == "false",
                     )
                     serialized_revised_memories = json.dumps(
                         [one.memory for one in revised_memory_list], indent=2
