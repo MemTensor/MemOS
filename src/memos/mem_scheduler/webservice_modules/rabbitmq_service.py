@@ -135,14 +135,10 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             env_exchange_type = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_TYPE")
             if env_exchange_name:
                 self.rabbitmq_exchange_name = env_exchange_name
-                logger.info(
-                    f"Using env exchange name override: {self.rabbitmq_exchange_name}"
-                )
+                logger.info(f"Using env exchange name override: {self.rabbitmq_exchange_name}")
             if env_exchange_type:
                 self.rabbitmq_exchange_type = env_exchange_type
-                logger.info(
-                    f"Using env exchange type override: {self.rabbitmq_exchange_type}"
-                )
+                logger.info(f"Using env exchange type override: {self.rabbitmq_exchange_type}")
 
                 # Start connection process
             parameters = self.get_rabbitmq_connection_param()
