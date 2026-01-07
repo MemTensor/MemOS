@@ -53,7 +53,7 @@ services:
       - "6333:6333"  # REST API
       - "6334:6334"  # gRPC API
     volumes:
-      - ./qdrant_data:/qdrant/storage
+      - qdrant_data:/qdrant/storage
     environment:
       QDRANT__SERVICE__GRPC_PORT: 6334
       QDRANT__SERVICE__HTTP_PORT: 6333
@@ -64,6 +64,7 @@ services:
 volumes:
   neo4j_data:
   neo4j_logs:
+  qdrant_data:
 
 networks:
   memos_network:
