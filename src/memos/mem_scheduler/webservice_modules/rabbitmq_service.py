@@ -327,8 +327,12 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
 
         # Env override: apply to all message types when MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME is set
         env_exchange_name = os.getenv("MEMSCHEDULER_RABBITMQ_EXCHANGE_NAME")
+        env_routing_key = os.getenv("MEMSCHEDULER_RABBITMQ_ROUTING_KEY")
         if env_exchange_name:
             exchange_name = env_exchange_name
+            routing_key = (
+                env_routing_key if env_routing_key is not None and env_routing_key != "" else ""
+            )
             logger.info(
                 f"[DIAGNOSTIC] Publishing {label} message with env exchange override. "
                 f"Exchange: {exchange_name}, Routing Key: '{routing_key}'."
