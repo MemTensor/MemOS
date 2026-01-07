@@ -225,7 +225,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             process_llm = chat_llm
 
         try:
-            if redis_client:
+            if redis_client and self.use_redis_queue:
                 self.status_tracker = TaskStatusTracker(redis_client)
                 if self.dispatcher:
                     self.dispatcher.status_tracker = self.status_tracker
@@ -305,16 +305,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         available via RedisSchedulerModule. This mirrors the lazy pattern used
         by `mem_cube` so downstream modules can safely access the tracker.
         """
-        if self._status_tracker is None:
-            try:
-                self._status_tracker = TaskStatusTracker(self.redis)
-                # Propagate to submodules when created lazily
-                if self.dispatcher:
-                    self.dispatcher.status_tracker = self._status_tracker
-                if self.memos_message_queue:
-                    self.memos_message_queue.set_status_tracker(self._status_tracker)
-            except Exception as e:
-                logger.warning(f"Failed to lazily initialize status_tracker: {e}", exc_info=True)
+        if self._status_tracker is None and self.use_redis_queue:
+            self._status_tracker = TaskStatusTracker(self.redis)
+            # Propagate to submodules when created lazily
+            if self.dispatcher:
+                self.dispatcher.status_tracker = self._status_tracker
+            if self.memos_message_queue:
+                self.memos_message_queue.set_status_tracker(self._status_tracker)
+
         return self._status_tracker
 
     @status_tracker.setter
