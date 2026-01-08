@@ -165,11 +165,14 @@ class HTTPBGEReranker(BaseReranker):
             documents = concat_original_source(graph_results, self.rerank_source)
         else:
             documents = []
+            filtered_graph_results = []
             for item in graph_results:
                 m = item.get("memory") if isinstance(item, dict) else getattr(item, "memory", None)
 
                 if isinstance(m, str) and m:
                     documents.append(_TAG1.sub("", m))
+                    filtered_graph_results.append(item)
+            graph_results = filtered_graph_results
 
         logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
 
