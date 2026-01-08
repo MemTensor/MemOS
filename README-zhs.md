@@ -40,6 +40,9 @@
     <a href="https://opensource.org/license/apache-2-0/">
       <img src="https://img.shields.io/badge/License-Apache_2.0-green.svg?logo=apache" alt="License">
     </a>
+    <a href="https://github.com/IAAR-Shanghai/Awesome-AI-Memory">
+      <img alt="Awesome AI Memory" src="https://img.shields.io/badge/Resources-Awesome--AI--Memory-8A2BE2">
+    </a>  
   </p>
 
 <p align="center">
@@ -76,13 +79,93 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - **Memory Feedback & Correction**: Refine memory with natural-language feedback—correcting, supplementing, or replacing existing memories over time.
 
 
-
 ### News
 
 - **2025-12-24** · 🎉 **MemOS v2.0: Stardust (星尘) Release**  
   Comprehensive KB (doc/URL parsing + cross-project sharing), memory feedback & precise deletion, multi-modal memory (images/charts), tool memory for agent planning, Redis Streams scheduling + DB optimizations, streaming/non-streaming chat, MCP upgrade, and lightweight quick/full deployment.
+  <details>
+    <summary>✨ <b>New Features</b></summary>
+
+  **Knowledge Base & Memory**
+  - Added knowledge base support for long-term memory from documents and URLs
+
+  **Feedback & Memory Management**
+  - Added natural language feedback and correction for memories
+  - Added memory deletion API by memory ID
+  - Added MCP support for memory deletion and feedback
+
+  **Conversation & Retrieval**
+  - Added chat API with memory-aware retrieval
+  - Added memory filtering with custom tags (Cloud & Open Source)
+
+  **Multimodal & Tool Memory**
+  - Added tool memory for tool usage history
+  - Added image memory support for conversations and documents
+
+  </details>
+
+  <details>
+    <summary>📈 <b>Improvements</b></summary>
+
+  **Data & Infrastructure**
+  - Upgraded database for better stability and performance
+
+  **Scheduler**
+  - Rebuilt task scheduler with Redis Streams and queue isolation
+  - Added task priority, auto-recovery, and quota-based scheduling
+
+  **Deployment & Engineering**
+  - Added lightweight deployment with quick and full modes
+
+  </details>
+
+  <details>
+    <summary>🐞 <b>Bug Fixes</b></summary>
+
+  **Memory Scheduling & Updates**
+  - Fixed legacy scheduling API to ensure correct memory isolation
+  - Fixed memory update logging to show new memories correctly
+
+  </details>
+
 - **2025-08-07** · 🎉 **MemOS v1.0.0 (MemCube) Release**  
   First MemCube release with a word-game demo, LongMemEval evaluation, BochaAISearchRetriever integration, NebulaGraph support, improved search capabilities, and the official Playground launch.
+
+  <details>
+    <summary>✨ <b>New Features</b></summary>
+
+  **Playground**
+  - Expanded Playground features and algorithm performance.
+
+  **MemCube Construction**
+  - Added a text game demo based on the MemCube novel.
+
+  **Extended Evaluation Set**
+  - Added LongMemEval evaluation results and scripts.
+
+  </details>
+
+  <details>
+    <summary>📈 <b>Improvements</b></summary>
+
+  **Plaintext Memory**
+  - Integrated internet search with Bocha.
+  - Added support for Nebula database.
+  - Added contextual understanding for the tree-structured plaintext memory search interface.
+
+  </details>
+
+  <details>
+    <summary>🐞 <b>Bug Fixes</b></summary>
+
+  **KV Cache Concatenation**
+  - Fixed the concat_cache method.
+
+  **Plaintext Memory**
+  - Fixed Nebula search-related issues.
+
+  </details>
+
 - **2025-07-07** · 🎉 **MemOS v1.0: Stellar (星河) Preview Release**  
   A SOTA Memory OS for LLMs is now open-sourced.
 - **2025-07-04** · 🎉 **MemOS Paper Release**  
@@ -177,6 +260,11 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
     res = requests.post(url=url, headers=headers, data=json.dumps(data))
     print(f"result: {res.json()}")
     ```
+
+<br>
+
+## 📚 Resources
+- [Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory) is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.
 
 <br>
 
