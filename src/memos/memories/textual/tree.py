@@ -347,6 +347,13 @@ class TreeTextMemory(BaseTextMemory):
             except Exception as e:
                 logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
 
+    def delete_by_memory_ids(self, memory_ids: list[str]) -> None:
+        """Delete memories by memory_ids."""
+        try:
+            self.graph_store.delete_node_by_prams(memory_ids=memory_ids)
+        except Exception as e:
+            logger.error(f"An error occurred while deleting memories by memory_ids: {e}")
+
     def delete_all(self) -> None:
         """Delete all memories and their relationships from the graph store."""
         try:
@@ -358,7 +365,7 @@ class TreeTextMemory(BaseTextMemory):
 
     def delete_by_filter(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
     ) -> None:
