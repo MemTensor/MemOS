@@ -17,6 +17,9 @@ class TaskStatusTracker:
         self.redis = redis_client
 
     def _get_key(self, user_id: str) -> str:
+        if not self.redis:
+            return
+
         return f"memos:task_meta:{user_id}"
 
     def _get_task_items_key(self, user_id: str, task_id: str) -> str:

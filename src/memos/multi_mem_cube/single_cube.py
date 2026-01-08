@@ -264,7 +264,10 @@ class SingleCubeView(MemCubeView):
             search_filter=search_filter,
             info=info,
         )
-        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in enhanced_memories
+        ]
         return formatted_memories
 
     def _agentic_search(
@@ -273,7 +276,10 @@ class SingleCubeView(MemCubeView):
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
         )
-        formatted_memories = [format_memory_item(data) for data in deepsearch_results]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in deepsearch_results
+        ]
         return formatted_memories
 
     def _fine_search(
@@ -328,6 +334,7 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             user_name=user_context.mem_cube_id,
             info=info,
+            dedup=search_req.dedup,
         )
 
         # Enhance with query
@@ -378,8 +385,13 @@ class SingleCubeView(MemCubeView):
                 unique_memories.append(mem)
             return unique_memories
 
-        deduped_memories = _dedup_by_content(enhanced_memories)
-        formatted_memories = [format_memory_item(data) for data in deduped_memories]
+        deduped_memories = (
+            enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
+        )
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in deduped_memories
+        ]
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
 
@@ -463,9 +475,13 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            dedup=search_req.dedup,
         )
 
-        formatted_memories = [format_memory_item(data) for data in search_results]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in search_results
+        ]
 
         return formatted_memories
 

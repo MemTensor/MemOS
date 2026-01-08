@@ -11,8 +11,8 @@ from memos.llms.factory import LLMFactory
 from memos.llms.hf import HFLLM
 
 
-@patch("memos.llms.hf.AutoModelForCausalLM", MagicMock())
-@patch("memos.llms.hf.AutoTokenizer", MagicMock())
+@patch("transformers.AutoModelForCausalLM", MagicMock())
+@patch("transformers.AutoTokenizer", MagicMock())
 class TestHFLLM(unittest.TestCase):
     def setUp(self):
         self.mock_inputs = MagicMock()

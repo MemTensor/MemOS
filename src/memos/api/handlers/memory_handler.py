@@ -23,6 +23,10 @@ from memos.mem_os.utils.format_utils import (
     remove_embedding_recursive,
     sort_children_by_memory_type,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
+    cosine_similarity_matrix,
+    find_best_unrelated_subgroup,
+)
 
 
 if TYPE_CHECKING:
@@ -37,6 +41,7 @@ def handle_get_all_memories(
     mem_cube_id: str,
     memory_type: Literal["text_mem", "act_mem", "param_mem", "para_mem"],
     naive_mem_cube: Any,
+    embedder: Any,
 ) -> MemoryResponse:
     """
     Main handler for getting all memories.
@@ -58,6 +63,14 @@ def handle_get_all_memories(
         if memory_type == "text_mem":
             # Get all text memories from the graph database
             memories = naive_mem_cube.text_mem.get_all(user_name=mem_cube_id)
+
+            mems = [mem.get("memory", "") for mem in memories.get("nodes", [])]
+            embeddings = embedder.embed(mems)
+            similarity_matrix = cosine_similarity_matrix(embeddings)
+            selected_indices, _ = find_best_unrelated_subgroup(
+                embeddings, similarity_matrix, bar=0.9
+            )
+            memories["nodes"] = [memories["nodes"][i] for i in selected_indices]
 
             # Format and convert to tree structure
             memories_cleaned = remove_embedding_recursive(memories)
@@ -167,21 +180,50 @@ def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
     # TODO: Implement get memory with filter
-    memories = naive_mem_cube.text_mem.get_all(user_name=get_mem_req.mem_cube_id)["nodes"]
+    memories = naive_mem_cube.text_mem.get_all(
+        user_name=get_mem_req.mem_cube_id,
+        user_id=get_mem_req.user_id,
+        page=get_mem_req.page,
+        page_size=get_mem_req.page_size,
+    )
+    total_nodes = memories["total_nodes"]
+    total_edges = memories["total_edges"]
+    del memories["total_nodes"]
+    del memories["total_edges"]
+
     preferences: list[TextualMemoryItem] = []
+    total_pref = 0
+
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
             filter_params["user_id"] = get_mem_req.user_id
         if get_mem_req.mem_cube_id is not None:
             filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
-        preferences = naive_mem_cube.pref_mem.get_memory_by_filter(filter_params)
-        preferences = [format_memory_item(mem) for mem in preferences]
+
+        preferences, total_pref = naive_mem_cube.pref_mem.get_memory_by_filter(
+            filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
+        )
+        format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
+
     return GetMemoryResponse(
         message="Memories retrieved successfully",
         data={
-            "text_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": memories}],
-            "pref_mem": [{"cube_id": get_mem_req.mem_cube_id, "memories": preferences}],
+            "text_mem": [
+                {
+                    "cube_id": get_mem_req.mem_cube_id,
+                    "memories": memories,
+                    "total_nodes": total_nodes,
+                    "total_edges": total_edges,
+                }
+            ],
+            "pref_mem": [
+                {
+                    "cube_id": get_mem_req.mem_cube_id,
+                    "memories": format_preferences,
+                    "total_nodes": total_pref,
+                }
+            ],
         },
     )
 
@@ -204,8 +246,7 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
 
     try:
         if delete_mem_req.memory_ids is not None:
-            for cube_id in delete_mem_req.writable_cube_ids:
-                naive_mem_cube.text_mem.delete(delete_mem_req.memory_ids, user_name=cube_id)
+            naive_mem_cube.text_mem.delete_by_memory_ids(delete_mem_req.memory_ids)
             if naive_mem_cube.pref_mem is not None:
                 naive_mem_cube.pref_mem.delete(delete_mem_req.memory_ids)
         elif delete_mem_req.file_ids is not None:
@@ -213,13 +254,9 @@ def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: 
                 writable_cube_ids=delete_mem_req.writable_cube_ids, file_ids=delete_mem_req.file_ids
             )
         elif delete_mem_req.filter is not None:
-            # TODO: Implement deletion by filter
-            # Need to find memories matching filter and delete them
-            logger.warning("Deletion by filter not implemented yet")
-            return DeleteMemoryResponse(
-                message="Deletion by filter not implemented yet",
-                data={"status": "failure"},
-            )
+            naive_mem_cube.text_mem.delete_by_filter(filter=delete_mem_req.filter)
+            if naive_mem_cube.pref_mem is not None:
+                naive_mem_cube.pref_mem.delete_by_filter(filter=delete_mem_req.filter)
     except Exception as e:
         logger.error(f"Failed to delete memories: {e}", exc_info=True)
         return DeleteMemoryResponse(

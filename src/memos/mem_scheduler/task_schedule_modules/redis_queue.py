@@ -787,7 +787,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             Total number of messages across all matching streams.
         """
         if not self._redis_conn:
-            return 0
+            return {}
 
         total_size = 0
         try:
@@ -1216,7 +1216,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             self._stream_keys_cache = active_stream_keys
             self._stream_keys_last_refresh = time.time()
             cache_count = len(self._stream_keys_cache)
-            logger.info(
-                f"Refreshed stream keys cache: {cache_count} active keys, "
-                f"{deleted_count} deleted, {len(candidate_keys)} candidates examined."
-            )
+        logger.info(
+            f"Refreshed stream keys cache: {cache_count} active keys, "
+            f"{deleted_count} deleted, {len(candidate_keys)} candidates examined."
+        )
