@@ -30,6 +30,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
         Initialize RabbitMQ connection settings.
         """
         super().__init__()
+        self.auth_config = None
 
         # RabbitMQ settings
         self.rabbitmq_config: RabbitMQConfig | None = None
@@ -99,25 +100,35 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 )
                 return
 
+            if self.is_rabbitmq_connected():
+                logger.warning("RabbitMQ is already connected. Skipping initialization.")
+                return
+
             from pika.adapters.select_connection import SelectConnection
 
-            if config is None:
-                if self.auth_config_path is not None and Path(self.auth_config_path).exists():
-                    self.auth_config = AuthConfig.from_local_config(
-                        config_path=self.auth_config_path
-                    )
+            if config is not None:
+                if isinstance(config, RabbitMQConfig):
+                    self.rabbitmq_config = config
+                elif isinstance(config, dict):
+                    self.rabbitmq_config = AuthConfig.from_dict(config).rabbitmq
+                else:
+                    logger.error(f"Unsupported config type: {type(config)}")
+                    return
+
+            else:
+                if config_path is not None and Path(config_path).exists():
+                    self.auth_config = AuthConfig.from_local_config(config_path=config_path)
                 elif AuthConfig.default_config_exists():
                     self.auth_config = AuthConfig.from_local_config()
                 else:
                     self.auth_config = AuthConfig.from_local_env()
                 self.rabbitmq_config = self.auth_config.rabbitmq
 
-            elif isinstance(config, RabbitMQConfig):
-                self.rabbitmq_config = config
-            elif isinstance(config, dict):
-                self.rabbitmq_config = AuthConfig.from_dict(config).rabbitmq
-            else:
-                logger.error("Not implemented")
+            if self.rabbitmq_config is None:
+                logger.error(
+                    "Failed to load RabbitMQ configuration. Please check your config file or environment variables."
+                )
+                return
 
             # Load exchange configuration from config
             if self.rabbitmq_config:
@@ -143,7 +154,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
                 self.rabbitmq_exchange_type = env_exchange_type
                 logger.info(f"Using env exchange type override: {self.rabbitmq_exchange_type}")
 
-                # Start connection process
+            # Start connection process
             parameters = self.get_rabbitmq_connection_param()
             self.rabbitmq_connection = SelectConnection(
                 parameters,
@@ -159,7 +170,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             self._io_loop_thread.start()
             logger.info("RabbitMQ connection process started")
         except Exception:
-            logger.debug("Fail to initialize auth_config", exc_info=True)
+            logger.error("Failed to initialize RabbitMQ connection", exc_info=True)
         finally:
             with self._rabbitmq_lock:
                 self._rabbitmq_initializing = False

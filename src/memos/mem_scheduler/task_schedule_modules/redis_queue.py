@@ -652,6 +652,16 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         need_pending = max(0, batch_size - new_count)
         return need_pending if need_pending > 0 else 0
 
+    def _parse_pending_entry(self, entry) -> tuple[str, int]:
+        """Extract message_id and idle_time from a pending entry (dict, tuple, or object)."""
+        if isinstance(entry, dict):
+            return entry.get("message_id"), entry.get("time_since_delivered")
+        elif isinstance(entry, tuple | list):
+            return entry[0], entry[2]
+        else:
+            # Assume object (redis-py 5.x+ PendingMessage)
+            return getattr(entry, "message_id", None), getattr(entry, "time_since_delivered", 0)
+
     def _manual_xautoclaim(
         self, stream_key: str, min_idle_time: int, count: int
     ) -> tuple[str, list[tuple[str, dict]], list[str]]:
@@ -672,8 +682,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             # entry structure depends on redis-py version/decoding
             # Assuming list of dicts: {'message_id': '...', 'time_since_delivered': ms, ...}
             # or list of tuples
-            msg_id = entry.get("message_id") if isinstance(entry, dict) else entry[0]
-            idle_time = entry.get("time_since_delivered") if isinstance(entry, dict) else entry[2]
+            msg_id, idle_time = self._parse_pending_entry(entry)
 
             if idle_time >= min_idle_time:
                 claim_ids.append(msg_id)
@@ -882,10 +891,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
 
             claim_ids = []
             for entry in pending_res:
-                msg_id = entry.get("message_id") if isinstance(entry, dict) else entry[0]
-                idle_time = (
-                    entry.get("time_since_delivered") if isinstance(entry, dict) else entry[2]
-                )
+                msg_id, idle_time = self._parse_pending_entry(entry)
                 if idle_time >= min_idle:
                     claim_ids.append(msg_id)
                     if len(claim_ids) >= need_count:
