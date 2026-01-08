@@ -867,6 +867,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             messages = [messages]  # transform single message to list
 
         for message in messages:
+            if self.rabbitmq_config is None:
+                return
             try:
                 # Always call publish; the publisher now caches when offline and flushes after reconnect
                 logger.info(

@@ -103,13 +103,16 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             from pika.adapters.select_connection import SelectConnection
 
             if config is None:
-                if config_path is None and AuthConfig.default_config_exists():
-                    auth_config = AuthConfig.from_local_config()
-                elif Path(config_path).exists():
-                    auth_config = AuthConfig.from_local_config(config_path=config_path)
+                if self.auth_config_path is not None and Path(self.auth_config_path).exists():
+                    self.auth_config = AuthConfig.from_local_config(
+                        config_path=self.auth_config_path
+                    )
+                elif AuthConfig.default_config_exists():
+                    self.auth_config = AuthConfig.from_local_config()
                 else:
-                    auth_config = AuthConfig.from_local_env()
-                self.rabbitmq_config = auth_config.rabbitmq
+                    self.auth_config = AuthConfig.from_local_env()
+                self.rabbitmq_config = self.auth_config.rabbitmq
+
             elif isinstance(config, RabbitMQConfig):
                 self.rabbitmq_config = config
             elif isinstance(config, dict):
@@ -148,7 +151,7 @@ class RabbitMQSchedulerModule(BaseSchedulerModule):
             self._io_loop_thread.start()
             logger.info("RabbitMQ connection process started")
         except Exception:
-            logger.error("Fail to initialize auth_config", exc_info=True)
+            logger.debug("Fail to initialize auth_config", exc_info=True)
         finally:
             with self._rabbitmq_lock:
                 self._rabbitmq_initializing = False
