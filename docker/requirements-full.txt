@@ -159,7 +159,7 @@ tzdata==2025.2
 ujson==5.10.0
 urllib3==2.5.0
 uvicorn==0.35.0
-uvloop==0.21.0
+uvloop==0.22.1; sys_platform != 'win32'
 volcengine-python-sdk==4.0.6
 watchfiles==1.1.0
 websockets==15.0.1
@@ -179,7 +179,7 @@ pathable==0.4.4
 pathvalidate==3.3.1
 platformdirs==4.5.0
 pluggy==1.6.0
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.11
 py-key-value-aio==0.2.8
 py-key-value-shared==0.2.8
 PyJWT==2.10.1
