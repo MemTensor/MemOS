@@ -69,6 +69,26 @@ Output:
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
+Dialogue:
+assistant: [10:30 AM, August 15, 2025]: The book Deep Work you mentioned is
+indeed very suitable for your current situation. The book explains … (omitted). The author suggests setting aside 2–3 hours of focused work blocks each day and turning off all notifications during that time. Considering that you need to submit a report next week, you could try using the 9:00–11:00 AM time slot for focused work.
+
+Output:
+{
+  "memory list": [
+    {
+      "key": "Deep Work Book Recommendation",
+      "memory_type": "LongTermMemory",
+      "value": "On August 15, 2025, the assistant recommended the book 'Deep Work' to the user and introduced its suggestion of reserving 2–3 hours per day for focused work while turning off all notifications. Based on the user's need to submit a report the following week, the assistant also suggested trying 9:00–11:00 AM as a focused work time block.",
+      "tags": ["book recommendation", "deep work", "time management", "report"]
+    }
+  ],
+  "summary": "The assistant recommended the book 'Deep Work' to the user and introduced the work methods discussed in the book."
+}
+
+Note: When the dialogue contains only assistant messages, phrasing such as
+“assistant recommended” or “assistant suggested” should be used, rather than incorrectly attributing the content to the user’s statements or plans.
+
 Another Example in Chinese (注意: 当user的语言为中文时，你就需要也输出中文)：
 {
   "memory list": [
@@ -162,6 +182,25 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
   ],
   "summary": "Tom目前正专注于管理一个进度紧张的新项目。在2025年6月25日的团队会议后，他意识到原定2025年12月15日的截止日期可能无法实现，因为后端会延迟。由于担心测试时间不足，他接受了Jerry提出的延期建议。Tom计划在次日早上的会议上提出将截止日期推迟至2026年1月5日。他的行为反映出对时间线的担忧，以及积极、以团队为导向的问题解决方式。"
 }
+
+对话：
+assistant: [2025年8月15日上午10:30]:
+你提到的那本《深度工作》确实很适合你现在的情况。这本书讲了......(略),作者建议每天留出2-3
+小时的专注时间块，期间关闭所有通知。考虑到你下周要交的报告，可以试试早上9点到11点这个时段。
+
+输出：
+{
+  "memory list": [
+    {
+      "key": "深度工作书籍推荐",
+      "memory_type": "LongTermMemory",
+      "value": "2025年8月15日助手向用户推荐了《深度工作》一书，并介绍了书中建议的每天留出2-3小时专注时间块、关闭所有通知的方法。助手还根据用户下周需要提交报告的情况，建议用户尝试早上9点到11点作为专注时段。",
+      "tags": ["书籍推荐", "深度工作", "时间管理", "报告"]
+    }
+  ],
+  "summary": "助手向用户推荐了《深度工作》一书，并介绍了了其中的工作方法"
+}
+注意：当对话仅有助手消息时，应使用"助手推荐"、"助手建议"等表述，而非将其错误归因为用户的陈述或计划。
 
 另一个中文示例（注意：当用户语言为中文时，您也需输出中文）：
 {
