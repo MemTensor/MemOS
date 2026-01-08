@@ -13,7 +13,31 @@ from memos.vec_dbs.item import VecDBItem
 
 logger = get_logger(__name__)
 
+def _flatten_info_fields(metadata: dict[str, Any]) -> dict[str, Any]:
+    """
+    Flatten the 'info' field in metadata to the top level.
 
+    If metadata contains an 'info' field that is a dictionary, all its key-value pairs
+    will be moved to the top level of metadata, and the 'info' field will be removed.
+
+    Args:
+        metadata: Dictionary that may contain an 'info' field
+
+    Returns:
+        Dictionary with 'info' fields flattened to top level
+
+    Example:
+        Input:  {"user_id": "xxx", "info": {"A": "value1", "B": "value2"}}
+        Output: {"user_id": "xxx", "A": "value1", "B": "value2"}
+    """
+    if "info" in metadata and isinstance(metadata["info"], dict):
+        # Copy info fields to top level
+        info_dict = metadata.pop("info")
+        for key, value in info_dict.items():
+            # Only add if key doesn't already exist at top level (to avoid overwriting)
+            if key not in metadata:
+                metadata[key] = value
+    return metadata
 class Neo4jCommunityGraphDB(Neo4jGraphDB):
     """
     Neo4j Community Edition graph memory store.
@@ -129,6 +153,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
                     metadata["user_name"] = effective_user_name
 
                 metadata = _prepare_node_metadata(metadata)
+                metadata = _flatten_info_fields(metadata)
 
                 embedding = metadata.pop("embedding", None)
                 if embedding is None:
