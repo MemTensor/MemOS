@@ -264,7 +264,10 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 <br>
 
 ## 📚 Resources
-- [Awesome-AI-Memory](https://github.com/IAAR-Shanghai/Awesome-AI-Memory) is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.
+
+>  **Awesome-AI-Memory** : A curated collection of LLM memory resources: **papers / frameworks / tools / practices**  
+>  This is a curated repository dedicated to resources on memory and memory systems for large language models. It systematically collects relevant research papers, frameworks, tools, and practical insights. The repository aims to organize and present the rapidly evolving research landscape of LLM memory, bridging multiple research directions including natural language processing, information retrieval, agentic systems, and cognitive science.  
+>  ** Start to learn** 👉 https://github.com/IAAR-Shanghai/Awesome-AI-Memory
 
 <br>
 
