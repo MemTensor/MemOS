@@ -163,6 +163,49 @@ def handle_get_subgraph(
         raise
 
 
+def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemoryResponse:
+    """
+    Handler for getting a single memory by its ID.
+
+    Tries to retrieve from text memory first, then preference memory if not found.
+
+    Args:
+        memory_id: The ID of the memory to retrieve
+        naive_mem_cube: Memory cube instance
+
+    Returns:
+        GetMemoryResponse with the memory data
+    """
+
+    try:
+        memory = naive_mem_cube.text_mem.get(memory_id)
+    except Exception:
+        memory = None
+
+    # If not found in text memory, try preference memory
+    pref = None
+    if memory is None and naive_mem_cube.pref_mem is not None:
+        collection_names = ["explicit_preference", "implicit_preference"]
+        for collection_name in collection_names:
+            try:
+                pref = naive_mem_cube.pref_mem.get_with_collection_name(collection_name, memory_id)
+                if pref is not None:
+                    break
+            except Exception:
+                continue
+
+    # Get the data from whichever memory source succeeded
+    data = (memory or pref).model_dump() if (memory or pref) else None
+
+    return GetMemoryResponse(
+        message="Memory retrieved successfully"
+        if data
+        else f"Memory with ID {memory_id} not found",
+        code=200,
+        data=data,
+    )
+
+
 def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
