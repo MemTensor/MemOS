@@ -314,6 +314,14 @@ def get_memories(memory_req: GetMemoryRequest):
     )
 
 
+@router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
+def get_memory_by_id(memory_id: str):
+    return handlers.memory_handler.handle_get_memory(
+        memory_id=memory_id,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
 @router.post(
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
