@@ -83,10 +83,18 @@ def concat_original_source(
     merge_field = ["sources"] if rerank_source is None else rerank_source.split(",")
     documents = []
     for item in graph_results:
-        memory = _TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m
+        m = item.get("memory") if isinstance(item, dict) else getattr(item, "memory", None)
+
+        memory = _TAG1.sub("", m) if isinstance(m, str) else m
+
         sources = []
         for field in merge_field:
-            source = getattr(item.metadata, field, None)
+            if isinstance(item, dict):
+                metadata = item.get("metadata", {})
+                source = metadata.get(field) if isinstance(metadata, dict) else None
+            else:
+                source = getattr(item.metadata, field, None) if hasattr(item, "metadata") else None
+
             if source is None:
                 continue
             sources.append((memory, source))

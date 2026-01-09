@@ -55,7 +55,11 @@ class SchedulerLoggerModule(BaseSchedulerModule):
                 "mem_cube is None — this should not happen in production!", stack_info=True
             )
         text_mem_base: TreeTextMemory = mem_cube.text_mem
-        current_memory_sizes = text_mem_base.get_current_memory_size(user_name=mem_cube_id)
+
+        current_memory_sizes = {}
+        if hasattr(text_mem_base, "get_current_memory_size"):
+            current_memory_sizes = text_mem_base.get_current_memory_size(user_name=mem_cube_id)
+
         current_memory_sizes = {
             "long_term_memory_size": current_memory_sizes.get("LongTermMemory", 0),
             "user_memory_size": current_memory_sizes.get("UserMemory", 0),
@@ -63,13 +67,31 @@ class SchedulerLoggerModule(BaseSchedulerModule):
             "transformed_act_memory_size": NOT_INITIALIZED,
             "parameter_memory_size": NOT_INITIALIZED,
         }
+
         memory_capacities = {
-            "long_term_memory_capacity": text_mem_base.memory_manager.memory_size["LongTermMemory"],
-            "user_memory_capacity": text_mem_base.memory_manager.memory_size["UserMemory"],
-            "working_memory_capacity": text_mem_base.memory_manager.memory_size["WorkingMemory"],
+            "long_term_memory_capacity": 0,
+            "user_memory_capacity": 0,
+            "working_memory_capacity": 0,
             "transformed_act_memory_capacity": NOT_INITIALIZED,
             "parameter_memory_capacity": NOT_INITIALIZED,
         }
+
+        if hasattr(text_mem_base, "memory_manager") and hasattr(
+            text_mem_base.memory_manager, "memory_size"
+        ):
+            memory_capacities.update(
+                {
+                    "long_term_memory_capacity": text_mem_base.memory_manager.memory_size.get(
+                        "LongTermMemory", 0
+                    ),
+                    "user_memory_capacity": text_mem_base.memory_manager.memory_size.get(
+                        "UserMemory", 0
+                    ),
+                    "working_memory_capacity": text_mem_base.memory_manager.memory_size.get(
+                        "WorkingMemory", 0
+                    ),
+                }
+            )
 
         if hasattr(self, "monitor"):
             if (

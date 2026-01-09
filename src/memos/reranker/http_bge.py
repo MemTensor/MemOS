@@ -129,7 +129,7 @@ class HTTPBGEReranker(BaseReranker):
     def rerank(
         self,
         query: str,
-        graph_results: list[TextualMemoryItem],
+        graph_results: list[TextualMemoryItem] | list[dict[str, Any]],
         top_k: int,
         search_priority: dict | None = None,
         **kwargs,
@@ -164,11 +164,15 @@ class HTTPBGEReranker(BaseReranker):
         if self.rerank_source:
             documents = concat_original_source(graph_results, self.rerank_source)
         else:
-            documents = [
-                (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
-                for item in graph_results
-            ]
-            documents = [d for d in documents if isinstance(d, str) and d]
+            documents = []
+            filtered_graph_results = []
+            for item in graph_results:
+                m = item.get("memory") if isinstance(item, dict) else getattr(item, "memory", None)
+
+                if isinstance(m, str) and m:
+                    documents.append(_TAG1.sub("", m))
+                    filtered_graph_results.append(item)
+            graph_results = filtered_graph_results
 
         logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
 

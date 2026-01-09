@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-
 import numpy as np
 
 from memos.dependency import require_python_package

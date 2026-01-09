@@ -27,7 +27,7 @@ input query:
   "tags": [...],
   "goal_type": "retrieval | qa | generation",
   "rephrased_instruction": "...", # return an empty string if the original instruction is easy enough to understand
-  "internet_search": True/False,
+  "internet_search": true/false,
   "memories": ["...", "...", ...]
 }
 """

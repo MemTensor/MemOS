@@ -2,7 +2,7 @@ import json
 import os
 import time
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
@@ -192,7 +192,7 @@ class MOSCore:
         self.chat_history_manager[user_id] = ChatHistory(
             user_id=user_id if user_id is not None else self.user_id,
             session_id=session_id if session_id is not None else self.session_id,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             total_messages=0,
             chat_history=[],
         )
@@ -311,7 +311,7 @@ class MOSCore:
         past_key_values = None
 
         if self.config.enable_activation_memory:
-            if self.config.chat_model.backend != "huggingface":
+            if self.config.chat_model.backend not in ["huggingface", "huggingface_singleton"]:
                 logger.error(
                     "Activation memory only used for huggingface backend. Skipping activation memory."
                 )
@@ -498,7 +498,9 @@ class MOSCore:
         existing_cube = self.user_manager.get_cube(mem_cube_id)
 
         # check the embedder is it consistent with MOSConfig
-        if self.config.mem_reader.config.embedder != (
+        if hasattr(
+            self.mem_cubes[mem_cube_id].text_mem.config, "embedder"
+        ) and self.config.mem_reader.config.embedder != (
             cube_embedder := self.mem_cubes[mem_cube_id].text_mem.config.embedder
         ):
             logger.warning(

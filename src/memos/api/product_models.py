@@ -319,6 +319,15 @@ class APISearchRequest(BaseRequest):
         description="Number of textual memories to retrieve (top-K). Default: 10.",
     )
 
+    dedup: Literal["no", "sim"] | None = Field(
+        None,
+        description=(
+            "Optional dedup option for textual memories. "
+            "Use 'no' for no dedup, 'sim' for similarity dedup. "
+            "If None, default exact-text dedup is applied."
+        ),
+    )
+
     pref_top_k: int = Field(
         6,
         ge=0,
@@ -763,12 +772,19 @@ class GetMemoryRequest(BaseRequest):
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to handle preference memory")
+    page: int | None = Field(
+        None,
+        description="Page number (starts from 1). If None, exports all data without pagination.",
+    )
+    page_size: int | None = Field(
+        None, description="Number of items per page. If None, exports all data without pagination."
+    )
 
 
 class DeleteMemoryRequest(BaseRequest):
     """Request model for deleting memories."""
 
-    writable_cube_ids: list[str] = Field(..., description="Writable cube IDs")
+    writable_cube_ids: list[str] = Field(None, description="Writable cube IDs")
     memory_ids: list[str] | None = Field(None, description="Memory IDs")
     file_ids: list[str] | None = Field(None, description="File IDs")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
@@ -856,8 +872,8 @@ class GetMemoryData(BaseModel):
     memory_detail_list: list[MemoryDetail] = Field(
         default_factory=list, alias="memory_detail_list", description="List of memory details"
     )
-    message_detail_list: list[MessageDetail] | None = Field(
-        None, alias="message_detail_list", description="List of message details (usually None)"
+    preference_detail_list: list[MessageDetail] | None = Field(
+        None, alias="preference_detail_list", description="List of preference detail"
     )
 
 
@@ -1009,7 +1025,7 @@ class MemOSGetMemoryResponse(BaseModel):
 
     code: int = Field(..., description="Response status code")
     message: str = Field(..., description="Response message")
-    data: SearchMemoryData = Field(..., description="Get results data")
+    data: GetMemoryData = Field(..., description="Get results data")
 
     @property
     def memories(self) -> list[MemoryDetail]:
@@ -1017,14 +1033,9 @@ class MemOSGetMemoryResponse(BaseModel):
         return self.data.memory_detail_list
 
     @property
-    def preferences(self) -> list[MemoryDetail]:
+    def preferences(self) -> list[MessageDetail] | None:
         """Convenient access to preference list."""
         return self.data.preference_detail_list
-
-    @property
-    def tool_memories(self) -> list[MemoryDetail]:
-        """Convenient access to tool_memory list."""
-        return self.data.tool_memory_detail_list
 
 
 class MemOSGetKnowledgebaseFileResponse(BaseModel):
@@ -1168,3 +1179,26 @@ class AllStatusResponse(BaseResponse[AllStatusResponseData]):
     """Response model for full scheduler status operations."""
 
     message: str = "Scheduler status summary retrieved successfully"
+
+
+# ─── Internal API Endpoints Models (for internal use) ───────────────────────────────────────────────────
+
+
+class GetUserNamesByMemoryIdsRequest(BaseRequest):
+    """Request model for getting user names by memory ids."""
+
+    memory_ids: list[str] = Field(..., description="Memory IDs")
+
+
+class GetUserNamesByMemoryIdsResponse(BaseResponse[dict[str, str | None]]):
+    """Response model for getting user names by memory ids."""
+
+
+class ExistMemCubeIdRequest(BaseRequest):
+    """Request model for checking if mem cube id exists."""
+
+    mem_cube_id: str = Field(..., description="Mem cube ID")
+
+
+class ExistMemCubeIdResponse(BaseResponse[dict[str, bool]]):
+    """Response model for checking if mem cube id exists."""

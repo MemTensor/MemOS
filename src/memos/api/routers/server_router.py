@@ -15,7 +15,7 @@ import os
 import random as _random
 import socket
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from memos.api import handlers
 from memos.api.handlers.add_handler import AddHandler
@@ -33,9 +33,13 @@ from memos.api.product_models import (
     ChatRequest,
     DeleteMemoryRequest,
     DeleteMemoryResponse,
+    ExistMemCubeIdRequest,
+    ExistMemCubeIdResponse,
     GetMemoryPlaygroundRequest,
     GetMemoryRequest,
     GetMemoryResponse,
+    GetUserNamesByMemoryIdsRequest,
+    GetUserNamesByMemoryIdsResponse,
     MemoryResponse,
     SearchResponse,
     StatusResponse,
@@ -43,6 +47,7 @@ from memos.api.product_models import (
     SuggestionResponse,
     TaskQueueResponse,
 )
+from memos.graph_dbs.polardb import PolarDBGraphDB
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
@@ -64,12 +69,16 @@ dependencies = HandlerDependencies.from_init_server(components)
 # Initialize all handlers with dependency injection
 search_handler = SearchHandler(dependencies)
 add_handler = AddHandler(dependencies)
-chat_handler = ChatHandler(
-    dependencies,
-    components["chat_llms"],
-    search_handler,
-    add_handler,
-    online_bot=components.get("online_bot"),
+chat_handler = (
+    ChatHandler(
+        dependencies,
+        components["chat_llms"],
+        search_handler,
+        add_handler,
+        online_bot=components.get("online_bot"),
+    )
+    if os.getenv("ENABLE_CHAT_API", "false") == "true"
+    else None
 )
 feedback_handler = FeedbackHandler(dependencies)
 # Extract commonly used components for function-based handlers
@@ -79,6 +88,8 @@ llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
 redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
+graph_db = components["graph_db"]
+vector_db = components["vector_db"]
 
 
 # =============================================================================
@@ -201,6 +212,10 @@ def chat_complete(chat_req: APIChatCompleteRequest):
 
     This endpoint uses the class-based ChatHandler.
     """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
     return chat_handler.handle_chat_complete(chat_req)
 
 
@@ -212,6 +227,10 @@ def chat_stream(chat_req: ChatRequest):
     This endpoint uses the class-based ChatHandler which internally
     composes SearchHandler and AddHandler for a clean architecture.
     """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
     return chat_handler.handle_chat_stream(chat_req)
 
 
@@ -223,6 +242,10 @@ def chat_stream_playground(chat_req: ChatPlaygroundRequest):
     This endpoint uses the class-based ChatHandler which internally
     composes SearchHandler and AddHandler for a clean architecture.
     """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
     return chat_handler.handle_chat_stream_playground(chat_req)
 
 
@@ -289,6 +312,14 @@ def get_memories(memory_req: GetMemoryRequest):
     )
 
 
+@router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
+def get_memory_by_id(memory_id: str):
+    return handlers.memory_handler.handle_get_memory(
+        memory_id=memory_id,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
 @router.post(
     "/delete_memory", summary="Delete memories for user", response_model=DeleteMemoryResponse
 )
@@ -311,3 +342,53 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
     This endpoint uses the class-based FeedbackHandler for better code organization.
     """
     return feedback_handler.handle_feedback_memories(feedback_req)
+
+
+# =============================================================================
+# Other API Endpoints (for internal use)
+# =============================================================================
+
+
+@router.post(
+    "/get_user_names_by_memory_ids",
+    summary="Get user names by memory ids",
+    response_model=GetUserNamesByMemoryIdsResponse,
+)
+def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
+    """Get user names by memory ids."""
+    if not isinstance(graph_db, PolarDBGraphDB):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "graph_db must be an instance of PolarDBGraphDB to use "
+                "get_user_names_by_memory_ids"
+                f"current graph_db is: {graph_db.__class__.__name__}"
+            ),
+        )
+    result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
+    if vector_db:
+        prefs = []
+        for collection_name in ["explicit_preference", "implicit_preference"]:
+            prefs.extend(
+                vector_db.get_by_ids(collection_name=collection_name, ids=request.memory_ids)
+            )
+        result.update({pref.id: pref.payload.get("mem_cube_id", None) for pref in prefs})
+    return GetUserNamesByMemoryIdsResponse(
+        code=200,
+        message="Successfully",
+        data=result,
+    )
+
+
+@router.post(
+    "/exist_mem_cube_id",
+    summary="Check if mem cube id exists",
+    response_model=ExistMemCubeIdResponse,
+)
+def exist_mem_cube_id(request: ExistMemCubeIdRequest):
+    """Check if mem cube id exists."""
+    return ExistMemCubeIdResponse(
+        code=200,
+        message="Successfully",
+        data=graph_db.exist_user_name(user_name=request.mem_cube_id),
+    )

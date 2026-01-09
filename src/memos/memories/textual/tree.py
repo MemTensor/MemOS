@@ -161,6 +161,7 @@ class TreeTextMemory(BaseTextMemory):
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -207,6 +208,7 @@ class TreeTextMemory(BaseTextMemory):
             user_name=user_name,
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            dedup=dedup,
             **kwargs,
         )
 
@@ -319,13 +321,21 @@ class TreeTextMemory(BaseTextMemory):
     ) -> list[TextualMemoryItem]:
         raise NotImplementedError
 
-    def get_all(self, user_name: str | None = None) -> dict:
+    def get_all(
+        self,
+        user_name: str,
+        user_id: str | None = None,
+        page: int | None = None,
+        page_size: int | None = None,
+    ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
-        all_items = self.graph_store.export_graph(user_name=user_name)
-        return all_items
+        graph_output = self.graph_store.export_graph(
+            user_name=user_name, user_id=user_id, page=page, page_size=page_size
+        )
+        return graph_output
 
     def delete(self, memory_ids: list[str], user_name: str | None = None) -> None:
         """Hard delete: permanently remove nodes and their edges from the graph."""
@@ -336,6 +346,13 @@ class TreeTextMemory(BaseTextMemory):
                 self.graph_store.delete_node(mid, user_name=user_name)
             except Exception as e:
                 logger.warning(f"TreeTextMemory.delete_hard: failed to delete {mid}: {e}")
+
+    def delete_by_memory_ids(self, memory_ids: list[str]) -> None:
+        """Delete memories by memory_ids."""
+        try:
+            self.graph_store.delete_node_by_prams(memory_ids=memory_ids)
+        except Exception as e:
+            logger.error(f"An error occurred while deleting memories by memory_ids: {e}")
 
     def delete_all(self) -> None:
         """Delete all memories and their relationships from the graph store."""
@@ -348,7 +365,7 @@ class TreeTextMemory(BaseTextMemory):
 
     def delete_by_filter(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
     ) -> None:

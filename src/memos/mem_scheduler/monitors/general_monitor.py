@@ -200,15 +200,19 @@ class SchedulerGeneralMonitor(BaseSchedulerModule):
         mem_cube_id: str,
         mem_cube: GeneralMemCube,
     ):
-        text_mem_base: TreeTextMemory = mem_cube.text_mem
-        assert isinstance(text_mem_base, TreeTextMemory)
-        self.working_mem_monitor_capacity = min(
-            DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
-            (
-                int(text_mem_base.memory_manager.memory_size["WorkingMemory"])
-                + self.partial_retention_number
-            ),
-        )
+        text_mem_base = mem_cube.text_mem
+
+        if isinstance(text_mem_base, TreeTextMemory):
+            self.working_mem_monitor_capacity = min(
+                DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT,
+                (
+                    int(text_mem_base.memory_manager.memory_size["WorkingMemory"])
+                    + self.partial_retention_number
+                ),
+            )
+        else:
+            # Fallback for NaiveTextMemory and others
+            self.working_mem_monitor_capacity = DEFAULT_WORKING_MEM_MONITOR_SIZE_LIMIT
 
         # register monitors
         self.register_memory_manager_if_not_exists(

@@ -177,7 +177,9 @@ class MemOSClient:
                 if retry == MAX_RETRY_COUNT - 1:
                     raise
 
-    def get_memory(self, user_id: str, include_preference: str) -> MemOSGetMemoryResponse | None:
+    def get_memory(
+        self, user_id: str, include_preference: bool = True, page: int = 1, size: int = 10
+    ) -> MemOSGetMemoryResponse | None:
         """get memories"""
         # Validate required parameters
         self._validate_required_params(include_preference=include_preference, user_id=user_id)
@@ -186,6 +188,8 @@ class MemOSClient:
         payload = {
             "include_preference": include_preference,
             "user_id": user_id,
+            "page": page,
+            "size": size,
         }
 
         for retry in range(MAX_RETRY_COUNT):

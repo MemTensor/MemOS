@@ -1132,41 +1132,95 @@ class Neo4jGraphDB(BaseGraphDB):
             logger.error(f"[ERROR] Failed to clear database '{self.db_name}': {e}")
             raise
 
-    def export_graph(self, **kwargs) -> dict[str, Any]:
+    def export_graph(
+        self,
+        page: int | None = None,
+        page_size: int | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
+
+        Args:
+            page (int, optional): Page number (starts from 1). If None, exports all data without pagination.
+            page_size (int, optional): Number of items per page. If None, exports all data without pagination.
+            **kwargs: Additional keyword arguments, including:
+                - user_name (str, optional): User name for filtering in non-multi-db mode
 
         Returns:
             {
                 "nodes": [ { "id": ..., "memory": ..., "metadata": {...} }, ... ],
-                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ]
+                "edges": [ { "source": ..., "target": ..., "type": ... }, ... ],
+                "total_nodes": int,  # Total number of nodes matching the filter criteria
+                "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+
+        # Initialize total counts
+        total_nodes = 0
+        total_edges = 0
+
+        # Determine if pagination is needed
+        use_pagination = page is not None and page_size is not None
+
+        # Validate pagination parameters if pagination is enabled
+        if use_pagination:
+            if page < 1:
+                page = 1
+            if page_size < 1:
+                page_size = 10
+            skip = (page - 1) * page_size
+
         with self.driver.session(database=self.db_name) as session:
-            # Export nodes
-            node_query = "MATCH (n:Memory)"
-            edge_query = "MATCH (a:Memory)-[r]->(b:Memory)"
+            # Build base queries
+            node_base_query = "MATCH (n:Memory)"
+            edge_base_query = "MATCH (a:Memory)-[r]->(b:Memory)"
             params = {}
 
             if not self.config.use_multi_db and (self.config.user_name or user_name):
-                node_query += " WHERE n.user_name = $user_name"
-                edge_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
+                node_base_query += " WHERE n.user_name = $user_name"
+                edge_base_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
                 params["user_name"] = user_name
 
-            node_result = session.run(f"{node_query} RETURN n", params)
+            # Get total count of nodes before pagination
+            count_node_query = node_base_query + " RETURN COUNT(n) AS count"
+            count_node_result = session.run(count_node_query, params)
+            total_nodes = count_node_result.single()["count"]
+
+            # Export nodes with ORDER BY created_at DESC
+            node_query = node_base_query + " RETURN n ORDER BY n.created_at DESC, n.id DESC"
+            if use_pagination:
+                node_query += f" SKIP {skip} LIMIT {page_size}"
+
+            node_result = session.run(node_query, params)
             nodes = [self._parse_node(dict(record["n"])) for record in node_result]
 
-            # Export edges
-            edge_result = session.run(
-                f"{edge_query} RETURN a.id AS source, b.id AS target, type(r) AS type", params
+            # Get total count of edges before pagination
+            count_edge_query = edge_base_query + " RETURN COUNT(r) AS count"
+            count_edge_result = session.run(count_edge_query, params)
+            total_edges = count_edge_result.single()["count"]
+
+            # Export edges with ORDER BY created_at DESC
+            edge_query = (
+                edge_base_query
+                + " RETURN a.id AS source, b.id AS target, type(r) AS type ORDER BY a.created_at DESC, b.created_at DESC, a.id DESC, b.id DESC"
             )
+            if use_pagination:
+                edge_query += f" SKIP {skip} LIMIT {page_size}"
+
+            edge_result = session.run(edge_query, params)
             edges = [
                 {"source": record["source"], "target": record["target"], "type": record["type"]}
                 for record in edge_result
             ]
 
-            return {"nodes": nodes, "edges": edges}
+            return {
+                "nodes": nodes,
+                "edges": edges,
+                "total_nodes": total_nodes,
+                "total_edges": total_edges,
+            }
 
     def import_graph(self, data: dict[str, Any], user_name: str | None = None) -> None:
         """
@@ -1347,6 +1401,15 @@ class Neo4jGraphDB(BaseGraphDB):
             with self.driver.session(database="system") as session:
                 session.run(f"CREATE DATABASE `{self.db_name}` IF NOT EXISTS")
         except ClientError as e:
+            if "Unsupported administration command" in str(
+                e
+            ) or "Unsupported administration" in str(e):
+                logger.warning(
+                    f"Could not create database '{self.db_name}' because this Neo4j instance "
+                    "(likely Community Edition) does not support administrative commands. "
+                    "Please ensure the database exists manually or use the default 'neo4j' database."
+                )
+                return
             if "ExistingDatabaseFound" in str(e):
                 pass  # Ignore, database already exists
             else:
@@ -1637,130 +1700,216 @@ class Neo4jGraphDB(BaseGraphDB):
 
     def delete_node_by_prams(
         self,
-        writable_cube_ids: list[str],
+        writable_cube_ids: list[str] | None = None,
         memory_ids: list[str] | None = None,
         file_ids: list[str] | None = None,
         filter: dict | None = None,
     ) -> int:
         """
         Delete nodes by memory_ids, file_ids, or filter.
+        Supports three scenarios:
+        1. Delete by memory_ids (standalone)
+        2. Delete by writable_cube_ids + file_ids (combined)
+        3. Delete by filter (standalone, no writable_cube_ids needed)
 
         Args:
-            writable_cube_ids (list[str]): List of cube IDs (user_name) to filter nodes. Required parameter.
+            writable_cube_ids (list[str], optional): List of cube IDs (user_name) to filter nodes.
+                Only used with file_ids scenario. If not provided, no user_name filter will be applied.
             memory_ids (list[str], optional): List of memory node IDs to delete.
-            file_ids (list[str], optional): List of file node IDs to delete.
-            filter (dict, optional): Filter dictionary to query matching nodes for deletion.
+            file_ids (list[str], optional): List of file node IDs to delete. Must be used with writable_cube_ids.
+            filter (dict, optional): Filter dictionary for metadata filtering.
+                Filter conditions are directly used in DELETE WHERE clause without pre-querying.
+                Does not require writable_cube_ids.
 
         Returns:
             int: Number of nodes deleted.
         """
+        batch_start_time = time.time()
         logger.info(
             f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
         )
-        print(
-            f"[delete_node_by_prams] memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}, writable_cube_ids: {writable_cube_ids}"
-        )
-
-        # Validate writable_cube_ids
-        if not writable_cube_ids or len(writable_cube_ids) == 0:
-            raise ValueError("writable_cube_ids is required and cannot be empty")
-
-        # Build WHERE conditions separately for memory_ids and file_ids
-        where_clauses = []
-        params = {}
 
         # Build user_name condition from writable_cube_ids (OR relationship - match any cube_id)
+        # Only add user_name filter if writable_cube_ids is provided (for file_ids scenario)
         user_name_conditions = []
-        for idx, cube_id in enumerate(writable_cube_ids):
-            param_name = f"cube_id_{idx}"
-            user_name_conditions.append(f"n.user_name = ${param_name}")
-            params[param_name] = cube_id
+        params = {}
+        if writable_cube_ids and len(writable_cube_ids) > 0:
+            for idx, cube_id in enumerate(writable_cube_ids):
+                param_name = f"cube_id_{idx}"
+                user_name_conditions.append(f"n.user_name = ${param_name}")
+                params[param_name] = cube_id
 
-        # Handle memory_ids: query n.id
-        if memory_ids and len(memory_ids) > 0:
-            where_clauses.append("n.id IN $memory_ids")
-            params["memory_ids"] = memory_ids
-
-        # Handle file_ids: query n.file_ids field
-        # All file_ids must be present in the array field (AND relationship)
-        if file_ids and len(file_ids) > 0:
-            file_id_and_conditions = []
-            for idx, file_id in enumerate(file_ids):
-                param_name = f"file_id_{idx}"
-                params[param_name] = file_id
-                # Check if this file_id is in the file_ids array field
-                file_id_and_conditions.append(f"${param_name} IN n.file_ids")
-            if file_id_and_conditions:
-                # Use AND to require all file_ids to be present
-                where_clauses.append(f"({' OR '.join(file_id_and_conditions)})")
-
-        # Query nodes by filter if provided
-        filter_ids = []
+        # Build filter conditions using common method (no query, direct use in WHERE clause)
+        filter_conditions = []
+        filter_params = {}
         if filter:
-            # Use get_by_metadata with empty filters list and filter
-            filter_ids = self.get_by_metadata(
-                filters=[],
-                user_name=None,
-                filter=filter,
-                knowledgebase_ids=writable_cube_ids,
+            filter_conditions, filter_params = self._build_filter_conditions_cypher(
+                filter, param_counter_start=0, node_alias="n"
             )
+            logger.info(f"[delete_node_by_prams] filter_conditions: {filter_conditions}")
+            params.update(filter_params)
 
-        # If filter returned IDs, add condition for them
-        if filter_ids:
-            where_clauses.append("n.id IN $filter_ids")
-            params["filter_ids"] = filter_ids
-
-        # If no conditions (except user_name), return 0
-        if not where_clauses:
+        # If no conditions to delete, return 0
+        if not memory_ids and not file_ids and not filter_conditions:
             logger.warning(
                 "[delete_node_by_prams] No nodes to delete (no memory_ids, file_ids, or filter provided)"
             )
             return 0
 
-        # Build WHERE clause
-        # First, combine memory_ids, file_ids, and filter conditions with OR (any condition can match)
-        data_conditions = " OR ".join([f"({clause})" for clause in where_clauses])
+        # Build WHERE conditions list
+        where_clauses = []
 
-        # Then, combine with user_name condition using AND (must match user_name AND one of the data conditions)
-        user_name_where = " OR ".join(user_name_conditions)
-        ids_where = f"({user_name_where}) AND ({data_conditions})"
+        # Scenario 1: memory_ids (standalone)
+        if memory_ids:
+            logger.info(f"[delete_node_by_prams] Processing {len(memory_ids)} memory_ids")
+            where_clauses.append("n.id IN $memory_ids")
+            params["memory_ids"] = memory_ids
 
-        logger.info(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
-        print(
-            f"[delete_node_by_prams] Deleting nodes - memory_ids: {memory_ids}, file_ids: {file_ids}, filter: {filter}"
-        )
+        # Scenario 2: file_ids + writable_cube_ids (combined)
+        if file_ids:
+            logger.info(f"[delete_node_by_prams] Processing {len(file_ids)} file_ids")
+            file_id_conditions = []
+            for idx, file_id in enumerate(file_ids):
+                param_name = f"file_id_{idx}"
+                params[param_name] = file_id
+                # Check if this file_id is in the file_ids array field
+                file_id_conditions.append(f"${param_name} IN n.file_ids")
+            if file_id_conditions:
+                where_clauses.append(f"({' OR '.join(file_id_conditions)})")
 
-        # First count matching nodes to get accurate count
-        count_query = f"MATCH (n:Memory) WHERE {ids_where} RETURN count(n) AS node_count"
-        logger.info(f"[delete_node_by_prams] count_query: {count_query}")
-        print(f"[delete_node_by_prams] count_query: {count_query}")
+        # Scenario 3: filter (standalone, no writable_cube_ids needed)
+        if filter_conditions:
+            logger.info("[delete_node_by_prams] Processing filter conditions")
+            # Combine filter conditions with AND
+            filter_where = " AND ".join(filter_conditions)
+            where_clauses.append(f"({filter_where})")
 
-        # Then delete nodes
-        delete_query = f"MATCH (n:Memory) WHERE {ids_where} DETACH DELETE n"
+        # Build final WHERE clause
+        if not where_clauses:
+            logger.warning("[delete_node_by_prams] No WHERE conditions to delete")
+            return 0
+
+        # Combine all conditions with AND
+        data_conditions = " AND ".join([f"({clause})" for clause in where_clauses])
+
+        # Add user_name filter if provided (for file_ids scenario)
+        if user_name_conditions:
+            user_name_where = " OR ".join(user_name_conditions)
+            final_where = f"({user_name_where}) AND ({data_conditions})"
+        else:
+            final_where = data_conditions
+
+        # Delete directly without pre-counting
+        delete_query = f"MATCH (n:Memory) WHERE {final_where} DETACH DELETE n"
         logger.info(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] delete_query: {delete_query}")
-        print(f"[delete_node_by_prams] params: {params}")
 
         deleted_count = 0
         try:
             with self.driver.session(database=self.db_name) as session:
-                # Count nodes before deletion
-                count_result = session.run(count_query, **params)
-                count_record = count_result.single()
-                expected_count = 0
-                if count_record:
-                    expected_count = count_record["node_count"] or 0
+                # Execute delete query
+                result = session.run(delete_query, **params)
+                # Consume the result to ensure deletion completes and get the summary
+                summary = result.consume()
+                # Get the count from the result summary
+                deleted_count = summary.counters.nodes_deleted if summary.counters else 0
 
-                # Delete nodes
-                session.run(delete_query, **params)
-                # Use the count from before deletion as the actual deleted count
-                deleted_count = expected_count
-
+                elapsed_time = time.time() - batch_start_time
+                logger.info(
+                    f"[delete_node_by_prams] Deletion completed successfully in {elapsed_time:.2f}s, total deleted {deleted_count} nodes"
+                )
         except Exception as e:
             logger.error(f"[delete_node_by_prams] Failed to delete nodes: {e}", exc_info=True)
             raise
 
         logger.info(f"[delete_node_by_prams] Successfully deleted {deleted_count} nodes")
         return deleted_count
+
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
+        """Get user names by memory ids.
+
+        Args:
+            memory_ids: List of memory node IDs to query.
+
+        Returns:
+            dict[str, str | None]: Dictionary mapping memory_id to user_name.
+                - Key: memory_id
+                - Value: user_name if exists, None if memory_id does not exist
+                Example: {"4918d700-6f01-4f4c-a076-75cc7b0e1a7c": "zhangsan", "2222222": None}
+        """
+        if not memory_ids:
+            return {}
+
+        logger.info(f"[get_user_names_by_memory_ids] Querying memory_ids {memory_ids}")
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Query to get memory_id and user_name pairs
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.id IN $memory_ids
+                    RETURN n.id AS memory_id, n.user_name AS user_name
+                """
+                logger.info(f"[get_user_names_by_memory_ids] query: {query}")
+
+                result = session.run(query, memory_ids=memory_ids)
+                result_dict = {}
+
+                # Build result dictionary from query results
+                for record in result:
+                    memory_id = record["memory_id"]
+                    user_name = record["user_name"]
+                    result_dict[memory_id] = user_name if user_name else None
+
+                # Set None for memory_ids that were not found
+                for mid in memory_ids:
+                    if mid not in result_dict:
+                        result_dict[mid] = None
+
+                logger.info(
+                    f"[get_user_names_by_memory_ids] Found {len([v for v in result_dict.values() if v is not None])} memory_ids with user_names, "
+                    f"{len([v for v in result_dict.values() if v is None])} memory_ids without user_names"
+                )
+
+                return result_dict
+        except Exception as e:
+            logger.error(
+                f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
+            )
+            raise
+
+    def exist_user_name(self, user_name: str) -> dict[str, bool]:
+        """Check if user name exists in the graph.
+
+        Args:
+            user_name: User name to check.
+
+        Returns:
+            dict[str, bool]: Dictionary with user_name as key and bool as value indicating existence.
+        """
+        logger.info(f"[exist_user_name] Querying user_name {user_name}")
+        if not user_name:
+            return {user_name: False}
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                # Query to check if user_name exists
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $user_name
+                    RETURN COUNT(n) AS count
+                """
+                logger.info(f"[exist_user_name] query: {query}")
+
+                result = session.run(query, user_name=user_name)
+                count = result.single()["count"]
+                result_dict = {user_name: count > 0}
+
+                logger.info(
+                    f"[exist_user_name] user_name {user_name} exists: {result_dict[user_name]}"
+                )
+                return result_dict
+        except Exception as e:
+            logger.error(
+                f"[exist_user_name] Failed to check user_name existence: {e}", exc_info=True
+            )
+            raise

@@ -108,8 +108,6 @@ class SchedulerDispatcher(BaseSchedulerModule):
         )
 
         self.metrics = metrics
-        self._status_tracker: TaskStatusTracker | None = None
-        # Use setter to allow propagation and keep a single source of truth
         self.status_tracker = status_tracker
         self.submit_web_logs = submit_web_logs  # ADDED
 
@@ -117,35 +115,6 @@ class SchedulerDispatcher(BaseSchedulerModule):
         if not msgs:
             return
         # This is handled in BaseScheduler now
-
-    @property
-    def status_tracker(self) -> TaskStatusTracker | None:
-        """Lazy-initialized status tracker for the dispatcher.
-
-        If the tracker is None, attempt to initialize from the Redis-backed
-        components available to the dispatcher (queue or orchestrator).
-        """
-        if self._status_tracker is None:
-            try:
-                self._status_tracker = TaskStatusTracker(self.redis)
-                # Propagate to submodules when created lazily
-                if self.memos_message_queue:
-                    self.memos_message_queue.set_status_tracker(self._status_tracker)
-            except Exception as e:
-                logger.warning(f"Failed to lazily initialize status_tracker: {e}", exc_info=True)
-        return self._status_tracker
-
-    @status_tracker.setter
-    def status_tracker(self, value: TaskStatusTracker | None) -> None:
-        self._status_tracker = value
-        # Propagate to the queue if possible
-        try:
-            if self.memos_message_queue and hasattr(self.memos_message_queue, "status_tracker"):
-                self.memos_message_queue.status_tracker = value
-        except Exception as e:
-            logger.warning(
-                f"Failed to propagate dispatcher status_tracker to queue: {e}", exc_info=True
-            )
 
     def _create_task_wrapper(self, handler: Callable, task_item: RunningTaskItem):
         """

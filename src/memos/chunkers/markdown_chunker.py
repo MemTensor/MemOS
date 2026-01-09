@@ -57,6 +57,6 @@ class MarkdownChunker(BaseChunker):
             except Exception as e:
                 logger.warning(f"warning chunking document: {e}")
                 chunks.append(doc.page_content)
-
+        logger.info(f"Generated chunks: {chunks[:5]}")
         logger.debug(f"Generated {len(chunks)} chunks from input text")
         return chunks

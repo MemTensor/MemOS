@@ -2,13 +2,7 @@ from collections.abc import Generator
 from typing import Any
 
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
     DynamicCache,
-    LogitsProcessorList,
-    TemperatureLogitsWarper,
-    TopKLogitsWarper,
-    TopPLogitsWarper,
 )
 
 from memos.configs.llm import HFLLMConfig
@@ -30,6 +24,17 @@ class HFLLM(BaseLLM):
         """
         Initialize the HFLLM model and tokenizer, and set up logits processors for sampling.
         """
+        import torch
+
+        from transformers import (
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            LogitsProcessorList,
+            TemperatureLogitsWarper,
+            TopKLogitsWarper,
+            TopPLogitsWarper,
+        )
+
         self.config = config
 
         # Default model if not specified
@@ -37,9 +42,14 @@ class HFLLM(BaseLLM):
             self.config.model_name_or_path = "Qwen/Qwen3-1.7B"
 
         # Initialize hf model
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
-        )
+        if torch.backends.mps.is_available():
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name_or_path, torch_dtype="auto"
+            ).to("mps")
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.config.model_name_or_path, torch_dtype="auto", device_map="auto"
+            )
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.config.model_name_or_path, use_fast=True
         )
@@ -355,6 +365,7 @@ class HFLLM(BaseLLM):
             DynamicCache: The constructed KV cache object.
         """
         import torch
+        import transformers
 
         # Accept multiple input types and convert to standard chat messages
         if isinstance(messages, str):
@@ -391,7 +402,7 @@ class HFLLM(BaseLLM):
 
             # Convert from legacy tuple format to DynamicCache if needed
             if isinstance(kv, tuple):
-                kv = DynamicCache.from_legacy_cache(kv)
+                kv = transformers.DynamicCache.from_legacy_cache(kv)
 
             # Handle compatibility between old and new transformers versions
             # In newer versions, DynamicCache uses 'layers' attribute

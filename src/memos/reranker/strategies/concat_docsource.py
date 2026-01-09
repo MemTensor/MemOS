@@ -54,6 +54,7 @@ class ConcatDocSourceStrategy(BaseRerankerStrategy):
         original_items = {}
         tracker = DialogueRankingTracker()
         documents = []
+        documents_set = set()
         for item in graph_results:
             memory = getattr(item, "memory", None)
             if isinstance(memory, str):
@@ -66,7 +67,11 @@ class ConcatDocSourceStrategy(BaseRerankerStrategy):
                     if source.type == "file":
                         chunk_text += source.content
             if chunk_text:
-                documents.append(f"{memory}\n\n[Sources]:\n{chunk_text}")
+                if chunk_text in documents_set:
+                    continue
+                else:
+                    documents_set.add(chunk_text)
+                    documents.append(f"{memory}\n\n[Sources]:\n{chunk_text}")
             else:
                 documents.append(memory)
         return tracker, original_items, documents

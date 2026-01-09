@@ -70,13 +70,25 @@ def test_add_and_get_by_id(vec_db):
 
 def test_search(vec_db):
     id = str(uuid.uuid4())
-    vec_db.client.search.return_value = [
-        type(
-            "obj",
-            (object,),
-            {"id": id, "vector": [0.1, 0.2, 0.3], "payload": {"tag": "search"}, "score": 0.9},
-        )
-    ]
+    mock_response = type(
+        "QueryResponse",
+        (object,),
+        {
+            "points": [
+                type(
+                    "obj",
+                    (object,),
+                    {
+                        "id": id,
+                        "vector": [0.1, 0.2, 0.3],
+                        "payload": {"tag": "search"},
+                        "score": 0.9,
+                    },
+                )
+            ]
+        },
+    )()
+    vec_db.client.query_points.return_value = mock_response
     results = vec_db.search([0.1, 0.2, 0.3], top_k=1)
     assert len(results) == 1
     assert isinstance(results[0], VecDBItem)

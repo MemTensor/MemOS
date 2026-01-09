@@ -138,14 +138,14 @@ class QdrantVecDB(BaseVecDB):
             List of search results with distance scores and payloads.
         """
         qdrant_filter = self._dict_to_filter(filter) if filter else None
-        response = self.client.search(
+        response = self.client.query_points(
             collection_name=self.config.collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
             query_filter=qdrant_filter,
             with_vectors=True,
             with_payload=True,
-        )
+        ).points
         logger.info(f"Qdrant search completed with {len(response)} results.")
         return [
             VecDBItem(
