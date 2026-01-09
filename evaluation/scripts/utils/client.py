@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -56,30 +57,22 @@ class Mem0Client:
         self.enable_graph = enable_graph
 
     def add(self, messages, user_id, timestamp, batch_size=2):
-        max_retries = 5
         for i in range(0, len(messages), batch_size):
             batch_messages = messages[i : i + batch_size]
-            for attempt in range(max_retries):
-                try:
-                    if self.enable_graph:
-                        self.client.add(
-                            messages=batch_messages,
-                            timestamp=timestamp,
-                            user_id=user_id,
-                            enable_graph=True,
-                        )
-                    else:
-                        self.client.add(
-                            messages=batch_messages,
-                            timestamp=timestamp,
-                            user_id=user_id,
-                        )
-                    break
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        time.sleep(2**attempt)
-                    else:
-                        raise e
+            if self.enable_graph:
+                self.client.add(
+                    messages=batch_messages,
+                    timestamp=timestamp,
+                    user_id=user_id,
+                    enable_graph=True,
+                )
+            else:
+                self.client.add(
+                    messages=batch_messages,
+                    timestamp=timestamp,
+                    user_id=user_id,
+                    infer=False,
+                )
 
     def search(self, query, user_id, top_k):
         res = self.client.search(
@@ -143,56 +136,95 @@ class MemobaseClient:
 
 
 class MemosApiClient:
-    def __init__(self):
-        self.memos_url = os.getenv("MEMOS_URL")
-        self.headers = {"Content-Type": "application/json", "Authorization": os.getenv("MEMOS_KEY")}
+    """Product Add API 封装"""
 
-    def add(self, messages, user_id, conv_id, batch_size: int = 9999):
-        """
-        messages = [{"role": "assistant", "content": data, "chat_time": date_str}]
-        """
-        url = f"{self.memos_url}/product/add"
-        added_memories = []
-        for i in range(0, len(messages), batch_size):
-            batch_messages = messages[i : i + batch_size]
-            payload = json.dumps(
-                {
-                    "messages": batch_messages,
-                    "user_id": user_id,
-                    "mem_cube_id": user_id,
-                    "conversation_id": conv_id,
-                }
-            )
-            response = requests.request("POST", url, data=payload, headers=self.headers)
-            assert response.status_code == 200, response.text
-            assert json.loads(response.text)["message"] == "Memory added successfully", (
-                response.text
-            )
-            added_memories += json.loads(response.text)["data"]
-        return added_memories
+    def __init__(self, timeout: float = 600.0):
+        self.base_url = os.getenv("MEMOS_URL")
+        self.headers = {"Content-Type": "application/json"}
+        self.timeout = timeout
 
-    def search(self, query, user_id, top_k):
-        """Search memories."""
-        url = f"{self.memos_url}/product/search"
-        payload = json.dumps(
-            {
-                "query": query,
-                "user_id": user_id,
-                "mem_cube_id": user_id,
-                "conversation_id": "",
-                "top_k": top_k,
-                "mode": os.getenv("SEARCH_MODE", "fast"),
-                "include_preference": True,
-                "pref_top_k": 6,
-            },
-            ensure_ascii=False,
+    def add(
+        self,
+        messages,
+        user_id,
+        writable_cube_ids: list[str],
+        source_type: str,
+        mode: str,
+        async_mode: str,
+    ):
+        """
+        调用 /product/add 接口
+
+        Args:
+            messages: 添加记忆信息
+            user_id: 用户ID
+            writable_cube_ids: 可写cube ID列表
+            source_type: 来源类型
+            mode: 模式 (fine/coarse)
+            async_mode: 异步模式 (sync/async)
+        """
+        url = f"{self.base_url}/product/add"
+
+        payload = {
+            "user_id": user_id,
+            "writable_cube_ids": writable_cube_ids,
+            "messages": messages,
+            "info": {"source_type": source_type},
+            "mode": mode,
+            "async_mode": async_mode,
+        }
+
+        response = requests.post(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=self.headers,
+            timeout=self.timeout,
         )
-        response = requests.request("POST", url, data=payload, headers=self.headers)
-        assert response.status_code == 200, response.text
-        assert json.loads(response.text)["message"] == "Search completed successfully", (
-            response.text
+
+        if response.status_code != 200:
+            raise RuntimeError(f"HTTP {response.status_code}: {response.text}")
+
+        body = response.json()
+        if body.get("code") is not None and body.get("code") != 200:
+            raise RuntimeError(f"BUSINESS ERROR {body.get('code')}: {response.text}")
+
+        return body
+
+    def search(self, query, user_id, readable_cube_ids: list[str], top_k: str, mode: str):
+        """
+        调用 /product/search 接口
+
+        Args:
+            query: 搜索查询
+            user_id: 用户ID
+            readable_cube_ids: 可读cube ID列表, 默认为[user_id]
+            top_k: 返回结果数量
+        """
+
+        url = f"{self.base_url}/product/search"
+
+        if readable_cube_ids is None:
+            readable_cube_ids = [user_id]
+
+        payload = {
+            "query": query,
+            "user_id": user_id,
+            "readable_cube_ids": readable_cube_ids,
+            "top_k": top_k,
+            "mode": mode,
+        }
+
+        response = requests.post(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=self.headers,
+            timeout=self.timeout,
         )
-        return json.loads(response.text)["data"]
+
+        if response.status_code != 200:
+            raise RuntimeError(f"HTTP {response.status_code}: {response.text}")
+
+        return response.json()
 
 
 class MemosApiOnlineClient:
@@ -276,44 +308,65 @@ class MemosApiOnlineClient:
 
 class SupermemoryClient:
     def __init__(self):
-        from supermemory import Supermemory
+        self.api_key = os.getenv("SUPERMEMORY_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "SUPERMEMORY_API_KEY environment variable is not set. Please set it in your .env file or environment."
+            )
+        self.add_url = "https://api.supermemory.ai/v3/documents"
+        self.search_url = "https://api.supermemory.ai/v3/search"
 
-        self.client = Supermemory(api_key=os.getenv("SUPERMEMORY_API_KEY"))
+    def _sanitize_tag(self, s: str) -> str:
+        t = str(s).strip()
+        t = os.path.splitext(t)[0]
+        t = t.replace(" ", "_")
+        t = re.sub(r"[^A-Za-z0-9_-]", "_", t)
+        t = re.sub(r"[_-]+", "_", t)
+        t = t.strip("_")
+        t = t.lower()
+        if not re.match(r"^[a-z0-9]", t or ""):
+            t = f"tag_{t}" if t else "tag_default"
+        return t
 
-    def add(self, messages, user_id):
-        content = "\n".join(
-            [f"{msg['chat_time']} {msg['role']}: {msg['content']}" for msg in messages]
-        )
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                self.client.memories.add(content=content, container_tag=user_id)
-                break
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(2**attempt)
-                else:
-                    raise e
+    def add(self, content: str, user_id: str):
+        payload = {
+            "content": content,
+            "raw": content,
+            "containerTag": self._sanitize_tag(user_id),
+        }
 
-    def search(self, query, user_id, top_k):
-        max_retries = 10
-        for attempt in range(max_retries):
-            try:
-                results = self.client.search.memories(
-                    q=query,
-                    container_tag=user_id,
-                    threshold=0,
-                    rerank=True,
-                    rewrite_query=True,
-                    limit=top_k,
-                )
-                context = "\n\n".join([r.memory for r in results.results])
-                return context
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(2**attempt)
-                else:
-                    raise e
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        resp = requests.post(self.add_url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+    def search(self, query: str, user_id: str, top_k: int):
+        payload = {
+            "q": query,
+            "limit": top_k,
+            "containerTags": [self._sanitize_tag(user_id)],
+            "rerank": True,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(self.search_url, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+
+        chunk_list = []
+        res = [entry.get("chunks") for entry in data.get("results", [])]
+        for chunks in res:
+            for chunk in chunks:
+                chunk_list.append(chunk["content"])
+
+        return chunk_list
 
 
 class MemuClient:

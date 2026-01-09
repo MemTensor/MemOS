@@ -1,110 +1,45 @@
 #!/bin/bash
+set -e
 
-# Common parameters for all scripts
-LIB="memos-api"
-VERSION="long-bench-v2-1208-1556-async"
-WORKERS=10
+ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$ROOT_DIR"
+export PYTHONPATH="$ROOT_DIR"
+
+# Common parameters
+LIB="supermemory"
+WORKERS=5
 TOPK=20
-MAX_SAMPLES=""  # Empty means all samples
-WAIT_INTERVAL=2   # seconds between polls
-WAIT_TIMEOUT=900  # seconds per user
+ADD_MODE="fine"
+SEARCH_MODE="fine"
+VERSION_DIR="test_1231"
+ASYNC_MODE="sync"
+CHAT_MODEL="gpt-4o-mini"
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --lib)
-            LIB="$2"
-            shift 2
-            ;;
-        --version)
-            VERSION="$2"
-            shift 2
-            ;;
-        --workers)
-            WORKERS="$2"
-            shift 2
-            ;;
-        --top_k)
-            TOPK="$2"
-            shift 2
-            ;;
-        --max_samples)
-            MAX_SAMPLES="$2"
-            shift 2
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-    esac
-done
+# Add / Ingestion
+echo "Running longbench_v2_ingestion.py..."
+python -m evaluation.scripts.longbench_v2.longbench_v2_ingestion \
+  --lib "$LIB" \
+  --workers "$WORKERS" \
+  --version-dir "$VERSION_DIR" \
+  --mode "$ADD_MODE" \
+  --async-mode "$ASYNC_MODE"
 
-# Build max_samples argument
-MAX_SAMPLES_ARG=""
-if [ -n "$MAX_SAMPLES" ]; then
-    MAX_SAMPLES_ARG="--max_samples $MAX_SAMPLES"
-fi
+# Search
+echo "Running longbench_v2_search.py..."
+python -m evaluation.scripts.longbench_v2.longbench_v2_search \
+  --lib "$LIB" \
+  --workers "$WORKERS" \
+  --version-dir "$VERSION_DIR" \
+  --top-k "$TOPK" \
+  --mode "$SEARCH_MODE" \
+  --limit 30
 
-echo "Running LongBench v2 evaluation with:"
-echo "  LIB: $LIB"
-echo "  VERSION: $VERSION"
-echo "  WORKERS: $WORKERS"
-echo "  TOPK: $TOPK"
-echo "  MAX_SAMPLES: ${MAX_SAMPLES:-all}"
-echo ""
+# Eval
+echo "Running longbench_v2_eval.py..."
+python -m evaluation.scripts.longbench_v2.longbench_v2_eval \
+  --lib "$LIB" \
+  --version-dir "$VERSION_DIR" \
+  --workers "$WORKERS" \
+  --chat-model "$CHAT_MODEL"
 
-# Step 2: Search
-echo ""
-echo "=========================================="
-echo "Step 2: Running longbench_v2_search.py..."
-echo "=========================================="
-python scripts/long_bench-v2/longbench_v2_search.py \
-    --lib $LIB \
-    --version $VERSION \
-    --top_k $TOPK \
-    --workers $WORKERS \
-    $MAX_SAMPLES_ARG
-
-if [ $? -ne 0 ]; then
-    echo "Error running longbench_v2_search.py"
-    exit 1
-fi
-
-# Step 3: Response Generation
-echo ""
-echo "=========================================="
-echo "Step 3: Running longbench_v2_responses.py..."
-echo "=========================================="
-python scripts/long_bench-v2/longbench_v2_responses.py \
-    --lib $LIB \
-    --version $VERSION \
-    --workers $WORKERS
-
-if [ $? -ne 0 ]; then
-    echo "Error running longbench_v2_responses.py"
-    exit 1
-fi
-
-# Step 4: Metrics Calculation
-echo ""
-echo "=========================================="
-echo "Step 4: Running longbench_v2_metric.py..."
-echo "=========================================="
-python scripts/long_bench-v2/longbench_v2_metric.py \
-    --lib $LIB \
-    --version $VERSION
-
-if [ $? -ne 0 ]; then
-    echo "Error running longbench_v2_metric.py"
-    exit 1
-fi
-
-echo ""
-echo "=========================================="
-echo "All steps completed successfully!"
-echo "=========================================="
-echo ""
-echo "Results are saved in: results/long_bench-v2/$LIB-$VERSION/"
-echo "  - Search results: ${LIB}_longbench_v2_search_results.json"
-echo "  - Responses: ${LIB}_longbench_v2_responses.json"
-echo "  - Metrics: ${LIB}_longbench_v2_metrics.json"
+echo "All scripts completed successfully!"

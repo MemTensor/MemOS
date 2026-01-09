@@ -65,6 +65,55 @@ PREFEVAL_ANSWER_PROMPT = """
     {context}
 """
 
+MMLONGBENCH_ANSWER_PROMPT = """
+    You are a helpful assistant that can answer questions based on the provided memories and images.
+
+    {memories}
+
+    Read the above memories and answer this question
+    Please make your answer as concise as possible.
+"""
+
+LONGBENCH_V2_ANSWER_PROMPT = """
+Please read the following retrieved text chunks and answer the question below.
+
+<text>
+$DOC$
+</text>
+
+What is the correct answer to this question: $Q$
+Choices:
+(A) $C_A$
+(B) $C_B$
+(C) $C_C$
+(D) $C_D$
+
+Format your response as follows: "The correct answer is (insert answer here)".
+"""
+
+
+HOTPOT_ANSWER_PROMPT = """
+You are answering a question from the HotpotQA dataset.
+
+The question may require multi-hop reasoning across multiple supporting facts.
+Carefully read the provided context and identify the relevant evidence.
+Reason step by step to connect the facts and determine the correct answer.
+
+Important instructions:
+- Use only the information provided in the context.
+- Perform multi-step reasoning internally if needed.
+- The final answer must be a short factual answer (e.g., a name, place, date, or entity).
+- Do NOT include explanations, reasoning steps, or citations in the final output.
+
+Question:
+{question}
+
+Context:
+{context}
+
+Final Answer:
+
+"""
 
 ZEP_CONTEXT_TEMPLATE = """
     FACTS and ENTITIES represent relevant context to the current conversation.
