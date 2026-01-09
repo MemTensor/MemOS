@@ -88,7 +88,6 @@ llm = components["llm"]
 naive_mem_cube = components["naive_mem_cube"]
 redis_client = components["redis_client"]
 status_tracker = TaskStatusTracker(redis_client=redis_client)
-embedder = components["embedder"]
 graph_db = components["graph_db"]
 vector_db = components["vector_db"]
 
@@ -302,7 +301,6 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
             ),
             memory_type=memory_req.memory_type or "text_mem",
             naive_mem_cube=naive_mem_cube,
-            embedder=embedder,
         )
 
 
@@ -310,6 +308,14 @@ def get_all_memories(memory_req: GetMemoryPlaygroundRequest):
 def get_memories(memory_req: GetMemoryRequest):
     return handlers.memory_handler.handle_get_memories(
         get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
+    )
+
+
+@router.get("/get_memory/{memory_id}", summary="Get memory by id", response_model=GetMemoryResponse)
+def get_memory_by_id(memory_id: str):
+    return handlers.memory_handler.handle_get_memory(
+        memory_id=memory_id,
         naive_mem_cube=naive_mem_cube,
     )
 
