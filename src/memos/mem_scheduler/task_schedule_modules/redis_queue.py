@@ -81,6 +81,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         # Consumer state
         self._is_listening = False
         self._message_handler: Callable[[ScheduleMessageItem], None] | None = None
+        self.supports_xautoclaim = False
 
         # Connection state
         self._is_connected = False
@@ -105,6 +106,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         # Auto-initialize Redis connection
         if self.auto_initialize_redis():
             self._is_connected = True
+            self._check_xautoclaim_support()
 
         self.seen_streams = set()
 
@@ -142,6 +144,33 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             except Exception as e:
                 logger.debug(f"Initial stream keys refresh failed: {e}")
             self._start_stream_keys_refresh_thread()
+
+    def _check_xautoclaim_support(self):
+        """Check if the Redis server supports xautoclaim (v6.2+)."""
+        if not self._redis_conn:
+            return
+
+        try:
+            info = self._redis_conn.info("server")
+            version_str = info.get("redis_version", "0.0.0")
+            # Simple version parsing
+            parts = [int(p) for p in version_str.split(".") if p.isdigit()]
+            while len(parts) < 3:
+                parts.append(0)
+
+            major, minor, _ = parts[:3]
+            if major > 6 or (major == 6 and minor >= 2):
+                self.supports_xautoclaim = True
+            else:
+                self.supports_xautoclaim = False
+
+            logger.info(
+                f"[REDIS_QUEUE] Redis version {version_str}. "
+                f"Supports xautoclaim: {self.supports_xautoclaim}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to check Redis version: {e}")
+            self.supports_xautoclaim = False
 
     def get_stream_key(self, user_id: str, mem_cube_id: str, task_label: str) -> str:
         stream_key = f"{self.stream_key_prefix}:{user_id}:{mem_cube_id}:{task_label}"
@@ -623,41 +652,67 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         need_pending = max(0, batch_size - new_count)
         return need_pending if need_pending > 0 else 0
 
+    def _parse_pending_entry(self, entry) -> tuple[str, int]:
+        """Extract message_id and idle_time from a pending entry (dict, tuple, or object)."""
+        if isinstance(entry, dict):
+            return entry.get("message_id"), entry.get("time_since_delivered")
+        elif isinstance(entry, tuple | list):
+            return entry[0], entry[2]
+        else:
+            # Assume object (redis-py 5.x+ PendingMessage)
+            return getattr(entry, "message_id", None), getattr(entry, "time_since_delivered", 0)
+
+    def _manual_xautoclaim(
+        self, stream_key: str, min_idle_time: int, count: int
+    ) -> tuple[str, list[tuple[str, dict]], list[str]]:
+        """
+        Simulate xautoclaim using xpending and xclaim for compatibility with older Redis versions.
+        """
+        # 1. Get pending entries (fetch slightly more to increase chance of finding idle ones)
+        fetch_count = count * 3
+        pending_entries = self._redis_conn.xpending_range(
+            stream_key, self.consumer_group, "-", "+", fetch_count
+        )
+
+        if not pending_entries:
+            return "0-0", [], []
+
+        claim_ids = []
+        for entry in pending_entries:
+            # entry structure depends on redis-py version/decoding
+            # Assuming list of dicts: {'message_id': '...', 'time_since_delivered': ms, ...}
+            # or list of tuples
+            msg_id, idle_time = self._parse_pending_entry(entry)
+
+            if idle_time >= min_idle_time:
+                claim_ids.append(msg_id)
+                if len(claim_ids) >= count:
+                    break
+
+        if not claim_ids:
+            return "0-0", [], []
+
+        # 2. Claim messages
+        claimed_messages = self._redis_conn.xclaim(
+            stream_key, self.consumer_group, self.consumer_name, min_idle_time, claim_ids
+        )
+
+        return "0-0", claimed_messages, []
+
     def _claim_pending_messages(
         self, stream_key: str, need_pending_count: int, task_label: str
     ) -> list[tuple[str, list[tuple[str, dict]]]]:
         """Claim pending messages exceeding idle threshold, with group existence handling."""
-        try:
-            claimed_result = self._redis_conn.xautoclaim(
-                name=stream_key,
-                groupname=self.consumer_group,
-                consumername=self.consumer_name,
-                min_idle_time=self.orchestrator.get_task_idle_min(task_label=task_label),
-                start_id="0-0",
-                count=need_pending_count,
-                justid=False,
-            )
-            if len(claimed_result) == 2:
-                next_id, claimed = claimed_result
-                deleted_ids = []
-            elif len(claimed_result) == 3:
-                next_id, claimed, deleted_ids = claimed_result
-            else:
-                raise ValueError(f"Unexpected xautoclaim response length: {len(claimed_result)}")
+        min_idle = self.orchestrator.get_task_idle_min(task_label=task_label)
 
-            return [(stream_key, claimed)] if claimed else []
-        except Exception as read_err:
-            err_msg = str(read_err).lower()
-            if "nogroup" in err_msg or "no such key" in err_msg:
-                logger.warning(
-                    f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (xautoclaim)."
-                )
-                self._ensure_consumer_group(stream_key=stream_key)
+        # Use native xautoclaim if supported (Redis 6.2+)
+        if self.supports_xautoclaim:
+            try:
                 claimed_result = self._redis_conn.xautoclaim(
                     name=stream_key,
                     groupname=self.consumer_group,
                     consumername=self.consumer_name,
-                    min_idle_time=self.orchestrator.get_task_idle_min(task_label=task_label),
+                    min_idle_time=min_idle,
                     start_id="0-0",
                     count=need_pending_count,
                     justid=False,
@@ -670,25 +725,64 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 else:
                     raise ValueError(
                         f"Unexpected xautoclaim response length: {len(claimed_result)}"
-                    ) from read_err
+                    )
 
                 return [(stream_key, claimed)] if claimed else []
+            except Exception as read_err:
+                err_msg = str(read_err).lower()
+                if "nogroup" in err_msg or "no such key" in err_msg:
+                    logger.warning(
+                        f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (xautoclaim)."
+                    )
+                    self._ensure_consumer_group(stream_key=stream_key)
+                    claimed_result = self._redis_conn.xautoclaim(
+                        name=stream_key,
+                        groupname=self.consumer_group,
+                        consumername=self.consumer_name,
+                        min_idle_time=min_idle,
+                        start_id="0-0",
+                        count=need_pending_count,
+                        justid=False,
+                    )
+                    if len(claimed_result) == 2:
+                        next_id, claimed = claimed_result
+                        deleted_ids = []
+                    elif len(claimed_result) == 3:
+                        next_id, claimed, deleted_ids = claimed_result
+                    else:
+                        raise ValueError(
+                            f"Unexpected xautoclaim response length: {len(claimed_result)}"
+                        ) from read_err
+
+                    return [(stream_key, claimed)] if claimed else []
+                return []
+
+        # Fallback to manual xautoclaim for older Redis versions
+        try:
+            _next, claimed, _deleted = self._manual_xautoclaim(
+                stream_key, min_idle, need_pending_count
+            )
+            return [(stream_key, claimed)] if claimed else []
+        except Exception as read_err:
+            err_msg = str(read_err).lower()
+            if "nogroup" in err_msg or "no such key" in err_msg:
+                logger.warning(
+                    f"Consumer group or stream missing for '{stream_key}/{self.consumer_group}'. Attempting to create and retry (manual xautoclaim)."
+                )
+                self._ensure_consumer_group(stream_key=stream_key)
+                try:
+                    _next, claimed, _deleted = self._manual_xautoclaim(
+                        stream_key, min_idle, need_pending_count
+                    )
+                    return [(stream_key, claimed)] if claimed else []
+                except Exception:
+                    return []
             return []
 
-    def _batch_claim_pending_messages(
+    def _batch_claim_native(
         self, claims_spec: list[tuple[str, int, str]]
     ) -> list[tuple[str, list[tuple[str, dict]]]]:
-        """Batch-claim pending messages across multiple streams.
-
-        Args:
-            claims_spec: List of tuples (stream_key, need_pending_count, task_label)
-
-        Returns:
-            A list of (stream_key, claimed_entries) pairs for all successful claims.
-        """
-        if not self._redis_conn or not claims_spec:
-            return []
-
+        """Batch-claim pending messages using Redis xautoclaim pipeline (Redis 6.2+)."""
         pipe = self._redis_conn.pipeline(transaction=False)
         for stream_key, need_count, label in claims_spec:
             pipe.xautoclaim(
@@ -702,14 +796,11 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             )
 
         try:
-            # Execute with raise_on_error=False so we get exceptions in the results list
-            # instead of aborting the whole batch.
             results = pipe.execute(raise_on_error=False)
         except Exception as e:
             logger.error(f"Pipeline execution critical failure: {e}")
             results = [e] * len(claims_spec)
 
-        # Handle individual failures (e.g. NOGROUP) by retrying just that stream
         final_results = []
         for i, res in enumerate(results):
             if isinstance(res, Exception):
@@ -736,12 +827,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             else:
                 final_results.append(res)
 
-        results = final_results
-
-        claimed_pairs: list[tuple[str, list[tuple[str, dict]]]] = []
-        for (stream_key, _need_count, _label), claimed_result in zip(
-            claims_spec, results, strict=False
-        ):
+        claimed_pairs = []
+        for (stream_key, _, _), claimed_result in zip(claims_spec, final_results, strict=False):
             try:
                 if not claimed_result:
                     continue
@@ -759,6 +846,98 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 logger.warning(f"Failed to parse xautoclaim result for '{stream_key}': {parse_err}")
 
         return claimed_pairs
+
+    def _batch_claim_manual(
+        self, claims_spec: list[tuple[str, int, str]]
+    ) -> list[tuple[str, list[tuple[str, dict]]]]:
+        """Batch-claim pending messages using 2-phase pipeline (Redis < 6.2)."""
+        # Phase 1: Fetch pending messages for all streams
+        pending_pipe = self._redis_conn.pipeline(transaction=False)
+        for stream_key, need_count, _label in claims_spec:
+            fetch_count = need_count * 3
+            pending_pipe.xpending_range(stream_key, self.consumer_group, "-", "+", fetch_count)
+
+        try:
+            pending_results = pending_pipe.execute(raise_on_error=False)
+        except Exception as e:
+            logger.error(f"Pending fetch pipeline failed: {e}")
+            return []
+
+        # Phase 2: Filter and prepare claim pipeline
+        claim_pipe = self._redis_conn.pipeline(transaction=False)
+        streams_to_claim_indices = []
+        claimed_pairs: list[tuple[str, list[tuple[str, dict]]]] = []
+
+        for i, (stream_key, need_count, label) in enumerate(claims_spec):
+            pending_res = pending_results[i]
+            min_idle = self.orchestrator.get_task_idle_min(task_label=label)
+
+            if isinstance(pending_res, Exception):
+                err_msg = str(pending_res).lower()
+                if "nogroup" in err_msg or "no such key" in err_msg:
+                    try:
+                        self._ensure_consumer_group(stream_key)
+                        _next, claimed, _ = self._manual_xautoclaim(
+                            stream_key, min_idle, need_count
+                        )
+                        if claimed:
+                            claimed_pairs.append((stream_key, claimed))
+                    except Exception as retry_err:
+                        logger.warning(f"Retry manual claim failed for {stream_key}: {retry_err}")
+                continue
+
+            if not pending_res:
+                continue
+
+            claim_ids = []
+            for entry in pending_res:
+                msg_id, idle_time = self._parse_pending_entry(entry)
+                if idle_time >= min_idle:
+                    claim_ids.append(msg_id)
+                    if len(claim_ids) >= need_count:
+                        break
+
+            if claim_ids:
+                claim_pipe.xclaim(
+                    stream_key,
+                    self.consumer_group,
+                    self.consumer_name,
+                    min_idle,
+                    claim_ids,
+                )
+                streams_to_claim_indices.append(i)
+
+        if streams_to_claim_indices:
+            try:
+                claim_results = claim_pipe.execute(raise_on_error=False)
+                for idx_in_results, original_idx in enumerate(streams_to_claim_indices):
+                    res = claim_results[idx_in_results]
+                    stream_key = claims_spec[original_idx][0]
+                    if isinstance(res, list) and res:
+                        claimed_pairs.append((stream_key, res))
+            except Exception as e:
+                logger.error(f"Claim pipeline failed: {e}")
+
+        return claimed_pairs
+
+    def _batch_claim_pending_messages(
+        self, claims_spec: list[tuple[str, int, str]]
+    ) -> list[tuple[str, list[tuple[str, dict]]]]:
+        """Batch-claim pending messages across multiple streams.
+
+        Args:
+            claims_spec: List of tuples (stream_key, need_pending_count, task_label)
+
+        Returns:
+            A list of (stream_key, claimed_entries) pairs for all successful claims.
+        """
+        if not self._redis_conn or not claims_spec:
+            return []
+
+        if self.supports_xautoclaim:
+            return self._batch_claim_native(claims_spec)
+
+        return self._batch_claim_manual(claims_spec)
 
     def _convert_messages(
         self, messages: list[tuple[str, list[tuple[str, dict]]]]
@@ -994,6 +1173,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                 # Test the connection
                 self._redis_conn.ping()
                 self._is_connected = True
+                self._check_xautoclaim_support()
                 logger.debug("Redis connection established successfully")
                 # Start stream keys refresher when connected
                 self._start_stream_keys_refresh_thread()
