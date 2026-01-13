@@ -1,141 +1,137 @@
 """
-MemCube persistence example.
+MemCube dump example using SingleCubeView.
 
-This example demonstrates how to use GeneralMemCube.dump() to save
-a statically loaded MemCube to disk.
+Demonstrates:
+1. Initialize server and create SingleCubeView with NEW cube_id
+2. Add memories via View
+3. Dump ONLY this cube's data to directory
 
-Important Notes:
-- dump() saves the GeneralMemCube object's memory data
-- If SingleCubeView wraps the same memory instances (e.g., loaded_naive wraps general's text_mem),
-  then View-added memories WILL be included in dump()
-- If SingleCubeView uses separate memory instances, then View-added memories will NOT be dumped
-- See load_cube.py for an example where View operations persist via dump()
-- GeneralMemCube is primarily used for static data persistence;
-  for runtime operations, use the View architecture
+Requirements:
+    - MemOS service environment (.env configured)
+    - Neo4j graph database (set NEO4J_BACKEND=neo4j in .env)
 
-Usage:
-    python examples/mem_cube/dump_cube.py
+Note on Embeddings:
+    This example exports embeddings along with memory data.
+    The sample data uses: bge-m3 model, 1024 dimensions.
+    If your environment uses a different embedding model or dimension,
+    you may need to re-embed the data after import, or the semantic
+    search results may be inaccurate or fail.
 """
 
+import contextlib
+import json
 import os
 import shutil
 
-from memos.mem_cube.general import GeneralMemCube
+from memos.api.handlers import init_server
+from memos.api.product_models import APIADDRequest
+from memos.log import get_logger
+from memos.multi_mem_cube.single_cube import SingleCubeView
 
 
-# ===========================================================================
-# Load existing MemCube
-# ===========================================================================
-print("=" * 80)
-print("Step 1: Loading MemCube from directory")
-print("=" * 80)
+logger = get_logger(__name__)
 
-mem_cube = GeneralMemCube.init_from_dir("examples/data/mem_cube_2")
+# NEW cube_id to avoid dumping existing data
+EXAMPLE_CUBE_ID = "example_dump_cube"
+EXAMPLE_USER_ID = "example_user"
 
-print(f"✓ Cube ID: {mem_cube.config.cube_id}")
-print(f"✓ User ID: {mem_cube.config.user_id}")
+# =============================================================================
+# Step 1: Initialize server
+# =============================================================================
+print("=" * 60)
+print("Step 1: Initialize server")
+print("=" * 60)
 
-# ===========================================================================
-# Check current memory statistics
-# ===========================================================================
-print("\n" + "=" * 80)
-print("Step 2: Memory statistics")
-print("=" * 80)
+components = init_server()
+print("✓ Server initialized")
 
-# Get memory items (with safe checks for get_all availability)
-# Note: text_mem.get_all() returns dict {"nodes": [...], "edges": [...]}
-text_data = (
-    mem_cube.text_mem.get_all()
-    if mem_cube.text_mem and hasattr(mem_cube.text_mem, "get_all")
-    else {}
+# =============================================================================
+# Step 2: Create SingleCubeView with NEW cube_id
+# =============================================================================
+print("\n" + "=" * 60)
+print(f"Step 2: Create SingleCubeView (cube_id={EXAMPLE_CUBE_ID})")
+print("=" * 60)
+
+naive = components["naive_mem_cube"]
+view = SingleCubeView(
+    cube_id=EXAMPLE_CUBE_ID,  # NEW cube_id
+    naive_mem_cube=naive,
+    mem_reader=components["mem_reader"],
+    mem_scheduler=components["mem_scheduler"],
+    logger=logger,
+    searcher=components["searcher"],
+    feedback_server=components["feedback_server"],
 )
-text_nodes = text_data.get("nodes", []) if isinstance(text_data, dict) else []
-act_items = (
-    mem_cube.act_mem.get_all() if mem_cube.act_mem and hasattr(mem_cube.act_mem, "get_all") else []
-)
-# Note: LoRAMemory does NOT have get_all() method
-para_items = (
-    mem_cube.para_mem.get_all()
-    if mem_cube.para_mem and hasattr(mem_cube.para_mem, "get_all")
-    else []
-)
-# Note: PreferenceMemory.get_all() returns dict {"explicit_preference": [...], "implicit_preference": [...]}
-pref_data = (
-    mem_cube.pref_mem.get_all()
-    if mem_cube.pref_mem and hasattr(mem_cube.pref_mem, "get_all")
-    else {}
-)
-pref_count = (
-    sum(len(v) for v in pref_data.values())
-    if isinstance(pref_data, dict)
-    else len(pref_data)
-    if pref_data
-    else 0
-)
+print("✓ SingleCubeView created")
 
-print(f"  - Text memories: {len(text_nodes)} nodes")
-print(f"  - Activation memories: {len(act_items)}")
-print(f"  - Parametric memories: {len(para_items) if para_items else 'N/A (no get_all)'}")
-print(f"  - Preference memories: {pref_count}")
+# =============================================================================
+# Step 3: Add memories via View
+# =============================================================================
+print("\n" + "=" * 60)
+print("Step 3: Add memories via SingleCubeView")
+print("=" * 60)
 
-# Show sample text memory content
-if text_nodes:
-    print("\n  Sample text memories (showing first 2):")
-    for i, node in enumerate(text_nodes[:2], 1):
-        memory_text = node.get("memory", str(node))[:100]
-        print(f"    [{i}] {memory_text}...")
+result = view.add_memories(
+    APIADDRequest(
+        user_id=EXAMPLE_USER_ID,
+        writable_cube_ids=[EXAMPLE_CUBE_ID],
+        messages=[
+            {"role": "user", "content": "This is a test memory for dump example"},
+            {"role": "user", "content": "Another memory to demonstrate persistence"},
+        ],
+        async_mode="sync",
+    )
+)
+print(f"✓ Added {len(result)} memories")
 
-# ===========================================================================
-# Persist to new directory
-# ===========================================================================
-print("\n" + "=" * 80)
-print("Step 3: Dumping MemCube to disk")
-print("=" * 80)
+# =============================================================================
+# Step 4: Dump ONLY this cube's data
+# =============================================================================
+print("\n" + "=" * 60)
+print("Step 4: Dump cube data (filtered by cube_id)")
+print("=" * 60)
 
 output_dir = "tmp/mem_cube_dump"
-print(f"Output directory: {output_dir}")
-
-# Clean up existing directory if it exists to avoid MemCubeError on second run
 if os.path.exists(output_dir):
-    print(f"⚠  Directory {output_dir} already exists, removing it...")
     shutil.rmtree(output_dir)
+os.makedirs(output_dir, exist_ok=True)
 
-mem_cube.dump(output_dir)
+# Export only this cube's data using user_name filter
+text_mem = naive.text_mem
+json_data = text_mem.graph_store.export_graph(
+    include_embedding=True,  # Include embeddings for semantic search
+    user_name=EXAMPLE_CUBE_ID,  # Filter by cube_id
+)
 
-# ===========================================================================
-# Verify dump output
-# ===========================================================================
-print("\n" + "=" * 80)
-print("Step 4: Verifying dump output")
-print("=" * 80)
+# Fix embedding format: parse string to list for import compatibility
+# (export_graph stores embedding as string in metadata, but add_node expects list)
+for node in json_data.get("nodes", []):
+    metadata = node.get("metadata", {})
+    if "embedding" in metadata and isinstance(metadata["embedding"], str):
+        with contextlib.suppress(json.JSONDecodeError):
+            metadata["embedding"] = json.loads(metadata["embedding"])
 
-if os.path.exists(output_dir):
-    print("✓ Dump successful!")
-    print("\nGenerated files:")
+print(f"✓ Exported {len(json_data.get('nodes', []))} nodes")
 
-    for root, _dirs, files in os.walk(output_dir):
-        level = root.replace(output_dir, "").count(os.sep)
-        indent = "  " * level
-        print(f"{indent}{os.path.basename(root)}/")
-        sub_indent = "  " * (level + 1)
-        for file in files:
-            print(f"{sub_indent}{file}")
+# Save to file
+memory_file = os.path.join(output_dir, "textual_memory.json")
+with open(memory_file, "w", encoding="utf-8") as f:
+    json.dump(json_data, f, indent=2, ensure_ascii=False)
+print(f"✓ Saved to: {memory_file}")
 
-    print("\n✓ You can load this dump using:")
-    print(f"   mem_cube = GeneralMemCube.init_from_dir('{output_dir}')")
-else:
-    print("✗ Dump failed - output directory not found")
+# Save config (user can modify sensitive fields before sharing)
+config = components["default_cube_config"].model_copy(deep=True)
+config.user_id = EXAMPLE_USER_ID
+config.cube_id = EXAMPLE_CUBE_ID
+config_file = os.path.join(output_dir, "config.json")
+config.to_json_file(config_file)
+print(f"✓ Config saved to: {config_file}")
 
-# ===========================================================================
-# Summary
-# ===========================================================================
-print("\n" + "=" * 80)
-print("✅ Dump example completed!")
-print("=" * 80)
-print("\n📝 Key Points:")
-print("  1. GeneralMemCube.dump() saves the current state to disk")
-print("  2. The dump includes: config.json + memory directories")
-print("  3. If View wraps the same memory instances, View-added memories ARE saved")
-print("  4. See load_cube.py for an example where View operations persist via dump()")
-print("  5. Use dump() for creating portable MemCube snapshots")
-print("\n" + "=" * 80)
+# =============================================================================
+# Done
+# =============================================================================
+print("\n" + "=" * 60)
+print("✅ Example completed!")
+print("=" * 60)
+print(f"\nDumped to: {output_dir}")
+print("Run load_cube.py to load this data")

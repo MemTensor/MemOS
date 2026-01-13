@@ -34,54 +34,47 @@ for item in items:
 
 ### New approach (recommended):
 ```python
-import os
+import json
 from memos.api.handlers import init_server
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_cube.navie import NaiveMemCube
+from memos.api.product_models import APISearchRequest
 from memos.multi_mem_cube.single_cube import SingleCubeView
+from memos.log import get_logger
 
-# Load static data
-general = GeneralMemCube.init_from_dir("examples/data/mem_cube_2")
+logger = get_logger(__name__)
 
-# Get runtime components
+# Initialize server (uses .env configuration)
 components = init_server()
-mem_scheduler = components["mem_scheduler"]
-
-# Stop scheduler consumer if enabled (avoid race conditions)
-scheduler_enabled = os.getenv("API_SCHEDULER_ON", "true").lower() == "true"
-if scheduler_enabled:
-    mem_scheduler.stop_consumer()  # Use stop_consumer, not stop!
-
-# Wrap in NaiveMemCube and rebind scheduler
-loaded_naive = NaiveMemCube(
-    text_mem=general.text_mem,
-    act_mem=general.act_mem,
-    para_mem=general.para_mem,
-    pref_mem=general.pref_mem,
-)
-loaded_searcher = loaded_naive.text_mem.get_searcher(...)
-mem_scheduler.init_mem_cube(loaded_naive, loaded_searcher, feedback_server=None)
-
-# Restart scheduler if it was enabled
-if scheduler_enabled:
-    mem_scheduler.start()
+naive = components["naive_mem_cube"]
 
 # Create View
 view = SingleCubeView(
-    cube_id=general.config.cube_id,
-    naive_mem_cube=loaded_naive,
+    cube_id="my_cube",
+    naive_mem_cube=naive,
     mem_reader=components["mem_reader"],
-    mem_scheduler=mem_scheduler,
-    searcher=loaded_searcher,
-    feedback_server=None,
-    # ...
+    mem_scheduler=components["mem_scheduler"],
+    logger=logger,
+    searcher=components["searcher"],
+    feedback_server=components["feedback_server"],
 )
 
-# Use View API
-results = view.search_memories(APISearchRequest(...))  # ✅ View interface
-for mem in results["text_mem"]:
-    print(mem)
+# Load data from exported JSON
+with open("examples/data/mem_cube_tree/textual_memory.json") as f:
+    json_data = json.load(f)
+naive.text_mem.graph_store.import_graph(json_data, user_name="my_cube")
+
+# Use View API for search
+results = view.search_memories(APISearchRequest(
+    user_id="user",
+    readable_cube_ids=["my_cube"],
+    query="your query here",
+))
+for group in results.get("text_mem", []):
+    for mem in group.get("memories", []):
+        print(mem.get("metadata", {}).get("memory", "N/A"))
 ```
+
+> **Note on Embeddings**: The sample data uses **bge-m3** model with **1024 dimensions**.
+> Ensure your environment uses the same embedding configuration for accurate search.
 
 ---
 
