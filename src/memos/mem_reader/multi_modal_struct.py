@@ -466,11 +466,15 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 if "user_name" in kwargs:
                     memory_ids = self.graph_db.search_by_embedding(
                         vector=self.embedder.embed(mem_str)[0],
-                        top_k=10,
+                        top_k=20,
                         status="activated",
                         user_name=kwargs.get("user_name"),
                         filter={
-                            "or": [{"memory_type": "LongTermMemory"}, {"memory_type": "UserMemory"}]
+                            "or": [
+                                {"memory_type": "LongTermMemory"},
+                                {"memory_type": "UserMemory"},
+                                {"memory_type": "WorkingMemory"},
+                            ]
                         },
                     )
                     memory_ids = set({r["id"] for r in memory_ids if r.get("id")})
@@ -506,7 +510,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             for merged_id in m["merged_from"]:
                                 if merged_id not in memory_ids:
                                     logger.warning("merged id not valid!!!!!")
-                            extra_kwargs["merged_from"] = m["merged_from"]
+                            info_per_item["merged_from"] = m["merged_from"]
                         # Create fine mode memory item (same as simple_struct)
                         node = self._make_memory_item(
                             value=m.get("value", ""),
@@ -527,7 +531,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         for merged_id in resp["merged_from"]:
                             if merged_id not in memory_ids:
                                 logger.warning("merged id not valid!!!!!")
-                        extra_kwargs["merged_from"] = resp["merged_from"]
+                        info_per_item["merged_from"] = resp["merged_from"]
                     # Create fine mode memory item (same as simple_struct)
                     node = self._make_memory_item(
                         value=resp.get("value", "").strip(),
