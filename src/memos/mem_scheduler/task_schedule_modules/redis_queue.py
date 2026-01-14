@@ -983,34 +983,21 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             logger.error(f"Failed to get Redis queue size: {e}", stack_info=True)
             return {}
 
-    def show_task_status(self) -> dict[str, dict[str, int]]:
-        stream_keys = self.get_stream_keys(stream_key_prefix=self.stream_key_prefix)
+    def show_task_status(self, stream_key_prefix: str | None = None) -> dict[str, dict[str, int]]:
+        effective_prefix = (
+            stream_key_prefix if stream_key_prefix is not None else self.stream_key_prefix
+        )
+        stream_keys = self.get_stream_keys(stream_key_prefix=effective_prefix)
         if not stream_keys:
-            logger.info("No Redis streams found for the configured prefix")
+            logger.info(f"No Redis streams found for the configured prefix: {effective_prefix}")
             return {}
-
-        consumer_group = self.consumer_group or "scheduler_group"
 
         grouped: dict[str, dict[str, int]] = {}
 
         for sk in stream_keys:
             uid = sk
             if uid not in grouped:
-                grouped[uid] = {"pending": 0, "remaining": 0}
-
-            # Pending count via XPENDING
-            pending_count = 0
-            try:
-                pending_info = self._redis_conn.xpending(sk, consumer_group)
-                # redis-py may return a tuple-like [count, ...]
-                if pending_info:
-                    try:
-                        pending_count = int(pending_info[0])
-                    except Exception:
-                        # Fallback if structure differs
-                        pending_count = int(getattr(pending_info, "count", 0) or 0)
-            except Exception as e:
-                logger.debug(f"XPENDING failed for '{sk}': {e}")
+                grouped[uid] = {"remaining": 0}
 
             # Remaining count via XLEN
             remaining_count = 0
@@ -1019,20 +1006,16 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             except Exception as e:
                 logger.debug(f"XLEN failed for '{sk}': {e}")
 
-            grouped[uid]["pending"] += pending_count
             grouped[uid]["remaining"] += remaining_count
 
         # Pretty-print summary
         try:
-            total_pending = sum(v.get("pending", 0) for v in grouped.values())
             total_remaining = sum(v.get("remaining", 0) for v in grouped.values())
-            header = f"Task Queue Status by user_id | pending={total_pending}, remaining={total_remaining}"
+            header = f"Task Queue Status by user_id | remaining={total_remaining}"
             print(header)
             for uid in sorted(grouped.keys()):
                 counts = grouped[uid]
-                print(
-                    f"- {uid}: pending={counts.get('pending', 0)}, remaining={counts.get('remaining', 0)}"
-                )
+                print(f"- {uid}: remaining={counts.get('remaining', 0)}")
         except Exception:
             # Printing is best-effort; return grouped regardless
             pass
