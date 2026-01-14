@@ -34,7 +34,7 @@ def to_iter(running: Any) -> list[Any]:
 
 
 def format_memory_item(
-    memory_data: Any, include_embedding: bool = False, save_sources: bool = False
+    memory_data: Any, include_embedding: bool = False, save_sources: bool = True
 ) -> dict[str, Any]:
     """
     Format a single memory item for API response.
@@ -182,6 +182,13 @@ def rerank_knowledge_mem(
     knowledge_mem_top_k = max(int(top_k * file_mem_proportion), int(top_k - len(conversation_mem)))
     # rerank set unuse
     reranked_knowledge_mem = knowledge_mem
+
+    # Sort by relativity in descending order
+    reranked_knowledge_mem = sorted(
+        reranked_knowledge_mem,
+        key=lambda item: item.get("metadata", {}).get("relativity", 0.0),
+        reverse=True,
+    )
 
     # TODO revoke sources replace memory value
     for item in reranked_knowledge_mem:
