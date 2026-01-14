@@ -6,7 +6,11 @@ This module handles retrieving all memories or specific subgraphs based on queri
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from memos.api.handlers.formatters_handler import format_memory_item
+from memos.api.handlers.formatters_handler import (
+    format_memory_item,
+    post_process_pref_mem,
+    post_process_textual_mem,
+)
 from memos.api.product_models import (
     DeleteMemoryRequest,
     DeleteMemoryResponse,
@@ -209,53 +213,66 @@ def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemory
 def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
-    # TODO: Implement get memory with filter
+    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": []}
     memories = naive_mem_cube.text_mem.get_all(
         user_name=get_mem_req.mem_cube_id,
         user_id=get_mem_req.user_id,
         page=get_mem_req.page,
         page_size=get_mem_req.page_size,
-    )
-    total_nodes = memories["total_nodes"]
-    total_edges = memories["total_edges"]
-    del memories["total_nodes"]
-    del memories["total_edges"]
+        filter=get_mem_req.filter,
+    )["nodes"]
+
+    results = post_process_textual_mem(results, memories, get_mem_req.mem_cube_id)
+
+    if not get_mem_req.include_tool_memory:
+        results["tool_mem"] = []
 
     preferences: list[TextualMemoryItem] = []
-    total_pref = 0
 
+    format_preferences = []
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
         filter_params: dict[str, Any] = {}
         if get_mem_req.user_id is not None:
             filter_params["user_id"] = get_mem_req.user_id
         if get_mem_req.mem_cube_id is not None:
             filter_params["mem_cube_id"] = get_mem_req.mem_cube_id
+        if get_mem_req.filter is not None:
+            # Check and remove user_id/mem_cube_id from filter if present
+            filter_copy = get_mem_req.filter.copy()
+            removed_fields = []
 
-        preferences, total_pref = naive_mem_cube.pref_mem.get_memory_by_filter(
+            if "user_id" in filter_copy:
+                filter_copy.pop("user_id")
+                removed_fields.append("user_id")
+            if "mem_cube_id" in filter_copy:
+                filter_copy.pop("mem_cube_id")
+                removed_fields.append("mem_cube_id")
+
+            if removed_fields:
+                logger.warning(
+                    f"Fields {removed_fields} found in filter will be ignored. "
+                    f"Use request-level user_id/mem_cube_id parameters instead."
+                )
+
+            filter_params.update(filter_copy)
+
+        preferences, _ = naive_mem_cube.pref_mem.get_memory_by_filter(
             filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
         )
         format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
 
-    return GetMemoryResponse(
-        message="Memories retrieved successfully",
-        data={
-            "text_mem": [
-                {
-                    "cube_id": get_mem_req.mem_cube_id,
-                    "memories": memories,
-                    "total_nodes": total_nodes,
-                    "total_edges": total_edges,
-                }
-            ],
-            "pref_mem": [
-                {
-                    "cube_id": get_mem_req.mem_cube_id,
-                    "memories": format_preferences,
-                    "total_nodes": total_pref,
-                }
-            ],
-        },
+    results = post_process_pref_mem(
+        results, format_preferences, get_mem_req.mem_cube_id, get_mem_req.include_preference
     )
+
+    # Filter to only keep text_mem, pref_mem, tool_mem
+    filtered_results = {
+        "text_mem": results.get("text_mem", []),
+        "pref_mem": results.get("pref_mem", []),
+        "tool_mem": results.get("tool_mem", []),
+    }
+
+    return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
 
 
 def handle_delete_memories(delete_mem_req: DeleteMemoryRequest, naive_mem_cube: NaiveMemCube):
