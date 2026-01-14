@@ -5,13 +5,14 @@ from datetime import datetime
 from typing import Any
 
 from memos.configs.graph_db import Neo4jGraphDBConfig
-from memos.graph_dbs.neo4j import Neo4jGraphDB, _prepare_node_metadata, _flatten_info_fields
+from memos.graph_dbs.neo4j import Neo4jGraphDB, _flatten_info_fields, _prepare_node_metadata
 from memos.log import get_logger
 from memos.vec_dbs.factory import VecDBFactory
 from memos.vec_dbs.item import VecDBItem
 
 
 logger = get_logger(__name__)
+
 
 class Neo4jCommunityGraphDB(Neo4jGraphDB):
     """
@@ -104,7 +105,6 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             )
 
     def add_nodes_batch(self, nodes: list[dict[str, Any]], user_name: str | None = None) -> None:
-
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
