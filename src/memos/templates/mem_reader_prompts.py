@@ -28,7 +28,8 @@ Return a single valid JSON object with the following structure:
       "key": <string, a unique, concise memory title>,
       "memory_type": <string, Either "LongTermMemory" or "UserMemory">,
       "value": <A detailed, self-contained, and unambiguous memory statement — written in English if the input conversation is in English, or in Chinese if the conversation is in Chinese>,
-      "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>
+      "tags": <A list of relevant thematic keywords (e.g., ["deadline", "team", "planning"])>,
+      "merged_from": <a list of reference memory IDs to be merged; omit this field if no reference memories are provided>
     },
     ...
   ],
@@ -41,7 +42,7 @@ Language rules:
 
 ${custom_tags_prompt}
 
-Example:
+Example 1 — No reference memories:
 Conversation:
 user: [June 26, 2025 at 3:00 PM]: Hi Jerry! Yesterday at 3 PM I had a meeting with my team about the new project.
 assistant: Oh Tom! Do you think the team can finish by December 15?
@@ -69,7 +70,7 @@ Output:
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
-Dialogue:
+Example 2 — No reference memories:
 assistant: [10:30 AM, August 15, 2025]: The book Deep Work you mentioned is
 indeed very suitable for your current situation. The book explains … (omitted). The author suggests setting aside 2–3 hours of focused work blocks each day and turning off all notifications during that time. Considering that you need to submit a report next week, you could try using the 9:00–11:00 AM time slot for focused work.
 
@@ -89,7 +90,7 @@ Output:
 Note: When the dialogue contains only assistant messages, phrasing such as
 “assistant recommended” or “assistant suggested” should be used, rather than incorrectly attributing the content to the user’s statements or plans.
 
-Another Example in Chinese (注意: 当user的语言为中文时，你就需要也输出中文)：
+Example 3 — No reference memories (note: if the user’s language is Chinese, output must also be Chinese):
 {
   "memory list": [
     {
@@ -103,10 +104,53 @@ Another Example in Chinese (注意: 当user的语言为中文时，你就需要�
   "summary": "Tom 目前专注于管理一个进度紧张的新项目..."
 }
 
-Always respond in the same language as the conversation.
+Note: We may provide partial reference memories. If newly extracted memories substantially overlap with reference memories, merge them and include a `merged_from` field indicating the merged memory IDs.
+If newly extracted memories are strongly related to reference memories, you may appropriately reference them during extraction (but never fabricate memories — only reference them when you are very confident).
+If no reference memories are provided, or if they are unrelated to the new memories, simply ignore them.
 
-Conversation:
+Example 4 — With reference memories:
+Dialogue:
+user: [January 13, 2026] Winter skiing is so much fun! I’m planning to go skiing again with friends this weekend!
+assistant: [January 13, 2026] That sounds great!
+user: [January 14, 2026] You remember my ski buddy, right? His name is Tom. We ski together every year — including this week!
+
+Reference memories:
+[xxxx-xxxx-xxxx-xxxx-01]: The user expressed a strong passion for skiing on December 29, 2025
+[xxxx-xxxx-xxxx-xxxx-06]: The user’s ski buddy is named Tom
+[xxxx-xxxx-xxxx-xxxx-11]: Niseko is a ski destination the user has visited multiple times; the user met Tom at Hirafu Ski Resort and became close friends
+[xxxx-xxxx-xxxx-xxxx-12]: On January 1, 2025, the user discussed skiing equipment with the assistant and planned to buy a new ski backpack
+
+Output:
+{
+  "memory list": [
+    {
+      "key": "User's winter skiing plan",
+      "memory_type": "UserMemory",
+      "value": "On January 13, 2026, the user planned to go skiing again over the weekend with their friend Tom.",
+      "tags": ["skiing", "sports preference", "plan", "winter activity"]
+    },
+    {
+      "key": "User's ski partner is named Tom",
+      "memory_type": "UserMemory",
+      "value": "On January 14, 2026, the user again mentioned their ski partner Tom and further explained that they ski together every year. This statement reinforces their long-term and stable skiing partnership and adds new information about its regular annual pattern.",
+      "tags": ["interpersonal relationship", "ski partner", "long-term habit"],
+      "merged_from": [
+        "xxxx-xxxx-xxxx-xxxx-06",
+        "xxxx-xxxx-xxxx-xxxx-11"
+      ]
+    }
+  ],
+  "summary": "The user recently reinforced their strong passion for skiing and, on January 13, 2026, explicitly stated that winter skiing brings them great joy and that they planned to ski again with a friend over the weekend. This indicates that skiing remains a highly significant activity in the user’s life. Additionally, on January 14, 2026, the user elaborated on their long-term relationship with their ski partner Tom, emphasizing that they ski together every year. This further solidifies the importance of this interpersonal relationship in the user’s personal experiences."
+}
+
+Your task:
+Dialogue to be extracted:
 ${conversation}
+
+Reference memories:
+${reference}
+
+Always respond in the same language as the conversation.
 
 Your Output:"""
 
@@ -143,7 +187,8 @@ SIMPLE_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
       "key": <字符串，唯一且简洁的记忆标题>,
       "memory_type": <字符串，"LongTermMemory" 或 "UserMemory">,
       "value": <详细、独立且无歧义的记忆陈述——若输入对话为英文，则用英文；若为中文，则用中文>,
-      "tags": <相关主题关键词列表（例如，["截止日期", "团队", "计划"]）>
+      "tags": <相关主题关键词列表（例如，["截止日期", "团队", "计划"]）>,
+      "merged_from": <需要被合并的参考记忆列表，当没有提供参考记忆时，不需要输出这个字段 >
     },
     ...
   ],
@@ -156,7 +201,7 @@ SIMPLE_STRUCT_MEM_READER_PROMPT_ZH = """您是记忆提取专家。
 
 ${custom_tags_prompt}
 
-示例：
+示例1-无参考记忆：
 对话：
 user: [2025年6月26日下午3:00]：嗨Jerry！昨天下午3点我和团队开了个会，讨论新项目。
 assistant: 哦Tom！你觉得团队能在12月15日前完成吗？
@@ -183,7 +228,7 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
   "summary": "Tom目前正专注于管理一个进度紧张的新项目。在2025年6月25日的团队会议后，他意识到原定2025年12月15日的截止日期可能无法实现，因为后端会延迟。由于担心测试时间不足，他接受了Jerry提出的延期建议。Tom计划在次日早上的会议上提出将截止日期推迟至2026年1月5日。他的行为反映出对时间线的担忧，以及积极、以团队为导向的问题解决方式。"
 }
 
-对话：
+示例2-无参考记忆：
 assistant: [2025年8月15日上午10:30]:
 你提到的那本《深度工作》确实很适合你现在的情况。这本书讲了......(略),作者建议每天留出2-3
 小时的专注时间块，期间关闭所有通知。考虑到你下周要交的报告，可以试试早上9点到11点这个时段。
@@ -202,25 +247,71 @@ assistant: [2025年8月15日上午10:30]:
 }
 注意：当对话仅有助手消息时，应使用"助手推荐"、"助手建议"等表述，而非将其错误归因为用户的陈述或计划。
 
-另一个中文示例（注意：当用户语言为中文时，您也需输出中文）：
+示例3-无参考记忆（注意：当用户语言为中文时，您也需输出中文）：
 {
   "memory list": [
     {
       "key": "项目会议",
       "memory_type": "LongTermMemory",
       "value": "在2025年6月25日下午3点，Tom与团队开会讨论了新项目，涉及时间表，并提出了对12月15日截止日期可行性的担忧。",
-      "tags": ["项目", "时间表", "会议", "截止日期"]
+      "tags": ["项目", "时间表", "会议", "截止日期"],
+      "merged_from": [
+        "xxxx-xxxx-xxxx-xxxx-xxx",
+        "xxxx-xxxx-xxxx-xxxx-xx",
+      ],
     },
     ...
   ],
   "summary": "Tom 目前专注于管理一个进度紧张的新项目..."
 }
 
-请始终使用与对话相同的语言进行回复。
+注意，我们可能给出部分参考记忆，这部分记忆如果和新添加的记忆大量重复，合并记忆，并在输入中多一个`merged_from`字段指明合并的记忆；
+新添加的记忆如果和参考记忆有强关联，可以在提取时适当参考（但一定不要捏造记忆，十分有把握再进行参考）；
+如果没有给出参考记忆、或参考记忆和新添加的记忆无关，直接忽略就好。
 
+示例4-带参考记忆：
 对话：
+user: [2026年1月13日] 冬天滑雪真的太快乐了！我打算这周末和朋友再滑一次！
+assistant：[2026年1月13日] 听起来就很棒！
+user: [2026年1月14日] 你还记得我的滑雪搭子吧？他叫Tom，我们每年都一起滑雪！这周也是！
+
+参考记忆：
+[xxxx-xxxx-xxxx-xxxx-01]: 用户在2025年12月29日表达了对滑雪的狂热喜爱
+[xxxx-xxxx-xxxx-xxxx-06]: 用户的滑雪搭子叫Tom
+[xxxx-xxxx-xxxx-xxxx-11]: 二世谷是用户多次去过的滑雪胜地，用户在比罗夫滑雪场认识了Tom并成为好朋友
+[xxxx-xxxx-xxxx-xxxx-12]: 用户2025年1月1日和助手讨论了滑雪装备，打算新买一个滑雪背包。
+
+输出：
+{
+  "memory list": [
+    {
+      "key": "用户冬季滑雪计划",
+      "memory_type": "UserMemory",
+      "value": "用户在2026年1月13日计划在周末与朋友Tom再次进行滑雪活动。",
+      "tags": ["滑雪", "运动偏好", "计划", "冬季活动"],
+    },
+    {
+      "key": "用户的滑雪伙伴叫Tom",
+      "memory_type": "UserMemory",
+      "value": "用户在2026年1月14日再次提到其滑雪搭子Tom，并进一步说明他们每年都会一起滑雪。这一描述强化了双方长期稳定的滑雪伙伴关系，在原有记忆基础上补充了新的时间规律性信息。",
+      "tags": ["人际关系", "滑雪搭子", "长期习惯"],
+      "merged_from": [
+        "xxxx-xxxx-xxxx-xxxx-06",
+        "xxxx-xxxx-xxxx-xxxx-11",
+      ],
+    }
+  ],
+  "summary": "用户近期再次强化了自己对滑雪的热爱，并在2026年1月13日明确表示冬季滑雪带来极大的快乐，同时计划于当周周末与朋友再度滑雪。这表明滑雪对用户而言仍然是一项高度重要的活动。此外，用户在2026年1月14日补充了关于其滑雪伙伴Tom的长期关系细节，强调两人每年都会结伴滑雪，进一步巩固了此人际关系在用户生活中的重要性。"
+}
+
+您的任务：
+待提取的对话：
 ${conversation}
 
+参考记忆：
+${reference}
+
+请始终使用与对话相同的语言进行回复。
 您的输出："""
 
 SIMPLE_STRUCT_DOC_READER_PROMPT = """You are an expert text analyst for a search and retrieval system.
