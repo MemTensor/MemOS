@@ -1,4 +1,5 @@
 import json
+import time
 
 from collections.abc import Generator
 
@@ -46,9 +47,16 @@ class OpenAILLM(BaseLLM):
             "extra_body": kwargs.get("extra_body", self.config.extra_body),
             "tools": kwargs.get("tools", NOT_GIVEN),
         }
+        start_time = time.perf_counter()
         logger.info(f"OpenAI LLM Request body: {request_body}")
+
         response = self.client.chat.completions.create(**request_body)
-        logger.info(f"Response from OpenAI: {response.model_dump_json()}")
+
+        cost_time = time.perf_counter() - start_time
+        logger.info(
+            f"Request body: {request_body}, Response from OpenAI: {response.model_dump_json()}, Cost time: {cost_time}"
+        )
+
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)
         if isinstance(tool_calls, list) and len(tool_calls) > 0:
             return self.tool_call_parser(tool_calls)
@@ -59,8 +67,8 @@ class OpenAILLM(BaseLLM):
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         if reasoning_content:
-            return reasoning_content + response_content
-        return response_content
+            return reasoning_content + (response_content or "")
+        return response_content or ""
 
     @timed_with_status(
         log_prefix="OpenAI LLM Stream",
@@ -151,7 +159,7 @@ class AzureLLM(BaseLLM):
         if self.config.remove_think_prefix:
             return remove_thinking_tags(response_content)
         else:
-            return response_content
+            return response_content or ""
 
     def generate_stream(self, messages: MessageList, **kwargs) -> Generator[str, None, None]:
         """Stream response from Azure OpenAI LLM with optional reasoning support."""

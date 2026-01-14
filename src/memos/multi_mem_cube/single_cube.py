@@ -15,6 +15,7 @@ from memos.api.handlers.formatters_handler import (
 )
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
+from memos.mem_reader.utils import parse_keep_filter_response
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
@@ -23,6 +24,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     PREF_ADD_TASK_LABEL,
 )
 from memos.multi_mem_cube.views import MemCubeView
+from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
     FineStrategy,
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
     from memos.mem_cube.navie import NaiveMemCube
     from memos.mem_reader.simple_struct import SimpleStructMemReader
     from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
+    from memos.memories.textual.item import TextualMemoryItem
 
 
 @dataclass
@@ -54,6 +57,7 @@ class SingleCubeView(MemCubeView):
     feedback_server: Any | None = None
     deepsearch_agent: Any | None = None
 
+    @timed
     def add_memories(self, add_req: APIADDRequest) -> list[dict[str, Any]]:
         """
         This is basically your current handle_add_memories logic,
@@ -100,6 +104,7 @@ class SingleCubeView(MemCubeView):
 
         return all_memories
 
+    @timed
     def search_memories(self, search_req: APISearchRequest) -> dict[str, Any]:
         # Create UserContext object
         user_context = UserContext(
@@ -147,6 +152,7 @@ class SingleCubeView(MemCubeView):
         self.logger.info(f"Search {len(memories_result)} memories.")
         return memories_result
 
+    @timed
     def feedback_memories(self, feedback_req: APIFeedbackRequest) -> dict[str, Any]:
         target_session_id = feedback_req.session_id or "default_session"
         if feedback_req.async_mode == "async":
@@ -258,7 +264,10 @@ class SingleCubeView(MemCubeView):
             search_filter=search_filter,
             info=info,
         )
-        formatted_memories = [format_memory_item(data) for data in enhanced_memories]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in enhanced_memories
+        ]
         return formatted_memories
 
     def _agentic_search(
@@ -267,7 +276,10 @@ class SingleCubeView(MemCubeView):
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
         )
-        formatted_memories = [format_memory_item(data) for data in deepsearch_results]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in deepsearch_results
+        ]
         return formatted_memories
 
     def _fine_search(
@@ -322,6 +334,7 @@ class SingleCubeView(MemCubeView):
             top_k=search_req.top_k,
             user_name=user_context.mem_cube_id,
             info=info,
+            dedup=search_req.dedup,
         )
 
         # Enhance with query
@@ -372,8 +385,13 @@ class SingleCubeView(MemCubeView):
                 unique_memories.append(mem)
             return unique_memories
 
-        deduped_memories = _dedup_by_content(enhanced_memories)
-        formatted_memories = [format_memory_item(data) for data in deduped_memories]
+        deduped_memories = (
+            enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
+        )
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in deduped_memories
+        ]
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
 
@@ -457,9 +475,13 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            dedup=search_req.dedup,
         )
 
-        formatted_memories = [format_memory_item(data) for data in search_results]
+        formatted_memories = [
+            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            for data in search_results
+        ]
 
         return formatted_memories
 
@@ -551,6 +573,7 @@ class SingleCubeView(MemCubeView):
             )
             self.mem_scheduler.submit_messages(messages=[message_item_add])
 
+    @timed
     def _process_pref_mem(
         self,
         add_req: APIADDRequest,
@@ -631,6 +654,105 @@ class SingleCubeView(MemCubeView):
                 for memory_id, memory in zip(pref_ids_local, pref_memories_local, strict=False)
             ]
 
+    def add_before_search(
+        self,
+        messages: list[dict],
+        memory_list: list[TextualMemoryItem],
+        user_name: str,
+        info: dict[str, Any],
+    ) -> list[TextualMemoryItem]:
+        # Build input objects with memory text and metadata (timestamps, sources, etc.)
+        template = PROMPT_MAPPING["add_before_search"]
+
+        if not self.searcher:
+            self.logger.warning("[add_before_search] Searcher is not initialized, skipping check.")
+            return memory_list
+
+        # 1. Gather candidates and search for related memories
+        candidates_data = []
+        for idx, mem in enumerate(memory_list):
+            try:
+                related_memories = self.searcher.search(
+                    query=mem.memory, top_k=3, mode="fast", user_name=user_name, info=info
+                )
+                related_text = "None"
+                if related_memories:
+                    related_text = "\n".join([f"- {r.memory}" for r in related_memories])
+
+                candidates_data.append(
+                    {"idx": idx, "new_memory": mem.memory, "related_memories": related_text}
+                )
+            except Exception as e:
+                self.logger.error(
+                    f"[add_before_search] Search error for memory '{mem.memory}': {e}"
+                )
+                # If search fails, we can either skip this check or treat related as empty
+                candidates_data.append(
+                    {
+                        "idx": idx,
+                        "new_memory": mem.memory,
+                        "related_memories": "None (Search Failed)",
+                    }
+                )
+
+        if not candidates_data:
+            return memory_list
+
+        # 2. Build Prompt
+        messages_inline = "\n".join(
+            [
+                f"- [{message.get('role', 'unknown')}]: {message.get('content', '')}"
+                for message in messages
+            ]
+        )
+
+        candidates_inline_dict = {
+            str(item["idx"]): {
+                "new_memory": item["new_memory"],
+                "related_memories": item["related_memories"],
+            }
+            for item in candidates_data
+        }
+
+        candidates_inline = json.dumps(candidates_inline_dict, ensure_ascii=False, indent=2)
+
+        prompt = template.format(
+            messages_inline=messages_inline, candidates_inline=candidates_inline
+        )
+
+        # 3. Call LLM
+        try:
+            raw = self.mem_reader.llm.generate([{"role": "user", "content": prompt}])
+            success, parsed_result = parse_keep_filter_response(raw)
+
+            if not success:
+                self.logger.warning(
+                    "[add_before_search] Failed to parse LLM response, keeping all."
+                )
+                return memory_list
+
+            # 4. Filter
+            filtered_list = []
+            for idx, mem in enumerate(memory_list):
+                res = parsed_result.get(idx)
+                if not res:
+                    filtered_list.append(mem)
+                    continue
+
+                if res.get("keep", True):
+                    filtered_list.append(mem)
+                else:
+                    self.logger.info(
+                        f"[add_before_search] Dropping memory: '{mem.memory}', reason: '{res.get('reason')}'"
+                    )
+
+            return filtered_list
+
+        except Exception as e:
+            self.logger.error(f"[add_before_search] LLM execution error: {e}")
+            return memory_list
+
+    @timed
     def _process_text_mem(
         self,
         add_req: APIADDRequest,

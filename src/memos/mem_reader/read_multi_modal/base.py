@@ -258,7 +258,7 @@ class BaseMessageParser(ABC):
         if not text or not text.strip():
             return []
 
-        splitter = get_text_splitter()
+        splitter = get_text_splitter(is_markdown=is_markdown)
         if not splitter:
             # If text splitter is not available, return text as single chunk
             return [text] if text.strip() else []

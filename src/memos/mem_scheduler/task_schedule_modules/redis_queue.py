@@ -686,6 +686,8 @@ class SchedulerRedisQueue(RedisSchedulerModule):
         Returns:
             A list of (stream_key, claimed_entries) pairs for all successful claims.
         """
+        if not self._redis_conn or not claims_spec:
+            return []
 
         pipe = self._redis_conn.pipeline(transaction=False)
         for stream_key, need_count, label in claims_spec:
@@ -707,7 +709,7 @@ class SchedulerRedisQueue(RedisSchedulerModule):
             logger.error(f"Pipeline execution critical failure: {e}")
             results = [e] * len(claims_spec)
 
-            # Handle individual failures (e.g. NOGROUP) by retrying just that stream
+        # Handle individual failures (e.g. NOGROUP) by retrying just that stream
         final_results = []
         for i, res in enumerate(results):
             if isinstance(res, Exception):

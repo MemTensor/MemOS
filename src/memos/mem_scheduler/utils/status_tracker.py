@@ -44,6 +44,9 @@ class TaskStatusTracker:
             mem_cube_id: Memory cube identifier
             business_task_id: Optional business-level task ID (one task_id can have multiple item_ids)
         """
+        if not self.redis:
+            return
+
         key = self._get_key(user_id)
         payload = {
             "status": "waiting",
@@ -100,6 +103,9 @@ class TaskStatusTracker:
         self.redis.expire(key, timedelta(days=7))
 
     def task_failed(self, task_id: str, user_id: str, error_message: str):
+        if not self.redis:
+            return
+
         key = self._get_key(user_id)
         existing_data_json = self.redis.hget(key, task_id)
         if not existing_data_json:
@@ -147,6 +153,9 @@ class TaskStatusTracker:
             - If any item is 'failed' → 'failed'
             Returns None if task_id not found.
         """
+        if not self.redis:
+            return None
+
         # Get all item_ids for this task_id
         task_items_key = self._get_task_items_key(user_id, business_task_id)
         item_ids = self.redis.smembers(task_items_key)

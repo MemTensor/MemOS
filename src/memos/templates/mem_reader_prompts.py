@@ -69,6 +69,26 @@ Output:
   "summary": "Tom is currently focused on managing a new project with a tight schedule. After a team meeting on June 25, 2025, he realized the original deadline of December 15 might not be feasible due to backend delays. Concerned about insufficient testing time, he welcomed Jerry’s suggestion of proposing an extension. Tom plans to raise the idea of shifting the deadline to January 5, 2026 in the next morning’s meeting. His actions reflect both stress about timelines and a proactive, team-oriented problem-solving approach."
 }
 
+Dialogue:
+assistant: [10:30 AM, August 15, 2025]: The book Deep Work you mentioned is
+indeed very suitable for your current situation. The book explains … (omitted). The author suggests setting aside 2–3 hours of focused work blocks each day and turning off all notifications during that time. Considering that you need to submit a report next week, you could try using the 9:00–11:00 AM time slot for focused work.
+
+Output:
+{
+  "memory list": [
+    {
+      "key": "Deep Work Book Recommendation",
+      "memory_type": "LongTermMemory",
+      "value": "On August 15, 2025, the assistant recommended the book 'Deep Work' to the user and introduced its suggestion of reserving 2–3 hours per day for focused work while turning off all notifications. Based on the user's need to submit a report the following week, the assistant also suggested trying 9:00–11:00 AM as a focused work time block.",
+      "tags": ["book recommendation", "deep work", "time management", "report"]
+    }
+  ],
+  "summary": "The assistant recommended the book 'Deep Work' to the user and introduced the work methods discussed in the book."
+}
+
+Note: When the dialogue contains only assistant messages, phrasing such as
+“assistant recommended” or “assistant suggested” should be used, rather than incorrectly attributing the content to the user’s statements or plans.
+
 Another Example in Chinese (注意: 当user的语言为中文时，你就需要也输出中文)：
 {
   "memory list": [
@@ -162,6 +182,25 @@ user: [2025年6月26日下午4:21]：好主意。我明天上午9:30的会上提
   ],
   "summary": "Tom目前正专注于管理一个进度紧张的新项目。在2025年6月25日的团队会议后，他意识到原定2025年12月15日的截止日期可能无法实现，因为后端会延迟。由于担心测试时间不足，他接受了Jerry提出的延期建议。Tom计划在次日早上的会议上提出将截止日期推迟至2026年1月5日。他的行为反映出对时间线的担忧，以及积极、以团队为导向的问题解决方式。"
 }
+
+对话：
+assistant: [2025年8月15日上午10:30]:
+你提到的那本《深度工作》确实很适合你现在的情况。这本书讲了......(略),作者建议每天留出2-3
+小时的专注时间块，期间关闭所有通知。考虑到你下周要交的报告，可以试试早上9点到11点这个时段。
+
+输出：
+{
+  "memory list": [
+    {
+      "key": "深度工作书籍推荐",
+      "memory_type": "LongTermMemory",
+      "value": "2025年8月15日助手向用户推荐了《深度工作》一书，并介绍了书中建议的每天留出2-3小时专注时间块、关闭所有通知的方法。助手还根据用户下周需要提交报告的情况，建议用户尝试早上9点到11点作为专注时段。",
+      "tags": ["书籍推荐", "深度工作", "时间管理", "报告"]
+    }
+  ],
+  "summary": "助手向用户推荐了《深度工作》一书，并介绍了了其中的工作方法"
+}
+注意：当对话仅有助手消息时，应使用"助手推荐"、"助手建议"等表述，而非将其错误归因为用户的陈述或计划。
 
 另一个中文示例（注意：当用户语言为中文时，您也需输出中文）：
 {
@@ -622,23 +661,21 @@ IMAGE_ANALYSIS_PROMPT_ZH = """您是一个智能记忆助手。请分析提供�
 专注于从图像中提取事实性、可观察的信息。除非与用户记忆明显相关，否则避免推测。"""
 
 
-SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
+SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT_BACKUP = """
 You are a strict, language-preserving memory validator and rewriter.
 
 Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
 
 Rules:
 1. **Language Consistency**: Keep the exact original language of each memory—no translation or language switching.
-2. **Strict Factual Grounding**: Include only what the user explicitly stated. Remove or flag anything not directly present in the messages—no assumptions, interpretations, predictions, emotional labels, summaries, or generalizations.
-3. **Ambiguity Elimination**:
-   - Replace vague pronouns (e.g., “he”, “it”, “they”) with clear, specific entities **only if** the messages identify them.
-   - Convert relative time expressions (e.g., “yesterday”) to absolute dates **only if** the messages provide enough temporal context.
+2. **Strict Factual Grounding**: Include only what the user explicitly stated. Remove or flag anything not directly present in the messages—no assumptions, interpretations, predictions, or generalizations NOT supported by the text. However, **you MUST retain specific details, reasons, explanations, and feelings if the user explicitly expressed them.** Minor formatting corrections (e.g., adding missing spaces between names, fixing obvious typos) are ALLOWED.
 4. **Hallucination Removal**:
-   - If a memory contains **any content not verbatim or directly implied by the user**, it must be rewritten.
-   - Do **not** rephrase inferences as facts. Instead, either:
-     - Remove the unsupported part and retain only the grounded core, or
-     - If the entire memory is ungrounded, mark it for rewrite and make the lack of user support explicit.
+- If a memory contains **any content not supported by the user's explicit statements**, it must be rewritten.
+- **Do NOT remove** details, reasons, or explanations that the user explicitly provided, even if they are subjective or specific.
+- Do **not** rephrase inferences as facts. Instead, either:
+- Remove the unsupported part and retain only the grounded core.
 5. **No Change if Fully Grounded**: If the memory is concise, unambiguous, and fully supported by the user’s messages, keep it unchanged.
+6. **Timestamp Exception**: Memories may include timestamps (e.g., dates like "On December 19, 2026") derived from conversation metadata. If the date in the memory is likely the conversation time (even if not shown in the `messages` list), do NOT treat it as a hallucination or require a rewrite.
 
 Inputs:
 messages:
@@ -651,16 +688,183 @@ Output Format:
 - Return a JSON object with string keys ("0", "1", "2", ...) matching input memory indices.
 - Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
 - The "reason" must be brief and precise, e.g.:
-  - "contains unsupported inference"
-  - "vague pronoun with no referent in messages"
-  - "relative time resolved to 2025-12-16"
+  - "contains unsupported inference ...."
   - "fully grounded and concise"
 
 Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
 """
 
+SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT = """
+You are a strict, language-preserving memory validator and rewriter.
+
+Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
+
+Rules:
+1. **Language Consistency**: Keep the exact original language of each memory—no translation or language switching.
+2. **Strict Factual Grounding**: Include only what is explicitly stated by the user in messages marked as [user]. Remove or flag anything not directly present in the user’s utterances—no assumptions, interpretations, predictions, generalizations, or content originating solely from [assistant].
+3. **Source Attribution Requirement**:
+   - Every memory must be clearly traceable to its source:
+     - If a fact appears **only in [assistant] messages** and **is not affirmed by [user]**, label it as “[assistant] memory”.
+     - If [assistant] states something and [user] explicitly contradicts or denies it, label it as “[assistant] memory, but [user] [brief quote or summary of denial]”.
+     - If a fact is stated by [user] —whether or not [assistant] also mentions it— it is attributed to “[user]” and may be retained without qualification.
+4. **Timestamp Exception**: Memories may include timestamps (e.g., "On December 19, 2026") derived from conversation metadata. If such a date likely reflects the conversation time (even if not in the `messages` list), do NOT treat it as hallucinated—but still attribute it to “[user]” only if the user mentioned or confirmed the date.
+
+Inputs:
+messages:
+{messages_inline}
+
+memories:
+{memories_inline}
+
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching input memory indices.
+- Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- The "reason" must be brief and precise, e.g.:
+  - "contains unsupported inference from [assistant]"
+  - "[assistant] memory, but [user] said 'I don't have a dog'"
+  - "fully grounded in [user]"
+
+Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
+"""
+
+SIMPLE_STRUCT_REWRITE_MEMORY_USER_ONLY_PROMPT = """
+You are a strict, language-preserving memory validator and rewriter.
+
+Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
+
+Note: The provided messages contain only user messages. The assistant's responses are intentionally omitted, not because the assistant didn't answer, but to focus strictly on validating memories against user input.
+
+Rules:
+1. **Language Consistency**: Keep the exact original language of each memory—no translation or language switching.
+2. **Strict Factual Grounding**: Include only what the user explicitly stated. Remove or flag anything not directly present in the messages—no assumptions, interpretations, predictions, or generalizations NOT supported by the text. However, **you MUST retain specific details, reasons, explanations, and feelings if the user explicitly expressed them.** Minor formatting corrections (e.g., adding missing spaces between names, fixing obvious typos) are ALLOWED.
+4. **Hallucination Removal**:
+- If a memory contains **any content not supported by the user's explicit statements**, it must be rewritten.
+- **Do NOT remove** details, reasons, or explanations that the user explicitly provided, even if they are subjective or specific.
+- Do **not** rephrase inferences as facts. Instead, either:
+- Remove the unsupported part and retain only the grounded core.
+5. **No Change if Fully Grounded**: If the memory is concise, unambiguous, and fully supported by the user’s messages, keep it unchanged.
+6. **Timestamp Exception**: Memories may include timestamps (e.g., dates like "On December 19, 2026") derived from conversation metadata. If the date in the memory is likely the conversation time (even if not shown in the `messages` list), do NOT treat it as a hallucination or require a rewrite.
+
+Inputs:
+messages:
+{messages_inline}
+
+memories:
+{memories_inline}
+
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching input memory indices.
+- Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- The "reason" must be brief and precise, e.g.:
+  - "contains unsupported inference ...."
+  - "fully grounded and concise"
+
+Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
+"""
+
+SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT_BACKUP = """
+You are a strict, language-preserving memory validator and rewriter.
+
+Your task is to eliminate hallucinations and tighten memories by grounding them strictly in the user’s explicit messages. Memories must be factual, unambiguous, and free of any inferred or speculative content.
+
+Rules:
+1. **Language Consistency**: Keep the exact original language of each memory—no translation or language switching.
+2. **Strict Factual Grounding**: Include only what the user explicitly stated. Remove or flag anything not directly present in the messages—no assumptions, interpretations, predictions, or generalizations NOT supported by the text. However, **you MUST retain specific details, reasons, explanations, and feelings if the user explicitly expressed them.** Minor formatting corrections (e.g., adding missing spaces between names, fixing obvious typos) are ALLOWED.
+4. **Hallucination Removal**:
+- If a memory contains **any content not supported by the user's explicit statements**, it must be rewritten.
+- **Do NOT remove** details, reasons, or explanations that the user explicitly provided, even if they are subjective or specific.
+- Do **not** rephrase inferences as facts. Instead, either:
+- Remove the unsupported part and retain only the grounded core.
+5. **No Change if Fully Grounded**: If the memory is concise, unambiguous, and fully supported by the user’s messages, keep it unchanged.
+6. **Timestamp Exception**: Memories may include timestamps (e.g., dates like "On December 19, 2026") derived from conversation metadata. If the date in the memory is likely the conversation time (even if not shown in the `messages` list), do NOT treat it as a hallucination or require a rewrite.
+
+Inputs:
+messages:
+{messages_inline}
+
+memories:
+{memories_inline}
+
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching input memory indices.
+- Each value must be: {{ "need_rewrite": boolean, "rewritten": string, "reason": string }}
+- The "reason" must be brief and precise, e.g.:
+  - "contains unsupported inference ...."
+  - "fully grounded and concise"
+
+Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
+"""
+
+SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
+You are a strict memory validator.
+Your task is to identify and delete hallucinated memories that are not explicitly stated by the user in the provided messages.
+
+Rules:
+1. **User-Only Origin**: Verify facts against USER messages ONLY. If the Assistant repeats a User fact, it is VALID. If the Assistant introduces a new detail (e.g., 'philanthropy') that the User did not explicitly confirm, it is INVALID.
+2. **No Inference Allowed**: Do NOT keep memories based on implication, emotion, preference, or generalization. Only verbatim or direct restatements of user-provided facts are valid. However, minor formatting corrections (e.g., adding missing spaces between names, fixing obvious typos) are ALLOWED.
+3. **Hallucination = Deletion**: If a memory contains any detail not directly expressed by the user, mark it for deletion.
+4. **Timestamp Exception**: Memories may include timestamps (e.g., dates like "On December 19, 2026") derived from conversation metadata. If the date in the memory is likely the conversation time (even if not shown in the `messages` list), do NOT treat it as a hallucination or require a rewrite.
+
+Examples:
+Messages:
+- [user]: I love coding in Python.
+- [assistant]: That's great! I assume you also contribute to open source projects?
+Memory: User enjoys Python and contributes to open source.
+Result: {{"keep": false, "reason": "User never stated they contribute to open source; this came from Assistant's assumption."}}
+
+Messages:
+- [user]: I am tired.
+- [assistant]: I hear you are tired. Rest is important.
+Memory: User stated they are tired.
+Result: {{"keep": true, "reason": "Direct restatement of user input, even if Assistant repeated it."}}
+
+Inputs:
+messages:
+{messages_inline}
+
+memories:
+{memories_inline}
+
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching the input memory indices.
+- Each value must be: {{ "keep": boolean, "reason": string }}
+- "keep": true only if the memory is a direct reflection of the user's explicit words.
+- "reason": brief, factual, and cites missing or unsupported content.
+
+Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
+"""
+
+
+SIMPLE_STRUCT_ADD_BEFORE_SEARCH_PROMPT = """
+You are a memory manager.
+Your task is to decide if a new memory should be added to the long-term memory, given a list of existing related memories.
+
+Rules:
+1. **Redundancy Check**: If the new memory is completely redundant, already known, or covered by the existing memories, discard it.
+2. **New Information**: If the new memory provides new information, details, or updates compared to the existing memories, keep it.
+3. **Contradiction**: If the new memory contradicts existing memories but seems valid/newer, keep it (updates).
+4. **Context Check**: Use the provided conversation messages to verify if the new memory is grounded in the user's explicit statements.
+
+Inputs:
+Messages:
+{messages_inline}
+
+Candidate Memories (to be evaluated):
+{candidates_inline}
+
+Output Format:
+- Return a JSON object with string keys ("0", "1", "2", ...) matching the input candidate memory indices.
+- Each value must be: {{ "keep": boolean, "reason": string }}
+- "keep": true if the memory should be added.
+- "reason": brief explanation.
+
+Important: Output **only** the JSON. No extra text.
+"""
 
 # Prompt mapping for specialized tasks (e.g., hallucination filtering)
 PROMPT_MAPPING = {
     "hallucination_filter": SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT,
+    "rewrite": SIMPLE_STRUCT_REWRITE_MEMORY_PROMPT,
+    "rewrite_user_only": SIMPLE_STRUCT_REWRITE_MEMORY_USER_ONLY_PROMPT,
+    "add_before_search": SIMPLE_STRUCT_ADD_BEFORE_SEARCH_PROMPT,
 }

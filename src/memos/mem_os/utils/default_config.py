@@ -181,15 +181,22 @@ def get_default_cube_config(
     # Configure text memory based on type
     if text_mem_type == "tree_text":
         # Tree text memory requires Neo4j configuration
+        # NOTE: Neo4j Community Edition does NOT support multiple databases.
+        # It only has one default database named 'neo4j'.
+        # If you are using Community Edition:
+        # 1. Set 'use_multi_db' to False (default)
+        # 2. Set 'db_name' to 'neo4j' (default)
+        # 3. Set 'auto_create' to False to avoid 'CREATE DATABASE' permission errors.
         db_name = f"memos{user_id.replace('-', '').replace('_', '')}"
         if not kwargs.get("use_multi_db", False):
-            db_name = kwargs.get("neo4j_db_name", "defaultdb")
+            db_name = kwargs.get("neo4j_db_name", "neo4j")
+
         neo4j_config = {
             "uri": kwargs.get("neo4j_uri", "bolt://localhost:7687"),
             "user": kwargs.get("neo4j_user", "neo4j"),
             "db_name": db_name,
             "password": kwargs.get("neo4j_password", "12345678"),
-            "auto_create": True,
+            "auto_create": kwargs.get("neo4j_auto_create", True),
             "use_multi_db": kwargs.get("use_multi_db", False),
             "embedding_dimension": kwargs.get("embedding_dimension", 3072),
         }

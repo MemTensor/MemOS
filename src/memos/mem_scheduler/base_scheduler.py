@@ -74,6 +74,7 @@ from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSche
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 from memos.memories.activation.kv import KVCacheMemory
 from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
+from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
@@ -198,13 +199,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             logger.error("mem_cube is None, cannot initialize", stack_info=True)
         self.mem_cube = mem_cube
         self.text_mem: TreeTextMemory = self.mem_cube.text_mem
-        self.reranker: HTTPBGEReranker = self.text_mem.reranker
+        self.reranker: HTTPBGEReranker = getattr(self.text_mem, "reranker", None)
         if searcher is None:
-            self.searcher: Searcher = self.text_mem.get_searcher(
-                manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
-                moscube=False,
-                process_llm=self.process_llm,
-            )
+            if hasattr(self.text_mem, "get_searcher"):
+                self.searcher: Searcher = self.text_mem.get_searcher(
+                    manual_close_internet=os.getenv("ENABLE_INTERNET", "true").lower() == "false",
+                    moscube=False,
+                    process_llm=self.process_llm,
+                )
+            else:
+                self.searcher = None
         else:
             self.searcher = searcher
         self.feedback_server = feedback_server
@@ -540,6 +544,29 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                 mem_cube=mem_cube,
                 log_func_callback=self._submit_web_logs,
             )
+        elif isinstance(text_mem_base, NaiveTextMemory):
+            # For NaiveTextMemory, we populate the monitors with the new candidates so activation memory can pick them up
+            logger.info(
+                f"NaiveTextMemory: Updating working memory monitors with {len(new_memory)} candidates."
+            )
+
+            # Use query keywords if available, otherwise just basic monitoring
+            query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
+            query_db_manager.sync_with_orm()
+            query_keywords = query_db_manager.obj.get_keywords_collections()
+
+            new_working_memory_monitors = self.transform_working_memories_to_monitors(
+                query_keywords=query_keywords,
+                memories=new_memory,
+            )
+
+            self.monitor.update_working_memory_monitors(
+                new_working_memory_monitors=new_working_memory_monitors,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+            )
+            memories_with_new_order = new_memory
         else:
             logger.error("memory_base is not supported")
             memories_with_new_order = new_memory
@@ -1008,15 +1035,28 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             try:
                 q_sizes = self.memos_message_queue.qsize()
 
+                if not isinstance(q_sizes, dict):
+                    continue
+
                 for stream_key, queue_length in q_sizes.items():
-                    # Expected format: "memos:stream:{user_id}:{mem_cube_id}" or "{user_id}"
+                    # Skip aggregate keys like 'total_size'
+                    if stream_key == "total_size":
+                        continue
+
+                    # Key format: ...:{user_id}:{mem_cube_id}:{task_label}
+                    # We want to extract user_id, which is the 3rd component from the end.
                     parts = stream_key.split(":")
                     if len(parts) >= 3:
-                        user_id = parts[2]
+                        user_id = parts[-3]
                         self.metrics.update_queue_length(queue_length, user_id)
-                    elif not self.use_redis_queue:  # local queue
-                        user_id = stream_key
-                        self.metrics.update_queue_length(queue_length, user_id)
+                    else:
+                        # Fallback for unexpected key formats (e.g. legacy or testing)
+                        # Try to use the key itself if it looks like a user_id (no colons)
+                        # or just log a warning?
+                        # For now, let's assume if it's not total_size and short, it might be a direct user_id key
+                        # (though that shouldn't happen with current queue implementations)
+                        if ":" not in stream_key:
+                            self.metrics.update_queue_length(queue_length, stream_key)
 
             except Exception as e:
                 logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)

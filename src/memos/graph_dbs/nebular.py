@@ -1207,7 +1207,7 @@ class NebulaGraphDB(BaseGraphDB):
 
     @timed
     def export_graph(
-        self, include_embedding: bool = False, user_name: str | None = None
+        self, include_embedding: bool = False, user_name: str | None = None, **kwargs
     ) -> dict[str, Any]:
         """
         Export all graph nodes and edges in a structured form.
