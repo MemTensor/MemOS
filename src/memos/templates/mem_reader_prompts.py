@@ -796,43 +796,48 @@ Important: Output **only** the JSON. No extra text, explanations, markdown, or f
 """
 
 SIMPLE_STRUCT_HALLUCINATION_FILTER_PROMPT = """
-You are a strict memory validator.
-Your task is to identify and delete hallucinated memories that are not explicitly stated by the user in the provided messages.
+ You are a strict memory validator.
+ Your task is to identify and delete hallucinated memories that are not explicitly stated by the user in the provided messages.
 
-Rules:
-1. **User-Only Origin**: Verify facts against USER messages ONLY. If the Assistant repeats a User fact, it is VALID. If the Assistant introduces a new detail (e.g., 'philanthropy') that the User did not explicitly confirm, it is INVALID.
-2. **No Inference Allowed**: Do NOT keep memories based on implication, emotion, preference, or generalization. Only verbatim or direct restatements of user-provided facts are valid. However, minor formatting corrections (e.g., adding missing spaces between names, fixing obvious typos) are ALLOWED.
-3. **Hallucination = Deletion**: If a memory contains any detail not directly expressed by the user, mark it for deletion.
-4. **Timestamp Exception**: Memories may include timestamps (e.g., dates like "On December 19, 2026") derived from conversation metadata. If the date in the memory is likely the conversation time (even if not shown in the `messages` list), do NOT treat it as a hallucination or require a rewrite.
+ Rules:
+ 1. **Explicit Denial & Inconsistency**: If a memory claims something that the user explicitly denied or is clearly inconsistent with the user's statements, mark it for deletion.
+ 2. **Timestamp Exception**: Memories may include timestamps (e.g., dates like "On December 19, 2026") derived from conversation metadata. If the date in the memory is likely the conversation time (even if not shown in the `messages` list), do NOT treat it as a hallucination or require a rewrite.
 
-Examples:
-Messages:
-- [user]: I love coding in Python.
-- [assistant]: That's great! I assume you also contribute to open source projects?
-Memory: User enjoys Python and contributes to open source.
-Result: {{"keep": false, "reason": "User never stated they contribute to open source; this came from Assistant's assumption."}}
+ Example:
+ Messages:
+ [user]: I'm planning a trip to Japan next month for about a week.
+ [assistant]: That sounds great! Are you planning to visit Tokyo Disneyland?
+ [user]: No, I won't be going to Tokyo this time. I plan to stay in Kyoto and Osaka to avoid crowds.
 
-Messages:
-- [user]: I am tired.
-- [assistant]: I hear you are tired. Rest is important.
-Memory: User stated they are tired.
-Result: {{"keep": true, "reason": "Direct restatement of user input, even if Assistant repeated it."}}
+ Memories:
+ {{
+   "0": "User plans to travel to Japan for a week next month.",
+   "1": "User intends to visit Tokyo Disneyland.",
+   "2": "User plans to stay in Kyoto and Osaka."
+ }}
 
-Inputs:
-messages:
-{messages_inline}
+ Output:
+ {{
+   "0": {{ "keep": true, "reason": "Explicitly stated by user." }},
+   "1": {{ "keep": false, "reason": "User explicitly denied visiting Tokyo." }},
+   "2": {{ "keep": true, "reason": "Explicitly stated by user." }}
+ }}
 
-memories:
-{memories_inline}
+ Inputs:
+ Messages:
+ {messages_inline}
 
-Output Format:
-- Return a JSON object with string keys ("0", "1", "2", ...) matching the input memory indices.
-- Each value must be: {{ "keep": boolean, "reason": string }}
-- "keep": true only if the memory is a direct reflection of the user's explicit words.
-- "reason": brief, factual, and cites missing or unsupported content.
+ Memories:
+ {memories_inline}
 
-Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
-"""
+ Output Format:
+ - Return a JSON object with string keys ("0", "1", "2", ...) matching the input memory indices.
+ - Each value must be: {{ "keep": boolean, "reason": string }}
+ - "keep": true only if the memory is a direct reflection of the user's explicit words.
+ - "reason": brief, factual, and cites missing or unsupported content.
+
+ Important: Output **only** the JSON. No extra text, explanations, markdown, or fields.
+ """
 
 
 SIMPLE_STRUCT_ADD_BEFORE_SEARCH_PROMPT = """
