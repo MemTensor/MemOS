@@ -1,5 +1,5 @@
-import asyncio
 import sys
+import time
 
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +64,7 @@ def service_run():
         print(
             f"Added: {res}",
         )
-        asyncio.sleep(0.5)
+        time.sleep(0.5)
 
     mem_scheduler.redis_stop_listening()
 
