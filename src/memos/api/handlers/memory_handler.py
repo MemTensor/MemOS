@@ -234,7 +234,7 @@ def handle_get_memories(
         preferences, total_pref = naive_mem_cube.pref_mem.get_memory_by_filter(
             filter_params, page=get_mem_req.page, page_size=get_mem_req.page_size
         )
-        format_preferences = [format_memory_item(item) for item in preferences]
+        format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
 
     return GetMemoryResponse(
         message="Memories retrieved successfully",
