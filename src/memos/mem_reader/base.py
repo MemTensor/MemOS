@@ -1,16 +1,37 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos.configs.mem_reader import BaseMemReaderConfig
 from memos.memories.textual.item import TextualMemoryItem
 
 
+if TYPE_CHECKING:
+    from memos.graph_dbs.base import BaseGraphDB
+
+
 class BaseMemReader(ABC):
     """MemReader interface class for reading information."""
+
+    # Optional graph database for recall operations (for deduplication, conflict
+    # detection .etc)
+    graph_db: "BaseGraphDB | None" = None
 
     @abstractmethod
     def __init__(self, config: BaseMemReaderConfig):
         """Initialize the MemReader with the given configuration."""
+
+    def set_graph_db(self, graph_db: "BaseGraphDB | None") -> None:
+        """
+        Set the graph database instance for recall operations.
+
+        This enables the mem-reader to perform:
+        - Semantic deduplication: avoid storing duplicate memories
+        - Conflict detection: detect contradictions with existing memories
+
+        Args:
+            graph_db: The graph database instance, or None to disable recall operations.
+        """
+        self.graph_db = graph_db
 
     @abstractmethod
     def get_memory(

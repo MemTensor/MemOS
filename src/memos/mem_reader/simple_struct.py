@@ -176,6 +176,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chat_window_max_tokens = getattr(self.config, "chat_window_max_tokens", 1024)
         self._count_tokens = count_tokens_text
         self.searcher = None
+        # Initialize graph_db as None, can be set later via set_graph_db for
+        # recall operations
+        self.graph_db = None
 
     def _make_memory_item(
         self,
