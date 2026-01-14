@@ -20,6 +20,7 @@ class BaseMemReader(ABC):
     def __init__(self, config: BaseMemReaderConfig):
         """Initialize the MemReader with the given configuration."""
 
+    @abstractmethod
     def set_graph_db(self, graph_db: "BaseGraphDB | None") -> None:
         """
         Set the graph database instance for recall operations.
