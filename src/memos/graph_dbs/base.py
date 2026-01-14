@@ -82,7 +82,7 @@ class BaseGraphDB(ABC):
 
     @abstractmethod
     def get_nodes(
-        self, id: str, include_embedding: bool = False, **kwargs
+        self, ids: list, include_embedding: bool = False, **kwargs
     ) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a list of nodes.

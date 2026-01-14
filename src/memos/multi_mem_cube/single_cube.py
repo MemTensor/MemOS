@@ -802,6 +802,7 @@ class SingleCubeView(MemCubeView):
                 "session_id": target_session_id,
             },
             mode=extract_mode,
+            user_name=user_context.mem_cube_id,
         )
         flattened_local = [mm for m in memories_local for mm in m]
 

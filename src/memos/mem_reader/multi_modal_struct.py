@@ -316,6 +316,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         custom_tags: list[str] | None = None,
         sources: list | None = None,
         prompt_type: str = "chat",
+        related_memories: str | None = None,
     ) -> dict:
         """
         Override parent method to improve language detection by using actual text content
@@ -326,6 +327,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             custom_tags: Optional custom tags
             sources: Optional list of SourceMessage objects to extract text content from
             prompt_type: Type of prompt to use ("chat" or "doc")
+            related_memories: related_memories in the graph
 
         Returns:
             LLM response dictionary
@@ -360,7 +362,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         else:
             template = PROMPT_DICT["chat"][lang]
             examples = PROMPT_DICT["chat"][f"{lang}_example"]
-            prompt = template.replace("${conversation}", mem_str)
+            prompt = template.replace("${conversation}", mem_str).replace(
+                "${reference}", related_memories
+            )
 
         custom_tags_prompt = (
             PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
@@ -418,6 +422,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         fast_memory_items: list[TextualMemoryItem],
         info: dict[str, Any],
         custom_tags: list[str] | None = None,
+        **kwargs,
     ) -> list[TextualMemoryItem]:
         """
         Process fast mode memory items through LLM to generate fine mode memories.
@@ -454,8 +459,36 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
+            # recall related memories
+            related_memories = None
+            memory_ids = []
+            if self.graph_db:
+                if "user_name" in kwargs:
+                    memory_ids = self.graph_db.search_by_embedding(
+                        vector=self.embedder.embed(mem_str)[0],
+                        top_k=10,
+                        status="activated",
+                        user_name=kwargs.get("user_name"),
+                        filter={
+                            "or": [{"memory_type": "LongTermMemory"}, {"memory_type": "UserMemory"}]
+                        },
+                    )
+                    memory_ids = set({r["id"] for r in memory_ids if r.get("id")})
+                    related_memories_list = self.graph_db.get_nodes(
+                        list(memory_ids),
+                        include_embedding=False,
+                        user_name=kwargs.get("user_name"),
+                    )
+                    related_memories = "\n".join(
+                        ["{}: {}".format(mem["id"], mem["memory"]) for mem in related_memories_list]
+                    )
+                else:
+                    logger.warning("user_name is null when graph_db exists")
+
             try:
-                resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
+                resp = self._get_llm_response(
+                    mem_str, custom_tags, sources, prompt_type, related_memories
+                )
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 return fine_items
@@ -469,6 +502,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             .replace("长期记忆", "LongTermMemory")
                             .replace("用户记忆", "UserMemory")
                         )
+                        if "merged_from" in m:
+                            for merged_id in m["merged_from"]:
+                                if merged_id not in memory_ids:
+                                    logger.warning("merged id not valid!!!!!")
+                            extra_kwargs["merged_from"] = m["merged_from"]
                         # Create fine mode memory item (same as simple_struct)
                         node = self._make_memory_item(
                             value=m.get("value", ""),
@@ -485,6 +523,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         logger.error(f"[MultiModalFine] parse error: {e}")
             elif resp.get("value") and resp.get("key"):
                 try:
+                    if "merged_from" in resp:
+                        for merged_id in resp["merged_from"]:
+                            if merged_id not in memory_ids:
+                                logger.warning("merged id not valid!!!!!")
+                        extra_kwargs["merged_from"] = resp["merged_from"]
                     # Create fine mode memory item (same as simple_struct)
                     node = self._make_memory_item(
                         value=resp.get("value", "").strip(),
@@ -533,9 +576,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             return []
 
     def _process_tool_trajectory_fine(
-        self,
-        fast_memory_items: list[TextualMemoryItem],
-        info: dict[str, Any],
+        self, fast_memory_items: list[TextualMemoryItem], info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Process tool trajectory memory items through LLM to generate fine mode memories.
@@ -618,10 +659,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
             with ContextThreadPoolExecutor(max_workers=2) as executor:
                 future_string = executor.submit(
-                    self._process_string_fine, fast_memory_items, info, custom_tags
+                    self._process_string_fine, fast_memory_items, info, custom_tags, **kwargs
                 )
                 future_tool = executor.submit(
-                    self._process_tool_trajectory_fine, fast_memory_items, info
+                    self._process_tool_trajectory_fine, fast_memory_items, info, **kwargs
                 )
 
                 # Collect results
@@ -710,7 +751,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         return scene_data
 
     def _read_memory(
-        self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
+        self,
+        messages: list[MessagesType],
+        type: str,
+        info: dict[str, Any],
+        mode: str = "fine",
+        **kwargs,
     ) -> list[list[TextualMemoryItem]]:
         list_scene_data_info = self.get_scene_data_info(messages, type)
 
@@ -718,7 +764,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(self._process_multi_modal_data, scene_data_info, info, mode=mode)
+                executor.submit(
+                    self._process_multi_modal_data, scene_data_info, info, mode=mode, **kwargs
+                )
                 for scene_data_info in list_scene_data_info
             ]
             for future in concurrent.futures.as_completed(futures):
