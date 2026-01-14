@@ -34,7 +34,7 @@ def to_iter(running: Any) -> list[Any]:
 
 
 def format_memory_item(
-    memory_data: Any, include_embedding: bool = False, save_sources: bool = False
+    memory_data: Any, include_embedding: bool = False, save_sources: bool = True
 ) -> dict[str, Any]:
     """
     Format a single memory item for API response.
