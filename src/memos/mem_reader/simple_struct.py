@@ -5,7 +5,7 @@ import os
 import traceback
 
 from abc import ABC
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from tqdm import tqdm
 
@@ -16,6 +16,10 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
+
+
+if TYPE_CHECKING:
+    from memos.graph_dbs.base import BaseGraphDB
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
     count_tokens_text,
@@ -179,6 +183,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Initialize graph_db as None, can be set later via set_graph_db for
         # recall operations
         self.graph_db = None
+
+    def set_graph_db(self, graph_db: "BaseGraphDB | None") -> None:
+        self.graph_db = graph_db
 
     def _make_memory_item(
         self,

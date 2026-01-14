@@ -32,7 +32,6 @@ class BaseMemReader(ABC):
         Args:
             graph_db: The graph database instance, or None to disable recall operations.
         """
-        self.graph_db = graph_db
 
     @abstractmethod
     def get_memory(
