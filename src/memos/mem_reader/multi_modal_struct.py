@@ -398,6 +398,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 ],
                 "summary": mem_str,
             }
+        logger.info(f"[MultiModalFine] Task {messages}, Result {response_json}")
         return response_json
 
     def _determine_prompt_type(self, sources: list) -> str:

@@ -361,7 +361,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             return chat_read_nodes
 
     def _process_transfer_chat_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ):
         raw_memory = raw_node.memory
         response_json = self._get_llm_response(raw_memory, custom_tags)
@@ -686,7 +686,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(processing_func, scene_data_info, custom_tags)
+                executor.submit(processing_func, scene_data_info, custom_tags, **kwargs)
                 for scene_data_info in input_memories
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -890,6 +890,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return doc_nodes
 
     def _process_transfer_doc_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ):
         raise NotImplementedError
