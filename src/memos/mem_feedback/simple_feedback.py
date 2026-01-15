@@ -25,6 +25,7 @@ class SimpleMemFeedback(MemFeedback):
         searcher: Searcher,
         reranker: BaseReranker,
         pref_mem: SimplePreferenceTextMemory,
+        pref_feedback: bool = False,
     ):
         self.llm = llm
         self.embedder = embedder
@@ -36,3 +37,4 @@ class SimpleMemFeedback(MemFeedback):
         self.pref_mem = pref_mem
         self.reranker = reranker
         self.DB_IDX_READY = False
+        self.pref_feedback = pref_feedback
