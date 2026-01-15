@@ -869,11 +869,32 @@ Important: Output **only** the JSON. No extra text.
 
 MEMORY_MERGE_PROMPT_EN = """You are a memory consolidation expert. Given a new memory and similar existing memories, decide if they should be merged.
 
-New Memory:
-{new_memory}
+Example:
+New memory:
+The user’s name is Tom, the user likes skiing, and plans to go skiing this weekend
 
-Similar Existing Memories:
-{similar_memories}
+Similar existing memories:
+xxxx-xxxx-xxxx-xxxx-01: The user’s name is Tom
+xxxx-xxxx-xxxx-xxxx-10: The user likes skiing
+xxxx-xxxx-xxxx-xxxx-11: The user lives by the sea
+
+Expected output:
+{{
+“value”: “The user’s name is Tom, the user likes skiing”,
+“merged_from”: [“xxxx-xxxx-xxxx-xxxx-01”, “xxxx-xxxx-xxxx-xxxx-10”],
+“should_merge”: true
+}}
+
+New memory:
+The user is going to attend a party on Sunday
+
+Similar existing memories:
+xxxx-xxxx-xxxx-xxxx-01: The user read a book yesterday
+
+Expected output:
+{{
+“should_merge”: false
+}}
 
 If the new memory substantially overlaps with or complements the existing memories, merge them into a single consolidated memory and return a JSON object with:
 - "value": the merged memory content (preserving all unique information)
@@ -882,6 +903,12 @@ If the new memory substantially overlaps with or complements the existing memori
 
 If the new memory is distinct and should remain separate, return:
 - "should_merge": false
+
+New Memory:
+{new_memory}
+
+Similar Existing Memories:
+{similar_memories}
 
 Return ONLY a valid JSON object, nothing else."""
 
