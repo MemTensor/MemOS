@@ -466,10 +466,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             memory_ids = []
             if self.graph_db:
                 if "user_name" in kwargs:
-                    memory_ids = self.graph_db.search_by_embedding(
+                    similarity_threshold = kwargs.get("similarity_threshold", 0.5)
+                    search_results = self.graph_db.search_by_embedding(
                         vector=self.embedder.embed(mem_str)[0],
-                        top_k=20,
+                        top_k=100,
                         status="activated",
+                        threshold=similarity_threshold,
                         user_name=kwargs.get("user_name"),
                         filter={
                             "or": [
@@ -479,17 +481,38 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             ]
                         },
                     )
-                    memory_ids = set({r["id"] for r in memory_ids if r.get("id")})
-                    related_memories_list = self.graph_db.get_nodes(
-                        list(memory_ids),
-                        include_embedding=False,
-                        user_name=kwargs.get("user_name"),
-                    )
+                    memory_ids = set({r["id"] for r in search_results if r.get("id")})
+                    related_memories_list = [
+                        self.graph_db.get_node(
+                            memory_id,
+                            include_embedding=False,
+                        )
+                        for memory_id in memory_ids
+                    ]
+
+                    # Filter out nodes with tags containing "mode: fast"
+                    filtered_memories_list = []
+                    for mem in related_memories_list:
+                        if mem:
+                            metadata = mem.get("metadata", {})
+                            tags = metadata.get("tags", [])
+                            if isinstance(tags, list):
+                                # Filter out if tags contain "mode: fast"
+                                if "mode:fast" not in tags:
+                                    filtered_memories_list.append(mem)
+                            else:
+                                filtered_memories_list.append(mem)
+
                     related_memories = "\n".join(
-                        ["{}: {}".format(mem["id"], mem["memory"]) for mem in related_memories_list]
+                        [
+                            "{}: {}".format(mem["id"], mem["memory"])
+                            for mem in filtered_memories_list
+                        ]
                     )
+                    memory_ids = set({mem["id"] for mem in filtered_memories_list if mem.get("id")})
                 else:
                     logger.warning("user_name is null when graph_db exists")
+                    memory_ids = set()
 
             try:
                 resp = self._get_llm_response(
@@ -511,7 +534,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         if "merged_from" in m:
                             for merged_id in m["merged_from"]:
                                 if merged_id not in memory_ids:
-                                    logger.warning("merged id not valid!!!!!")
+                                    logger.warning(f"merged id not valid!!!!!: {merged_id}")
                             info_per_item["merged_from"] = m["merged_from"]
                         # Create fine mode memory item (same as simple_struct)
                         node = self._make_memory_item(

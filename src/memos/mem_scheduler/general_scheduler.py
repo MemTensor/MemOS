@@ -898,6 +898,38 @@ class GeneralScheduler(BaseScheduler):
                         f"Added {len(enhanced_mem_ids)} enhanced memories: {enhanced_mem_ids}"
                     )
 
+                    # Mark merged_from memories as archived when provided in memory metadata
+                    if self.mem_reader and self.mem_reader.graph_db:
+                        for memory in flattened_memories:
+                            merged_from = (memory.metadata.info or {}).get("merged_from")
+                            if merged_from:
+                                old_ids = (
+                                    merged_from
+                                    if isinstance(merged_from, (list | tuple | set))
+                                    else [merged_from]
+                                )
+                                for old_id in old_ids:
+                                    try:
+                                        self.mem_reader.graph_db.update_node(
+                                            str(old_id), {"status": "archived"}, user_name=user_name
+                                        )
+                                        logger.info(
+                                            f"[Scheduler] Archived merged_from memory: {old_id}"
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"[Scheduler] Failed to archive merged_from memory {old_id}: {e}"
+                                        )
+                    else:
+                        # Check if any memory has merged_from but graph_db is unavailable
+                        has_merged_from = any(
+                            (m.metadata.info or {}).get("merged_from") for m in flattened_memories
+                        )
+                        if has_merged_from:
+                            logger.warning(
+                                "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
+                            )
+
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging
                     cloud_env = is_cloud_env()
