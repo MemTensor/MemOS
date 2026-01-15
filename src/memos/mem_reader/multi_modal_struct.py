@@ -455,7 +455,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             lang = detect_lang(mem_text)
 
         # Search for similar memories
-        merge_threshold = kwargs.get("merge_similarity_threshold", 0.5)
+        merge_threshold = kwargs.get("merge_similarity_threshold", 0.3)
 
         try:
             search_results = self.graph_db.search_by_embedding(
@@ -499,6 +499,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         "memory": mem.get("memory", ""),
                     }
                 )
+            logger.info(
+                f"Valid similar memories for {mem_text} is "
+                f"{len(filtered_similar)}: {filtered_similar}"
+            )
 
             if not filtered_similar:
                 # No valid similar memories, return original
