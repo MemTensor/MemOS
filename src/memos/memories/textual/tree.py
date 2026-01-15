@@ -1,7 +1,9 @@
+import concurrent.futures
 import json
 import os
 import shutil
 import tempfile
+import time
 
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +11,7 @@ from typing import Any
 
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.configs.reranker import RerankerConfigFactory
+from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
@@ -457,3 +460,98 @@ class TreeTextMemory(BaseTextMemory):
                 logger.info(f"Deleted old backup directory: {old_dir}")
             except Exception as e:
                 logger.warning(f"Failed to delete backup {old_dir}: {e}")
+
+    def add_rawfile_nodes_n_edges(
+        self,
+        raw_file_mem_group: list[TextualMemoryItem],
+        mem_ids: list[str],
+        user_id: str | None = None,
+        user_name: str | None = None,
+    ) -> None:
+        """
+        Add raw file nodes and edges to the graph.
+        Args:
+            raw_file_mem_group: List of raw file memory items.
+            mem_ids: List of memory IDs.
+            user_name: cube id.
+        """
+        rawfile_ids_local: list[str] = self.add(
+            raw_file_mem_group,
+            user_name=user_name,
+        )
+
+        from_ids = []
+        to_ids = []
+        types = []
+
+        for raw_file_mem in raw_file_mem_group:
+            if hasattr(raw_file_mem.metadata, "summary_id") and raw_file_mem.metadata.summary_id:
+                summary_id = raw_file_mem.metadata.summary_id
+                if summary_id in mem_ids:
+                    from_ids.append(summary_id)
+                    to_ids.append(raw_file_mem.id)
+                    types.append("MATERIAL")
+
+                    from_ids.append(raw_file_mem.id)
+                    to_ids.append(summary_id)
+                    types.append("SUMMARY")
+
+            # Add FOLLOWING edge: current chunk -> next chunk
+            if (
+                hasattr(raw_file_mem.metadata, "following_id")
+                and raw_file_mem.metadata.following_id
+            ):
+                following_id = raw_file_mem.metadata.following_id
+                if following_id in rawfile_ids_local:
+                    from_ids.append(raw_file_mem.id)
+                    to_ids.append(following_id)
+                    types.append("FOLLOWING")
+
+            # Add PRECEDING edge: previous chunk -> current chunk
+            if (
+                hasattr(raw_file_mem.metadata, "preceding_id")
+                and raw_file_mem.metadata.preceding_id
+            ):
+                preceding_id = raw_file_mem.metadata.preceding_id
+                if preceding_id in rawfile_ids_local:
+                    from_ids.append(preceding_id)
+                    to_ids.append(raw_file_mem.id)
+                    types.append("PRECEDING")
+
+        start_time = time.time()
+        self.add_graph_edges(
+            from_ids,
+            to_ids,
+            types,
+            user_name=user_name,
+        )
+        end_time = time.time()
+        logger.info(f"[RawFile]Added {len(rawfile_ids_local)} chunks for user {user_id}")
+        logger.info(
+            f"[RawFile]Time taken to add edges: {end_time - start_time} seconds for {len(from_ids)} edges"
+        )
+
+    def add_graph_edges(
+        self, from_ids: list[str], to_ids: list[str], types: list[str], user_name: str | None = None
+    ) -> None:
+        """
+        Add edges to the graph.
+        Args:
+            from_ids: List of source node IDs.
+            to_ids: List of target node IDs.
+            types: List of edge types.
+            user_name: Optional user name.
+        """
+        with ContextThreadPoolExecutor(max_workers=20) as executor:
+            futures = {
+                executor.submit(
+                    self.graph_store.add_edge, from_id, to_id, edge_type, user_name=user_name
+                )
+                for from_id, to_id, edge_type in zip(from_ids, to_ids, types, strict=False)
+            }
+
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.exception("Add edge error: ", exc_info=e)

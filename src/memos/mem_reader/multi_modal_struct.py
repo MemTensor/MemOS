@@ -413,7 +413,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return prompt_type
 
-    def _process_string_fine(
+    def _process_string_fine(  # TODO sync async fine merge point   # TODO niu
         self,
         fast_memory_items: list[TextualMemoryItem],
         info: dict[str, Any],
@@ -421,6 +421,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
     ) -> list[TextualMemoryItem]:
         """
         Process fast mode memory items through LLM to generate fine mode memories.
+        Where fast_memory_items are raw chunk memory items, not the final memory items.
         """
         if not fast_memory_items:
             return []
@@ -455,7 +456,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             prompt_type = self._determine_prompt_type(sources)
 
             try:
-                resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
+                resp = self._get_llm_response(
+                    mem_str, custom_tags, sources, prompt_type
+                )  # TODO async fine  # TODO niu
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 return fine_items
@@ -633,7 +636,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
-                sources = fast_item.metadata.sources
+                sources = fast_item.metadata.sources  # TODO only parse sources  # TODO niu
                 for source in sources:
                     lang = getattr(source, "lang", "en")
                     items = self.multi_modal_parser.process_transfer(
@@ -647,7 +650,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             return fine_memory_items
 
     @timed
-    def _process_transfer_multi_modal_data(
+    def _process_transfer_multi_modal_data(  # async fine
         self,
         raw_node: TextualMemoryItem,
         custom_tags: list[str] | None = None,

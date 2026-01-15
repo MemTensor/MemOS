@@ -814,16 +814,34 @@ class SingleCubeView(MemCubeView):
         self.logger.info(f"Memory extraction completed for user {add_req.user_id}")
 
         # Add memories to text_mem
+        mem_group = [
+            memory for memory in flattened_local if memory.metadata.memory_type != "RawFileMemory"
+        ]
         mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
-            flattened_local,
+            mem_group,
             user_name=user_context.mem_cube_id,
-        )
+        )  # TODO async 阶段这里会将file url存入graph   # TODO niu
+
         self.logger.info(
             f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
             f"in session {add_req.session_id}: {mem_ids_local}"
         )
 
-        # Schedule async/sync tasks
+        # Add raw file nodes and edges
+        if os.getenv("SAVE_RAW_FILE", "false").lower() == "true" and extract_mode == "fine":
+            raw_file_mem_group = [
+                memory
+                for memory in flattened_local
+                if memory.metadata.memory_type == "RawFileMemory"
+            ]
+            self.naive_mem_cube.text_mem.add_rawfile_nodes_n_edges(
+                raw_file_mem_group,
+                mem_ids_local,
+                user_id=add_req.user_id,
+                user_name=user_context.mem_cube_id,
+            )
+
+        # Schedule async/sync tasks: async process raw chunk memory | sync only send messages
         self._schedule_memory_tasks(
             add_req=add_req,
             user_context=user_context,

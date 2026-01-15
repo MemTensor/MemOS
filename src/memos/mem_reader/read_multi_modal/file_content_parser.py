@@ -64,7 +64,7 @@ class FileContentParser(BaseMessageParser):
 
         lang = detect_lang(chunk_text)
         template = DOC_PROMPT_DICT["doc"][lang]
-        prompt = template.replace("{chunk_text}", chunk_text)
+        prompt = template.replace("{chunk_text}", chunk_text)  # TODO niu
 
         custom_tags_prompt = (
             DOC_PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
@@ -781,6 +781,31 @@ class FileContentParser(BaseMessageParser):
             logger.warning(f"[FileContentParser] Fallback to raw for chunk {chunk_idx}")
             return _make_fallback(chunk_idx, chunk_text)
 
+        def _relate_chunks(items: list[TextualMemoryItem]) -> None:
+            """
+            Relate chunks to each other.
+            """
+            if len(items) <= 1:
+                return
+
+            def get_chunk_idx(item: TextualMemoryItem) -> int:
+                """Extract chunk_idx from item's source metadata."""
+                if item.metadata.sources and len(item.metadata.sources) > 0:
+                    source = item.metadata.sources[0]
+                    if source.file_info and isinstance(source.file_info, dict):
+                        chunk_idx = source.file_info.get("chunk_index")
+                        if chunk_idx is not None:
+                            return chunk_idx
+                return float("inf")
+
+            sorted_items = sorted(items, key=get_chunk_idx)
+
+            # Relate adjacent items
+            for i in range(len(sorted_items) - 1):
+                sorted_items[i].metadata.following_id = sorted_items[i + 1].id
+                sorted_items[i + 1].metadata.preceding_id = sorted_items[i].id
+            return sorted_items
+
         # Process chunks concurrently with progress bar
         memory_items = []
         chunk_map = dict(valid_chunks)
@@ -802,8 +827,24 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx = futures[future]
                 try:
                     node = future.result()
-                    if node:
-                        memory_items.append(node)
+                    memory_items.append(node)
+                    # save raw file
+                    node_id = node.id
+                    if node.memory != node.metadata.sources[0].content:
+                        chunk_node = _make_memory_item(
+                            value=node.metadata.sources[0].content,
+                            mem_type="RawFileMemory",
+                            tags=[
+                                "mode:fine",
+                                "multimodal:file",
+                                f"chunk:{chunk_idx + 1}/{total_chunks}",
+                            ],
+                            chunk_idx=chunk_idx,
+                            chunk_content="",
+                        )
+                        chunk_node.metadata.summary_id = node_id
+                        memory_items.append(chunk_node)
+
                 except Exception as e:
                     tqdm.write(f"[ERROR] Chunk {chunk_idx} failed: {e}")
                     logger.error(f"[FileContentParser] Future failed for chunk {chunk_idx}: {e}")
@@ -816,6 +857,14 @@ class FileContentParser(BaseMessageParser):
         logger.info(
             f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks"
         )
+        rawfile_items = [
+            memory for memory in memory_items if memory.metadata.memory_type == "RawFileMemory"
+        ]
+        mem_items = [
+            memory for memory in memory_items if memory.metadata.memory_type != "RawFileMemory"
+        ]
+        related_rawfile_items = _relate_chunks(rawfile_items)
+        memory_items = mem_items + related_rawfile_items
 
         return memory_items or [
             _make_memory_item(

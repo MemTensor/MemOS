@@ -1,6 +1,7 @@
 import concurrent.futures
 import contextlib
 import json
+import os
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -844,7 +845,9 @@ class GeneralScheduler(BaseScheduler):
             memory_items = []
             for mem_id in mem_ids:
                 try:
-                    memory_item = text_mem.get(mem_id, user_name=user_name)
+                    memory_item = text_mem.get(
+                        mem_id, user_name=user_name
+                    )  # TODO get 是异步fast下粗略chunk结果   # TODO niu
                     memory_items.append(memory_item)
                 except Exception as e:
                     logger.warning(
@@ -885,17 +888,36 @@ class GeneralScheduler(BaseScheduler):
             if processed_memories and len(processed_memories) > 0:
                 # Flatten the results (mem_reader returns list of lists)
                 flattened_memories = []
-                for memory_list in processed_memories:
+                for memory_list in processed_memories:  # TODO  # TODO niu
                     flattened_memories.extend(memory_list)
 
                 logger.info(f"mem_reader processed {len(flattened_memories)} enhanced memories")
 
                 # Add the enhanced memories back to the memory system
                 if flattened_memories:
-                    enhanced_mem_ids = text_mem.add(flattened_memories, user_name=user_name)
+                    mem_group = [
+                        memory
+                        for memory in flattened_memories
+                        if memory.metadata.memory_type != "RawFileMemory"
+                    ]
+                    enhanced_mem_ids = text_mem.add(mem_group, user_name=user_name)
                     logger.info(
                         f"Added {len(enhanced_mem_ids)} enhanced memories: {enhanced_mem_ids}"
                     )
+
+                    # add raw file nodes and edges
+                    if os.getenv("SAVE_RAW_FILE", "false").lower() == "true":
+                        raw_file_mem_group = [
+                            memory
+                            for memory in flattened_memories
+                            if memory.metadata.memory_type == "RawFileMemory"
+                        ]
+                        text_mem.add_rawfile_nodes_n_edges(
+                            raw_file_mem_group,
+                            enhanced_mem_ids,
+                            user_id=user_id,
+                            user_name=user_name,
+                        )
 
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging
@@ -994,7 +1016,7 @@ class GeneralScheduler(BaseScheduler):
             # build full delete list:
             # - original raw mem_ids (temporary fast memories)
             # - any bound working memories referenced by the enhanced memories
-            delete_ids = list(mem_ids)
+            delete_ids = list(mem_ids)  # TODO   # TODO niu
             if bindings_to_delete:
                 delete_ids.extend(list(bindings_to_delete))
             # deduplicate
