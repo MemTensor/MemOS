@@ -877,6 +877,7 @@ class GeneralScheduler(BaseScheduler):
                     memory_items,
                     type="chat",
                     custom_tags=custom_tags,
+                    user_name=user_name,
                 )
             except Exception as e:
                 logger.warning(f"{e}: Fail to transfer mem: {memory_items}")

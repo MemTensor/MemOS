@@ -694,9 +694,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
     @timed
     def _process_transfer_multi_modal_data(
-        self,
-        raw_node: TextualMemoryItem,
-        custom_tags: list[str] | None = None,
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Process transfer for multimodal data.
@@ -720,9 +718,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Part A: call llm in parallel using thread pool
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             future_string = executor.submit(
-                self._process_string_fine, [raw_node], info, custom_tags
+                self._process_string_fine, [raw_node], info, custom_tags, **kwargs
             )
-            future_tool = executor.submit(self._process_tool_trajectory_fine, [raw_node], info)
+            future_tool = executor.submit(
+                self._process_tool_trajectory_fine, [raw_node], info, **kwargs
+            )
 
             # Collect results
             fine_memory_items_string_parser = future_string.result()
@@ -789,6 +789,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         input_memories: list[TextualMemoryItem],
         type: str,
         custom_tags: list[str] | None = None,
+        **kwargs,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
@@ -799,7 +800,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         with ContextThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(
-                    self._process_transfer_multi_modal_data, scene_data_info, custom_tags
+                    self._process_transfer_multi_modal_data, scene_data_info, custom_tags, **kwargs
                 )
                 for scene_data_info in input_memories
             ]

@@ -669,6 +669,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         input_memories: list[TextualMemoryItem],
         type: str,
         custom_tags: list[str] | None = None,
+        **kwargs,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
