@@ -846,7 +846,9 @@ class SingleCubeView(MemCubeView):
                         for old_id in old_ids:
                             try:
                                 self.mem_reader.graph_db.update_node(
-                                    str(old_id), {"status": "archived"}
+                                    str(old_id),
+                                    {"status": "archived"},
+                                    user_name=user_context.mem_cube_id,
                                 )
                                 self.logger.info(
                                     f"[SingleCubeView] Archived merged_from memory: {old_id}"

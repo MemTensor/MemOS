@@ -899,7 +899,7 @@ class GeneralScheduler(BaseScheduler):
                     )
 
                     # Mark merged_from memories as archived when provided in memory metadata
-                    if self.mem_reader and self.mem_reader.graph_db:
+                    if self.mem_reader.graph_db:
                         for memory in flattened_memories:
                             merged_from = (memory.metadata.info or {}).get("merged_from")
                             if merged_from:

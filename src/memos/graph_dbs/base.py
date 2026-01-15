@@ -19,12 +19,13 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def update_node(self, id: str, fields: dict[str, Any]) -> None:
+    def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """
         Update attributes of an existing node.
         Args:
             id: Node identifier to be updated.
             fields: Dictionary of fields to update.
+            user_name: given user_name
         """
 
     @abstractmethod
@@ -70,7 +71,7 @@ class BaseGraphDB(ABC):
 
     # Graph Query & Reasoning
     @abstractmethod
-    def get_node(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and content of a node.
         Args:
