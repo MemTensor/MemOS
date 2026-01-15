@@ -160,13 +160,17 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_by_metadata(self, filters: list[dict[str, Any]]) -> list[str]:
+    def get_by_metadata(
+        self, filters: list[dict[str, Any]], status: str | None = None
+    ) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
 
         Args:
             filters (dict[str, Any]): A dictionary of attribute-value filters.
                 Example: {"topic": "psychology", "importance": 2}
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[str]: Node IDs whose metadata match the filter conditions.
@@ -239,13 +243,17 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> list[dict]:
+    def get_all_memory_items(
+        self, scope: str, include_embedding: bool = False, status: str | None = None
+    ) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
             include_embedding: with/without embedding
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[dict]: Full list of memory items under this scope.
