@@ -362,8 +362,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         else:
             template = PROMPT_DICT["chat"][lang]
             examples = PROMPT_DICT["chat"][f"{lang}_example"]
+            related_memories_str = related_memories if related_memories is not None else ""
             prompt = template.replace("${conversation}", mem_str).replace(
-                "${reference}", related_memories
+                "${reference}", related_memories_str
             )
 
         custom_tags_prompt = (
