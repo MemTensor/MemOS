@@ -228,7 +228,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         lang = detect_lang(mem_str)
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
-        prompt = template.replace("${conversation}", mem_str).replace("${reference}", "")
+        prompt = template.replace("${conversation}", mem_str)
 
         custom_tags_prompt = (
             PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
