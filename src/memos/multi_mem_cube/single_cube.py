@@ -833,29 +833,32 @@ class SingleCubeView(MemCubeView):
         )
 
         # Mark merged_from memories as archived when provided in add_req.info
-        for memory in flattened_local:
-            merged_from = (memory.metadata.info or {}).get("merged_from")
-            if merged_from:
-                old_ids = (
-                    merged_from if isinstance(merged_from, (list | tuple | set)) else [merged_from]
-                )
-                if self.mem_reader and self.mem_reader.graph_db:
-                    for old_id in old_ids:
-                        try:
-                            self.mem_reader.graph_db.update_node(
-                                str(old_id), {"status": "archived"}
-                            )
-                            self.logger.info(
-                                f"[SingleCubeView] Archived merged_from memory: {old_id}"
-                            )
-                        except Exception as e:
-                            self.logger.warning(
-                                f"[SingleCubeView] Failed to archive merged_from memory {old_id}: {e}"
-                            )
-                else:
-                    self.logger.warning(
-                        "[SingleCubeView] merged_from provided but graph_db is unavailable; skip archiving."
+        if sync_mode == "sync" and extract_mode == "fine":
+            for memory in flattened_local:
+                merged_from = (memory.metadata.info or {}).get("merged_from")
+                if merged_from:
+                    old_ids = (
+                        merged_from
+                        if isinstance(merged_from, (list | tuple | set))
+                        else [merged_from]
                     )
+                    if self.mem_reader and self.mem_reader.graph_db:
+                        for old_id in old_ids:
+                            try:
+                                self.mem_reader.graph_db.update_node(
+                                    str(old_id), {"status": "archived"}
+                                )
+                                self.logger.info(
+                                    f"[SingleCubeView] Archived merged_from memory: {old_id}"
+                                )
+                            except Exception as e:
+                                self.logger.warning(
+                                    f"[SingleCubeView] Failed to archive merged_from memory {old_id}: {e}"
+                                )
+                    else:
+                        self.logger.warning(
+                            "[SingleCubeView] merged_from provided but graph_db is unavailable; skip archiving."
+                        )
 
         text_memories = [
             {

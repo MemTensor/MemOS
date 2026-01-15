@@ -228,7 +228,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         lang = detect_lang(mem_str)
         template = PROMPT_DICT["chat"][lang]
         examples = PROMPT_DICT["chat"][f"{lang}_example"]
-        prompt = template.replace("${conversation}", mem_str).replace("${reference}", "")
+        prompt = template.replace("${conversation}", mem_str)
 
         custom_tags_prompt = (
             PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
@@ -361,7 +361,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             return chat_read_nodes
 
     def _process_transfer_chat_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ):
         raw_memory = raw_node.memory
         response_json = self._get_llm_response(raw_memory, custom_tags)
@@ -669,6 +669,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         input_memories: list[TextualMemoryItem],
         type: str,
         custom_tags: list[str] | None = None,
+        **kwargs,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
@@ -685,7 +686,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(processing_func, scene_data_info, custom_tags)
+                executor.submit(processing_func, scene_data_info, custom_tags, **kwargs)
                 for scene_data_info in input_memories
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -889,6 +890,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return doc_nodes
 
     def _process_transfer_doc_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ):
         raise NotImplementedError
