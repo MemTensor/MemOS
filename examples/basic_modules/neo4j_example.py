@@ -31,9 +31,9 @@ def get_neo4j_graph(db_name: str = "paper"):
     config = GraphDBConfigFactory(
         backend="neo4j",
         config={
-            "uri": "bolt://47.117.45.189:7687",
+            "uri": "bolt://xxxx:7687",
             "user": "neo4j",
-            "password": "iaarlichunyu",
+            "password": "xxxx",
             "db_name": db_name,
             "auto_create": True,
             "embedding_dimension": 3072,
