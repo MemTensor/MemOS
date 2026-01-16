@@ -3,8 +3,6 @@ import json
 import re
 import traceback
 
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from memos import log
@@ -22,36 +20,6 @@ from memos.utils import timed
 
 
 logger = log.get_logger(__name__)
-
-
-def _log_merge_check(
-    query: str,
-    triggered: bool,
-    merged_from: list[str] | None = None,
-    merged_content: str | None = None,
-    merge_details: list[dict] | None = None,
-    reason: str | None = None,
-):
-    """Simple JSON logging for merge check results."""
-    log_file = Path("merge_check_log.jsonl")
-    record = {
-        "timestamp": datetime.now().isoformat(),
-        "query": query[:200],  # Truncate for readability
-        "triggered": triggered,
-        "merged_from": merged_from if merged_from else None,
-        "merged_content": merged_content[:300] if merged_content else None,  # Truncate
-        "merge_details": [
-            {"id": d.get("id"), "memory": d.get("memory", "")[:200]} for d in merge_details
-        ]
-        if merge_details
-        else None,  # Truncate memory
-        "reason": reason,
-    }
-    try:
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        pass  # Silently fail if file write fails
 
 
 class MultiModalStructMemReader(SimpleStructMemReader):
@@ -470,11 +438,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         """
         # If no graph_db or user_name, return original
         if not self.graph_db or "user_name" not in kwargs:
-            _log_merge_check(
-                query=kwargs.get("original_query", mem_text),
-                triggered=False,
-                reason="no_graph_db_or_user_name",
-            )
             return extracted_memory_dict
         user_name = kwargs.get("user_name")
 
@@ -511,12 +474,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
 
             if not search_results:
-                # No similar memories found, return original
-                _log_merge_check(
-                    query=kwargs.get("original_query", mem_text),
-                    triggered=True,
-                    reason="no_similar_found",
-                )
                 return extracted_memory_dict
 
             # Get full memory details
@@ -547,12 +504,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
 
             if not filtered_similar:
-                # No valid similar memories, return original
-                _log_merge_check(
-                    query=kwargs.get("original_query", mem_text),
-                    triggered=True,
-                    reason="all_filtered_out",
-                )
                 return extracted_memory_dict
 
             # Create a temporary TextualMemoryItem for merge check
@@ -580,22 +531,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 merged_dict["value"] = merged_content
                 merged_from_ids = merge_result.get("merged_from", [])
                 merged_dict["merged_from"] = merged_from_ids
-                _log_merge_check(
-                    query=kwargs.get("original_query", mem_text),
-                    triggered=True,
-                    merged_from=merged_from_ids,
-                    merged_content=merged_content,
-                    merge_details=filtered_similar,
-                    reason="merged_successfully",
-                )
                 return merged_dict
             else:
-                # No merge needed, return original
-                _log_merge_check(
-                    query=kwargs.get("original_query", mem_text),
-                    triggered=True,
-                    reason="llm_decided_not_to_merge",
-                )
                 return extracted_memory_dict
 
         except Exception as e:
