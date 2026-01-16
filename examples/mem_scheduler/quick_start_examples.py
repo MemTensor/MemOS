@@ -146,7 +146,9 @@ def kv_cache_only():
 
 def run_scheduler_example():
     # 使用 MemScheduler 加载主 MOS(Memory-Oriented System)配置文件
-    config = parse_yaml("./examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml")
+    config = parse_yaml(
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_scheduler.yaml"
+    )
     # 将解析出的配置字典传入 MOSConfig 构造器, 构建配置对象
     mos_config = MOSConfig(**config)
     # 使用配置对象初始化 MOS 系统实例
@@ -159,12 +161,12 @@ def run_scheduler_example():
 
     # 从 YAML 文件加载 MemCube(记忆立方体)的通用配置
     config = GeneralMemCubeConfig.from_yaml_file(
-        "./examples/data/config/mem_scheduler/mem_cube_config.yaml"
+        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config.yaml"
     )
     # 定义 MemCube 的唯一标识符
     mem_cube_id = "mem_cube_5"
     # 定义 MemCube 的本地存储路径(路径中包含用户 ID 和 MemCube ID)
-    mem_cube_name_or_path = f"./outputs/mem_scheduler/{user_id}/{mem_cube_id}"
+    mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
 
     # 如果该路径已存在, 则先删除旧目录
     if Path(mem_cube_name_or_path).exists():

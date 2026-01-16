@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import re
 import traceback
 
 from typing import Any
@@ -547,7 +548,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         for fast_item in fast_memory_items:
             # Extract memory text (string content)
             mem_str = fast_item.memory or ""
-            if not mem_str.strip() or "tool:" not in mem_str:
+            if not mem_str.strip() or (
+                "tool:" not in mem_str
+                and "[tool_calls]:" not in mem_str
+                and not re.search(r"<tool_schema>.*?</tool_schema>", mem_str, re.DOTALL)
+            ):
                 continue
             try:
                 resp = self._get_llm_tool_trajectory_response(mem_str)
@@ -563,6 +568,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         value=m.get("trajectory", ""),
                         info=info,
                         memory_type=memory_type,
+                        correctness=m.get("correctness", ""),
+                        experience=m.get("experience", ""),
                         tool_used_status=m.get("tool_used_status", []),
                     )
                     fine_memory_items.append(node)
@@ -606,16 +613,22 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if mode == "fast":
             return fast_memory_items
         else:
-            # Part A: call llm
+            # Part A: call llm in parallel using thread pool
             fine_memory_items = []
-            fine_memory_items_string_parser = self._process_string_fine(
-                fast_memory_items, info, custom_tags
-            )
-            fine_memory_items.extend(fine_memory_items_string_parser)
 
-            fine_memory_items_tool_trajectory_parser = self._process_tool_trajectory_fine(
-                fast_memory_items, info
-            )
+            with ContextThreadPoolExecutor(max_workers=2) as executor:
+                future_string = executor.submit(
+                    self._process_string_fine, fast_memory_items, info, custom_tags
+                )
+                future_tool = executor.submit(
+                    self._process_tool_trajectory_fine, fast_memory_items, info
+                )
+
+                # Collect results
+                fine_memory_items_string_parser = future_string.result()
+                fine_memory_items_tool_trajectory_parser = future_tool.result()
+
+            fine_memory_items.extend(fine_memory_items_string_parser)
             fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
 
             # Part B: get fine multimodal items
@@ -658,13 +671,18 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         }
 
         fine_memory_items = []
-        # Part A: call llm
-        fine_memory_items_string_parser = self._process_string_fine([raw_node], info, custom_tags)
-        fine_memory_items.extend(fine_memory_items_string_parser)
+        # Part A: call llm in parallel using thread pool
+        with ContextThreadPoolExecutor(max_workers=2) as executor:
+            future_string = executor.submit(
+                self._process_string_fine, [raw_node], info, custom_tags
+            )
+            future_tool = executor.submit(self._process_tool_trajectory_fine, [raw_node], info)
 
-        fine_memory_items_tool_trajectory_parser = self._process_tool_trajectory_fine(
-            [raw_node], info
-        )
+            # Collect results
+            fine_memory_items_string_parser = future_string.result()
+            fine_memory_items_tool_trajectory_parser = future_tool.result()
+
+        fine_memory_items.extend(fine_memory_items_string_parser)
         fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
 
         # Part B: get fine multimodal items
