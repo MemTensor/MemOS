@@ -36,5 +36,6 @@
       "embedding_dimension": 768
     }
   },
-  "reorganize": true
+  "reorganize": true,
+  "memory_filename": "tree_textual_memories.json"
 }
