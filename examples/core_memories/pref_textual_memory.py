@@ -1,27 +1,18 @@
 import time
 
 from memos import log
-from memos.configs.mem_reader import SimpleStructMemReaderConfig
-from memos.configs.memory import TreeTextMemoryConfig
-from memos.mem_reader.multi_modal_struct import MultiModalStructMemReader
-from memos.mem_reader.simple_struct import SimpleStructMemReader
-from memos.memories.textual.tree import TreeTextMemory
+from memos.configs.memory import PreferenceTextMemoryConfig
+from memos.memories.textual.preference import PreferenceTextMemory
 
 
 logger = log.get_logger(__name__)
 
-
-tree_config = TreeTextMemoryConfig.from_json_file(
-    "examples/data/config/tree_config_shared_database.json"
+preference_config = PreferenceTextMemoryConfig.from_json_file(
+    "examples/data/config/preference_config.json"
 )
-my_tree_textual_memory = TreeTextMemory(tree_config)
-my_tree_textual_memory.delete_all()
+my_preference_textual_memory = PreferenceTextMemory(preference_config)
+my_preference_textual_memory.delete_all()
 
-# Create a memory reader instance
-reader_config = SimpleStructMemReaderConfig.from_json_file(
-    "examples/data/config/simple_struct_reader_config.json"
-)
-reader = SimpleStructMemReader(reader_config)
 
 scene_data = [
     [
@@ -166,116 +157,36 @@ scene_data = [
     ],
 ]
 
-# Acquiring memories
-memory = reader.get_memory(scene_data, type="chat", info={"user_id": "1234", "session_id": "2222"})
+memories = my_preference_textual_memory.get_memory(
+    scene_data, type="chat", info={"user_id": "1234", "session_id": "2222"}
+)
 
-for m_list in memory:
-    added_ids = my_tree_textual_memory.add(m_list)
-    for i, id in enumerate(added_ids):
-        print(f"{i}'th added result is:" + my_tree_textual_memory.get(id).memory)
-    my_tree_textual_memory.memory_manager.wait_reorganizer()
+added_ids = my_preference_textual_memory.add(memories)
 
-time.sleep(60)
+time.sleep(10)
 
 init_time = time.time()
-results = my_tree_textual_memory.search(
-    "Talk about the user's childhood story?",
-    top_k=10,
-    info={
-        "query": "Talk about the user's childhood story?",
-        "user_id": "111",
-        "session_id": "2234",
-        "chat_history": [{"role": "user", "content": "xxxxx"}],
-    },
-)
+# search preference memories
+results = my_preference_textual_memory.search("Talk about childhood story of the user", top_k=10)
+
 for i, r in enumerate(results):
     r = r.to_dict()
     print(f"{i}'th similar result is: " + str(r["memory"]))
 print(f"Successfully search {len(results)} memories in {round(time.time() - init_time)}s")
 
-# try this when use 'fine' mode (Note that you should pass the internet Config, refer to examples/core_memories/textual_internet_memoy.py)
-init_time = time.time()
-results_fine_search = my_tree_textual_memory.search(
-    "Recent news in the first city you've mentioned.",
-    top_k=10,
-    mode="fine",
-    info={
-        "query": "Recent news in NewYork",
-        "user_id": "111",
-        "session_id": "2234",
-        "chat_history": [
-            {"role": "user", "content": "I want to know three beautiful cities"},
-            {"role": "assistant", "content": "New York, London, and Shanghai"},
-        ],
-    },
+# get all preference memories
+all_preference_memories = my_preference_textual_memory.get_all()
+for key, value in all_preference_memories.items():
+    for i, m in enumerate(value):
+        print(f"{i}'th {key} memory is: " + str(m.memory))
+
+# use filter to get all implicit preference memories
+all_implicit_memories = my_preference_textual_memory.get_memory_by_filter(
+    {"preference_type": "implicit_preference"}
 )
+for i, m in enumerate(all_implicit_memories[0]):
+    print(f"{i}'th filtered memory is: " + str(m.memory))
 
-for i, r in enumerate(results_fine_search):
-    r = r.to_dict()
-    print(f"{i}'th similar result is: " + str(r["memory"]))
-print(
-    f"Successfully search {len(results_fine_search)} memories in {round(time.time() - init_time)}s"
-)
-
-# find related nodes
-related_nodes = my_tree_textual_memory.get_relevant_subgraph("Painting")
-
-# get current memory_size
-print(f"Current Memory Size is {my_tree_textual_memory.get_current_memory_size()}")
-
-logger.info("Start doc search example...")
-# Processing Documents
-doc_paths = [
-    "./text1.txt",
-    "./text2.txt",
-]
-# Acquiring memories from documents
-doc_memory = reader.get_memory(doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"})
-
-for m_list in doc_memory:
-    added_ids = my_tree_textual_memory.add(m_list)
-    my_tree_textual_memory.memory_manager.wait_reorganizer()
-
-results = my_tree_textual_memory.search(
-    "Tell me about what memos consist of?",
-    top_k=30,
-    info={"query": "Tell me about what memos consist of?", "user_id": "111", "session": "2234"},
-)
-
-for i, r in enumerate(results):
-    r = r.to_dict()
-    print(f"{i}'th similar result is: " + str(r["memory"]))
-print(f"Successfully search {len(results)} memories")
-
-logger.info("start multi-modal memory search example...")
-
-multi_modal_reader = MultiModalStructMemReader(reader_config)
-doc_paths = ["examples/data/one_page_example.pdf"]
-multi_modal_memory = multi_modal_reader.get_memory(
-    doc_paths, "doc", info={"user_id": "1111", "session_id": "2222"}
-)
-
-for m_list in multi_modal_memory:
-    added_ids = my_tree_textual_memory.add(m_list)
-    my_tree_textual_memory.memory_manager.wait_reorganizer()
-
-results = my_tree_textual_memory.search(
-    "Give me one poem from Tagore's 'Stray birds'",
-    top_k=30,
-    info={
-        "query": "Give me one poem from Tagore's 'Stray birds'",
-        "user_id": "111",
-        "session": "2234",
-    },
-)
-for i, r in enumerate(results):
-    r = r.to_dict()
-    print(f"{i}'th similar result is: " + str(r["memory"]))
-print(f"Successfully search {len(results)} memories")
-
-# close the synchronous thread in memory manager
-my_tree_textual_memory.memory_manager.close()
-
-# my_tree_textual_memory.dump
-my_tree_textual_memory.dump("tmp/my_tree_textual_memory")
-my_tree_textual_memory.drop()
+# dump preference memories
+dumped_memories_dir = "tmp/my_preference_textual_memory"
+my_preference_textual_memory.dump(dumped_memories_dir)
