@@ -2,7 +2,7 @@ import json
 
 from pathlib import Path
 
-from memos.api.start_api import app
+from memos.api.server_api import app
 
 
 OPENAPI_JSON_PATH = Path(__file__).parent.parent / "docs" / "openapi.json"
