@@ -76,7 +76,8 @@ class MemFeedback(BaseMemFeedback):
         self.llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(config.extractor_llm)
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: PolarDBGraphDB = GraphStoreFactory.from_config(config.graph_db)
-        self.mem_reader = MemReaderFactory.from_config(config.mem_reader)
+        # Pass graph_store to mem_reader for recall operations (deduplication, conflict detection)
+        self.mem_reader = MemReaderFactory.from_config(config.mem_reader, graph_db=self.graph_store)
 
         self.is_reorganize = config.reorganize
         self.memory_manager: MemoryManager = MemoryManager(

@@ -19,12 +19,13 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def update_node(self, id: str, fields: dict[str, Any]) -> None:
+    def update_node(self, id: str, fields: dict[str, Any], user_name: str | None = None) -> None:
         """
         Update attributes of an existing node.
         Args:
             id: Node identifier to be updated.
             fields: Dictionary of fields to update.
+            user_name: given user_name
         """
 
     @abstractmethod
@@ -70,7 +71,7 @@ class BaseGraphDB(ABC):
 
     # Graph Query & Reasoning
     @abstractmethod
-    def get_node(self, id: str, include_embedding: bool = False) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and content of a node.
         Args:
@@ -82,7 +83,7 @@ class BaseGraphDB(ABC):
 
     @abstractmethod
     def get_nodes(
-        self, id: str, include_embedding: bool = False, **kwargs
+        self, ids: list, include_embedding: bool = False, **kwargs
     ) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a list of nodes.
@@ -160,13 +161,17 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_by_metadata(self, filters: list[dict[str, Any]]) -> list[str]:
+    def get_by_metadata(
+        self, filters: list[dict[str, Any]], status: str | None = None
+    ) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
 
         Args:
             filters (dict[str, Any]): A dictionary of attribute-value filters.
                 Example: {"topic": "psychology", "importance": 2}
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[str]: Node IDs whose metadata match the filter conditions.
@@ -239,13 +244,17 @@ class BaseGraphDB(ABC):
         """
 
     @abstractmethod
-    def get_all_memory_items(self, scope: str, include_embedding: bool = False) -> list[dict]:
+    def get_all_memory_items(
+        self, scope: str, include_embedding: bool = False, status: str | None = None
+    ) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
             include_embedding: with/without embedding
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[dict]: Full list of memory items under this scope.
