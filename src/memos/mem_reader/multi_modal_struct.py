@@ -474,13 +474,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
 
             if not search_results:
-                # No similar memories found, return original
                 return extracted_memory_dict
 
             # Get full memory details
             similar_memory_ids = [r["id"] for r in search_results if r.get("id")]
             similar_memories_list = [
-                self.graph_db.get_node(mem_id, include_embedding=False)
+                self.graph_db.get_node(mem_id, include_embedding=False, user_name=user_name)
                 for mem_id in similar_memory_ids
             ]
 
@@ -505,7 +504,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             )
 
             if not filtered_similar:
-                # No valid similar memories, return original
                 return extracted_memory_dict
 
             # Create a temporary TextualMemoryItem for merge check
@@ -529,14 +527,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if merge_result:
                 # Return merged memory dict
                 merged_dict = extracted_memory_dict.copy()
-                merged_dict["value"] = merge_result.get("value", mem_text)
-                merged_dict["merged_from"] = merge_result.get("merged_from", [])
-                logger.info(
-                    f"[MultiModalFine] Merged memory with {len(merged_dict['merged_from'])} existing memories"
-                )
+                merged_content = merge_result.get("value", mem_text)
+                merged_dict["value"] = merged_content
+                merged_from_ids = merge_result.get("merged_from", [])
+                merged_dict["merged_from"] = merged_from_ids
                 return merged_dict
             else:
-                # No merge needed, return original
                 return extracted_memory_dict
 
         except Exception as e:
@@ -648,6 +644,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                             extracted_memory_dict=m,
                             mem_text=m.get("value", ""),
                             sources=sources,
+                            original_query=mem_str,
                             **kwargs,
                         )
                         # Normalize memory_type (same as simple_struct)
@@ -680,6 +677,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         extracted_memory_dict=resp,
                         mem_text=resp.get("value", "").strip(),
                         sources=sources,
+                        original_query=mem_str,
                         **kwargs,
                     )
                     node = self._make_memory_item(
