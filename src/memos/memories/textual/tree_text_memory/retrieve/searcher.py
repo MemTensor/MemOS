@@ -288,6 +288,9 @@ class Searcher:
         if parsed_goal.memories:
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
 
+        if query_embedding is None:
+            query_embedding = self.embedder.embed([query])
+
         return parsed_goal, query_embedding, context, query
 
     @timed
