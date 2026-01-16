@@ -57,6 +57,10 @@ class OpenAILLM(BaseLLM):
             f"Request body: {request_body}, Response from OpenAI: {response.model_dump_json()}, Cost time: {cost_time}"
         )
 
+        if not response.choices:
+            logger.warning("OpenAI response has no choices")
+            return ""
+
         tool_calls = getattr(response.choices[0].message, "tool_calls", None)
         if isinstance(tool_calls, list) and len(tool_calls) > 0:
             return self.tool_call_parser(tool_calls)
@@ -99,6 +103,8 @@ class OpenAILLM(BaseLLM):
         reasoning_started = False
 
         for chunk in response:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
 
             # Support for custom 'reasoning_content' (if present in OpenAI-compatible models like Qwen, DeepSeek)
@@ -153,6 +159,10 @@ class AzureLLM(BaseLLM):
             extra_body=kwargs.get("extra_body", self.config.extra_body),
         )
         logger.info(f"Response from Azure OpenAI: {response.model_dump_json()}")
+        if not response.choices:
+            logger.warning("Azure OpenAI response has no choices")
+            return ""
+
         if response.choices[0].message.tool_calls:
             return self.tool_call_parser(response.choices[0].message.tool_calls)
         response_content = response.choices[0].message.content
@@ -180,6 +190,8 @@ class AzureLLM(BaseLLM):
         reasoning_started = False
 
         for chunk in response:
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
 
             # Support for custom 'reasoning_content' (if present in OpenAI-compatible models like Qwen, DeepSeek)
