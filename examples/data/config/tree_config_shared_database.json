@@ -58,6 +58,6 @@
     "WorkingMemory": 200,
     "LongTermMemory": 20000,
     "UserMemory": 30000
-  }
+  },
   "memory_filename": "tree_textual_memories.json"
 }
