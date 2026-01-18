@@ -331,7 +331,7 @@ url = {https://global-sci.com/article/91443/memory3-language-modeling-with-expli
 
 ## 🙌 Contributing
 
-We welcome contributions from the community! Please read our [contribution guidelines](https://memos-docs.openmem.net/contribution/overview) to get started.
+We welcome contributions from the community! Please read our [contribution guidelines](https://memos-docs.openmem.net/open_source/contribution/overview/) to get started.
 
 <br>
 
