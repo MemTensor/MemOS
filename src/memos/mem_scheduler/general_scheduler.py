@@ -878,6 +878,7 @@ class GeneralScheduler(BaseScheduler):
                     memory_items,
                     type="chat",
                     custom_tags=custom_tags,
+                    user_name=user_name,
                 )
             except Exception as e:
                 logger.warning(f"{e}: Fail to transfer mem: {memory_items}")
@@ -916,6 +917,43 @@ class GeneralScheduler(BaseScheduler):
                             user_id=user_id,
                             user_name=user_name,
                         )
+
+                    # Mark merged_from memories as archived when provided in memory metadata
+                    summary_memories = [
+                        memory
+                        for memory in flattened_memories
+                        if memory.metadata.memory_type != "RawFileMemory"
+                    ]
+                    if self.mem_reader.graph_db:
+                        for memory in summary_memories:
+                            merged_from = (memory.metadata.info or {}).get("merged_from")
+                            if merged_from:
+                                old_ids = (
+                                    merged_from
+                                    if isinstance(merged_from, (list | tuple | set))
+                                    else [merged_from]
+                                )
+                                for old_id in old_ids:
+                                    try:
+                                        self.mem_reader.graph_db.update_node(
+                                            str(old_id), {"status": "archived"}, user_name=user_name
+                                        )
+                                        logger.info(
+                                            f"[Scheduler] Archived merged_from memory: {old_id}"
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"[Scheduler] Failed to archive merged_from memory {old_id}: {e}"
+                                        )
+                    else:
+                        # Check if any memory has merged_from but graph_db is unavailable
+                        has_merged_from = any(
+                            (m.metadata.info or {}).get("merged_from") for m in summary_memories
+                        )
+                        if has_merged_from:
+                            logger.warning(
+                                "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
+                            )
 
                     # LOGGING BLOCK START
                     # This block is replicated from _add_message_consumer to ensure consistent logging

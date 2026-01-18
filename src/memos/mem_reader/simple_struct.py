@@ -5,7 +5,7 @@ import os
 import traceback
 
 from abc import ABC
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from tqdm import tqdm
 
@@ -16,6 +16,10 @@ from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import EmbedderFactory
 from memos.llms.factory import LLMFactory
 from memos.mem_reader.base import BaseMemReader
+
+
+if TYPE_CHECKING:
+    from memos.graph_dbs.base import BaseGraphDB
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
     count_tokens_text,
@@ -176,6 +180,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         self.chat_window_max_tokens = getattr(self.config, "chat_window_max_tokens", 1024)
         self._count_tokens = count_tokens_text
         self.searcher = None
+        # Initialize graph_db as None, can be set later via set_graph_db for
+        # recall operations
+        self.graph_db = None
+
+    def set_graph_db(self, graph_db: "BaseGraphDB | None") -> None:
+        self.graph_db = graph_db
 
     def _make_memory_item(
         self,
@@ -351,7 +361,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             return chat_read_nodes
 
     def _process_transfer_chat_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ):
         raw_memory = raw_node.memory
         response_json = self._get_llm_response(raw_memory, custom_tags)
@@ -390,7 +400,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return chat_read_nodes
 
     def get_memory(
-        self, scene_data: SceneDataInput, type: str, info: dict[str, Any], mode: str = "fine"
+        self,
+        scene_data: SceneDataInput,
+        type: str,
+        info: dict[str, Any],
+        mode: str = "fine",
+        user_name: str | None = None,
     ) -> list[list[TextualMemoryItem]]:
         """
         Extract and classify memory content from scene_data.
@@ -409,6 +424,8 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 - chunk_overlap: Overlap for small chunks (default: 50)
             mode: mem-reader mode, fast for quick process while fine for
             better understanding via calling llm
+            user_name: tha user_name would be inserted later into the
+            database, may be used in recall.
         Returns:
             list[list[TextualMemoryItem]] containing memory content with summaries as keys and original text as values
         Raises:
@@ -432,7 +449,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Backward compatibility, after coercing scene_data, we only tackle
         # with standard scene_data type: MessagesType
         standard_scene_data = coerce_scene_data(scene_data, type)
-        return self._read_memory(standard_scene_data, type, info, mode)
+        return self._read_memory(standard_scene_data, type, info, mode, user_name=user_name)
 
     def rewrite_memories(
         self, messages: list[dict], memory_list: list[TextualMemoryItem], user_only: bool = True
@@ -558,7 +575,12 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return memory_list
 
     def _read_memory(
-        self, messages: list[MessagesType], type: str, info: dict[str, Any], mode: str = "fine"
+        self,
+        messages: list[MessagesType],
+        type: str,
+        info: dict[str, Any],
+        mode: str = "fine",
+        **kwargs,
     ) -> list[list[TextualMemoryItem]]:
         """
         1. raw file:
@@ -647,6 +669,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         input_memories: list[TextualMemoryItem],
         type: str,
         custom_tags: list[str] | None = None,
+        **kwargs,
     ) -> list[list[TextualMemoryItem]]:
         if not input_memories:
             return []
@@ -663,7 +686,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         # Process Q&A pairs concurrently with context propagation
         with ContextThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(processing_func, scene_data_info, custom_tags)
+                executor.submit(processing_func, scene_data_info, custom_tags, **kwargs)
                 for scene_data_info in input_memories
             ]
             for future in concurrent.futures.as_completed(futures):
@@ -867,6 +890,6 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         return doc_nodes
 
     def _process_transfer_doc_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None
+        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
     ):
         raise NotImplementedError
