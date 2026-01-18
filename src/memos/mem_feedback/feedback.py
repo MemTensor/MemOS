@@ -234,18 +234,15 @@ class MemFeedback(BaseMemFeedback):
             to_add_memory.metadata.tags = new_memory_item.metadata.tags
             to_add_memory.memory = new_memory_item.memory
             to_add_memory.metadata.embedding = new_memory_item.metadata.embedding
-
             to_add_memory.metadata.user_id = new_memory_item.metadata.user_id
-            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-                datetime.now().isoformat()
-            )
-            to_add_memory.metadata.background = new_memory_item.metadata.background
         else:
             to_add_memory = new_memory_item.model_copy(deep=True)
-            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-                datetime.now().isoformat()
-            )
-            to_add_memory.metadata.background = new_memory_item.metadata.background
+
+        to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
+            datetime.now().isoformat()
+        )
+        to_add_memory.metadata.background = new_memory_item.metadata.background
+        to_add_memory.metadata.sources = []
 
         to_add_memory.id = ""
         added_ids = self._retry_db_operation(
