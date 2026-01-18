@@ -469,7 +469,7 @@ class TreeTextMemory(BaseTextMemory):
         user_name: str | None = None,
     ) -> None:
         """
-        Add raw file nodes and edges to the graph.
+        Add raw file nodes and edges to the graph. Edges are between raw file ids and mem_ids.
         Args:
             raw_file_mem_group: List of raw file memory items.
             mem_ids: List of memory IDs.
@@ -485,6 +485,7 @@ class TreeTextMemory(BaseTextMemory):
         types = []
 
         for raw_file_mem in raw_file_mem_group:
+            # Add SUMMARY edge: memory -> raw file; raw file -> memory
             if hasattr(raw_file_mem.metadata, "summary_id") and raw_file_mem.metadata.summary_id:
                 summary_id = raw_file_mem.metadata.summary_id
                 if summary_id in mem_ids:
@@ -514,8 +515,8 @@ class TreeTextMemory(BaseTextMemory):
             ):
                 preceding_id = raw_file_mem.metadata.preceding_id
                 if preceding_id in rawfile_ids_local:
-                    from_ids.append(preceding_id)
-                    to_ids.append(raw_file_mem.id)
+                    from_ids.append(raw_file_mem.id)
+                    to_ids.append(preceding_id)
                     types.append("PRECEDING")
 
         start_time = time.time()

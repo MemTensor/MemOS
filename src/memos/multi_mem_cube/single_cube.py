@@ -820,7 +820,7 @@ class SingleCubeView(MemCubeView):
         mem_ids_local: list[str] = self.naive_mem_cube.text_mem.add(
             mem_group,
             user_name=user_context.mem_cube_id,
-        )  # TODO async 阶段这里会将file url存入graph   # TODO niu
+        )
 
         self.logger.info(
             f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
@@ -828,7 +828,7 @@ class SingleCubeView(MemCubeView):
         )
 
         # Add raw file nodes and edges
-        if os.getenv("SAVE_RAW_FILE", "false").lower() == "true" and extract_mode == "fine":
+        if os.getenv("SAVE_RAWFILE_NODE", "false").lower() == "true" and extract_mode == "fine":
             raw_file_mem_group = [
                 memory
                 for memory in flattened_local

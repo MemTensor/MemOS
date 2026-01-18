@@ -841,13 +841,11 @@ class GeneralScheduler(BaseScheduler):
                 )
                 return
 
-            # Get the original memory items
+            # Get the original fast memory (raw chunk) items
             memory_items = []
             for mem_id in mem_ids:
                 try:
-                    memory_item = text_mem.get(
-                        mem_id, user_name=user_name
-                    )  # TODO get 是异步fast下粗略chunk结果   # TODO niu
+                    memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
                     logger.warning(
@@ -888,7 +886,7 @@ class GeneralScheduler(BaseScheduler):
             if processed_memories and len(processed_memories) > 0:
                 # Flatten the results (mem_reader returns list of lists)
                 flattened_memories = []
-                for memory_list in processed_memories:  # TODO  # TODO niu
+                for memory_list in processed_memories:
                     flattened_memories.extend(memory_list)
 
                 logger.info(f"mem_reader processed {len(flattened_memories)} enhanced memories")
@@ -906,7 +904,7 @@ class GeneralScheduler(BaseScheduler):
                     )
 
                     # add raw file nodes and edges
-                    if os.getenv("SAVE_RAW_FILE", "false").lower() == "true":
+                    if os.getenv("SAVE_RAWFILE_NODE", "false").lower() == "true":
                         raw_file_mem_group = [
                             memory
                             for memory in flattened_memories
@@ -1016,7 +1014,7 @@ class GeneralScheduler(BaseScheduler):
             # build full delete list:
             # - original raw mem_ids (temporary fast memories)
             # - any bound working memories referenced by the enhanced memories
-            delete_ids = list(mem_ids)  # TODO   # TODO niu
+            delete_ids = list(mem_ids)
             if bindings_to_delete:
                 delete_ids.extend(list(bindings_to_delete))
             # deduplicate

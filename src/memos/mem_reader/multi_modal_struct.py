@@ -413,7 +413,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return prompt_type
 
-    def _process_string_fine(  # TODO sync async fine merge point   # TODO niu
+    def _process_string_fine(
         self,
         fast_memory_items: list[TextualMemoryItem],
         info: dict[str, Any],
@@ -456,9 +456,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             prompt_type = self._determine_prompt_type(sources)
 
             try:
-                resp = self._get_llm_response(
-                    mem_str, custom_tags, sources, prompt_type
-                )  # TODO async fine  # TODO niu
+                resp = self._get_llm_response(mem_str, custom_tags, sources, prompt_type)
             except Exception as e:
                 logger.error(f"[MultiModalFine] Error calling LLM: {e}")
                 return fine_items
@@ -636,7 +634,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
-                sources = fast_item.metadata.sources  # TODO only parse sources  # TODO niu
+                sources = fast_item.metadata.sources
                 for source in sources:
                     lang = getattr(source, "lang", "en")
                     items = self.multi_modal_parser.process_transfer(

@@ -392,8 +392,8 @@ class APISearchRequest(BaseRequest):
     )
     # Internal field for search memory type
     search_memory_type: str = Field(
-        "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory",
+        "AllSummaryMemory",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory",
     )
 
     # ==== Context ====

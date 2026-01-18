@@ -64,7 +64,7 @@ class FileContentParser(BaseMessageParser):
 
         lang = detect_lang(chunk_text)
         template = DOC_PROMPT_DICT["doc"][lang]
-        prompt = template.replace("{chunk_text}", chunk_text)  # TODO niu
+        prompt = template.replace("{chunk_text}", chunk_text)
 
         custom_tags_prompt = (
             DOC_PROMPT_DICT["custom_tags"][lang].replace("{custom_tags}", str(custom_tags))
@@ -448,10 +448,6 @@ class FileContentParser(BaseMessageParser):
         if filename:
             content_parts.append(f"[Filename: {filename}]")
 
-        # If no content can be extracted, create a placeholder
-        if not content_parts:
-            content_parts.append("[File: unknown]")
-
         # Combine content parts
         content = " ".join(content_parts)
 
@@ -504,38 +500,6 @@ class FileContentParser(BaseMessageParser):
                     embedding=content_chunk_embeddings[chunk_idx],
                     usage=[],
                     sources=[source],
-                    background="",
-                    confidence=0.99,
-                    type="fact",
-                    info=info_,
-                    file_ids=file_ids,
-                ),
-            )
-            memory_items.append(memory_item)
-
-        # If no chunks were created, create a placeholder
-        if not memory_items:
-            # Create source for placeholder (no chunk index since there are no chunks)
-            placeholder_source = self.create_source(
-                message,
-                info,
-                chunk_index=None,
-                chunk_total=0,
-                chunk_content=content,
-                file_url_flag=file_url_flag,
-            )
-            memory_item = TextualMemoryItem(
-                memory=content,
-                metadata=TreeNodeTextualMemoryMetadata(
-                    user_id=user_id,
-                    session_id=session_id,
-                    memory_type=memory_type,
-                    status="activated",
-                    tags=["mode:fast", "multimodal:file"],
-                    key=_derive_key(content),
-                    embedding=self.embedder.embed([content])[0],
-                    usage=[],
-                    sources=[placeholder_source],
                     background="",
                     confidence=0.99,
                     type="fact",
