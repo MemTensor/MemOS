@@ -1,0 +1,77 @@
+{
+  "model_schema": "memos.configs.mem_cube.GeneralMemCubeConfig",
+  "user_id": "Ki-Seki",
+  "cube_id": "Ki-Seki/mem_cube_2",
+  "config_filename": "config.json",
+  "text_mem": {
+    "backend": "general_text",
+    "config": {
+      "cube_id": "Ki-Seki/mem_cube_2",
+      "memory_filename": "textual_memory.json",
+      "extractor_llm": {
+        "backend": "huggingface",
+        "config": {
+          "model_name_or_path": "Qwen/Qwen3-1.7B",
+          "temperature": 0.8,
+          "max_tokens": 1024,
+          "top_p": 0.9,
+          "top_k": 50,
+          "add_generation_prompt": true,
+          "remove_think_prefix": false
+        }
+      },
+      "vector_db": {
+        "backend": "qdrant",
+        "config": {
+          "collection_name": "Ki-Seki/mem_cube_2",
+          "vector_dimension": 768,
+          "distance_metric": "cosine"
+        }
+      },
+      "embedder": {
+        "backend": "ollama",
+        "config": {
+          "model_name_or_path": "nomic-embed-text:latest",
+          "embedding_dims": null,
+          "api_base": "http://localhost:11434"
+        }
+      }
+    }
+  },
+  "act_mem": {
+    "backend": "kv_cache",
+    "config": {
+      "memory_filename": "activation_memory.pickle",
+      "extractor_llm": {
+        "backend": "huggingface",
+        "config": {
+          "model_name_or_path": "Qwen/Qwen3-1.7B",
+          "temperature": 0.8,
+          "max_tokens": 1024,
+          "top_p": 0.9,
+          "top_k": 50,
+          "add_generation_prompt": true,
+          "remove_think_prefix": false
+        }
+      }
+    }
+  },
+  "para_mem": {
+    "backend": "lora",
+    "config": {
+      "memory_filename": "parametric_memory.adapter",
+      "extractor_llm": {
+        "backend": "huggingface",
+        "config": {
+          "model_name_or_path": "Qwen/Qwen3-1.7B",
+          "temperature": 0.8,
+          "max_tokens": 1024,
+          "top_p": 0.9,
+          "top_k": 50,
+          "add_generation_prompt": true,
+          "remove_think_prefix": false
+        }
+      }
+    }
+  }
+}
