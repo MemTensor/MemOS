@@ -34,7 +34,7 @@ import requests
 # Global config
 # ---------------------------------------------------------------------------
 
-BASE_URL = "http://0.0.0.0:8001/product"
+BASE_URL = "http://127.0.0.1:8000/product"
 HEADERS = {"Content-Type": "application/json"}
 
 # You can change these identifiers if your backend requires pre-registered users/cubes.
@@ -88,7 +88,12 @@ def example_01_string_message_minimal():
     payload = {
         "user_id": USER_ID,
         "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": "今天心情不错，喝了咖啡。",
+        "messages": [
+            {
+                "role": "user",
+                "content": "今天心情不错，喝了咖啡。",
+            }
+        ],
     }
     call_add_api("01_string_message_minimal", payload)
 
@@ -108,12 +113,7 @@ def example_02_standard_chat_triplet():
         "messages": [
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a helpful travel assistant.",
-                    }
-                ],
+                "content": "You are a helpful travel assistant.",
                 "chat_time": "2025-11-24T10:00:00Z",
                 "message_id": "sys-1",
             },
@@ -160,17 +160,7 @@ def example_03_assistant_with_tool_calls():
         "messages": [
             {
                 "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "tool-call-weather-1",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"location": "北京"}',
-                        },
-                    }
-                ],
+                "content": '[Tool Call] get_weather({"location": "北京"})',
                 "chat_time": "2025-11-24T10:12:00Z",
                 "message_id": "assistant-with-call-1",
             }
@@ -195,24 +185,13 @@ def example_03b_tool_message_with_result():
         "messages": [
             {
                 "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "tool-call-weather-1",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"location": "北京"}',
-                        },
-                    }
-                ],
+                "content": '[Tool Call] get_weather({"location": "北京"})',
                 "chat_time": "2025-11-24T10:12:00Z",
                 "message_id": "assistant-with-call-1",
             },
             {
-                "role": "tool",
-                "content": "北京今天天气晴朗，温度25°C，湿度60%。",
-                "tool_call_id": "tool-call-weather-1",
+                "role": "system",
+                "content": "[Tool Result] 北京今天天气晴朗，温度25°C，湿度60%。",
                 "chat_time": "2025-11-24T10:12:05Z",
                 "message_id": "tool-result-1",
             },
@@ -232,31 +211,44 @@ def example_03c_tool_description_input_output():
     - `tool_output`: the result/output from the tool execution.
     - These are alternative formats for representing tool interactions.
     """
+    tool_desc = {
+        "type": "tool_description",
+        "name": "get_weather",
+        "description": "获取指定地点的当前天气信息",
+        "parameters": {
+            "type": "object",
+            "properties": {"location": {"type": "string", "description": "城市名称"}},
+            "required": ["location"],
+        },
+    }
+    tool_input = {
+        "type": "tool_input",
+        "call_id": "call_123",
+        "name": "get_weather",
+        "argument": {"location": "北京"},
+    }
+    tool_output = {
+        "type": "tool_output",
+        "call_id": "call_123",
+        "name": "get_weather",
+        "output": {"weather": "晴朗", "temperature": 25, "humidity": 60},
+    }
+
     payload = {
         "user_id": USER_ID,
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "tool_description",
-                "name": "get_weather",
-                "description": "获取指定地点的当前天气信息",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string", "description": "城市名称"}},
-                    "required": ["location"],
-                },
+                "role": "system",
+                "content": f"[Tool Description] {json.dumps(tool_desc, ensure_ascii=False)}",
             },
             {
-                "type": "tool_input",
-                "call_id": "call_123",
-                "name": "get_weather",
-                "argument": {"location": "北京"},
+                "role": "user",
+                "content": f"[Tool Input] {json.dumps(tool_input, ensure_ascii=False)}",
             },
             {
-                "type": "tool_output",
-                "call_id": "call_123",
-                "name": "get_weather",
-                "output": {"weather": "晴朗", "temperature": 25, "humidity": 60},
+                "role": "system",
+                "content": f"[Tool Output] {json.dumps(tool_output, ensure_ascii=False)}",
             },
         ],
         "info": {"source_type": "custom_tool_format"},
@@ -282,20 +274,13 @@ def example_04_extreme_multimodal_single_message():
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "请分析下面这些信息："},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
-                    {"type": "file", "file": {"file_id": "f1", "filename": "xx.pdf"}},
-                ],
+                "content": "请分析下面这些信息：\n[Image: https://example.com/x.png]\n[File: xx.pdf]",
                 "chat_time": "2025-11-24T10:55:00Z",
                 "message_id": "mix-mm-1",
             },
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "请再分析一下下面这些信息："},
-                    {"type": "file", "file": {"file_id": "f1", "filename": "xx.pdf"}},
-                ],
+                "content": "请再分析一下下面这些信息：\n[File: xx.pdf]",
                 "chat_time": "2025-11-24T10:55:10Z",
                 "message_id": "mix-mm-2",
             },
@@ -323,19 +308,7 @@ def example_05_multimodal_text_and_image():
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "帮我看看这张图片大概是什么内容？",
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://example.com/mountain_lake.jpg",
-                            "detail": "high",
-                        },
-                    },
-                ],
+                "content": "帮我看看这张图片大概是什么内容？\n[Image: https://example.com/mountain_lake.jpg]",
                 "chat_time": "2025-11-24T10:20:00Z",
                 "message_id": "mm-img-1",
             }
@@ -361,19 +334,7 @@ def example_06_multimodal_text_and_file():
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "请阅读这个PDF，总结里面的要点。",
-                    },
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_id": "file_123",
-                            "filename": "report.pdf",  # optional, but recommended
-                        },
-                    },
-                ],
+                "content": "请阅读这个PDF，总结里面的要点。\n[File: report.pdf (ID: file_123)]",
                 "chat_time": "2025-11-24T10:21:00Z",
                 "message_id": "mm-file-1",
             }
@@ -396,15 +357,7 @@ def example_07_audio_only_message():
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": "base64_encoded_audio_here",
-                            "format": "mp3",
-                        },
-                    }
-                ],
+                "content": "[Audio Input: base64_encoded_audio_here (mp3)]",
                 "chat_time": "2025-11-24T10:22:00Z",
                 "message_id": "audio-1",
             }
@@ -431,12 +384,12 @@ def example_08_pure_text_input_items():
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "text",
-                "text": "这是一段独立的文本输入，没有明确的对话上下文。",
+                "role": "user",
+                "content": "这是一段独立的文本输入，没有明确的对话上下文。",
             },
             {
-                "type": "text",
-                "text": "它依然会被抽取和写入明文记忆。",
+                "role": "user",
+                "content": "它依然会被抽取和写入明文记忆。",
             },
         ],
         "info": {"source_type": "batch_import"},
@@ -453,18 +406,15 @@ def example_09_pure_file_input_by_file_id():
       * `file_id`: optional, use when file is already uploaded
       * `file_data`: optional, use for base64-encoded content
       * `filename`: optional, but recommended for clarity
-    - In practice, you need at least `file_id` OR `file_data` to specify the file.
+      - In practice, you need at least `file_id` OR `file_data` to specify the file.
     """
     payload = {
         "user_id": USER_ID,
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "file",
-                "file": {
-                    "file_id": "file_uploaded_123",  # at least one of file_id/file_data needed
-                    "filename": "document.pdf",  # optional
-                },
+                "role": "user",
+                "content": "[File: document.pdf (ID: file_uploaded_123)]",
             }
         ],
         "info": {"source_type": "file_ingestion"},
@@ -487,11 +437,8 @@ def example_09b_pure_file_input_by_file_data():
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "file",
-                "file": {
-                    "file_data": "base64_encoded_file_content_here",  # at least one of file_id/file_data needed
-                    "filename": "document.pdf",  # optional
-                },
+                "role": "user",
+                "content": "[File: document.pdf (base64_data)]",
             }
         ],
         "info": {"source_type": "file_ingestion_base64"},
@@ -512,11 +459,8 @@ def example_09c_pure_file_input_by_oss_url():
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "file",
-                "file": {
-                    "file_data": "oss_url",  # OSS URL instead of base64
-                    "filename": "document.pdf",
-                },
+                "role": "user",
+                "content": "[File: document.pdf (OSS: oss_url)]",
             }
         ],
         "info": {"source_type": "file_ingestion_oss"},
@@ -537,11 +481,8 @@ def example_09d_pure_image_input():
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "image_url",
-                "image_url": {
-                    "url": "https://example.com/standalone_image.jpg",
-                    "detail": "high",
-                },
+                "role": "user",
+                "content": "[Image: https://example.com/standalone_image.jpg]",
             }
         ],
         "info": {"source_type": "image_ingestion"},
@@ -561,26 +502,7 @@ def example_10_mixed_text_file_image():
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "请同时分析这个报告和图表。",
-                    },
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_id": "file_789",
-                            "filename": "analysis_report.pdf",
-                        },
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://example.com/chart.png",
-                            "detail": "auto",
-                        },
-                    },
-                ],
+                "content": "请同时分析这个报告和图表。\n[File: analysis_report.pdf (ID: file_789)]\n[Image: https://example.com/chart.png]",
                 "chat_time": "2025-11-24T10:23:00Z",
                 "message_id": "mixed-1",
             }
@@ -845,6 +767,82 @@ def example_18_add_with_chat_history():
 
 
 # ===========================================================================
+# 8. Search and Chat examples
+# ===========================================================================
+
+
+def example_19_search_memories():
+    """
+    Search memories using `APISearchRequest`.
+
+    - Searches for memories relevant to a query.
+    - Demonstrates usage of `readable_cube_ids` for scoping.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "query": "What are my hotel preferences?",
+        "readable_cube_ids": [MEM_CUBE_ID],
+        "top_k": 5,
+        "mode": "fast",
+        "include_preference": True,
+    }
+
+    print("=" * 80)
+    print("[*] Example: 19_search_memories")
+    print("- Payload:")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/search", headers=HEADERS, data=json.dumps(payload), timeout=60
+        )
+        print("- Response:")
+        print(resp.status_code, resp.text)
+    except Exception as e:
+        print(f"- Request failed with exception: {e!r}")
+
+    print("=" * 80)
+    print()
+
+
+def example_20_chat_complete():
+    """
+    Chat completion using `APIChatCompleteRequest`.
+
+    - Sends a chat query to the system.
+    - System retrieves relevant memories and generates a response.
+    - please make sure ENABLE_CHAT_API=true in .env or environment variables
+    - and set up CHAT_MODEL_LIST in .env or environment variables properly with api keys and stuff.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "query": "Recommend a hotel for me based on my preferences.",
+        "readable_cube_ids": [MEM_CUBE_ID],
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "mode": "fast",
+        "top_k": 5,
+        "add_message_on_answer": True,
+    }
+
+    print("=" * 80)
+    print("[*] Example: 20_chat_complete")
+    print("- Payload:")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/chat/complete", headers=HEADERS, data=json.dumps(payload), timeout=60
+        )
+        print("- Response:")
+        print(resp.status_code, resp.text)
+    except Exception as e:
+        print(f"- Request failed with exception: {e!r}")
+
+    print("=" * 80)
+    print()
+
+
+# ===========================================================================
 # Entry point
 # ===========================================================================
 
@@ -873,3 +871,5 @@ if __name__ == "__main__":
     example_16_feedback_add()
     example_17_family_travel_conversation()
     example_18_add_with_chat_history()
+    example_19_search_memories()
+    example_20_chat_complete()
