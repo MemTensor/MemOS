@@ -1687,7 +1687,7 @@ class Neo4jGraphDB(BaseGraphDB):
         node.pop("user_name", None)
 
         # serialization
-        if node.get("sources"):
+        if node["sources"]:
             for idx in range(len(node["sources"])):
                 if not (
                     isinstance(node["sources"][idx], str)
