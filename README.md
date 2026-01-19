@@ -211,6 +211,7 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 - Launch via the uvicorn command line interface (CLI)
   ###### Tips: Please ensure that Neo4j and Qdrant are running before executing the following command.
   ```bash
+  cd src
   uvicorn memos.api.server_api:app --host 0.0.0.0 --port 8001 --workers 1
   ```
   ##### For detailed integration steps, see the [`CLI Reference`](https://docs.openmem.net/open_source/getting_started/rest_api_server/#method-3client-install-with-CLI).
