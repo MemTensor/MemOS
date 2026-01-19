@@ -46,7 +46,8 @@ def timed_with_status(
                 return result
             except Exception as e:
                 exc_type = type(e)
-                exc_message = traceback.format_exc()
+                stack_info = "".join(traceback.format_stack()[:-1])
+                exc_message = f"{stack_info}{traceback.format_exc()}"
                 success_flag = False
 
                 if fallback is not None and callable(fallback):
