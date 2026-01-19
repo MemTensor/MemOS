@@ -154,7 +154,8 @@ class HTTPBGEReranker(BaseReranker):
         list[tuple[TextualMemoryItem, float]]
             Re-ranked items with scores, sorted descending by score.
         """
-
+        if len(query) > 8000:
+            query = query[:500] + "\n" + query[-500:]
         if not graph_results:
             return []
 
