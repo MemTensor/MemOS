@@ -50,7 +50,6 @@ def show_ranked(title: str, ranked: list[tuple[TextualMemoryItem, float]], top_n
 def main():
     # -------------------------------
     # 1) Build the embedder (real vectors)
-    # You may need to set valid OPENAI_API_KEY and OPENAI_API_BASE in your environment variables.
     # -------------------------------
     embedder_cfg = EmbedderConfigFactory.model_validate(
         {
@@ -63,22 +62,6 @@ def main():
             },
         }
     )
-    """
-    # -------------------------------
-    # Optional: Build the embedder (using local sentence-transformers)
-    # -------------------------------
-    # Use a local model so no API key is required.
-    embedder_cfg = EmbedderConfigFactory.model_validate(
-        {
-            "backend": "sentence_transformer",
-            "config": {
-                "model_name_or_path": "nomic-ai/nomic-embed-text-v1.5",
-                "trust_remote_code": True,
-            },
-        }
-    )
-    """
-
     embedder = EmbedderFactory.from_config(embedder_cfg)
 
     # -------------------------------

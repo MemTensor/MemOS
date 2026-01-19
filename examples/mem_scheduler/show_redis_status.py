@@ -1,25 +1,10 @@
-"""
-# Prerequisites:
-# 1. Ensure a Redis server is running locally on the default port (6379).
-#    You can start it with: `redis-server`
-#    On macOS with Homebrew: `/opt/homebrew/bin/redis-server` or `brew services start redis`
-#    On Linux: `sudo service redis-server start`
-# 2. If Redis is running on a different host/port, update the configuration or environment variables accordingly.
-"""
-
 import time
 
-from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
+from memos.api.routers.server_router import mem_scheduler
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
 
 
-# Explicitly initialize Redis queue for monitoring
-queue = SchedulerRedisQueue(
-    max_len=None,
-    consumer_group="scheduler_group",
-    consumer_name="monitor_consumer",
-    orchestrator=SchedulerOrchestrator(),
-)
+queue = mem_scheduler.memos_message_queue.memos_message_queue
 
 
 def fetch_status(

@@ -3,10 +3,7 @@ from memos.embedders.factory import EmbedderFactory
 
 
 # Scenario 1: Using EmbedderFactory
-# Prerequisites:
-# 1. Install Ollama: https://ollama.com/
-# 2. Start Ollama server: `ollama serve`
-# 3. Pull the model: `ollama pull nomic-embed-text`
+
 config = EmbedderConfigFactory.model_validate(
     {
         "backend": "ollama",
@@ -36,9 +33,6 @@ print("==" * 20)
 
 
 # Scenario 3: Using SenTranEmbedder
-# Prerequisites:
-# 1. Ensure `einops` is installed: `pip install einops` (Required for some HF models like nomic-bert)
-# 2. The model `nomic-ai/nomic-embed-text-v1.5` will be downloaded automatically from HuggingFace.
 
 config_hf = EmbedderConfigFactory.model_validate(
     {
@@ -55,9 +49,6 @@ print("Scenario 3 HF embedding shape:", len(embedding_hf[0]))
 print("==" * 20)
 
 # === Scenario 4: Using UniversalAPIEmbedder(OpenAI) ===
-# Prerequisites:
-# 1. Set a valid OPENAI_API_KEY
-# 2. Ensure the base_url is reachable
 
 config_api = EmbedderConfigFactory.model_validate(
     {
@@ -77,9 +68,6 @@ print("Scenario 4: OpenAI API embedding vector length:", len(embedding_api[0]))
 print("Embedding preview:", embedding_api[0][:10])
 
 # === Scenario 5: Using UniversalAPIEmbedder(Azure) ===
-# Prerequisites:
-# 1. Set a valid AZURE_API_KEY
-# 2. Ensure the base_url is reachable
 
 config_api = EmbedderConfigFactory.model_validate(
     {
