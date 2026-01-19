@@ -244,7 +244,6 @@ class MemFeedback(BaseMemFeedback):
         to_add_memory.metadata.background = new_memory_item.metadata.background
         to_add_memory.metadata.sources = []
 
-        to_add_memory.id = ""
         added_ids = self._retry_db_operation(
             lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
         )

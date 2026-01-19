@@ -486,16 +486,17 @@ class TreeTextMemory(BaseTextMemory):
 
         for raw_file_mem in raw_file_mem_group:
             # Add SUMMARY edge: memory -> raw file; raw file -> memory
-            if hasattr(raw_file_mem.metadata, "summary_id") and raw_file_mem.metadata.summary_id:
-                summary_id = raw_file_mem.metadata.summary_id
-                if summary_id in mem_ids:
-                    from_ids.append(summary_id)
-                    to_ids.append(raw_file_mem.id)
-                    types.append("MATERIAL")
+            if hasattr(raw_file_mem.metadata, "summary_ids") and raw_file_mem.metadata.summary_ids:
+                summary_ids = raw_file_mem.metadata.summary_ids
+                for summary_id in summary_ids:
+                    if summary_id in mem_ids:
+                        from_ids.append(summary_id)
+                        to_ids.append(raw_file_mem.id)
+                        types.append("MATERIAL")
 
-                    from_ids.append(raw_file_mem.id)
-                    to_ids.append(summary_id)
-                    types.append("SUMMARY")
+                        from_ids.append(raw_file_mem.id)
+                        to_ids.append(summary_id)
+                        types.append("SUMMARY")
 
             # Add FOLLOWING edge: current chunk -> next chunk
             if (

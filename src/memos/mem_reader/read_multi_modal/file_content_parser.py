@@ -806,7 +806,7 @@ class FileContentParser(BaseMessageParser):
                             chunk_idx=chunk_idx,
                             chunk_content="",
                         )
-                        chunk_node.metadata.summary_id = node_id
+                        chunk_node.metadata.summary_ids = [node_id]
                         memory_items.append(chunk_node)
 
                 except Exception as e:
