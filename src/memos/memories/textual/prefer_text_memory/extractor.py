@@ -70,7 +70,7 @@ class NaiveExtractor(BaseExtractor):
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             if not response:
-                logger.error(
+                logger.info(
                     f"[prefer_extractor]: (Error) LLM response content is {response} when extracting explicit preference"
                 )
                 return None
@@ -80,7 +80,7 @@ class NaiveExtractor(BaseExtractor):
                 d["preference"] = d.pop("explicit_preference")
             return result
         except Exception as e:
-            logger.error(f"Error extracting explicit preference: {e}, return None")
+            logger.info(f"Error extracting explicit preference: {e}, return None")
             return None
 
     def extract_implicit_preference(self, qa_pair: MessageList | str) -> dict[str, Any] | None:
@@ -98,7 +98,7 @@ class NaiveExtractor(BaseExtractor):
         try:
             response = self.llm_provider.generate([{"role": "user", "content": prompt}])
             if not response:
-                logger.error(
+                logger.info(
                     f"[prefer_extractor]: (Error) LLM response content is {response} when extracting implicit preference"
                 )
                 return None
@@ -108,7 +108,7 @@ class NaiveExtractor(BaseExtractor):
                 d["preference"] = d.pop("implicit_preference")
             return result
         except Exception as e:
-            logger.error(f"Error extracting implicit preferences: {e}, return None")
+            logger.info(f"Error extracting implicit preferences: {e}, return None")
             return None
 
     def _process_single_chunk_explicit(

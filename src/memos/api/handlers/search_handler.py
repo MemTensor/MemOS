@@ -82,8 +82,8 @@ class SearchHandler(BaseHandler):
             file_mem_proportion=0.5,
         )
         rerank_time = time.time() - start_time
-        self.logger.info(f"[Knowledge_replace_memory_time] Rerank time: {rerank_time} seconds")
 
+        self.logger.info(f"[Knowledge_replace_memory_time] Rerank time: {rerank_time} seconds")
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
         )

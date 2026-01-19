@@ -2823,6 +2823,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name: str | None = None,
         filter: dict | None = None,
         knowledgebase_ids: list | None = None,
+        status: str | None = None,
     ) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
@@ -2831,12 +2832,16 @@ class PolarDBGraphDB(BaseGraphDB):
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
             include_embedding: with/without embedding
             user_name (str, optional): User name for filtering in non-multi-db mode
+            filter (dict, optional): Filter conditions with 'and' or 'or' logic for search results.
+            knowledgebase_ids (list, optional): List of knowledgebase IDs to filter by.
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
         logger.info(
-            f"[get_all_memory_items] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_all_memory_items] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}, status: {status}"
         )
 
         user_name = user_name if user_name else self._get_config_value("user_name")
@@ -2867,6 +2872,8 @@ class PolarDBGraphDB(BaseGraphDB):
         if include_embedding:
             # Build WHERE clause with user_name/knowledgebase_ids and filter
             where_parts = [f"n.memory_type = '{scope}'"]
+            if status:
+                where_parts.append(f"n.status = '{status}'")
             if user_name_where:
                 # user_name_where already contains parentheses if it's an OR condition
                 where_parts.append(user_name_where)
@@ -2927,6 +2934,8 @@ class PolarDBGraphDB(BaseGraphDB):
         else:
             # Build WHERE clause with user_name/knowledgebase_ids and filter
             where_parts = [f"n.memory_type = '{scope}'"]
+            if status:
+                where_parts.append(f"n.status = '{status}'")
             if user_name_where:
                 # user_name_where already contains parentheses if it's an OR condition
                 where_parts.append(user_name_where)

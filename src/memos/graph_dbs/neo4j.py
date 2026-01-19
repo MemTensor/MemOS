@@ -916,6 +916,7 @@ class Neo4jGraphDB(BaseGraphDB):
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
         user_name_flag: bool = True,
+        status: str | None = None,
     ) -> list[str]:
         """
         TODO:
@@ -933,6 +934,8 @@ class Neo4jGraphDB(BaseGraphDB):
                 {"field": "tags", "op": "contains", "value": "AI"},
                 ...
             ]
+        status (str, optional): Filter by status (e.g., 'activated', 'archived').
+            If None, no status filter is applied.
 
         Returns:
             list[str]: Node IDs whose metadata match the filter conditions. (AND logic).
@@ -942,14 +945,19 @@ class Neo4jGraphDB(BaseGraphDB):
             - Can be used for faceted recall or prefiltering before embedding rerank.
         """
         logger.info(
-            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
         print(
-            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_by_metadata] filters: {filters},user_name: {user_name},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
         user_name = user_name if user_name else self.config.user_name
         where_clauses = []
         params = {}
+
+        # Add status filter if provided
+        if status:
+            where_clauses.append("n.status = $status")
+            params["status"] = status
 
         for i, f in enumerate(filters):
             field = f["field"]
@@ -1272,8 +1280,10 @@ class Neo4jGraphDB(BaseGraphDB):
     def get_all_memory_items(
         self,
         scope: str,
+        include_embedding: bool = False,
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
+        status: str | None = None,
         **kwargs,
     ) -> list[dict]:
         """
@@ -1281,18 +1291,21 @@ class Neo4jGraphDB(BaseGraphDB):
 
         Args:
             scope (str): Must be one of 'WorkingMemory', 'LongTermMemory', or 'UserMemory'.
+            include_embedding (bool): Whether to include embedding in results.
             filter (dict, optional): Filter conditions with 'and' or 'or' logic for search results.
                 Example: {"and": [{"id": "xxx"}, {"A": "yyy"}]} or {"or": [{"id": "xxx"}, {"A": "yyy"}]}
-        Returns:
+            knowledgebase_ids (list[str], optional): List of knowledgebase IDs to filter by.
+            status (str, optional): Filter by status (e.g., 'activated', 'archived').
+                If None, no status filter is applied.
 
         Returns:
             list[dict]: Full list of memory items under this scope.
         """
         logger.info(
-            f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
         print(
-            f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids}"
+            f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
 
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
@@ -1301,6 +1314,11 @@ class Neo4jGraphDB(BaseGraphDB):
 
         where_clauses = ["n.memory_type = $scope"]
         params = {"scope": scope}
+
+        # Add status filter if provided
+        if status:
+            where_clauses.append("n.status = $status")
+            params["status"] = status
 
         # Build user_name filter with knowledgebase_ids support (OR relationship) using common method
         user_name_conditions, user_name_params = self._build_user_name_and_kb_ids_conditions_cypher(

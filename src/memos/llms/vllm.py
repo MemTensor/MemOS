@@ -125,6 +125,10 @@ class VLLMLLM(BaseLLM):
 
             response = self.client.chat.completions.create(**completion_kwargs)
 
+            if not response.choices:
+                logger.warning("VLLM response has no choices")
+                return ""
+
             if response.choices[0].message.tool_calls:
                 return self.tool_call_parser(response.choices[0].message.tool_calls)
 
@@ -184,6 +188,8 @@ class VLLMLLM(BaseLLM):
 
             reasoning_started = False
             for chunk in stream:
+                if not chunk.choices:
+                    continue
                 delta = chunk.choices[0].delta
                 if hasattr(delta, "reasoning") and delta.reasoning:
                     if not reasoning_started and not self.config.remove_think_prefix:

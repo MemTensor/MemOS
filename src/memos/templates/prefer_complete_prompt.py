@@ -69,6 +69,28 @@ You are a preference inference assistant. Please extract **implicit preferences*
 (preferences that the user did not explicitly state but can be reasonably inferred from their underlying motivations, behavioral patterns, decision-making logic, and latent needs).
 
 Notes:
+- For Assistant's responses or suggestions, they can only be extracted as the user's implicit preferences if there is evidence in subsequent conversation that the user implicitly accepted them (e.g., adoption, agreement, acting on the suggestion, etc.). Assistant suggestions alone do not constitute user preferences.
+- For conversations with only one question-answer turn (single Q&A), implicit preferences cannot be extracted due to insufficient context and behavioral patterns. Implicit preferences require observation of recurring patterns or subsequent behaviors across multiple conversation turns.
+
+Counter-examples:
+【Counter-example 1 - Assistant suggestion not accepted by user】
+Conversation:
+User: I want to buy a phone, any recommendations?
+Assistant: I suggest considering the iPhone 15 Pro, it has powerful performance and great camera quality.
+User: What about the iPhone 16?
+Assistant: The iPhone 16 is expected to be released in September 2026, it will have a new design and features.
+
+Analysis: Although the Assistant recommended iPhone, the user showed no acceptance (e.g., "okay", "I'll consider it", or follow-up questions about iPhone), so this cannot be extracted as the user's implicit preference.
+Result: Cannot extract implicit preference
+
+【Counter-example 2 - Single question-answer situation】
+Conversation:
+User: Any good movies recently?
+Assistant: "Dune 2" has good reviews, it's a sci-fi epic genre.
+
+Analysis: This is just a single simple Q&A exchange. The user provided no further feedback or behavior, lacking sufficient context to infer user preferences for sci-fi movies or other hidden tendencies.
+Result: Cannot extract implicit preference
+
 - Implicit preferences refer to user inclinations or choices that are not directly expressed, but can be deeply inferred by analyzing:
   * **Hidden motivations**: What underlying needs or goals might drive the user's behavior?
   * **Behavioral patterns**: What recurring patterns or tendencies can be observed?
@@ -77,7 +99,6 @@ Notes:
   * **Contextual signals**: What do the user's choices, comparisons, exclusions, or scenario selections reveal about their deeper preferences?
 - Do not treat explicitly stated preferences as implicit preferences; this prompt is only for inferring preferences that are not directly mentioned.
 - Go beyond surface-level facts to understand the user's hidden possibilities and underlying logic.
-- For Assistant's responses or suggestions, they can only be extracted as the user's implicit preferences if there is evidence in subsequent conversation that the user implicitly accepted them (e.g., adoption, agreement, acting on the suggestion, etc.). Assistant suggestions alone do not constitute user preferences.
 
 Requirements:
 1. Only make inferences when there is sufficient evidence in the conversation; avoid unsupported or far-fetched guesses.
@@ -110,6 +131,28 @@ NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
 （用户没有明确表述，但可以通过分析其潜在动机、行为模式、决策逻辑和隐藏需求深度推断出的偏好）。
 
 注意事项：
+- 对于Assistant的回答内容或建议，只有在后续对话中用户表现出隐含接受（如采纳、认同、按建议行动等）的情况下，才能将相关内容提取为用户的隐式偏好。单纯的Assistant建议本身不构成用户偏好。
+- 对于只有一轮问答（一问一答）的对话，由于缺乏足够的上下文和行为模式，不能提取隐式偏好。隐式偏好需要从多轮对话中观察到的重复模式或后续行为来推断。
+
+反例示例：
+【反例1 - 未被用户认可的Assistant建议】
+对话：
+User: 我想买个手机，有什么推荐吗？
+Assistant: 建议你考虑iPhone 15 Pro，性能强大，拍照效果好。
+User: iPhone 16 怎么样？
+Assistant: iPhone 16 预计将在2026年9月发布，会有新的设计和功能。
+
+分析：虽然Assistant推荐了iPhone，但用户没有表现出任何接受态度（如"好的"、"我会考虑"、后续询问iPhone相关问题等），因此不能提取为用户的隐式偏好。
+结果：无法提取隐式偏好
+
+【反例2 - 只有一问一答的情况】
+对话：
+User: 最近有什么好看的电影吗？
+Assistant: 《沙丘2》口碑不错，是科幻史诗类型的。
+
+分析：这只是一轮简单问答，用户没有进一步的反馈或行为，缺乏足够的上下文来推断用户对科幻电影的偏好或其他隐藏倾向。
+结果：无法提取隐式偏好
+
 - 隐式偏好是指用户未直接表达，但可以通过深入分析以下方面推断出的倾向或选择：
   * **隐藏动机**：什么样的潜在需求或目标可能驱动用户的行为？
   * **行为模式**：可以观察到什么样的重复模式或倾向？
@@ -118,7 +161,6 @@ NAIVE_IMPLICIT_PREFERENCE_EXTRACT_PROMPT_ZH = """
   * **情境信号**：用户的选择、比较、排除或场景选择揭示了什么样的深层偏好？
 - 不要将明确陈述的偏好视为隐式偏好；此提示仅用于推断未直接提及的偏好。
 - 超越表面事实，理解用户的隐藏可能性和背后的逻辑。
-- 对于Assistant的回答内容或建议，只有在后续对话中用户表现出隐含接受（如采纳、认同、按建议行动等）的情况下，才能将相关内容提取为用户的隐式偏好。单纯的Assistant建议本身不构成用户偏好。
 
 要求：
 1. 仅在对话中有充分证据时进行推断；避免无根据或牵强的猜测。
