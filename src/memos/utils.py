@@ -87,7 +87,6 @@ def timed_with_status(
                 msg = (
                     f"[TIMER_WITH_STATUS] {log_prefix or fn.__name__} "
                     f"took {elapsed_ms:.0f} ms{status_info}, args: {ctx_str}"
-                    f", result: {result}"
                 )
 
                 logger.info(msg)
