@@ -5,6 +5,10 @@ from memos.llms.ollama import OllamaLLM
 
 # Scenario 1: Using LLMFactory with Ollama Backend
 # This is the most recommended way! 🌟
+# Prerequisites:
+# 1. Install Ollama: https://ollama.com/
+# 2. Start Ollama server: `ollama serve`
+# 3. Need python ollama package(>=0.5.0,<0.6.0)
 
 config = LLMConfigFactory.model_validate(
     {
@@ -46,6 +50,10 @@ print("==" * 20)
 
 
 # Scenario 3: Using LLMFactory with OpenAI Backend
+# Prerequisites:
+# 1. You need a valid OpenAI API key to run this scenario.
+# 2. Replace 'sk-xxxx' with your actual API key below.
+
 
 config = LLMConfigFactory.model_validate(
     {

@@ -1,3 +1,12 @@
+"""
+# Prerequisites & Configuration
+# To run this script, you must have the following services
+# running and configured in your .env file (or environment variables):
+# 1. Redis (Required for TaskStatusTracker and Scheduler Queue)
+# 2. Graph Database (Required for Memory Storage)
+# 3. Vector Database (Required if using Neo4j Community or Preference Memory)
+"""
+
 import sys
 
 from pathlib import Path
