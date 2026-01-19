@@ -11,12 +11,14 @@ on:
     branches:
       - "main"
       - "dev"
+      - "dev*"
       - "feat/*"
       - "test"
   pull_request:
     branches:
       - "main"
       - "dev"
+      - "dev*"
       - "feat/*"
       - "test"
 
