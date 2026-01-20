@@ -14,6 +14,7 @@ class BaseChunkerConfig(BaseConfig):
     chunk_size: int = Field(default=512, description="Maximum tokens per chunk")
     chunk_overlap: int = Field(default=128, description="Overlap between chunks")
     min_sentences_per_chunk: int = Field(default=1, description="Minimum sentences in each chunk")
+    save_rawfile: bool = Field(default=False, description="Whether to save rawfile")
 
 
 class SentenceChunkerConfig(BaseChunkerConfig):

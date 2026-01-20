@@ -1,7 +1,6 @@
 import concurrent.futures
 import contextlib
 import json
-import os
 import traceback
 
 from memos.configs.mem_scheduler import GeneralSchedulerConfig
@@ -905,7 +904,7 @@ class GeneralScheduler(BaseScheduler):
                     )
 
                     # add raw file nodes and edges
-                    if os.getenv("SAVE_RAWFILE_NODE", "false").lower() == "true":
+                    if self.mem_reader.save_rawfile:
                         raw_file_mem_group = [
                             memory
                             for memory in flattened_memories

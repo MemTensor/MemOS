@@ -829,7 +829,7 @@ class SingleCubeView(MemCubeView):
         )
 
         # Add raw file nodes and edges
-        if os.getenv("SAVE_RAWFILE_NODE", "false").lower() == "true" and extract_mode == "fine":
+        if self.mem_reader.save_rawfile and extract_mode == "fine":
             raw_file_mem_group = [
                 memory
                 for memory in flattened_local

@@ -1,6 +1,5 @@
 import concurrent.futures
 import json
-import os
 import re
 import traceback
 
@@ -717,11 +716,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     logger.error(f"[MultiModalFine] parse error: {e}")
 
             # save rawfile node
-            if (
-                os.getenv("SAVE_RAWFILE_NODE", "false").lower() == "true"
-                and prompt_type == "doc"
-                and len(fine_items) > 0
-            ):
+            if self.save_rawfile and prompt_type == "doc" and len(fine_items) > 0:
                 rawfile_chunk = mem_str
                 file_info = fine_items[0].metadata.sources[0].file_info
                 source = self.multi_modal_parser.file_content_parser.create_source(

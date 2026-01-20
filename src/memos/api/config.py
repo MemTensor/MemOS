@@ -495,6 +495,10 @@ class APIConfig:
                         "chunker": {
                             "backend": "sentence",
                             "config": {
+                                "save_rawfile": os.getenv(
+                                    "MEM_READER_SAVE_RAWFILENODE", "false"
+                                ).lower()
+                                == "true",
                                 "tokenizer_or_token_counter": "gpt2",
                                 "chunk_size": 512,
                                 "chunk_overlap": 128,
@@ -730,6 +734,10 @@ class APIConfig:
                     "chunker": {
                         "backend": "sentence",
                         "config": {
+                            "save_rawfile": os.getenv(
+                                "MEM_READER_SAVE_RAWFILENODE", "false"
+                            ).lower()
+                            == "true",
                             "tokenizer_or_token_counter": "gpt2",
                             "chunk_size": 512,
                             "chunk_overlap": 128,
@@ -840,6 +848,8 @@ class APIConfig:
                     "chunker": {
                         "backend": "sentence",
                         "config": {
+                            "save_rawfile": os.getenv("MEM_READER_SAVE_RAWFILENODE", "true").lower()
+                            == "true",
                             "tokenizer_or_token_counter": "gpt2",
                             "chunk_size": 512,
                             "chunk_overlap": 128,
