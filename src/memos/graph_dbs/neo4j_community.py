@@ -56,6 +56,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         # Safely process metadata
         metadata = _prepare_node_metadata(metadata)
 
+        # Initialize delete_time and delete_record_id fields
+        metadata.setdefault("delete_time", "")
+        metadata.setdefault("delete_record_id", "")
+
         # serialization
         if metadata["sources"]:
             for idx in range(len(metadata["sources"])):
@@ -105,6 +109,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             )
 
     def add_nodes_batch(self, nodes: list[dict[str, Any]], user_name: str | None = None) -> None:
+        print("neo4j_community add_nodes_batch:")
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
@@ -129,6 +134,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
                 metadata = _prepare_node_metadata(metadata)
                 metadata = _flatten_info_fields(metadata)
+
+                # Initialize delete_time and delete_record_id fields
+                metadata.setdefault("delete_time", "")
+                metadata.setdefault("delete_record_id", "")
 
                 embedding = metadata.pop("embedding", None)
                 if embedding is None:

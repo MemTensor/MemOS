@@ -3394,6 +3394,8 @@ class PolarDBGraphDB(BaseGraphDB):
             "memory": memory,
             "created_at": created_at,
             "updated_at": updated_at,
+            "delete_time": "",
+            "delete_record_id": "",
             **metadata,
         }
 
@@ -3535,6 +3537,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     "memory": memory,
                     "created_at": created_at,
                     "updated_at": updated_at,
+                    "delete_time": "",
+                    "delete_record_id": "",
                     **metadata,
                 }
 
