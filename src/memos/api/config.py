@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
 
