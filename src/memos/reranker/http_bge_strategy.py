@@ -113,6 +113,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
         self.max_query_tokens = max_query_tokens
         self.concate_len = concate_len
         self.headers_extra = headers_extra or {}
+        self.concate_len = min(concate_len, 500)
 
         self.boost_weights = (
             DEFAULT_BOOST_WEIGHTS.copy()
