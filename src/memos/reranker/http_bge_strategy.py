@@ -111,8 +111,8 @@ class HTTPBGERerankerStrategy(BaseReranker):
         self.model = model
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
-        self.max_token_thredhold = max_token_thredhold
-        self.concate_len = concate_len
+        self.max_token_thredhold = min(max_token_thredhold, 8000)
+        self.concate_len = min(concate_len, 500)
 
         self.boost_weights = (
             DEFAULT_BOOST_WEIGHTS.copy()
