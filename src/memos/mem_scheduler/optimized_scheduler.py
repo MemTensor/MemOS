@@ -114,7 +114,9 @@ class OptimizedScheduler(GeneralScheduler):
         target_session_id = search_req.session_id
         if not target_session_id:
             target_session_id = "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter
 
         # Create MemCube and perform search
         search_results = mem_cube.text_mem.search(
@@ -124,6 +126,7 @@ class OptimizedScheduler(GeneralScheduler):
             mode=mode,
             manual_close_internet=not search_req.internet_search,
             search_filter=search_filter,
+            search_priority=search_priority,
             info={
                 "user_id": search_req.user_id,
                 "session_id": target_session_id,
@@ -145,7 +148,10 @@ class OptimizedScheduler(GeneralScheduler):
         )
 
         if not self.config.use_redis_queue:
-            logger.warning("Redis queue is not enabled, falling back to fast search.")
+            logger.warning(
+                "Redis queue is not enabled. Running in degraded mode: "
+                "FAST search only, no history memory reranking, no async updates."
+            )
             memories = self.search_memories(
                 search_req=search_req,
                 user_context=user_context,
