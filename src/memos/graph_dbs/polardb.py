@@ -835,6 +835,10 @@ class PolarDBGraphDB(BaseGraphDB):
     def add_edge(
         self, source_id: str, target_id: str, type: str, user_name: str | None = None
     ) -> None:
+        logger.info(
+            f"polardb [add_edge] source_id: {source_id}, target_id: {target_id}, type: {type},user_name:{user_name}")
+
+        start_time = time.time()
         if not source_id or not target_id:
             logger.warning(f"Edge '{source_id}' and '{target_id}' are both None")
             raise ValueError("[add_edge] source_id and target_id must be provided")
@@ -864,13 +868,18 @@ class PolarDBGraphDB(BaseGraphDB):
                   AND end_id   = ag_catalog._make_graph_id('{self.db_name}_graph'::name, 'Memory'::name, '{target_id}'::text::cstring)
             );
         """
-
+        logger.info(f"polardb [add_edge] query: {query}, properties: {json.dumps(properties)}")
         conn = None
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
                 cursor.execute(query, (source_id, target_id, type, json.dumps(properties)))
                 logger.info(f"Edge created: {source_id} -[{type}]-> {target_id}")
+
+                elapsed_time = time.time() - start_time
+                logger.info(
+                    f" polardb [add_edge] insert completed time in {elapsed_time:.2f}s"
+                )
         except Exception as e:
             logger.error(f"Failed to insert edge: {e}", exc_info=True)
             raise
@@ -1033,7 +1042,9 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             dict: Node properties as key-value pairs, or None if not found.
         """
-
+        logger.info(
+            f"polardb [get_node] id: {id}, include_embedding: {include_embedding}, user_name: {user_name}")
+        start_time = time.time()
         select_fields = "id, properties, embedding" if include_embedding else "id, properties"
 
         query = f"""
@@ -1048,6 +1059,7 @@ class PolarDBGraphDB(BaseGraphDB):
             query += "\nAND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
             params.append(self.format_param_value(user_name))
 
+        logger.info(f"polardb [get_node] query: {query},params: {params}")
         conn = None
         try:
             conn = self._get_connection()
@@ -1084,6 +1096,10 @@ class PolarDBGraphDB(BaseGraphDB):
                         except (json.JSONDecodeError, TypeError):
                             logger.warning(f"Failed to parse embedding for node {id}")
 
+                    elapsed_time = time.time() - start_time
+                    logger.info(
+                        f" polardb [get_node] get_node completed time in {elapsed_time:.2f}s"
+                    )
                     return self._parse_node(
                         {
                             "id": id,
