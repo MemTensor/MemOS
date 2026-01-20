@@ -224,6 +224,22 @@ class SimpleStructMemReader(BaseMemReader, ABC):
             ),
         )
 
+    def _safe_generate(self, messages: list[dict]) -> str | None:
+        try:
+            return self.llm.generate(messages)
+        except Exception:
+            logger.exception("[LLM] Generation failed")
+            return None
+
+    def _safe_parse(self, text: str | None) -> dict | None:
+        if not text:
+            return None
+        try:
+            return parse_json_result(text)
+        except Exception:
+            logger.warning("[LLM] JSON parse failed")
+            return None
+
     def _get_llm_response(self, mem_str: str, custom_tags: list[str] | None) -> dict:
         lang = detect_lang(mem_str)
         template = PROMPT_DICT["chat"][lang]
@@ -240,13 +256,13 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         if self.config.remove_prompt_example:
             prompt = prompt.replace(examples, "")
         messages = [{"role": "user", "content": prompt}]
-        try:
-            response_text = self.llm.generate(messages)
-            response_json = parse_json_result(response_text)
-        except Exception as e:
-            logger.error(f"[LLM] Exception during chat generation: {e}")
-            response_json = {
-                "memory list": [
+
+        response_text = self._safe_generate(messages)
+        response_json = self._safe_parse(response_text)
+
+        if not response_json:
+            return {
+                "memory_list": [
                     {
                         "key": mem_str[:10],
                         "memory_type": "UserMemory",
@@ -256,6 +272,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 ],
                 "summary": mem_str,
             }
+
         return response_json
 
     def _iter_chat_windows(self, scene_data_info, max_tokens=None, overlap=200):
