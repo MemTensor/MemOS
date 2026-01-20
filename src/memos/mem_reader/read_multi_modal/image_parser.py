@@ -192,6 +192,9 @@ class ImageParser(BaseMessageParser):
 
             # Parse JSON response
             response_json = self._parse_json_result(response_text)
+            if not response_json:
+                logger.warning(f"[ImageParser] Fail to parse response from LLM: {response_text}")
+                return []
 
             # Extract memory items from response
             memory_items = []
@@ -323,8 +326,7 @@ class ImageParser(BaseMessageParser):
                     return json.loads(s)
                 except json.JSONDecodeError:
                     pass
-            logger.error(f"[ImageParser] Failed to parse JSON: {e}\nResponse: {response_text}")
-            return {}
+            logger.warning(f"[ImageParser] Failed to parse JSON: {e}\nResponse: {response_text}")
 
     def _create_memory_item(
         self,
