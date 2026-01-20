@@ -11,11 +11,6 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_cube.navie import NaiveMemCube
 from memos.mem_scheduler.general_modules.api_misc import SchedulerAPIModule
 from memos.mem_scheduler.general_scheduler import GeneralScheduler
-from memos.mem_scheduler.schemas.api_schemas import (
-    APIMemoryHistoryEntryItem,
-    APISearchHistoryManager,
-    TaskRunningStatus,
-)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     API_MIX_SEARCH_TASK_LABEL,
@@ -47,7 +42,6 @@ class OptimizedScheduler(GeneralScheduler):
         self.history_memory_turns = int(os.getenv("API_SEARCH_HISTORY_TURNS", 5))
         self.session_counter = OrderedDict()
         self.max_session_history = 5
-        self.local_history_manager: dict[str, APISearchHistoryManager] = {}
 
         if self.config.use_redis_queue:
             self.api_module = SchedulerAPIModule(
@@ -114,7 +108,6 @@ class OptimizedScheduler(GeneralScheduler):
         target_session_id = search_req.session_id
         if not target_session_id:
             target_session_id = "default_session"
-
         search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
         search_filter = search_req.filter
 
@@ -193,22 +186,11 @@ class OptimizedScheduler(GeneralScheduler):
         )
 
         # Try to get pre-computed memories if available
-        if self.api_module:
-            history_memories = self.api_module.get_history_memories(
-                user_id=search_req.user_id,
-                mem_cube_id=user_context.mem_cube_id,
-                turns=self.history_memory_turns,
-            )
-        else:
-            # Use local list
-            key = f"search_history:{search_req.user_id}:{user_context.mem_cube_id}"
-            if key in self.local_history_manager:
-                history_memories = self.local_history_manager[key].get_history_memories(
-                    turns=self.history_memory_turns
-                )
-            else:
-                history_memories = []
-
+        history_memories = self.api_module.get_history_memories(
+            user_id=search_req.user_id,
+            mem_cube_id=user_context.mem_cube_id,
+            turns=self.history_memory_turns,
+        )
         logger.info(f"Found {len(history_memories)} history memories.")
 
         # if history memories can directly answer
@@ -287,65 +269,17 @@ class OptimizedScheduler(GeneralScheduler):
                 ]
                 formatted_memories = memories_to_store["formatted_memories"]
 
-            # Sync search data
-            if self.api_module:
-                self.api_module.sync_search_data(
-                    item_id=msg.item_id,
-                    user_id=search_req["user_id"],
-                    mem_cube_id=user_context["mem_cube_id"],
-                    query=search_req["query"],
-                    memories=memories,
-                    formatted_memories=formatted_memories,
-                    session_id=session_id,
-                    conversation_turn=session_turn,
-                )
-            else:
-                # Local sync
-                user_id = search_req["user_id"]
-                mem_cube_id = user_context["mem_cube_id"]
-                key = f"search_history:{user_id}:{mem_cube_id}"
-
-                if key not in self.local_history_manager:
-                    self.local_history_manager[key] = APISearchHistoryManager(
-                        window_size=self.window_size
-                    )
-
-                search_history = self.local_history_manager[key]
-
-                # Update existing entry or add new
-                success = search_history.update_entry_by_item_id(
-                    item_id=msg.item_id,
-                    query=search_req["query"],
-                    formatted_memories=formatted_memories,
-                    task_status=TaskRunningStatus.COMPLETED,
-                    session_id=session_id,
-                    memories=memories,
-                )
-
-                if not success:
-                    # Add new
-                    entry_item = APIMemoryHistoryEntryItem(
-                        item_id=msg.item_id,
-                        query=search_req["query"],
-                        formatted_memories=formatted_memories,
-                        memories=memories,
-                        task_status=TaskRunningStatus.COMPLETED,
-                        session_id=session_id,
-                        conversation_turn=session_turn,
-                    )
-                    search_history.completed_entries.append(entry_item)
-
-                    # Sort by created_time to ensure chronological order
-                    search_history.completed_entries.sort(key=lambda x: x.created_time)
-
-                    # Maintain window size
-                    if len(search_history.completed_entries) > search_history.window_size:
-                        search_history.completed_entries = search_history.completed_entries[
-                            -search_history.window_size :
-                        ]
-
-                    if msg.item_id in search_history.running_item_ids:
-                        search_history.running_item_ids.remove(msg.item_id)
+            # Sync search data to Redis
+            self.api_module.sync_search_data(
+                item_id=msg.item_id,
+                user_id=search_req["user_id"],
+                mem_cube_id=user_context["mem_cube_id"],
+                query=search_req["query"],
+                memories=memories,
+                formatted_memories=formatted_memories,
+                session_id=session_id,
+                conversation_turn=session_turn,
+            )
 
     def _api_mix_search_message_consumer(self, messages: list[ScheduleMessageItem]) -> None:
         """
