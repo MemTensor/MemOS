@@ -80,6 +80,8 @@ class HTTPBGEReranker(BaseReranker):
         token: str = "",
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
+        max_token_thredhold: int = 8000,
+        concate_len: int = 500,
         headers_extra: dict | None = None,
         rerank_source: str | None = None,
         boost_weights: dict[str, float] | None = None,
@@ -109,6 +111,8 @@ class HTTPBGEReranker(BaseReranker):
         self.timeout = timeout
         self.headers_extra = headers_extra or {}
         self.rerank_source = rerank_source
+        self.max_token_thredhold = min(max_token_thredhold, 8000)
+        self.concate_len = min(concate_len, 500)
 
         self.boost_weights = (
             DEFAULT_BOOST_WEIGHTS.copy()
@@ -154,7 +158,8 @@ class HTTPBGEReranker(BaseReranker):
         list[tuple[TextualMemoryItem, float]]
             Re-ranked items with scores, sorted descending by score.
         """
-
+        if len(query) > self.max_token_thredhold:
+            query = query[: self.concate_len] + "\n" + query[-self.concate_len :]
         if not graph_results:
             return []
 
