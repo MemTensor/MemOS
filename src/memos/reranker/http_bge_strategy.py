@@ -153,8 +153,7 @@ class HTTPBGERerankerStrategy(BaseReranker):
         list[tuple[TextualMemoryItem, float]]
             Re-ranked items with scores, sorted descending by score.
         """
-
-        if self.self.max_query_tokens and len(query) > self.max_query_tokens:
+        if self.max_query_tokens and len(query) > self.max_query_tokens:
             single_concate_len = self.concate_len // 2
             query = query[:single_concate_len] + "\n" + query[-single_concate_len:]
 
