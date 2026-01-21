@@ -43,10 +43,14 @@ class OptimizedScheduler(GeneralScheduler):
         self.session_counter = OrderedDict()
         self.max_session_history = 5
 
-        self.api_module = SchedulerAPIModule(
-            window_size=self.window_size,
-            history_memory_turns=self.history_memory_turns,
-        )
+        if self.config.use_redis_queue:
+            self.api_module = SchedulerAPIModule(
+                window_size=self.window_size,
+                history_memory_turns=self.history_memory_turns,
+            )
+        else:
+            self.api_module = None
+
         self.register_handlers(
             {
                 API_MIX_SEARCH_TASK_LABEL: self._api_mix_search_message_consumer,
@@ -104,7 +108,8 @@ class OptimizedScheduler(GeneralScheduler):
         target_session_id = search_req.session_id
         if not target_session_id:
             target_session_id = "default_session"
-        search_filter = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
+        search_filter = search_req.filter
 
         # Create MemCube and perform search
         search_results = mem_cube.text_mem.search(
@@ -114,6 +119,7 @@ class OptimizedScheduler(GeneralScheduler):
             mode=mode,
             manual_close_internet=not search_req.internet_search,
             search_filter=search_filter,
+            search_priority=search_priority,
             info={
                 "user_id": search_req.user_id,
                 "session_id": target_session_id,
@@ -133,6 +139,22 @@ class OptimizedScheduler(GeneralScheduler):
         logger.info(
             f"Mix searching memories for user {search_req.user_id} with query: {search_req.query}"
         )
+
+        if not self.config.use_redis_queue:
+            logger.warning(
+                "Redis queue is not enabled. Running in degraded mode: "
+                "FAST search only, no history memory reranking, no async updates."
+            )
+            memories = self.search_memories(
+                search_req=search_req,
+                user_context=user_context,
+                mem_cube=self.mem_cube,
+                mode=SearchMode.FAST,
+            )
+            return [
+                format_textual_memory_item(item, include_embedding=search_req.dedup == "sim")
+                for item in memories
+            ]
 
         # Get mem_cube for fast search
         target_session_id = search_req.session_id
