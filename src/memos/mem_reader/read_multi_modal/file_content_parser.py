@@ -74,12 +74,23 @@ class FileContentParser(BaseMessageParser):
         prompt = prompt.replace("{custom_tags_prompt}", custom_tags_prompt)
 
         messages = [{"role": "user", "content": prompt}]
-        try:
-            response_text = self.llm.generate(messages)
-            response_json = parse_json_result(response_text)
-        except Exception as e:
-            logger.error(f"[FileContentParser] LLM generation error: {e}")
-            response_json = {}
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response_text = self.llm.generate(messages)
+                response_json = parse_json_result(response_text)
+                return response_json
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"[FileContentParser] LLM generation error (attempt {attempt + 1}/{max_retries}): {e}."
+                    )
+                else:
+                    logger.error(
+                        f"[FileContentParser] LLM generation error after {max_retries} attempts: {e}"
+                    )
+                    response_json = {}
+
         return response_json
 
     def _handle_url(self, url_str: str, filename: str) -> tuple[str, str | None, bool]:
