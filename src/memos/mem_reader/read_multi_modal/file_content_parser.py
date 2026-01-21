@@ -80,7 +80,6 @@ class FileContentParser(BaseMessageParser):
         except Exception as e:
             logger.error(f"[FileContentParser] LLM generation error: {e}")
             response_json = {}
-
         return response_json
 
     def _handle_url(self, url_str: str, filename: str) -> tuple[str, str | None, bool]:
