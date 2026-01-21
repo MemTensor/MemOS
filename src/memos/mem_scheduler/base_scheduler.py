@@ -964,6 +964,14 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Original local queue logic
         while self._running:  # Use a running flag for graceful shutdown
             try:
+                # Check dispatcher thread pool status to avoid overloading
+                if self.enable_parallel_dispatch and self.dispatcher:
+                    running_tasks = self.dispatcher.get_running_task_count()
+                    if running_tasks >= self.dispatcher.max_workers:
+                        # Thread pool is full, wait and retry
+                        time.sleep(self._consume_interval)
+                        continue
+
                 # Get messages in batches based on consume_batch setting
 
                 messages = self.memos_message_queue.get_messages(batch_size=self.consume_batch)
