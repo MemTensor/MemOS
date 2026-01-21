@@ -46,17 +46,20 @@ class MarkdownChunker(BaseChunker):
 
     def chunk(self, text: str, **kwargs) -> list[str] | list[Chunk]:
         """Chunk the given text into smaller chunks based on sentences."""
-        md_header_splits = self.chunker.split_text(text)
+        protected_text, url_map = self.protect_urls(text)
+        md_header_splits = self.chunker.split_text(protected_text)
         chunks = []
         if self.chunker_recursive:
             md_header_splits = self.chunker_recursive.split_documents(md_header_splits)
         for doc in md_header_splits:
             try:
                 chunk = " ".join(list(doc.metadata.values())) + "\n" + doc.page_content
+                chunk = self.restore_urls(chunk, url_map)
                 chunks.append(chunk)
             except Exception as e:
                 logger.warning(f"warning chunking document: {e}")
-                chunks.append(doc.page_content)
+                restored_chunk = self.restore_urls(doc.page_content, url_map)
+                chunks.append(restored_chunk)
         logger.info(f"Generated chunks: {chunks[:5]}")
         logger.debug(f"Generated {len(chunks)} chunks from input text")
         return chunks
