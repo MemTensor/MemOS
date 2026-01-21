@@ -410,6 +410,8 @@ class APIConfig:
                     "url": os.getenv("MOS_RERANKER_URL", "localhost:8000/v1/rerank"),
                     "model": os.getenv("MOS_FEEDBACK_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
+                    "max_query_tokens": int(os.getenv("MOS_RERANKER_MAX_TOKENS", 8000)),
+                    "concate_len": int(os.getenv("MOS_RERANKER_CONCAT_LEN", 1000)),
                     "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
                     "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
