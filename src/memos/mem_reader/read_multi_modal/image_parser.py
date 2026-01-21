@@ -151,6 +151,17 @@ class ImageParser(BaseMessageParser):
             IMAGE_ANALYSIS_PROMPT_ZH if lang == "zh" else IMAGE_ANALYSIS_PROMPT_EN
         )
 
+        # Add context if available
+        context_text = ""
+        if context_items:
+            for item in context_items:
+                if hasattr(item, "memory") and item.memory:
+                    context_text += f"{item.memory}\n"
+        context_text = context_text.strip()
+
+        # Inject context into prompt when possible
+        image_analysis_prompt = image_analysis_prompt.replace("{context}", context_text)
+
         # Build messages with image content
         messages = [
             {
@@ -167,21 +178,6 @@ class ImageParser(BaseMessageParser):
                 ],
             }
         ]
-
-        # Add context if available
-        if context_items:
-            context_text = ""
-            for item in context_items:
-                if hasattr(item, "memory") and item.memory:
-                    context_text += f"{item.memory}\n"
-            if context_text:
-                messages.insert(
-                    0,
-                    {
-                        "role": "system",
-                        "content": f"Context from previous conversation:\n{context_text}",
-                    },
-                )
 
         try:
             # Call LLM with vision model
