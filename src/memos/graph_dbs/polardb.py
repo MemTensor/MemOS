@@ -1895,7 +1895,7 @@ class PolarDBGraphDB(BaseGraphDB):
         filter: dict | None = None,
         knowledgebase_ids: list[str] | None = None,
         tsvector_field: str = "properties_tsvector_zh",
-        tsquery_config: str = "jiebaqry",
+        tsquery_config: str = "jiebacfg",
         **kwargs,
     ) -> list[dict]:
         """
@@ -1918,7 +1918,10 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             list[dict]: result list containing id and score
         """
+        logger.info(
+            f"[search_by_fulltext] query_words: {query_words},top_k:{top_k},scope:{scope},status:{status},threshold:{threshold},search_filter:{search_filter},user_name:{user_name},knowledgebase_ids:{knowledgebase_ids},filter:{filter}")
         # Build WHERE clause dynamically, same as search_by_embedding
+        start_time = time.time()
         where_clauses = []
 
         if scope:
@@ -1940,6 +1943,7 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self.config.user_name,
         )
+        logger.info(f"[search_by_fulltext] user_name_conditions: {user_name_conditions}")
 
         # Add OR condition if we have any user_name conditions
         if user_name_conditions:
@@ -1962,6 +1966,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
         # Build filter conditions using common method
         filter_conditions = self._build_filter_conditions_sql(filter)
+        logger.info(f"[search_by_fulltext] filter_conditions: {filter_conditions}")
+
         where_clauses.extend(filter_conditions)
         # Add fulltext search condition
         # Convert query_text to OR query format: "word1 | word2 | word3"
@@ -1970,6 +1976,8 @@ class PolarDBGraphDB(BaseGraphDB):
         where_clauses.append(f"{tsvector_field} @@ to_tsquery('{tsquery_config}', %s)")
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        logger.info(f"[search_by_fulltext] where_clause: {where_clause}")
 
         # Build fulltext search query
         query = f"""
@@ -2002,7 +2010,10 @@ class PolarDBGraphDB(BaseGraphDB):
                     # Apply threshold filter if specified
                     if threshold is None or score_val >= threshold:
                         output.append({"id": id_val, "score": score_val})
-
+                elapsed_time = time.time() - start_time
+                logger.info(
+                    f" polardb [search_by_fulltext] query completed time in {elapsed_time:.2f}s"
+                )
                 return output[:top_k]
         finally:
             self._return_connection(conn)
@@ -4301,7 +4312,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
 
-        if effective_user_name:
+        if effective_user_name and default_user_name != 'xxx':
             user_name_conditions.append(
                 f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{effective_user_name}\"'::agtype"
             )
