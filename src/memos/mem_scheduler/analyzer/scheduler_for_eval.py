@@ -164,11 +164,33 @@ class SchedulerForEval(GeneralScheduler):
             new_candidates = []
             for item in missing_evidences:
                 logger.info(f"missing_evidences: {item}")
-                results: list[TextualMemoryItem] = self.retriever.search(
+                
+                # Determine search mode from method
+                from memos.mem_scheduler.schemas.general_schemas import (
+                    TreeTextMemory_FINE_SEARCH_METHOD,
+                    TreeTextMemory_SEARCH_METHOD,
+                )
+                from memos.types.general_types import SearchMode
+                
+                # Convert search_method to SearchMode
+                if self.search_method == TreeTextMemory_FINE_SEARCH_METHOD:
+                    mode = SearchMode.FINE
+                elif self.search_method == TreeTextMemory_SEARCH_METHOD:
+                    mode = SearchMode.FAST
+                else:
+                    # Fallback to FAST mode for unknown methods
+                    logger.warning(
+                        f"Unknown search_method '{self.search_method}', falling back to SearchMode.FAST"
+                    )
+                    mode = SearchMode.FAST
+                
+                # Use unified search service
+                results: list[TextualMemoryItem] = self.search_service.search(
                     query=item,
+                    user_id=user_id,
                     mem_cube=mem_cube,
                     top_k=k_per_evidence,
-                    method=self.search_method,
+                    mode=mode,
                 )
                 logger.info(
                     f"search results for {missing_evidences}: {[one.memory for one in results]}"

@@ -27,7 +27,8 @@ from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
-from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.memory_manage_modules.post_processor import MemoryPostProcessor
+from memos.mem_scheduler.memory_manage_modules.search_service import SchedulerSearchService
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.monitors.task_schedule_monitor import TaskScheduleMonitor
@@ -144,7 +145,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.orchestrator = SchedulerOrchestrator()
 
         self.searcher: Searcher | None = None
-        self.retriever: SchedulerRetriever | None = None
+        self.search_service: SchedulerSearchService | None = None
+        self.post_processor: MemoryPostProcessor | None = None
         self.db_engine: Engine | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
@@ -212,6 +214,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         else:
             self.searcher = searcher
         self.feedback_server = feedback_server
+        
+        # Initialize search service with the searcher
+        self.search_service = SchedulerSearchService(searcher=self.searcher)
 
     def initialize_modules(
         self,
@@ -241,7 +246,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
-            self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
+            
+            # Initialize post-processor for memory enhancement and filtering
+            self.post_processor = MemoryPostProcessor(process_llm=self.process_llm, config=self.config)
 
             if mem_reader:
                 self.mem_reader = mem_reader
@@ -352,7 +359,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
     def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
         self.current_mem_cube = value
-        self.retriever.mem_cube = value
+        # No need to set mem_cube on retriever anymore (it's passed per-search now)
 
     @property
     def mem_cubes(self) -> dict[str, BaseMemCube]:
@@ -478,7 +485,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             original_memory = filtered_original_memory
 
             memories_with_new_order, rerank_success_flag = (
-                self.retriever.process_and_rerank_memories(
+                self.post_processor.process_and_rerank_memories(
                     queries=query_history,
                     original_memory=original_memory,
                     new_memory=new_memory,
@@ -488,7 +495,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             # Filter completely unrelated memories according to query_history
             logger.info(f"Filtering memories based on query history: {len(query_history)} queries")
-            filtered_memories, filter_success_flag = self.retriever.filter_unrelated_memories(
+            filtered_memories, filter_success_flag = self.post_processor.filter_unrelated_memories(
                 query_history=query_history,
                 memories=memories_with_new_order,
             )

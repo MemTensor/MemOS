@@ -104,27 +104,30 @@ class OptimizedScheduler(GeneralScheduler):
         mem_cube: NaiveMemCube,
         mode: SearchMode,
     ):
-        """Fine search memories function copied from server_router to avoid circular import"""
-        target_session_id = search_req.session_id
-        if not target_session_id:
-            target_session_id = "default_session"
+        """
+        Search memories using unified Searcher interface.
+        
+        This method now uses self.searcher (via SchedulerSearchService) instead of
+        directly calling mem_cube.text_mem.search(), ensuring consistency with the
+        API search path.
+        """
+        target_session_id = search_req.session_id or "default_session"
         search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
         search_filter = search_req.filter
 
-        # Create MemCube and perform search
-        search_results = mem_cube.text_mem.search(
+        # Use unified search service
+        search_results = self.search_service.search(
             query=search_req.query,
-            user_name=user_context.mem_cube_id,
+            user_id=search_req.user_id,
+            mem_cube=mem_cube,
             top_k=search_req.top_k,
             mode=mode,
-            manual_close_internet=not search_req.internet_search,
             search_filter=search_filter,
             search_priority=search_priority,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": target_session_id,
-                "chat_history": search_req.chat_history,
-            },
+            session_id=target_session_id,
+            internet_search=search_req.internet_search,
+            chat_history=search_req.chat_history,
+            mem_cube_id=user_context.mem_cube_id,
         )
         return search_results
 
@@ -322,7 +325,7 @@ class OptimizedScheduler(GeneralScheduler):
 
             query_history = query_db_manager.obj.get_queries_with_timesort()
             memories_with_new_order, rerank_success_flag = (
-                self.retriever.process_and_rerank_memories(
+                self.post_processor.process_and_rerank_memories(
                     queries=query_history,
                     original_memory=original_memory,
                     new_memory=new_memory,
@@ -335,7 +338,7 @@ class OptimizedScheduler(GeneralScheduler):
                 f"[optimized replace_working_memory] Applying combined unrelated and redundant memory filtering to {len(memories_with_new_order)} memories"
             )
             filtered_memories, filtering_success_flag = (
-                self.retriever.filter_unrelated_and_redundant_memories(
+                self.post_processor.filter_unrelated_and_redundant_memories(
                     query_history=query_history,
                     memories=memories_with_new_order,
                 )
