@@ -10,7 +10,6 @@ from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
-from memos.utils import extract_json_obj, extract_list_items_in_answer
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     FastTokenizer,
@@ -20,6 +19,7 @@ from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.reranker.base import BaseReranker
 from memos.templates.advanced_search_prompts import PROMPT_MAPPING
 from memos.types.general_types import FINE_STRATEGY, FineStrategy, SearchMode
+from memos.utils import extract_json_obj, extract_list_items_in_answer
 
 
 logger = get_logger(__name__)
@@ -375,16 +375,16 @@ class AdvancedSearcher(Searcher):
     ) -> tuple[list[TextualMemoryItem], bool]:
         """
         Enhance memories by adding context and making connections to queries.
-        
+
         This method uses LLM to rewrite or recreate memories to better align
         with the given query history, making them more relevant and contextual.
-        
+
         Args:
             query_history: List of user queries in chronological order
             memories: List of memory items to enhance
             batch_size: Optional batch size for parallel processing
             retries: Number of retries for LLM calls
-            
+
         Returns:
             Tuple of (enhanced_memories, success_flag)
             - enhanced_memories: Enhanced memory items
@@ -411,7 +411,7 @@ class AdvancedSearcher(Searcher):
                 batches = self._split_batches(memories=memories, batch_size=batch_size)
                 all_success = True
                 failed_batches = 0
-                
+
                 with ContextThreadPoolExecutor(max_workers=len(batches)) as executor:
                     future_map = {
                         executor.submit(
@@ -419,17 +419,17 @@ class AdvancedSearcher(Searcher):
                         ): (bi, s, e)
                         for bi, (s, e, texts) in enumerate(batches)
                     }
-                    
+
                     enhanced_memories = []
                     for fut in as_completed(future_map):
                         bi, s, e = future_map[fut]
                         batch_memories, ok = fut.result()
                         enhanced_memories.extend(batch_memories)
-                        
+
                         if not ok:
                             all_success = False
                             failed_batches += 1
-                            
+
                 logger.info(
                     f"[Enhance] ✅ multi-batch done | batches={len(batches)} | "
                     f"enhanced={len(enhanced_memories)} | failed_batches={failed_batches} | "
@@ -444,7 +444,7 @@ class AdvancedSearcher(Searcher):
         if len(enhanced_memories) == 0:
             enhanced_memories = []
             logger.error("[Enhance] ❌ fatal error: enhanced_memories is empty", exc_info=True)
-            
+
         return enhanced_memories, all_success
 
     def _process_enhancement_batch(
@@ -456,7 +456,7 @@ class AdvancedSearcher(Searcher):
     ) -> tuple[list[TextualMemoryItem], bool]:
         """
         Process a single batch of memories for enhancement.
-        
+
         This method handles retry logic and strategy-specific enhancement
         (REWRITE vs RECREATE).
         """
@@ -472,13 +472,13 @@ class AdvancedSearcher(Searcher):
             try:
                 llm_response = self.process_llm.generate([{"role": "user", "content": prompt}])
                 processed_text_memories = extract_list_items_in_answer(llm_response)
-                
+
                 if len(processed_text_memories) > 0:
                     enhanced_memories = self._create_enhanced_memories(
                         processed_text_memories=processed_text_memories,
                         original_memories=memories,
                     )
-                    
+
                     logger.info(
                         f"[enhance_memories_with_query] ✅ done | Strategy={FINE_STRATEGY} | "
                         f"batch={batch_index}"
@@ -489,7 +489,7 @@ class AdvancedSearcher(Searcher):
                         f"Fail to run memory enhancement; retry {attempt}/{max(1, retries) + 1}; "
                         f"processed_text_memories: {processed_text_memories}"
                     )
-                    
+
             except Exception as e:
                 attempt += 1
                 time.sleep(1)
@@ -497,16 +497,14 @@ class AdvancedSearcher(Searcher):
                     f"[enhance_memories_with_query][batch={batch_index}] "
                     f"🔁 retry {attempt}/{max(1, retries) + 1} failed: {e}"
                 )
-                
+
         logger.error(
             f"Fail to run memory enhancement; prompt: {prompt};\n llm_response: {llm_response}",
             exc_info=True,
         )
         return memories, False
 
-    def _build_enhancement_prompt(
-        self, query_history: list[str], batch_texts: list[str]
-    ) -> str:
+    def _build_enhancement_prompt(self, query_history: list[str], batch_texts: list[str]) -> str:
         """Build the LLM prompt for memory enhancement."""
         if len(query_history) == 1:
             query_history_formatted = query_history[0]
@@ -524,7 +522,7 @@ class AdvancedSearcher(Searcher):
         else:
             text_memories = "\n".join([f"- {mem}" for i, mem in enumerate(batch_texts)])
             prompt_name = "memory_recreate_enhancement"
-            
+
         return self.build_prompt(
             prompt_name,
             query_history=query_history_formatted,
@@ -538,7 +536,7 @@ class AdvancedSearcher(Searcher):
     ) -> list[TextualMemoryItem]:
         """
         Create enhanced memory items based on the processing strategy.
-        
+
         Supports two strategies:
         - RECREATE: Create new memory items with enhanced text
         - REWRITE: Rewrite existing memories while preserving metadata
@@ -556,7 +554,7 @@ class AdvancedSearcher(Searcher):
                         ),
                     )
                 )
-                
+
         elif FINE_STRATEGY == FineStrategy.REWRITE:
             # Parse index from each processed line and rewrite corresponding original memory
             def _parse_index_and_text(s: str) -> tuple[int | None, str]:
@@ -581,10 +579,10 @@ class AdvancedSearcher(Searcher):
                 else:
                     # Fallback: align by order if index missing/invalid
                     orig = original_memories[j] if j < len(original_memories) else None
-                    
+
                 if not orig:
                     continue
-                    
+
                 enhanced_memories.append(
                     TextualMemoryItem(
                         id=orig.id,
@@ -618,14 +616,14 @@ class AdvancedSearcher(Searcher):
     ) -> tuple[str, bool]:
         """
         Analyze memories and generate hint for additional recall.
-        
+
         This method uses LLM to determine if the current memories are sufficient
         or if additional recall is needed, along with a hint for the recall query.
-        
+
         Args:
             query: Original user query
             memories: List of currently retrieved memory texts
-            
+
         Returns:
             Tuple of (hint, trigger_recall)
             - hint: Suggested query for additional recall
@@ -643,8 +641,7 @@ class AdvancedSearcher(Searcher):
         json_result: dict = extract_json_obj(llm_response)
 
         logger.info(
-            f"[recall_for_missing_memories] ✅ done | prompt={prompt} | "
-            f"llm_response={llm_response}"
+            f"[recall_for_missing_memories] ✅ done | prompt={prompt} | llm_response={llm_response}"
         )
 
         hint = json_result.get("hint", "")

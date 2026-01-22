@@ -106,7 +106,7 @@ class OptimizedScheduler(GeneralScheduler):
     ):
         """
         Search memories using unified Searcher interface.
-        
+
         This method now uses self.searcher (via SchedulerSearchService) instead of
         directly calling mem_cube.text_mem.search(), ensuring consistency with the
         API search path.

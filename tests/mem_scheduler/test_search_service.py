@@ -5,8 +5,9 @@ These tests verify that the SchedulerSearchService correctly delegates
 search operations to the Searcher class and provides proper fallback behavior.
 """
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 from memos.mem_scheduler.memory_manage_modules.search_service import SchedulerSearchService
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
@@ -22,12 +23,14 @@ class TestSchedulerSearchService:
         """Create a mock Searcher instance."""
         searcher = Mock()
         searcher.manual_close_internet = True
-        searcher.search = Mock(return_value=[
-            TextualMemoryItem(
-                memory="Test memory 1",
-                metadata=TextualMemoryMetadata(user_id="user1", memory_type="LongTermMemory")
-            )
-        ])
+        searcher.search = Mock(
+            return_value=[
+                TextualMemoryItem(
+                    memory="Test memory 1",
+                    metadata=TextualMemoryMetadata(user_id="user1", memory_type="LongTermMemory"),
+                )
+            ]
+        )
         return searcher
 
     @pytest.fixture
@@ -35,12 +38,14 @@ class TestSchedulerSearchService:
         """Create a mock MemCube instance."""
         mem_cube = Mock()
         mem_cube.text_mem = Mock(spec=TreeTextMemory)
-        mem_cube.text_mem.search = Mock(return_value=[
-            TextualMemoryItem(
-                memory="Fallback memory",
-                metadata=TextualMemoryMetadata(user_id="user1", memory_type="LongTermMemory")
-            )
-        ])
+        mem_cube.text_mem.search = Mock(
+            return_value=[
+                TextualMemoryItem(
+                    memory="Fallback memory",
+                    metadata=TextualMemoryMetadata(user_id="user1", memory_type="LongTermMemory"),
+                )
+            ]
+        )
         return mem_cube
 
     def test_init_with_searcher(self, mock_searcher):
@@ -56,7 +61,7 @@ class TestSchedulerSearchService:
     def test_search_with_searcher(self, mock_searcher, mock_mem_cube):
         """Test search operation using Searcher (preferred path)."""
         service = SchedulerSearchService(searcher=mock_searcher)
-        
+
         results = service.search(
             query="test query",
             user_id="user1",
@@ -68,20 +73,20 @@ class TestSchedulerSearchService:
         # Verify Searcher.search() was called ONCE with memory_type="All"
         # (This avoids the 2*top_k bug)
         assert mock_searcher.search.call_count == 1
-        
+
         # Verify correct parameters were passed
         call_args = mock_searcher.search.call_args[1]
         assert call_args["query"] == "test query"
         assert call_args["memory_type"] == "All"  # Should search all types together
         assert call_args["top_k"] == 10
-        
+
         # Verify results were returned
         assert len(results) >= 1
 
     def test_search_without_searcher_fallback(self, mock_mem_cube):
         """Test search operation without Searcher (fallback path)."""
         service = SchedulerSearchService(searcher=None)
-        
+
         results = service.search(
             query="test query",
             user_id="user1",
@@ -90,16 +95,16 @@ class TestSchedulerSearchService:
             mode=SearchMode.FAST,
         )
 
-        # Verify text_mem.search() was called as fallback
-        assert mock_mem_cube.text_mem.search.call_count == 2
-        
+        # Verify text_mem.search() was called once as fallback (with memory_type="All")
+        assert mock_mem_cube.text_mem.search.call_count == 1
+
         # Verify results were returned
         assert len(results) >= 1
 
     def test_search_internet_search_toggle(self, mock_searcher, mock_mem_cube):
         """Test that internet_search parameter correctly toggles manual_close_internet."""
         service = SchedulerSearchService(searcher=mock_searcher)
-        
+
         # Test with internet_search=True
         service.search(
             query="test query",
@@ -108,15 +113,15 @@ class TestSchedulerSearchService:
             top_k=10,
             internet_search=True,
         )
-        
+
         # Verify manual_close_internet was set to False (enable internet search)
         # Note: This is tested during the call, then restored
-        assert mock_searcher.manual_close_internet == True  # Restored after call
+        assert mock_searcher.manual_close_internet  # Restored after call
 
     def test_search_mode_fine(self, mock_searcher, mock_mem_cube):
         """Test search with FINE mode."""
         service = SchedulerSearchService(searcher=mock_searcher)
-        
+
         service.search(
             query="test query",
             user_id="user1",
@@ -132,10 +137,10 @@ class TestSchedulerSearchService:
     def test_search_with_filters(self, mock_searcher, mock_mem_cube):
         """Test search with search_filter and search_priority."""
         service = SchedulerSearchService(searcher=mock_searcher)
-        
+
         search_filter = {"source": "document"}
         search_priority = {"session_id": "session123"}
-        
+
         service.search(
             query="test query",
             user_id="user1",
@@ -154,7 +159,7 @@ class TestSchedulerSearchService:
         """Test that exceptions are caught and empty list is returned."""
         service = SchedulerSearchService(searcher=None)
         mock_mem_cube.text_mem.search.side_effect = Exception("Search failed")
-        
+
         results = service.search(
             query="test query",
             user_id="user1",
@@ -168,10 +173,10 @@ class TestSchedulerSearchService:
     def test_search_preserves_searcher_state(self, mock_searcher, mock_mem_cube):
         """Test that the original searcher state is preserved after search."""
         service = SchedulerSearchService(searcher=mock_searcher)
-        
+
         original_state = True
         mock_searcher.manual_close_internet = original_state
-        
+
         service.search(
             query="test query",
             user_id="user1",

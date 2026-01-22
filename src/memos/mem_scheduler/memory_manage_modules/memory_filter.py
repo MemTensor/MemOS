@@ -2,8 +2,8 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.utils import extract_json_obj
 from memos.memories.textual.tree import TextualMemoryItem
+from memos.utils import extract_json_obj
 
 
 logger = get_logger(__name__)

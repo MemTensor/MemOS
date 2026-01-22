@@ -214,7 +214,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         else:
             self.searcher = searcher
         self.feedback_server = feedback_server
-        
+
         # Initialize search service with the searcher
         self.search_service = SchedulerSearchService(searcher=self.searcher)
 
@@ -246,9 +246,11 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
-            
+
             # Initialize post-processor for memory enhancement and filtering
-            self.post_processor = MemoryPostProcessor(process_llm=self.process_llm, config=self.config)
+            self.post_processor = MemoryPostProcessor(
+                process_llm=self.process_llm, config=self.config
+            )
 
             if mem_reader:
                 self.mem_reader = mem_reader

@@ -33,28 +33,28 @@ logger = get_logger(__name__)
 class MemoryPostProcessor(BaseSchedulerModule):
     """
     Post-processor for retrieved memories.
-    
+
     This class handles scheduler-specific post-retrieval operations:
     - Memory filtering: Remove unrelated or redundant memories
     - Memory reranking: Reorder memories by relevance
     - Memory evaluation: Assess memory's ability to answer queries
-    
+
     Design principles:
     - Single Responsibility: Only handles filtering/reranking, not enhancement or retrieval
     - Composable: Can be used independently or chained together
     - Testable: Each operation can be tested in isolation
-    
+
     Note: Memory enhancement operations have been moved to AdvancedSearcher.
-    
+
     Usage:
         processor = MemoryPostProcessor(process_llm=llm, config=config)
-        
+
         # Filter out unrelated memories
         filtered, _ = processor.filter_unrelated_memories(
             query_history=["What is Python?"],
             memories=raw_memories
         )
-        
+
         # Rerank memories by relevance
         reranked, _ = processor.process_and_rerank_memories(
             queries=["What is Python?"],
@@ -67,7 +67,7 @@ class MemoryPostProcessor(BaseSchedulerModule):
     def __init__(self, process_llm: BaseLLM, config: BaseSchedulerConfig):
         """
         Initialize the post-processor.
-        
+
         Args:
             process_llm: LLM instance for enhancement and filtering operations
             config: Scheduler configuration containing batch sizes and retry settings
@@ -82,7 +82,7 @@ class MemoryPostProcessor(BaseSchedulerModule):
         # Configuration
         self.filter_similarity_threshold = 0.75
         self.filter_min_length_threshold = 6
-        
+
         # NOTE: Config keys still use "scheduler_retriever_*" prefix for backward compatibility
         # TODO: Consider renaming to "post_processor_*" in future config refactor
         self.batch_size: int | None = getattr(
@@ -97,20 +97,20 @@ class MemoryPostProcessor(BaseSchedulerModule):
     ) -> bool:
         """
         Evaluate whether the given memories can answer the query.
-        
+
         This method uses LLM to assess if the provided memories contain
         sufficient information to answer the given query.
-        
+
         Args:
             query: The query to be answered
             memory_texts: List of memory text strings
             top_k: Optional limit on number of memories to consider
-            
+
         Returns:
             Boolean indicating whether memories can answer the query
         """
         limited_memories = memory_texts[:top_k] if top_k is not None else memory_texts
-        
+
         # Build prompt using the template
         prompt = self.build_prompt(
             template_name="memory_answer_ability_evaluation",
@@ -135,15 +135,11 @@ class MemoryPostProcessor(BaseSchedulerModule):
                 )
                 return result["result"]
             else:
-                logger.warning(
-                    f"[Answerability] invalid LLM JSON structure; payload={result}"
-                )
+                logger.warning(f"[Answerability] invalid LLM JSON structure; payload={result}")
                 return False
 
         except Exception as e:
-            logger.error(
-                f"[Answerability] parse failed; err={e}; raw={str(response)[:200]}..."
-            )
+            logger.error(f"[Answerability] parse failed; err={e}; raw={str(response)[:200]}...")
             return False
 
     def rerank_memories(
@@ -151,17 +147,17 @@ class MemoryPostProcessor(BaseSchedulerModule):
     ) -> tuple[list[str], bool]:
         """
         Rerank memories based on relevance to given queries using LLM.
-        
+
         Args:
             queries: List of query strings to determine relevance
             original_memories: List of memory strings to be reranked
             top_k: Number of top memories to return after reranking
-            
+
         Returns:
             Tuple of (reranked_memories, success_flag)
             - reranked_memories: List of reranked memory strings (length <= top_k)
             - success_flag: True if reranking succeeded
-            
+
         Note:
             If LLM reranking fails, falls back to original order (truncated to top_k)
         """
@@ -196,7 +192,7 @@ class MemoryPostProcessor(BaseSchedulerModule):
             )
             text_memories_with_new_order = original_memories[:top_k]
             success_flag = False
-            
+
         return text_memories_with_new_order, success_flag
 
     def process_and_rerank_memories(
@@ -208,20 +204,20 @@ class MemoryPostProcessor(BaseSchedulerModule):
     ) -> tuple[list[TextualMemoryItem], bool]:
         """
         Process and rerank memory items by combining, filtering, and reranking.
-        
+
         This is a higher-level method that combines multiple post-processing steps:
         1. Merge original and new memories
         2. Apply similarity filtering
         3. Apply length filtering
         4. Remove duplicates
         5. Rerank by relevance
-        
+
         Args:
             queries: List of query strings to rerank memories against
             original_memory: List of original TextualMemoryItem objects
             new_memory: List of new TextualMemoryItem objects to merge
             top_k: Maximum number of memories to return after reranking
-            
+
         Returns:
             Tuple of (reranked_memories, success_flag)
             - reranked_memories: List of reranked TextualMemoryItem objects
@@ -281,7 +277,7 @@ class MemoryPostProcessor(BaseSchedulerModule):
     ) -> tuple[list[TextualMemoryItem], bool]:
         """
         Filter out memories unrelated to the query history.
-        
+
         Delegates to MemoryFilter for the actual filtering logic.
         """
         return self.memory_filter.filter_unrelated_memories(query_history, memories)
@@ -293,7 +289,7 @@ class MemoryPostProcessor(BaseSchedulerModule):
     ) -> tuple[list[TextualMemoryItem], bool]:
         """
         Filter out redundant memories from the list.
-        
+
         Delegates to MemoryFilter for the actual filtering logic.
         """
         return self.memory_filter.filter_redundant_memories(query_history, memories)
@@ -305,7 +301,7 @@ class MemoryPostProcessor(BaseSchedulerModule):
     ) -> tuple[list[TextualMemoryItem], bool]:
         """
         Filter out both unrelated and redundant memories using LLM analysis.
-        
+
         Delegates to MemoryFilter for the actual filtering logic.
         """
         return self.memory_filter.filter_unrelated_and_redundant_memories(query_history, memories)

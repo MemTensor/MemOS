@@ -1469,7 +1469,7 @@ class GeneralScheduler(BaseScheduler):
                 TreeTextMemory_SEARCH_METHOD,
             )
             from memos.types.general_types import SearchMode
-            
+
             # Convert search_method to SearchMode
             if self.search_method == TreeTextMemory_FINE_SEARCH_METHOD:
                 mode = SearchMode.FINE
@@ -1481,7 +1481,7 @@ class GeneralScheduler(BaseScheduler):
                     f"Unknown search_method '{self.search_method}', falling back to SearchMode.FAST"
                 )
                 mode = SearchMode.FAST
-            
+
             if isinstance(text_mem_base, NaiveTextMemory):
                 # NaiveTextMemory: Use direct search as fallback
                 try:

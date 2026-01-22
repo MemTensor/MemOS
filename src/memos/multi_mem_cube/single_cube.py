@@ -274,9 +274,7 @@ class SingleCubeView(MemCubeView):
         ]
         return formatted_memories
 
-    def _agentic_search(
-        self, search_req: APISearchRequest, user_context: UserContext
-    ) -> list:
+    def _agentic_search(self, search_req: APISearchRequest, user_context: UserContext) -> list:
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
         )

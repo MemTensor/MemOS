@@ -10,8 +10,6 @@ from memos.log import get_logger
 from memos.mem_scheduler.schemas.message_schemas import (
     ScheduleMessageItem,
 )
-# Re-export from memos.utils for backward compatibility
-from memos.utils import extract_json_obj, extract_list_items, extract_list_items_in_answer
 
 
 logger = get_logger(__name__)

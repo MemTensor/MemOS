@@ -19,16 +19,16 @@ logger = get_logger(__name__)
 class SchedulerSearchService:
     """
     Unified search service for the scheduler.
-    
+
     This service provides a clean interface for memory search operations,
     delegating to the Searcher class while handling scheduler-specific
     parameter adaptations.
-    
+
     Design principles:
     - Single Responsibility: Only handles search coordination
     - Dependency Injection: Searcher is injected, not created
     - Fail-safe: Falls back to direct text_mem.search() if Searcher unavailable
-    
+
     Usage:
         service = SchedulerSearchService(searcher=searcher)
         results = service.search(
@@ -42,7 +42,7 @@ class SchedulerSearchService:
     def __init__(self, searcher: Searcher | None = None):
         """
         Initialize the search service.
-        
+
         Args:
             searcher: Optional Searcher instance. If None, will fall back to
                      direct mem_cube.text_mem.search() calls.
@@ -69,10 +69,10 @@ class SchedulerSearchService:
     ) -> list[TextualMemoryItem]:
         """
         Search for memories across both LongTermMemory and UserMemory.
-        
+
         This method provides a unified interface for memory search, automatically
         handling the search across different memory types and merging results.
-        
+
         Args:
             query: The search query string
             user_id: User identifier
@@ -89,10 +89,10 @@ class SchedulerSearchService:
             tool_mem_top_k: Top-k for tool memory search
             playground_search_goal_parser: Whether to use playground goal parser
             mem_cube_id: Memory cube identifier (defaults to user_id if not provided)
-            
+
         Returns:
             List of TextualMemoryItem objects sorted by relevance
-            
+
         Raises:
             Exception: Propagates exceptions from underlying search implementations
         """
@@ -176,17 +176,17 @@ class SchedulerSearchService:
     ) -> list[TextualMemoryItem]:
         """
         Search using the injected Searcher instance.
-        
+
         IMPORTANT: This method searches "All" memory types in a single call to avoid
         the bug where calling search() twice (for LongTermMemory and UserMemory separately)
         would return 2*top_k results due to Searcher.search() applying deduplication and
         top_k limiting on each call.
-        
+
         This ensures the final result is properly deduplicated and limited to top_k items.
         """
         # Preserve original internet search setting
         original_manual_close = getattr(self.searcher, "manual_close_internet", None)
-        
+
         try:
             # Configure internet search
             if original_manual_close is not None:
@@ -234,10 +234,10 @@ class SchedulerSearchService:
     ) -> list[TextualMemoryItem]:
         """
         Fallback: Search using direct text_mem.search() calls.
-        
+
         This is used when no Searcher instance is available, providing
         backward compatibility with the original implementation.
-        
+
         NOTE: TreeTextMemory.search() with memory_type="All" will internally
         search both LongTermMemory and UserMemory and properly merge results.
         """
