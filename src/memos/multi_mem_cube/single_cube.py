@@ -16,6 +16,10 @@ from memos.api.handlers.formatters_handler import (
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_reader.utils import parse_keep_filter_response
+from memos.mem_scheduler.schemas.general_schemas import (
+    DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+    DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
+)
 from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
@@ -337,10 +341,12 @@ class SingleCubeView(MemCubeView):
             dedup=search_req.dedup,
         )
 
-        # Enhance with query
+        # Enhance with query (pass configuration to maintain consistent behavior)
         enhanced_memories, _ = self.searcher.enhance_memories_with_query(
             query_history=[search_req.query],
             memories=raw_memories,
+            batch_size=DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+            retries=DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
         )
 
         if len(enhanced_memories) < len(raw_memories):

@@ -2,7 +2,7 @@ from memos.configs.mem_scheduler import BaseSchedulerConfig
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
-from memos.mem_scheduler.utils.misc_utils import extract_json_obj
+from memos.utils import extract_json_obj
 from memos.memories.textual.tree import TextualMemoryItem
 
 

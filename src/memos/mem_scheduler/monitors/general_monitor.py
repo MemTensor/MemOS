@@ -27,7 +27,7 @@ from memos.mem_scheduler.schemas.monitor_schemas import (
     QueryMonitorQueue,
 )
 from memos.mem_scheduler.utils.db_utils import get_utc_now
-from memos.mem_scheduler.utils.misc_utils import extract_json_obj
+from memos.utils import extract_json_obj
 from memos.memories.textual.tree import TreeTextMemory
 from memos.types import MemCubeID, UserID
 

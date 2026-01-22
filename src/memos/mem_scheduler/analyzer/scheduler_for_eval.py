@@ -248,7 +248,7 @@ class SchedulerForEval(GeneralScheduler):
 
         try:
             # Extract JSON response
-            from memos.mem_scheduler.utils.misc_utils import extract_json_obj
+            from memos.utils import extract_json_obj
 
             result = extract_json_obj(response)
 

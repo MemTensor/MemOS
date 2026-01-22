@@ -9,8 +9,8 @@ from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
-from memos.mem_scheduler.utils.misc_utils import extract_json_obj, extract_list_items_in_answer
 from memos.memories.textual.item import TextualMemoryItem, TextualMemoryMetadata
+from memos.utils import extract_json_obj, extract_list_items_in_answer
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
     FastTokenizer,

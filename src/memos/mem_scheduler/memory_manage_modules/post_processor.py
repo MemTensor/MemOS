@@ -21,8 +21,8 @@ from memos.mem_scheduler.utils.filter_utils import (
     filter_vector_based_similar_memories,
     transform_name_to_key,
 )
-from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 from memos.memories.textual.item import TextualMemoryItem
+from memos.utils import extract_json_obj
 
 from .memory_filter import MemoryFilter
 
