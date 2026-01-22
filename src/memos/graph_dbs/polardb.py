@@ -836,7 +836,8 @@ class PolarDBGraphDB(BaseGraphDB):
         self, source_id: str, target_id: str, type: str, user_name: str | None = None
     ) -> None:
         logger.info(
-            f"polardb [add_edge] source_id: {source_id}, target_id: {target_id}, type: {type},user_name:{user_name}")
+            f"polardb [add_edge] source_id: {source_id}, target_id: {target_id}, type: {type},user_name:{user_name}"
+        )
 
         start_time = time.time()
         if not source_id or not target_id:
@@ -877,9 +878,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 logger.info(f"Edge created: {source_id} -[{type}]-> {target_id}")
 
                 elapsed_time = time.time() - start_time
-                logger.info(
-                    f" polardb [add_edge] insert completed time in {elapsed_time:.2f}s"
-                )
+                logger.info(f" polardb [add_edge] insert completed time in {elapsed_time:.2f}s")
         except Exception as e:
             logger.error(f"Failed to insert edge: {e}", exc_info=True)
             raise
@@ -1043,7 +1042,8 @@ class PolarDBGraphDB(BaseGraphDB):
             dict: Node properties as key-value pairs, or None if not found.
         """
         logger.info(
-            f"polardb [get_node] id: {id}, include_embedding: {include_embedding}, user_name: {user_name}")
+            f"polardb [get_node] id: {id}, include_embedding: {include_embedding}, user_name: {user_name}"
+        )
         start_time = time.time()
         select_fields = "id, properties, embedding" if include_embedding else "id, properties"
 
@@ -1919,7 +1919,8 @@ class PolarDBGraphDB(BaseGraphDB):
             list[dict]: result list containing id and score
         """
         logger.info(
-            f"[search_by_fulltext] query_words: {query_words},top_k:{top_k},scope:{scope},status:{status},threshold:{threshold},search_filter:{search_filter},user_name:{user_name},knowledgebase_ids:{knowledgebase_ids},filter:{filter}")
+            f"[search_by_fulltext] query_words: {query_words},top_k:{top_k},scope:{scope},status:{status},threshold:{threshold},search_filter:{search_filter},user_name:{user_name},knowledgebase_ids:{knowledgebase_ids},filter:{filter}"
+        )
         # Build WHERE clause dynamically, same as search_by_embedding
         start_time = time.time()
         where_clauses = []
@@ -4312,7 +4313,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
 
-        if effective_user_name and default_user_name != 'xxx':
+        if effective_user_name and default_user_name != "xxx":
             user_name_conditions.append(
                 f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{effective_user_name}\"'::agtype"
             )
