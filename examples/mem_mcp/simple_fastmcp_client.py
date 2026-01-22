@@ -12,66 +12,43 @@ async def main():
     print("Working FastMCP Client")
     print("=" * 40)
 
-    async with Client("http://127.0.0.1:8000/mcp") as client:
-        print("Connected to MOS MCP server!")
+    # Connect to MCP server via HTTP
+    # FastMCP HTTP endpoint is at /mcp (not /mcp/v1)
+    async with Client("http://localhost:8002/mcp") as client:
+        print("Connected to MCP server")
 
-        print("Available tools:")
-        tools = await client.list_tools()
-        for tool in tools:
-            print("**" * 20)
-            print(f"  - {tool.name}: {tool.description}")
+        print("\nTesting tool calls via Server API...")
 
-        print("Available resources:")
-        resources = await client.list_resources()
-        for resource in resources:
-            print(f"  - {resource.uri}: {resource.description}")
+        # Note: 'create_user' and 'get_user_info' are not supported by the Server API.
+        # We assume the user already exists or the Server API handles it implicitly.
+        # Using a demo user ID.
+        user_id = "fastmcp_demo_user"
 
-        print("Testing tool calls...")
-
-        print("  Getting user info...")
-        result = await client.call_tool("get_user_info", {})
-        print(f"    Result: {result.content[0].text}")
-
-        print("  Creating user...")
+        print("\n  1. Adding memory...")
         result = await client.call_tool(
-            "create_user",
-            {"user_id": "fastmcp_user", "role": "USER", "user_name": "FastMCP Test User"},
-        )
-        print(f"Result: {result.content[0].text}")
-
-        print(" register cube...")
-        result = await client.call_tool(
-            "register_cube",
-            {
-                "cube_name_or_path": "cube_default_user",
-                "user_id": "fastmcp_user",
-                "cube_id": "fastmcp_user",
+            "add_memory",
+            arguments={
+                "memory_content": "MemOS is a great tool for memory management.",
+                "user_id": user_id,
             },
         )
         print(f"    Result: {result}")
 
-        print("  Adding memory...")
+        print("\n  2. Searching memories...")
         result = await client.call_tool(
-            "add_memory",
-            {
-                "memory_content": "This is a test memory from FastMCP client.",
-                "cube_id": "fastmcp_user",
-                "user_id": "fastmcp_user",
-            },
+            "search_memories",
+            arguments={"query": "MemOS", "user_id": user_id},
         )
-        print(f"    Result: {result.content[0].text}")
+        print(f"    Result: {result}")
 
-        print("  Searching memories...")
+        print("\n  3. Chatting...")
         result = await client.call_tool(
-            "search_memories", {"query": "test memory", "user_id": "fastmcp_user"}
+            "chat",
+            arguments={"query": "What is MemOS?", "user_id": user_id},
         )
-        print(f"    Result: {result.content[0].text[:200]}...")
+        print(f"    Result: {result}")
 
-        print("  Testing chat...")
-        result = await client.call_tool(
-            "chat", {"query": "Hello! Tell me about yourself.", "user_id": "fastmcp_user"}
-        )
-        print(f"    Result: {result.content[0].text[:200]}...")
+        print("\n✓ All tests completed!")
 
 
 if __name__ == "__main__":

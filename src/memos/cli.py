@@ -13,7 +13,7 @@ from io import BytesIO
 
 def export_openapi(output: str) -> bool:
     """Export OpenAPI schema to JSON file."""
-    from memos.api.start_api import app
+    from memos.api.server_api import app
 
     # Create directory if it doesn't exist
     if os.path.dirname(output):
