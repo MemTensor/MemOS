@@ -1,8 +1,9 @@
 """
 Unit tests for MemoryPostProcessor.
 
-These tests verify the post-processing operations including memory enhancement,
-filtering, and reranking.
+These tests verify the post-processing operations including filtering and reranking.
+
+Note: Memory enhancement tests have been moved to AdvancedSearcher tests.
 """
 
 import pytest
@@ -98,40 +99,6 @@ class TestMemoryPostProcessor:
         prompt_content = call_args[0]["content"]
         # Should contain only 3 memories
         assert prompt_content.count("- memory") == 3
-
-    def test_enhance_memories_with_query_empty(self, processor):
-        """Test enhance_memories_with_query with empty memory list."""
-        enhanced, success = processor.enhance_memories_with_query(
-            query_history=["test query"],
-            memories=[],
-        )
-        
-        assert enhanced == []
-        assert success is True
-
-    def test_recall_for_missing_memories(self, processor, mock_llm):
-        """Test recall_for_missing_memories returns hint and trigger flag."""
-        mock_llm.generate.return_value = '{"hint": "search for Python basics", "trigger_recall": true}'
-        
-        hint, trigger = processor.recall_for_missing_memories(
-            query="What is Python?",
-            memories=["JavaScript is a language"],
-        )
-        
-        assert hint == "search for Python basics"
-        assert trigger is True
-
-    def test_recall_for_missing_memories_no_hint(self, processor, mock_llm):
-        """Test recall_for_missing_memories when no hint is provided."""
-        mock_llm.generate.return_value = '{"hint": "", "trigger_recall": false}'
-        
-        hint, trigger = processor.recall_for_missing_memories(
-            query="test query",
-            memories=["sufficient memory"],
-        )
-        
-        assert hint == ""
-        assert trigger is False
 
     def test_rerank_memories_success(self, processor, mock_llm):
         """Test successful memory reranking."""
@@ -239,24 +206,6 @@ class TestMemoryPostProcessor:
             )
             
             assert mock_memory_filter.filter_unrelated_and_redundant_memories.called
-
-    def test_split_batches(self):
-        """Test _split_batches static method."""
-        memories = [
-            TextualMemoryItem(
-                memory=f"memory {i}",
-                metadata=TextualMemoryMetadata(user_id="user1", memory_type="LongTermMemory")
-            )
-            for i in range(25)
-        ]
-        
-        batches = MemoryPostProcessor._split_batches(memories, batch_size=10)
-        
-        assert len(batches) == 3
-        assert batches[0][0] == 0  # Start index
-        assert batches[0][1] == 10  # End index
-        assert len(batches[0][2]) == 10  # Batch size
-        assert len(batches[2][2]) == 5  # Last batch partial
 
 
 if __name__ == "__main__":

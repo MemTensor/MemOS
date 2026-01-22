@@ -271,7 +271,7 @@ class SingleCubeView(MemCubeView):
         return formatted_memories
 
     def _agentic_search(
-        self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
+        self, search_req: APISearchRequest, user_context: UserContext
     ) -> list:
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
@@ -338,7 +338,7 @@ class SingleCubeView(MemCubeView):
         )
 
         # Enhance with query
-        enhanced_memories, _ = self.mem_scheduler.retriever.enhance_memories_with_query(
+        enhanced_memories, _ = self.searcher.enhance_memories_with_query(
             query_history=[search_req.query],
             memories=raw_memories,
         )
@@ -347,7 +347,7 @@ class SingleCubeView(MemCubeView):
             logger.info(
                 f"Enhanced memories ({len(enhanced_memories)}) are less than raw memories ({len(raw_memories)}). Recalling for more."
             )
-            missing_info_hint, trigger = self.mem_scheduler.retriever.recall_for_missing_memories(
+            missing_info_hint, trigger = self.searcher.recall_for_missing_memories(
                 query=search_req.query,
                 memories=[mem.memory for mem in enhanced_memories],
             )
