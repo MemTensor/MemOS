@@ -51,7 +51,6 @@ def is_cloud_env() -> bool:
     )
 
 
-def extract_json_obj(text: str):
 def parse_yaml(yaml_file: str | Path):
     yaml_path = Path(yaml_file)
     if not yaml_path.is_file():
