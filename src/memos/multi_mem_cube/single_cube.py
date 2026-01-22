@@ -339,15 +339,22 @@ class SingleCubeView(MemCubeView):
             dedup=search_req.dedup,
         )
 
-        # Enhance with query (pass configuration to maintain consistent behavior)
-        enhanced_memories, _ = self.searcher.enhance_memories_with_query(
-            query_history=[search_req.query],
-            memories=raw_memories,
-            batch_size=DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
-            retries=DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
-        )
+        if hasattr(self.searcher, "enhance_memories_with_query"):
+            enhanced_memories, _ = self.searcher.enhance_memories_with_query(
+                query_history=[search_req.query],
+                memories=raw_memories,
+                batch_size=DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
+                retries=DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
+            )
+        else:
+            logger.warning(
+                "Searcher does not support enhance_memories_with_query; skipping enhancement."
+            )
+            enhanced_memories = raw_memories
 
-        if len(enhanced_memories) < len(raw_memories):
+        if len(enhanced_memories) < len(raw_memories) and hasattr(
+            self.searcher, "recall_for_missing_memories"
+        ):
             logger.info(
                 f"Enhanced memories ({len(enhanced_memories)}) are less than raw memories ({len(raw_memories)}). Recalling for more."
             )

@@ -54,7 +54,11 @@ class AdvancedSearcher(Searcher):
         )
 
         self.stage_retrieve_top = 3
-        self.process_llm = process_llm
+        if process_llm is None:
+            logger.warning(
+                "[AdvancedSearcher] process_llm is None, falling back to dispatcher_llm"
+            )
+        self.process_llm = process_llm or dispatcher_llm
         self.thinking_stages = 3
         self.max_retry_times = 2
         self.deep_search_top_k_bar = 2
