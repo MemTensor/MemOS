@@ -1,6 +1,7 @@
 import concurrent.futures
 import json
 import re
+import time
 import traceback
 
 from typing import Any
@@ -788,6 +789,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             better understanding via calling llm
             **kwargs: Additional parameters (mode, etc.)
         """
+        init_time = time.time()
         # Pop custom_tags from info (same as simple_struct.py)
         # must pop here, avoid add to info, only used in sync fine mode
         custom_tags = info.pop("custom_tags", None) if isinstance(info, dict) else None
@@ -798,14 +800,21 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Parse each message in the list
             all_memory_items = []
             for msg in scene_data_info:
-                items = self.multi_modal_parser.parse(msg, info, mode="fast", **kwargs)
+                items = self.multi_modal_parser.parse(
+                    msg, info, mode="fast", is_need_emb=False, **kwargs
+                )
                 all_memory_items.extend(items)
         else:
             # Parse as single message
             all_memory_items = self.multi_modal_parser.parse(
-                scene_data_info, info, mode="fast", **kwargs
+                scene_data_info, info, mode="fast", is_need_emb=False, **kwargs
             )
+
+        print(f"time for multi_modal_parser.parse: {time.time() - init_time}")
+        init_time = time.time()
+
         fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+        print(f"time for _concat_multi_modal_memories: {time.time() - init_time}")
         if mode == "fast":
             return fast_memory_items
         else:

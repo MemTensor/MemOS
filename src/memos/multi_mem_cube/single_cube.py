@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import traceback
 
 from dataclasses import dataclass
@@ -772,6 +773,8 @@ class SingleCubeView(MemCubeView):
         Returns:
             List of formatted memory responses
         """
+        init_time = time.time()
+        print(f"init time: {init_time}")
         target_session_id = add_req.session_id or "default_session"
 
         # Decide extraction mode:
@@ -806,6 +809,12 @@ class SingleCubeView(MemCubeView):
         )
         flattened_local = [mm for m in memories_local for mm in m]
 
+        print(
+            f"Time for get_memory: {time.time() - init_time}, "
+            f"total memories: {len(flattened_local)}"
+        )
+        init_time = time.time()
+
         # Explicitly set source_doc_id to metadata if present in info
         source_doc_id = (add_req.info or {}).get("source_doc_id")
         if source_doc_id:
@@ -819,6 +828,7 @@ class SingleCubeView(MemCubeView):
             flattened_local,
             user_name=user_context.mem_cube_id,
         )
+        print(f"time for add: {time.time() - init_time}")
         self.logger.info(
             f"Added {len(mem_ids_local)} memories for user {add_req.user_id} "
             f"in session {add_req.session_id}: {mem_ids_local}"
