@@ -255,7 +255,6 @@ class Neo4jGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
-        print("a1111dd_nodes_batch")
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
