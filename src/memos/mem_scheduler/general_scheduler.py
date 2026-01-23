@@ -850,28 +850,41 @@ class GeneralScheduler(BaseScheduler):
                 f"[process_session_turn] Searching for missing evidence: '{item}' with top_k={k_per_evidence} for user_id={user_id}"
             )
 
-            search_args = {}
+            # Determine search mode from method
+            from memos.mem_scheduler.schemas.general_schemas import (
+                TreeTextMemory_FINE_SEARCH_METHOD,
+                TreeTextMemory_SEARCH_METHOD,
+            )
+            from memos.types.general_types import SearchMode
+
+            # Convert search_method to SearchMode
+            if self.search_method == TreeTextMemory_FINE_SEARCH_METHOD:
+                mode = SearchMode.FINE
+            elif self.search_method == TreeTextMemory_SEARCH_METHOD:
+                mode = SearchMode.FAST
+            else:
+                # Fallback to FAST mode for unknown methods
+                logger.warning(
+                    f"Unknown search_method '{self.search_method}', falling back to SearchMode.FAST"
+                )
+                mode = SearchMode.FAST
+
             if isinstance(text_mem_base, NaiveTextMemory):
-                # NaiveTextMemory doesn't support complex search args usually, but let's see
-                # self.retriever.search calls mem_cube.text_mem.search
-                # NaiveTextMemory.search takes query and top_k
-                # SchedulerRetriever.search handles method dispatch
-                # For NaiveTextMemory, we might need to bypass retriever or extend it
-                # But let's try calling naive memory directly if retriever fails or doesn't support it
+                # NaiveTextMemory: Use direct search as fallback
                 try:
                     results = text_mem_base.search(query=item, top_k=k_per_evidence)
                 except Exception as e:
                     logger.warning(f"NaiveTextMemory search failed: {e}")
                     results = []
             else:
-                results: list[TextualMemoryItem] = self.retriever.search(
+                # Use unified search service
+                results: list[TextualMemoryItem] = self.search_service.search(
                     query=item,
                     user_id=user_id,
-                    mem_cube_id=mem_cube_id,
                     mem_cube=mem_cube,
                     top_k=k_per_evidence,
-                    method=self.search_method,
-                    search_args=search_args,
+                    mode=mode,
+                    mem_cube_id=mem_cube_id,
                 )
 
             logger.info(
