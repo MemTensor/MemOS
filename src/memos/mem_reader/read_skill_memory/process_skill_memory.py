@@ -2,8 +2,11 @@ from concurrent.futures import as_completed
 from typing import Any
 
 from memos.context import ContextThreadPoolExecutor
+from memos.llms.base import BaseLLM
 from memos.log import get_logger
+from memos.mem_reader.utils import parse_json_string
 from memos.memories.textual.item import TextualMemoryItem
+from memos.templates.skill_mem_prompt import TASK_CHUNKING_PROMPT
 from memos.types import MessageList
 
 
@@ -14,15 +17,52 @@ OSS_DIR = "memos/skill_memory/"
 
 
 def _reconstruct_messages_from_memory_items(memory_items: list[TextualMemoryItem]) -> MessageList:
-    pass
+    reconstructed_messages = []
+    for memory_item in memory_items:
+        for source_message in memory_item.metadata.sources:
+            try:
+                role = source_message.role
+                content = source_message.content
+                reconstructed_messages.append({"role": role, "content": content})
+            except Exception as e:
+                logger.error(f"Error reconstructing message: {e}")
+                continue
+    return reconstructed_messages
 
 
 def _add_index_to_message(messages: MessageList) -> MessageList:
-    pass
+    for i, message in enumerate(messages):
+        message["idx"] = i
+    return messages
 
 
-def _split_task_chunk_by_llm(messages: MessageList) -> dict[str, MessageList]:
-    pass
+def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, MessageList]:
+    """Split messages into task chunks by LLM."""
+    messages_context = "\n".join(
+        [
+            f"{message.get('idx', i)}: {message['role']}: {message['content']}"
+            for i, message in enumerate(messages)
+        ]
+    )
+    prompt = [
+        {"role": "user", "content": TASK_CHUNKING_PROMPT.replace("{{messages}}", messages_context)}
+    ]
+    for attempt in range(3):
+        try:
+            response_text = llm.generate(prompt)
+            break
+        except Exception as e:
+            logger.warning(f"LLM generate failed (attempt {attempt + 1}): {e}")
+            if attempt == 2:
+                logger.error("LLM generate failed after 3 retries, returning default value")
+                return {"default": [messages[i] for i in range(len(messages))]}
+    response_json = parse_json_string(response_text)
+    task_chunks = {}
+    for item in response_json:
+        task_name = item["task_name"]
+        message_indices = item["message_indices"]
+        task_chunks[task_name] = [messages[idx] for idx in message_indices]
+    return task_chunks
 
 
 def _extract_skill_memory_by_llm(task_type: str, messages: MessageList) -> dict[str, Any]:
