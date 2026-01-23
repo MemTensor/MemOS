@@ -475,6 +475,8 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            include_skill_memory=search_req.include_skill_memory,
+            skill_mem_top_k=search_req.skill_mem_top_k,
             dedup=search_req.dedup,
         )
 

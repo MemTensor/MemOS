@@ -358,6 +358,18 @@ class APISearchRequest(BaseRequest):
         description="Number of tool memories to retrieve (top-K). Default: 6.",
     )
 
+    include_skill_memory: bool = Field(
+        True,
+        description="Whether to retrieve skill memories along with general memories. "
+        "If enabled, the system will automatically recall skill memories "
+        "relevant to the query. Default: True.",
+    )
+    skill_mem_top_k: int = Field(
+        3,
+        ge=0,
+        description="Number of skill memories to retrieve (top-K). Default: 3.",
+    )
+
     # ==== Filter conditions ====
     # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(

@@ -119,6 +119,8 @@ class Searcher:
         info=None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
         dedup: str | None = None,
         plugin=False,
     ):
@@ -127,7 +129,13 @@ class Searcher:
         else:
             deduped = self._deduplicate_results(retrieved_results)
         final_results = self._sort_and_trim(
-            deduped, top_k, plugin, search_tool_memory, tool_mem_top_k
+            deduped,
+            top_k,
+            plugin,
+            search_tool_memory,
+            tool_mem_top_k,
+            include_skill_memory,
+            skill_mem_top_k,
         )
         self._update_usage_history(final_results, info, user_name)
         return final_results
@@ -145,6 +153,8 @@ class Searcher:
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
         dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
@@ -207,6 +217,8 @@ class Searcher:
             plugin=kwargs.get("plugin", False),
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            include_skill_memory=include_skill_memory,
+            skill_mem_top_k=skill_mem_top_k,
             dedup=dedup,
         )
 
@@ -642,6 +654,17 @@ class Searcher:
         )
         return schema_reranked + trajectory_reranked
 
+    # --- Path E
+    @timed
+    def _retrieve_from_skill_memory(
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+    ):
+        """Retrieve and rerank from SkillMemory"""
+
     @timed
     def _retrieve_simple(
         self,
@@ -704,7 +727,14 @@ class Searcher:
 
     @timed
     def _sort_and_trim(
-        self, results, top_k, plugin=False, search_tool_memory=False, tool_mem_top_k=6
+        self,
+        results,
+        top_k,
+        plugin=False,
+        search_tool_memory=False,
+        tool_mem_top_k=6,
+        include_skill_memory=False,
+        skill_mem_top_k=3,
     ):
         """Sort results by score and trim to top_k"""
         final_items = []
@@ -749,6 +779,10 @@ class Searcher:
                         metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
                     )
                 )
+
+        if include_skill_memory:
+            pass
+
         # separate textual results
         results = [
             (item, score)
