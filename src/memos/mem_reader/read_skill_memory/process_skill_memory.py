@@ -1,10 +1,11 @@
+import json
+
 from concurrent.futures import as_completed
 from typing import Any
 
 from memos.context import ContextThreadPoolExecutor
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
-from memos.mem_reader.utils import parse_json_string
 from memos.memories.textual.item import TextualMemoryItem
 from memos.templates.skill_mem_prompt import TASK_CHUNKING_PROMPT
 from memos.types import MessageList
@@ -56,12 +57,13 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
             if attempt == 2:
                 logger.error("LLM generate failed after 3 retries, returning default value")
                 return {"default": [messages[i] for i in range(len(messages))]}
-    response_json = parse_json_string(response_text)
+    response_json = json.loads(response_text.replace("```json", "").replace("```", ""))
     task_chunks = {}
     for item in response_json:
         task_name = item["task_name"]
         message_indices = item["message_indices"]
-        task_chunks[task_name] = [messages[idx] for idx in message_indices]
+        for start, end in message_indices:
+            task_chunks.setdefault(task_name, []).extend(messages[start : end + 1])
     return task_chunks
 
 

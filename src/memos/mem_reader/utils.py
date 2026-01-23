@@ -76,74 +76,6 @@ def parse_json_result(response_text: str) -> dict:
         return {}
 
 
-def parse_json_string(response_text: str) -> any:
-    """Parse JSON string that could be either an object or an array.
-
-    Args:
-        response_text: The text containing JSON data
-
-    Returns:
-        Parsed JSON object or array, or empty dict if parsing fails
-    """
-    s = (response_text or "").strip()
-
-    # Extract JSON from code blocks
-    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, flags=re.I)
-    s = (m.group(1) if m else s.replace("```", "")).strip()
-
-    # Find the start of JSON (either { or [)
-    brace_idx = s.find("{")
-    bracket_idx = s.find("[")
-
-    # Determine which one comes first
-    if brace_idx == -1 and bracket_idx == -1:
-        return {}
-
-    # Start from the first JSON delimiter
-    if brace_idx == -1:
-        # Only bracket found
-        start_idx = bracket_idx
-    elif bracket_idx == -1:
-        # Only brace found
-        start_idx = brace_idx
-    else:
-        # Both found, use the one that comes first
-        start_idx = min(brace_idx, bracket_idx)
-
-    s = s[start_idx:].strip()
-
-    try:
-        return json.loads(s)
-    except json.JSONDecodeError:
-        pass
-
-    # Try to find the end of JSON
-    j = max(s.rfind("}"), s.rfind("]"))
-    if j != -1:
-        try:
-            return json.loads(s[: j + 1])
-        except json.JSONDecodeError:
-            pass
-
-    # Try to close the JSON structure
-    def _cheap_close(t: str) -> str:
-        t += "}" * max(0, t.count("{") - t.count("}"))
-        t += "]" * max(0, t.count("[") - t.count("]"))
-        return t
-
-    t = _cheap_close(s)
-    try:
-        return json.loads(t)
-    except json.JSONDecodeError as e:
-        if "Invalid \\escape" in str(e):
-            s = s.replace("\\", "\\\\")
-            return json.loads(s)
-        logger.error(
-            f"[JSONParse] Failed to decode JSON: {e}\nTail: Raw {response_text} \\            json: {s}"
-        )
-        return {}
-
-
 def parse_rewritten_response(text: str) -> tuple[bool, dict[int, dict]]:
     """Parse index-keyed JSON from hallucination filter response.
     Expected shape: { "0": {"need_rewrite": bool, "rewritten": str, "reason": str}, ... }
@@ -222,18 +154,3 @@ def parse_keep_filter_response(text: str) -> tuple[bool, dict[int, dict]]:
                 "reason": reason,
             }
     return (len(result) > 0), result
-
-
-if __name__ == "__main__":
-    json_str = """
-    [
-        {
-            "task_id": 1,
-            "task_name": "任务的简短描述（如：制定旅行计划）",
-            "message_indices": [0, 1, 2, 3, 4, 5],
-            "reasoning": "简述为什么将这些消息归为一类"
-        }
-    ]
-    """
-    json_data = parse_json_string(json_str)
-    print(json_data)

@@ -12,15 +12,17 @@ Please analyze the provided conversation records, identify all independent "task
 4. **Output Format**: Please strictly follow the JSON format for output to facilitate my subsequent processing.
 5. **Language Consistency**: The language used in the task_name field must match the language used in the conversation records.
 
+```json
 [
   {
     "task_id": 1,
     "task_name": "Brief description of the task (e.g., Making travel plans)",
-    "message_indices": [0, 1, 2, 3, 4, 5],
+    "message_indices": [[0, 5],[16, 17]], # 0-5 and 16-17 are the message indices for this task
     "reasoning": "Briefly explain why these messages are grouped together"
   },
   ...
 ]
+```
 
 
 
