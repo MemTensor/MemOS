@@ -1,7 +1,10 @@
 import json
+import os
 
 from concurrent.futures import as_completed
 from typing import Any
+
+import alibabacloud_oss_v2 as oss
 
 from memos.context import ContextThreadPoolExecutor
 from memos.llms.base import BaseLLM
@@ -15,6 +18,22 @@ logger = get_logger(__name__)
 
 
 OSS_DIR = "memos/skill_memory/"
+
+
+def create_oss_client() -> oss.Client:
+    credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
+
+    # load SDK's default configuration, and set credential provider
+    cfg = oss.config.load_default()
+    cfg.credentials_provider = credentials_provider
+    cfg.region = os.getenv("OSS_REGION")
+    cfg.endpoint = os.getenv("OSS_ENDPOINT")
+    client = oss.Client(cfg)
+
+    return client
+
+
+OSS_CLIENT = create_oss_client()
 
 
 def _reconstruct_messages_from_memory_items(memory_items: list[TextualMemoryItem]) -> MessageList:
@@ -67,16 +86,33 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
     return task_chunks
 
 
-def _extract_skill_memory_by_llm(task_type: str, messages: MessageList) -> dict[str, Any]:
+def _extract_skill_memory_by_llm(
+    task_type: str, messages: MessageList, llm: BaseLLM
+) -> dict[str, Any]:
     pass
 
 
-def _upload_skills_to_oss(file_path: str) -> str:
-    pass
+def _upload_skills_to_oss(
+    local_file_path: str, oss_file_path: str, client: oss.Client
+) -> oss.PutObjectResult:
+    result = client.put_object_from_file(
+        request=oss.PutObjectRequest(
+            bucket=os.getenv("OSS_BUCKET_NAME"),
+            key=oss_file_path,
+        ),
+        filepath=local_file_path,
+    )
+    return result
 
 
-def _delete_skills_from_oss(file_path: str) -> None:
-    pass
+def _delete_skills_from_oss(oss_file_path: str, client: oss.Client) -> oss.DeleteObjectResult:
+    result = client.delete_object(
+        oss.DeleteObjectRequest(
+            bucket=os.getenv("OSS_BUCKET_NAME"),
+            key=oss_file_path,
+        )
+    )
+    return result
 
 
 def _write_skills_to_file(skill_memory: dict[str, Any]) -> str:

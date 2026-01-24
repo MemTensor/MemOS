@@ -123,3 +123,4 @@ uvicorn==0.38.0
 uvloop==0.22.1; sys_platform != 'win32'
 watchfiles==1.1.1
 websockets==15.0.1
+alibabacloud-oss-v2==1.2.2
