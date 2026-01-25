@@ -190,7 +190,7 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
-        lambda_relevance = 0.8
+        lambda_relevance = 0.7
         remaining = set(range(len(flat)))
         while remaining:
             best_idx: int | None = None
