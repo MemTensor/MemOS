@@ -247,7 +247,7 @@ class PostgresGraphDBConfig(BaseConfig):
         default=False,
         description="If False: use single database with logical isolation by user_name",
     )
-    embedding_dimension: int = Field(default=384, description="Dimension of vector embedding")
+    embedding_dimension: int = Field(default=768, description="Dimension of vector embedding (768 for all-mpnet-base-v2)")
     maxconn: int = Field(
         default=20,
         description="Maximum number of connections in the connection pool",
