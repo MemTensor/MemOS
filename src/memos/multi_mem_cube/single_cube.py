@@ -121,6 +121,7 @@ class SingleCubeView(MemCubeView):
             "pref_mem": [],
             "pref_note": "",
             "tool_mem": [],
+            "skill_mem": [],
         }
 
         # Determine search mode

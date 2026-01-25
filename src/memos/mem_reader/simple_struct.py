@@ -20,6 +20,7 @@ from memos.mem_reader.base import BaseMemReader
 
 if TYPE_CHECKING:
     from memos.graph_dbs.base import BaseGraphDB
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.mem_reader.read_multi_modal import coerce_scene_data, detect_lang
 from memos.mem_reader.utils import (
     count_tokens_text,
@@ -186,6 +187,9 @@ class SimpleStructMemReader(BaseMemReader, ABC):
 
     def set_graph_db(self, graph_db: "BaseGraphDB | None") -> None:
         self.graph_db = graph_db
+
+    def set_searcher(self, searcher: "Searcher | None") -> None:
+        self.searcher = searcher
 
     def _make_memory_item(
         self,

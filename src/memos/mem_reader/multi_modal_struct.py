@@ -10,6 +10,7 @@ from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
+from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -819,13 +820,24 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 future_tool = executor.submit(
                     self._process_tool_trajectory_fine, fast_memory_items, info, **kwargs
                 )
+                future_skill = executor.submit(
+                    process_skill_memory_fine,
+                    fast_memory_items=fast_memory_items,
+                    info=info,
+                    searcher=self.searcher,
+                    llm=self.llm,
+                    rewrite_query=kwargs.get("rewrite_query", False),
+                    **kwargs,
+                )
 
                 # Collect results
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
+                fine_memory_items_skill_memory_parser = future_skill.result()
 
             fine_memory_items.extend(fine_memory_items_string_parser)
             fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
+            fine_memory_items.extend(fine_memory_items_skill_memory_parser)
 
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
