@@ -265,7 +265,7 @@ class SingleCubeView(MemCubeView):
             info=info,
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in enhanced_memories
         ]
         return formatted_memories
@@ -277,7 +277,7 @@ class SingleCubeView(MemCubeView):
             search_req.query, user_id=user_context.mem_cube_id
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in deepsearch_results
         ]
         return formatted_memories
@@ -389,7 +389,7 @@ class SingleCubeView(MemCubeView):
             enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in deduped_memories
         ]
 
@@ -479,7 +479,7 @@ class SingleCubeView(MemCubeView):
         )
 
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in search_results
         ]
 

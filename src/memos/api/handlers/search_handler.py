@@ -5,6 +5,7 @@ This module provides a class-based implementation of search handlers,
 using dependency injection for better modularity and testability.
 """
 
+import math
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
@@ -55,19 +56,55 @@ class SearchHandler(BaseHandler):
         """
         self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
 
-        # Increase recall pool if deduplication is enabled to ensure diversity
         original_top_k = search_req.top_k
-        if search_req.dedup == "sim":
-            search_req.top_k = original_top_k * 5
+        adjusted_top_k = False
 
-        cube_view = self._build_cube_view(search_req)
+        prev_text_mem_include_embedding: bool | None = None
+        prev_graph_retriever_include_embedding: bool | None = None
 
-        results = cube_view.search_memories(search_req)
-        if search_req.dedup == "sim":
-            results = self._dedup_text_memories(results, original_top_k)
-            self._strip_embeddings(results)
-            # Restore original top_k for downstream logic or response metadata
-            search_req.top_k = original_top_k
+        search_req.dedup = "mmr"
+
+        try:
+            if search_req.dedup == "sim":
+                search_req.top_k = original_top_k * 5
+                adjusted_top_k = True
+            elif search_req.dedup == "mmr":
+                search_req.top_k = original_top_k * 5
+                adjusted_top_k = True
+
+            if search_req.dedup == "mmr":
+                text_mem = getattr(self.naive_mem_cube, "text_mem", None)
+                if text_mem is not None and hasattr(text_mem, "include_embedding"):
+                    prev_text_mem_include_embedding = text_mem.include_embedding
+                    text_mem.include_embedding = True
+
+                graph_retriever = getattr(self.searcher, "graph_retriever", None)
+                if graph_retriever is not None and hasattr(graph_retriever, "include_embedding"):
+                    prev_graph_retriever_include_embedding = graph_retriever.include_embedding
+                    graph_retriever.include_embedding = True
+
+            cube_view = self._build_cube_view(search_req)
+            results = cube_view.search_memories(search_req)
+
+            if search_req.dedup == "sim":
+                results = self._dedup_text_memories(results, original_top_k)
+                self._strip_embeddings(results)
+            elif search_req.dedup == "mmr":
+                results = self._mmr_dedup_text_memories(results, original_top_k)
+                self._strip_embeddings(results)
+        finally:
+            if adjusted_top_k:
+                search_req.top_k = original_top_k
+
+            if prev_text_mem_include_embedding is not None:
+                text_mem = getattr(self.naive_mem_cube, "text_mem", None)
+                if text_mem is not None and hasattr(text_mem, "include_embedding"):
+                    text_mem.include_embedding = prev_text_mem_include_embedding
+
+            if prev_graph_retriever_include_embedding is not None:
+                graph_retriever = getattr(self.searcher, "graph_retriever", None)
+                if graph_retriever is not None and hasattr(graph_retriever, "include_embedding"):
+                    graph_retriever.include_embedding = prev_graph_retriever_include_embedding
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
@@ -125,6 +162,78 @@ class SearchHandler(BaseHandler):
             bucket["memories"] = [flat[i][1] for i in selected_indices]
         return results
 
+    def _mmr_dedup_text_memories(self, results: dict[str, Any], target_top_k: int) -> dict[str, Any]:
+        buckets = results.get("text_mem", [])
+        if not buckets:
+            return results
+
+        flat: list[tuple[int, dict[str, Any], float]] = []
+        for bucket_idx, bucket in enumerate(buckets):
+            for mem in bucket.get("memories", []):
+                score = mem.get("metadata", {}).get("relativity", 0.0)
+                flat.append((bucket_idx, mem, float(score) if score is not None else 0.0))
+
+        if len(flat) <= 1:
+            return results
+
+        embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
+        if embeddings is None:
+            documents = [mem.get("memory", "") for _, mem, _ in flat]
+            embeddings = self.searcher.embedder.embed(documents)
+
+        similarity_matrix = self._cosine_similarity_matrix_local(embeddings)
+
+        indices_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
+        for flat_index, (bucket_idx, _, _) in enumerate(flat):
+            indices_by_bucket[bucket_idx].append(flat_index)
+
+        selected_global: list[int] = []
+        selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
+
+        lambda_relevance = 0.8
+        remaining = set(range(len(flat)))
+        while remaining:
+            best_idx: int | None = None
+            best_mmr: float | None = None
+
+            for idx in remaining:
+                bucket_idx = flat[idx][0]
+                if len(selected_by_bucket[bucket_idx]) >= target_top_k:
+                    continue
+
+                relevance = flat[idx][2]
+                diversity = (
+                    0.0
+                    if not selected_global
+                    else max(similarity_matrix[idx][j] for j in selected_global)
+                )
+                mmr_score = lambda_relevance * relevance - (1.0 - lambda_relevance) * diversity
+
+                if best_mmr is None or mmr_score > best_mmr:
+                    best_mmr = mmr_score
+                    best_idx = idx
+
+            if best_idx is None:
+                break
+
+            selected_global.append(best_idx)
+            selected_by_bucket[flat[best_idx][0]].append(best_idx)
+            remaining.remove(best_idx)
+
+            all_full = True
+            for bucket_idx, bucket_indices in indices_by_bucket.items():
+                if len(selected_by_bucket[bucket_idx]) < min(target_top_k, len(bucket_indices)):
+                    all_full = False
+                    break
+            if all_full:
+                break
+
+        for bucket_idx, bucket in enumerate(buckets):
+            selected_indices = selected_by_bucket.get(bucket_idx, [])
+            bucket["memories"] = [flat[i][1] for i in selected_indices]
+
+        return results
+
     @staticmethod
     def _is_unrelated(
         index: int,
@@ -164,6 +273,34 @@ class SearchHandler(BaseHandler):
                 metadata = mem.get("metadata", {})
                 if "embedding" in metadata:
                     metadata["embedding"] = []
+
+    @staticmethod
+    def _cosine_similarity_matrix_local(embeddings: list[list[float]]) -> list[list[float]]:
+        if not embeddings:
+            return []
+
+        normalized: list[list[float]] = []
+        for vec in embeddings:
+            norm_sq = 0.0
+            for x in vec:
+                xf = float(x)
+                norm_sq += xf * xf
+            denom = math.sqrt(norm_sq) if norm_sq > 0.0 else 1.0
+            normalized.append([float(x) / denom for x in vec])
+
+        n = len(normalized)
+        sim: list[list[float]] = [[0.0] * n for _ in range(n)]
+        for i in range(n):
+            sim[i][i] = 1.0
+            vi = normalized[i]
+            for j in range(i + 1, n):
+                vj = normalized[j]
+                dot = 0.0
+                for a, b in zip(vi, vj, strict=False):
+                    dot += a * b
+                sim[i][j] = dot
+                sim[j][i] = dot
+        return sim
 
     def _resolve_cube_ids(self, search_req: APISearchRequest) -> list[str]:
         """
