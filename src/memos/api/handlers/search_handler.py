@@ -191,6 +191,7 @@ class SearchHandler(BaseHandler):
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
         lambda_relevance = 0.7
+        alpha_tag = 0.1
         remaining = set(range(len(flat)))
         while remaining:
             best_idx: int | None = None
@@ -207,7 +208,33 @@ class SearchHandler(BaseHandler):
                     if not selected_global
                     else max(similarity_matrix[idx][j] for j in selected_global)
                 )
-                mmr_score = lambda_relevance * relevance - (1.0 - lambda_relevance) * diversity
+                tag_penalty = 0.0
+                if selected_global:
+                    current_tags = set(
+                        flat[idx][1].get("metadata", {}).get("tags", []) or []
+                    )
+                    if current_tags:
+                        max_jaccard = 0.0
+                        for j in selected_global:
+                            other_tags = set(
+                                flat[j][1].get("metadata", {}).get("tags", []) or []
+                            )
+                            if not other_tags:
+                                continue
+                            inter = current_tags.intersection(other_tags)
+                            if not inter:
+                                continue
+                            union = current_tags.union(other_tags)
+                            jaccard = float(len(inter)) / float(len(union)) if union else 0.0
+                            if jaccard > max_jaccard:
+                                max_jaccard = jaccard
+                        tag_penalty = max_jaccard
+
+                mmr_score = (
+                    lambda_relevance * relevance
+                    - (1.0 - lambda_relevance) * diversity
+                    - alpha_tag * tag_penalty
+                )
 
                 if best_mmr is None or mmr_score > best_mmr:
                     best_mmr = mmr_score
