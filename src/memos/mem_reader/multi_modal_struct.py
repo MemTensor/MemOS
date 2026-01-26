@@ -826,7 +826,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     info=info,
                     searcher=self.searcher,
                     llm=self.llm,
-                    rewrite_query=kwargs.get("rewrite_query", False),
                     **kwargs,
                 )
 
@@ -885,13 +884,22 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             future_tool = executor.submit(
                 self._process_tool_trajectory_fine, [raw_node], info, **kwargs
             )
+            future_skill = executor.submit(
+                process_skill_memory_fine,
+                [raw_node],
+                info,
+                searcher=self.searcher,
+                llm=self.llm,
+                **kwargs,
+            )
 
             # Collect results
             fine_memory_items_string_parser = future_string.result()
             fine_memory_items_tool_trajectory_parser = future_tool.result()
-
+            fine_memory_items_skill_memory_parser = future_skill.result()
         fine_memory_items.extend(fine_memory_items_string_parser)
         fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
+        fine_memory_items.extend(fine_memory_items_skill_memory_parser)
 
         # Part B: get fine multimodal items
         for source in sources:
