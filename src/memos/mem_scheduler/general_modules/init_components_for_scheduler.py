@@ -109,7 +109,7 @@ def build_chat_llm_config() -> list[dict[str, Any]]:
     Returns:
         Validated chat LLM configuration dictionary
     """
-    configs = json.loads(os.getenv("CHAT_MODEL_LIST"))
+    configs = json.loads(os.getenv("CHAT_MODEL_LIST", "[]"))
     return [
         {
             "config_class": LLMConfigFactory.model_validate(
