@@ -209,6 +209,10 @@ class Neo4jGraphDB(BaseGraphDB):
         # Flatten info fields to top level (for Neo4j flat structure)
         metadata = _flatten_info_fields(metadata)
 
+        # Initialize delete_time and delete_record_id fields
+        metadata.setdefault("delete_time", "")
+        metadata.setdefault("delete_record_id", "")
+
         # Merge node and set metadata
         created_at = metadata.pop("created_at")
         updated_at = metadata.pop("updated_at")
@@ -251,6 +255,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+        logger.info("neo4j [add_nodes_batch] staring")
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
@@ -279,6 +284,10 @@ class Neo4jGraphDB(BaseGraphDB):
 
                 # Flatten info fields to top level (for Neo4j flat structure)
                 metadata = _flatten_info_fields(metadata)
+
+                # Initialize delete_time and delete_record_id fields
+                metadata.setdefault("delete_time", "")
+                metadata.setdefault("delete_record_id", "")
 
                 # Merge node and set metadata
                 created_at = metadata.pop("created_at")
