@@ -191,9 +191,17 @@ def _recall_related_skill_memories(
     llm: BaseLLM,
     rewrite_query: bool,
     info: dict[str, Any],
+    mem_cube_id: str,
 ) -> list[TextualMemoryItem]:
     query = _rewrite_query(task_type, messages, llm, rewrite_query)
-    related_skill_memories = searcher.search(query, top_k=10, memory_type="SkillMemory", info=info)
+    related_skill_memories = searcher.search(
+        query,
+        top_k=10,
+        memory_type="SkillMemory",
+        info=info,
+        include_skill_memory=True,
+        user_name=mem_cube_id,
+    )
 
     return related_skill_memories
 
@@ -252,8 +260,7 @@ def _upload_skills_to_oss(local_file_path: str, oss_file_path: str, client: oss.
     # Construct and return the URL
     bucket_name = os.getenv("OSS_BUCKET_NAME")
     endpoint = os.getenv("OSS_ENDPOINT").replace("https://", "").replace("http://", "")
-    file_name = Path(local_file_path).name
-    url = f"https://{bucket_name}.{endpoint}/{file_name}"
+    url = f"https://{bucket_name}.{endpoint}/{oss_file_path}"
     return url
 
 
@@ -449,7 +456,7 @@ def process_skill_memory_fine(
     graph_db: BaseGraphDB | None = None,
     llm: BaseLLM | None = None,
     embedder: BaseEmbedder | None = None,
-    rewrite_query: bool = False,
+    rewrite_query: bool = True,
     **kwargs,
 ) -> list[TextualMemoryItem]:
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
@@ -469,6 +476,7 @@ def process_skill_memory_fine(
                 llm=llm,
                 rewrite_query=rewrite_query,
                 info=info,
+                mem_cube_id=kwargs.get("user_name", info.get("user_id", "")),
             ): task
             for task, msg in task_chunks.items()
         }
@@ -541,6 +549,8 @@ def process_skill_memory_fine(
                     if old_oss_path:
                         try:
                             # delete old skill from OSS
+                            zip_filename = Path(old_oss_path).name
+                            old_oss_path = (Path(OSS_DIR) / user_id / zip_filename).as_posix()
                             _delete_skills_from_oss(old_oss_path, OSS_CLIENT)
                             logger.info(f"Deleted old skill from OSS: {old_oss_path}")
                         except Exception as e:
@@ -557,7 +567,9 @@ def process_skill_memory_fine(
             oss_path = (Path(OSS_DIR) / user_id / zip_filename).as_posix()
 
             # _upload_skills_to_oss returns the URL
-            url = _upload_skills_to_oss(str(zip_path), oss_path, OSS_CLIENT)
+            url = _upload_skills_to_oss(
+                local_file_path=str(zip_path), oss_file_path=oss_path, client=OSS_CLIENT
+            )
 
             # Set URL directly to skill_memory
             skill_memory["url"] = url
