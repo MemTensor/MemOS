@@ -825,7 +825,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     fast_memory_items=fast_memory_items,
                     info=info,
                     searcher=self.searcher,
+                    graph_db=self.graph_db,
                     llm=self.llm,
+                    embedder=self.embedder,
                     **kwargs,
                 )
 
@@ -890,6 +892,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 info,
                 searcher=self.searcher,
                 llm=self.llm,
+                embedder=self.embedder,
+                graph_db=self.graph_db,
                 **kwargs,
             )
 

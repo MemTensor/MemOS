@@ -304,6 +304,9 @@ def init_server() -> dict[str, Any]:
     )
     logger.debug("Searcher created")
 
+    # Set searcher to mem_reader
+    mem_reader.set_searcher(searcher)
+
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(
         llm=llm,
