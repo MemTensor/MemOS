@@ -13,10 +13,10 @@ from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import Fast
 logger = get_logger(__name__)
 
 
-class PreUpdateRecaller:
+class PreUpdateRetriever:
     def __init__(self, graph_db, embedder):
         """
-        The PreUpdateRecaller is designed for the /add phase .
+        The PreUpdateRetriever is designed for the /add phase .
         It serves to recall potentially duplicate/conflict memories against the new content that's being added.
 
         Args:
@@ -145,7 +145,7 @@ class PreUpdateRecaller:
             )
             return results
         except Exception as e:
-            logger.error(f"[PreUpdateRecaller] Vector search failed: {e}")
+            logger.error(f"[PreUpdateRetriever] Vector search failed: {e}")
             return []
 
     def keyword_search(
@@ -170,7 +170,7 @@ class PreUpdateRecaller:
                         query_words=keywords, user_name=user_name, filter=search_filter
                     )
                 except Exception as e:
-                    logger.warning(f"[PreUpdateRecaller] seach_by_keywords_tfidf failed: {e}")
+                    logger.warning(f"[PreUpdateRetriever] seach_by_keywords_tfidf failed: {e}")
 
             # 3. Fallback to search_by_fulltext
             if not results and hasattr(self.graph_db, "search_by_fulltext"):
@@ -179,15 +179,15 @@ class PreUpdateRecaller:
                         query_words=keywords, top_k=top_k, user_name=user_name, filter=search_filter
                     )
                 except Exception as e:
-                    logger.warning(f"[PreUpdateRecaller] search_by_fulltext failed: {e}")
+                    logger.warning(f"[PreUpdateRetriever] search_by_fulltext failed: {e}")
 
             return results[:top_k]
 
         except Exception as e:
-            logger.error(f"[PreUpdateRecaller] Keyword search failed: {e}")
+            logger.error(f"[PreUpdateRetriever] Keyword search failed: {e}")
             return []
 
-    def recall(
+    def retrieve(
         self, item: TextualMemoryItem, user_name: str, top_k: int = 10, sim_threshold: float = 0.5
     ) -> list[TextualMemoryItem]:
         """
@@ -250,7 +250,7 @@ class PreUpdateRecaller:
                         retrieved_ids.add(r["id"])
 
                 except Exception as e:
-                    logger.error(f"[PreUpdateRecaller] Search future task failed: {e}")
+                    logger.error(f"[PreUpdateRetriever] Search future task failed: {e}")
 
         retrieved_ids = list(retrieved_ids)
 

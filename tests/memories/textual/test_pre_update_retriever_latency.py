@@ -14,7 +14,7 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
-from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRecaller
+from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRetriever
 
 
 # Load environment variables
@@ -23,7 +23,7 @@ load_dotenv()
 
 class TestPreUpdateRecallerLatency(unittest.TestCase):
     """
-    Performance and latency tests for PreUpdateRecaller.
+    Performance and latency tests for PreUpdateRetriever.
     These tests are designed to measure latency and might take longer to run.
     """
 
@@ -41,7 +41,7 @@ class TestPreUpdateRecallerLatency(unittest.TestCase):
                 f"Skipping test because initialization failed (likely missing env vars): {e}"
             ) from e
 
-        cls.recaller = PreUpdateRecaller(cls.graph_db, cls.embedder)
+        cls.recaller = PreUpdateRetriever(cls.graph_db, cls.embedder)
 
         # Use a unique user name to isolate tests
         cls.user_name = "test_pre_update_recaller_latency_user_" + str(uuid.uuid4())[:8]
@@ -133,7 +133,7 @@ class TestPreUpdateRecallerLatency(unittest.TestCase):
                 sources=[SourceMessage(role="user", lang="en")], memory_type="WorkingMemory"
             ),
         )
-        self.recaller.recall(warmup_item, self.user_name, top_k=5)
+        self.recaller.retrieve(warmup_item, self.user_name, top_k=5)
 
         print(f"Running {len(queries)} queries...")
         for q in queries:
@@ -150,7 +150,7 @@ class TestPreUpdateRecallerLatency(unittest.TestCase):
             )
 
             start_time = time.time()
-            results = self.recaller.recall(item, self.user_name, top_k=5)
+            results = self.recaller.retrieve(item, self.user_name, top_k=5)
             end_time = time.time()
 
             duration_ms = (end_time - start_time) * 1000

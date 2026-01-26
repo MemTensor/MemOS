@@ -11,7 +11,7 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
-from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRecaller
+from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRetriever
 
 
 # Load environment variables
@@ -34,7 +34,7 @@ class TestPreUpdateRecaller(unittest.TestCase):
                 f"Skipping test because initialization failed (likely missing env vars): {e}"
             ) from e
 
-        cls.recaller = PreUpdateRecaller(cls.graph_db, cls.embedder)
+        cls.recaller = PreUpdateRetriever(cls.graph_db, cls.embedder)
 
         # Use a unique user name to isolate tests
         cls.user_name = "test_pre_update_recaller_user_" + str(uuid.uuid4())[:8]
@@ -102,7 +102,7 @@ class TestPreUpdateRecaller(unittest.TestCase):
         item = TextualMemoryItem(memory=query_text, metadata=metadata)
 
         # The recall method does both vector and keyword search
-        results = self.recaller.recall(item, self.user_name, top_k=5)
+        results = self.recaller.retrieve(item, self.user_name, top_k=5)
 
         # Verify we got results
         self.assertTrue(len(results) > 0, "Should return at least one result")
@@ -125,7 +125,7 @@ class TestPreUpdateRecaller(unittest.TestCase):
 
         item = TextualMemoryItem(memory=query_text, metadata=metadata)
 
-        results = self.recaller.recall(item, self.user_name, top_k=5)
+        results = self.recaller.retrieve(item, self.user_name, top_k=5)
 
         found_texts = [r.memory for r in results]
         self.assertTrue(
