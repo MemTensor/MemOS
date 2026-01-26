@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import time
+
+from memos.context.context import ContextThread
 from memos.log import get_logger
+from memos.mem_scheduler.schemas.general_schemas import DEFAULT_MONITOR_INTERVAL_SECONDS
 from memos.mem_scheduler.task_schedule_modules.local_queue import SchedulerLocalQueue
 from memos.mem_scheduler.task_schedule_modules.redis_queue import SchedulerRedisQueue
+from memos.mem_scheduler.utils import metrics
 
 
 logger = get_logger(__name__)
@@ -22,10 +27,68 @@ class TaskScheduleMonitor:
         memos_message_queue: SchedulerRedisQueue | SchedulerLocalQueue,
         dispatcher: object | None = None,
         get_status_parallel: bool = False,
+        check_interval: int = DEFAULT_MONITOR_INTERVAL_SECONDS,
     ) -> None:
         self.queue = memos_message_queue
         self.dispatcher = dispatcher
         self.get_status_parallel = get_status_parallel
+        self.check_interval = check_interval
+
+        # Monitor thread
+        self._monitor_thread: ContextThread | None = None
+        self._running = False
+
+    def start(self) -> None:
+        """Start the background monitor thread."""
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            logger.info("TaskScheduleMonitor is already running")
+            return
+
+        self._running = True
+        self._monitor_thread = ContextThread(
+            target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor"
+        )
+        self._monitor_thread.start()
+        logger.info("TaskScheduleMonitor started")
+
+    def stop(self) -> None:
+        """Stop the background monitor thread."""
+        if not self._running:
+            return
+
+        self._running = False
+        if self._monitor_thread:
+            self._monitor_thread.join(timeout=2.0)
+            self._monitor_thread = None
+        logger.info("TaskScheduleMonitor stopped")
+
+    def _monitor_loop(self) -> None:
+        """Periodically check queue sizes and update metrics."""
+        while self._running:
+            try:
+                q_sizes = self.queue.qsize()
+
+                if isinstance(q_sizes, dict):
+                    for stream_key, queue_length in q_sizes.items():
+                        # Skip aggregate keys like 'total_size'
+                        if stream_key == "total_size":
+                            continue
+
+                        # Key format: ...:{user_id}:{mem_cube_id}:{task_label}
+                        # We want to extract user_id, which is the 3rd component from the end.
+                        parts = stream_key.split(":")
+                        if len(parts) >= 3:
+                            user_id = parts[-3]
+                            metrics.update_queue_length(queue_length, user_id)
+                        else:
+                            # Fallback
+                            if ":" not in stream_key:
+                                metrics.update_queue_length(queue_length, stream_key)
+
+            except Exception as e:
+                logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)
+
+            time.sleep(self.check_interval)
 
     @staticmethod
     def init_task_status() -> dict:

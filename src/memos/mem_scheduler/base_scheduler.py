@@ -26,6 +26,9 @@ from memos.mem_cube.general import GeneralMemCube
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
+from memos.mem_scheduler.memory_manage_modules.activation_memory_manager import (
+    ActivationMemoryManager,
+)
 from memos.mem_scheduler.memory_manage_modules.post_processor import MemoryPostProcessor
 from memos.mem_scheduler.memory_manage_modules.search_service import SchedulerSearchService
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
@@ -65,12 +68,9 @@ from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
 from memos.mem_scheduler.webservice_modules.web_log_service import WebLogSchedulerModule
-from memos.memories.activation.kv import KVCacheMemory
-from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 from memos.types.general_types import (
     MemCubeID,
     UserID,
@@ -137,13 +137,13 @@ class BaseScheduler(
         self.searcher: Searcher | None = None
         self.search_service: SchedulerSearchService | None = None
         self.post_processor: MemoryPostProcessor | None = None
+        self.activation_memory_manager: ActivationMemoryManager | None = None
         self.db_engine: Engine | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.mem_reader = None  # Will be set by MOSCore
         self._status_tracker: TaskStatusTracker | None = None
         self.metrics = metrics
-        self._monitor_thread = None
         self.memos_message_queue = ScheduleTaskQueue(
             use_redis_queue=self.use_redis_queue,
             maxsize=self.max_internal_message_queue_size,
@@ -167,6 +167,7 @@ class BaseScheduler(
             memos_message_queue=self.memos_message_queue.memos_message_queue,
             dispatcher=self.dispatcher,
             get_status_parallel=self.get_status_parallel,
+            check_interval=self.config.get("monitor_interval_seconds", 15),
         )
 
         # other attributes
@@ -237,9 +238,19 @@ class BaseScheduler(
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
 
+            # Initialize search service (will be updated with searcher when mem_cube is initialized)
+            self.search_service = SchedulerSearchService(searcher=self.searcher)
+
             # Initialize post-processor for memory enhancement and filtering
             self.post_processor = MemoryPostProcessor(
                 process_llm=self.process_llm, config=self.config
+            )
+
+            self.activation_memory_manager = ActivationMemoryManager(
+                act_mem_dump_path=self.act_mem_dump_path,
+                monitor=self.monitor,
+                log_func_callback=self._submit_web_logs,
+                log_activation_memory_update_func=self.log_activation_memory_update,
             )
 
             if mem_reader:
@@ -585,74 +596,16 @@ class BaseScheduler(
         Update activation memory by extracting KVCacheItems from new_memory (list of str),
         add them to a KVCacheMemory instance, and dump to disk.
         """
-        if len(new_memories) == 0:
-            logger.error("update_activation_memory: new_memory is empty.")
-            return
-        if isinstance(new_memories[0], TextualMemoryItem):
-            new_text_memories = [mem.memory for mem in new_memories]
-        elif isinstance(new_memories[0], str):
-            new_text_memories = new_memories
-        else:
-            logger.error("Not Implemented.")
-            return
-
-        try:
-            if isinstance(mem_cube.act_mem, VLLMKVCacheMemory):
-                act_mem: VLLMKVCacheMemory = mem_cube.act_mem
-            elif isinstance(mem_cube.act_mem, KVCacheMemory):
-                act_mem: KVCacheMemory = mem_cube.act_mem
-            else:
-                logger.error("Not Implemented.")
-                return
-
-            new_text_memory = MEMORY_ASSEMBLY_TEMPLATE.format(
-                memory_text="".join(
-                    [
-                        f"{i + 1}. {sentence.strip()}\n"
-                        for i, sentence in enumerate(new_text_memories)
-                        if sentence.strip()  # Skip empty strings
-                    ]
-                )
-            )
-
-            # huggingface or vllm kv cache
-            original_cache_items: list[VLLMKVCacheItem] = act_mem.get_all()
-            original_text_memories = []
-            if len(original_cache_items) > 0:
-                pre_cache_item: VLLMKVCacheItem = original_cache_items[-1]
-                original_text_memories = pre_cache_item.records.text_memories
-                original_composed_text_memory = pre_cache_item.records.composed_text_memory
-                if original_composed_text_memory == new_text_memory:
-                    logger.warning(
-                        "Skipping memory update - new composition matches existing cache: %s",
-                        new_text_memory[:50] + "..."
-                        if len(new_text_memory) > 50
-                        else new_text_memory,
-                    )
-                    return
-                act_mem.delete_all()
-
-            cache_item = act_mem.extract(new_text_memory)
-            cache_item.records.text_memories = new_text_memories
-            cache_item.records.timestamp = get_utc_now()
-
-            act_mem.add([cache_item])
-            act_mem.dump(self.act_mem_dump_path)
-
-            self.log_activation_memory_update(
-                original_text_memories=original_text_memories,
-                new_text_memories=new_text_memories,
+        if self.activation_memory_manager:
+            self.activation_memory_manager.update_activation_memory(
+                new_memories=new_memories,
                 label=label,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
-                log_func_callback=self._submit_web_logs,
             )
-
-        except Exception as e:
-            logger.error(f"MOS-based activation memory update failed: {e}", exc_info=True)
-            # Re-raise the exception if it's critical for the operation
-            # For now, we'll continue execution but this should be reviewed
+        else:
+            logger.warning("Activation memory manager not initialized")
 
     def update_activation_memory_periodically(
         self,
@@ -662,73 +615,16 @@ class BaseScheduler(
         mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
     ):
-        try:
-            if (
-                self.monitor.last_activation_mem_update_time == datetime.min
-                or self.monitor.timed_trigger(
-                    last_time=self.monitor.last_activation_mem_update_time,
-                    interval_seconds=interval_seconds,
-                )
-            ):
-                logger.info(
-                    f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}"
-                )
-
-                if (
-                    user_id not in self.monitor.working_memory_monitors
-                    or mem_cube_id not in self.monitor.working_memory_monitors[user_id]
-                    or len(self.monitor.working_memory_monitors[user_id][mem_cube_id].obj.memories)
-                    == 0
-                ):
-                    logger.warning(
-                        "No memories found in working_memory_monitors, activation memory update is skipped"
-                    )
-                    return
-
-                self.monitor.update_activation_memory_monitors(
-                    user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
-                )
-
-                # Sync with database to get latest activation memories
-                activation_db_manager = self.monitor.activation_memory_monitors[user_id][
-                    mem_cube_id
-                ]
-                activation_db_manager.sync_with_orm()
-                new_activation_memories = [
-                    m.memory_text for m in activation_db_manager.obj.memories
-                ]
-
-                logger.info(
-                    f"Collected {len(new_activation_memories)} new memory entries for processing"
-                )
-                # Print the content of each new activation memory
-                for i, memory in enumerate(new_activation_memories[:5], 1):
-                    logger.info(
-                        f"Part of New Activation Memorires | {i}/{len(new_activation_memories)}: {memory[:20]}"
-                    )
-
-                self.update_activation_memory(
-                    new_memories=new_activation_memories,
-                    label=label,
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                )
-
-                self.monitor.last_activation_mem_update_time = get_utc_now()
-
-                logger.debug(
-                    f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
-                )
-
-            else:
-                logger.info(
-                    f"Skipping update - {interval_seconds} second interval not yet reached. "
-                    f"Last update time is {self.monitor.last_activation_mem_update_time} and now is "
-                    f"{get_utc_now()}"
-                )
-        except Exception as e:
-            logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
+        if self.activation_memory_manager:
+            self.activation_memory_manager.update_activation_memory_periodically(
+                interval_seconds=interval_seconds,
+                label=label,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+            )
+        else:
+            logger.warning("Activation memory manager not initialized")
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit messages for processing, with priority-aware dispatch.
@@ -943,39 +839,6 @@ class BaseScheduler(
                     logger.error(f"Unexpected error in message consumer: {e!s}", exc_info=True)
                 time.sleep(self._consume_interval)  # Prevent tight error loops
 
-    def _monitor_loop(self):
-        while self._running:
-            try:
-                q_sizes = self.memos_message_queue.qsize()
-
-                if not isinstance(q_sizes, dict):
-                    continue
-
-                for stream_key, queue_length in q_sizes.items():
-                    # Skip aggregate keys like 'total_size'
-                    if stream_key == "total_size":
-                        continue
-
-                    # Key format: ...:{user_id}:{mem_cube_id}:{task_label}
-                    # We want to extract user_id, which is the 3rd component from the end.
-                    parts = stream_key.split(":")
-                    if len(parts) >= 3:
-                        user_id = parts[-3]
-                        self.metrics.update_queue_length(queue_length, user_id)
-                    else:
-                        # Fallback for unexpected key formats (e.g. legacy or testing)
-                        # Try to use the key itself if it looks like a user_id (no colons)
-                        # or just log a warning?
-                        # For now, let's assume if it's not total_size and short, it might be a direct user_id key
-                        # (though that shouldn't happen with current queue implementations)
-                        if ":" not in stream_key:
-                            self.metrics.update_queue_length(queue_length, stream_key)
-
-            except Exception as e:
-                logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)
-
-            time.sleep(15)  # 每 15 秒采样一次
-
     def start(self) -> None:
         """
         Start the message consumer thread/process and initialize dispatcher resources.
@@ -983,6 +846,7 @@ class BaseScheduler(
         Initializes and starts:
         1. Message consumer thread or process (based on startup_mode)
         2. Dispatcher thread pool (if parallel dispatch enabled)
+        3. Task schedule monitor
         """
         # Initialize dispatcher resources
         if self.enable_parallel_dispatch:
@@ -991,16 +855,7 @@ class BaseScheduler(
             )
 
         self.start_consumer()
-        self.start_background_monitor()
-
-    def start_background_monitor(self):
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            return
-        self._monitor_thread = ContextThread(
-            target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor"
-        )
-        self._monitor_thread.start()
-        logger.info("Scheduler metrics monitor thread started.")
+        self.task_schedule_monitor.start()
 
     def start_consumer(self) -> None:
         """
@@ -1088,8 +943,7 @@ class BaseScheduler(
         # Stop consumer first
         self.stop_consumer()
 
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=2.0)
+        self.task_schedule_monitor.stop()
 
         # Shutdown dispatcher
         if self.dispatcher:

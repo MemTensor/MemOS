@@ -14,7 +14,7 @@ from memos.configs.mem_scheduler import (
 )
 from memos.llms.base import BaseLLM
 from memos.mem_cube.general import GeneralMemCube
-from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.memory_manage_modules.search_service import SchedulerSearchService
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.scheduler_factory import SchedulerFactory
 from memos.mem_scheduler.schemas.message_schemas import (
@@ -113,7 +113,7 @@ class TestGeneralScheduler(unittest.TestCase):
         """Test module initialization with proper component assignments."""
         self.assertEqual(self.scheduler.chat_llm, self.llm)
         self.assertIsInstance(self.scheduler.monitor, SchedulerGeneralMonitor)
-        self.assertIsInstance(self.scheduler.retriever, SchedulerRetriever)
+        self.assertIsInstance(self.scheduler.search_service, SchedulerSearchService)
 
     def test_submit_web_logs(self):
         """Test submission of web logs with updated data structure."""

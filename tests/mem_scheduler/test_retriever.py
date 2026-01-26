@@ -74,7 +74,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         self.scheduler.initialize_modules(chat_llm=self.llm, process_llm=self.llm)
         self.scheduler.mem_cube = self.mem_cube
 
-        self.retriever = self.scheduler.retriever
+        self.post_processor = self.scheduler.post_processor
 
         # Mock logging to verify messages
         self.logging_warning_patch = patch("logging.warning")
@@ -176,7 +176,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         """Test filter_unrelated_memories with empty memories list."""
         query_history = ["What is the weather like?", "Tell me about Python programming"]
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=[]
         )
 
@@ -192,7 +192,7 @@ class TestSchedulerRetriever(unittest.TestCase):
             TextualMemoryItem(memory="Data science involves statistics"),
         ]
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=[], memories=memories
         )
 
@@ -221,7 +221,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Convert to proper JSON string
         self.llm.generate.return_value = json.dumps(mock_llm_response)
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=memories
         )
 
@@ -251,7 +251,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Mock LLM to return an invalid response that will trigger error handling
         self.llm.generate.return_value = "Invalid response that cannot be parsed"
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=memories
         )
 
@@ -275,7 +275,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Mock LLM to return invalid JSON
         self.llm.generate.return_value = "This is not valid JSON"
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=memories
         )
 
@@ -301,7 +301,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Convert to proper JSON string
         self.llm.generate.return_value = json.dumps(mock_llm_response)
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=memories
         )
 
@@ -327,7 +327,7 @@ class TestSchedulerRetriever(unittest.TestCase):
         # Convert to proper JSON string
         self.llm.generate.return_value = json.dumps(mock_llm_response)
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=memories
         )
 
@@ -353,7 +353,7 @@ class TestSchedulerRetriever(unittest.TestCase):
 
         self.llm.generate.return_value = json.dumps(mock_llm_response)
 
-        result, success_flag = self.retriever.filter_unrelated_memories(
+        result, success_flag = self.post_processor.filter_unrelated_memories(
             query_history=query_history, memories=memories
         )
 
