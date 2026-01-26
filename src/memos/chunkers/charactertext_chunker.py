@@ -36,6 +36,8 @@ class CharacterTextChunker(BaseChunker):
 
     def chunk(self, text: str, **kwargs) -> list[str] | list[Chunk]:
         """Chunk the given text into smaller chunks based on sentences."""
-        chunks = self.chunker.split_text(text)
+        protected_text, url_map = self.protect_urls(text)
+        chunks = self.chunker.split_text(protected_text)
+        chunks = [self.restore_urls(chunk, url_map) for chunk in chunks]
         logger.debug(f"Generated {len(chunks)} chunks from input text")
         return chunks
