@@ -214,10 +214,9 @@ class SearchHandler(BaseHandler):
                 selected_global.append(idx)
                 selected_by_bucket[bucket_idx].append(idx)
 
-        # MMR selection with threshold-based penalties
+        # MMR selection with diversity and tag penalties
         lambda_relevance = 0.8
         alpha_tag = 0.1
-        similarity_threshold = 0.9
         remaining = set(range(len(flat))) - set(selected_global)
         while remaining:
             best_idx: int | None = None
@@ -234,7 +233,6 @@ class SearchHandler(BaseHandler):
                     if not selected_global
                     else max(similarity_matrix[idx][j] for j in selected_global)
                 )
-                diversity_penalty = max(0.0, diversity - similarity_threshold)
 
                 # Tag penalty: compute max Jaccard similarity with selected memories
                 tag_penalty = 0.0
@@ -272,7 +270,7 @@ class SearchHandler(BaseHandler):
 
                 mmr_score = (
                     lambda_relevance * relevance
-                    - (1.0 - lambda_relevance) * diversity_penalty
+                    - (1.0 - lambda_relevance) * diversity
                     - alpha_tag * tag_penalty
                 )
 
