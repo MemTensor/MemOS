@@ -207,8 +207,8 @@ class SearchHandler(BaseHandler):
                 selected_global.append(idx)
                 selected_by_bucket[bucket_idx].append(idx)
 
-        lambda_relevance = 0.6
-        alpha_tag = 0.1
+        lambda_relevance = 0.8
+        alpha_tag = 0.2
         remaining = set(range(len(flat))) - set(selected_global)
         while remaining:
             best_idx: int | None = None
