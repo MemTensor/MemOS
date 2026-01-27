@@ -2929,14 +2929,14 @@ markers = {main = "platform_system == \"Linux\" and platform_machine == \"x86_64
 
 [[package]]
 name = "ollama"
-version = "0.4.9"
+version = "0.5.0"
 description = "The official Python client for Ollama."
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "ollama-0.4.9-py3-none-any.whl", hash = "sha256:18c8c85358c54d7f73d6a66cda495b0e3ba99fdb88f824ae470d740fbb211a50"},
-    {file = "ollama-0.4.9.tar.gz", hash = "sha256:5266d4d29b5089a01489872b8e8f980f018bccbdd1082b3903448af1d5615ce7"},
+    {file = "ollama-0.5.0-py3-none-any.whl", hash = "sha256:625371de663ccb48f14faa49bd85ae409da5e40d84cab42366371234b4dbaf68"},
+    {file = "ollama-0.5.0.tar.gz", hash = "sha256:ed6a343b64de22f69309ac930d8ac12b46775aebe21cbb91b859b99f59c53fa7"},
 ]
 
 [package.dependencies]
@@ -6373,4 +6373,4 @@ tree-mem = ["neo4j", "schedule"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "d4a267db0ac8b85f5bd995b34bfd7ebb8a678e478ddb3c3e45fb52cf58403b50"
+content-hash = "faff240c05a74263a404e8d9324ffd2f342cb4f0a4c1f5455b87349f6ccc61a5"
