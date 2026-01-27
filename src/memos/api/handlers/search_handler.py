@@ -179,6 +179,15 @@ class SearchHandler(BaseHandler):
         if len(flat) <= 1:
             return results
 
+        ordered_by_relevance = sorted(range(len(flat)), key=lambda idx: flat[idx][2], reverse=True)
+        candidate_pool_size = min(len(flat), target_top_k * 3)
+        candidate_indices = ordered_by_relevance[:candidate_pool_size]
+        flat = [flat[i] for i in candidate_indices]
+        ordered_by_relevance = sorted(range(len(flat)), key=lambda idx: flat[idx][2], reverse=True)
+
+        if len(flat) <= 1:
+            return results
+
         embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
         if embeddings is None:
             documents = [mem.get("memory", "") for _, mem, _ in flat]
@@ -193,23 +202,10 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
-        prefill_top_n = min(5, target_top_k)
-        if prefill_top_n > 0:
-            ordered_by_relevance = sorted(
-                range(len(flat)), key=lambda idx: flat[idx][2], reverse=True
-            )
-            for idx in ordered_by_relevance:
-                if len(selected_global) >= prefill_top_n:
-                    break
-                bucket_idx = flat[idx][0]
-                if len(selected_by_bucket[bucket_idx]) >= target_top_k:
-                    continue
-                selected_global.append(idx)
-                selected_by_bucket[bucket_idx].append(idx)
-
+        # No prefill - let MMR handle all selections with threshold-based penalty
         lambda_relevance = 0.8
-        alpha_tag = 0
-        remaining = set(range(len(flat))) - set(selected_global)
+        similarity_threshold = 0.9
+        remaining = set(range(len(flat)))
         while remaining:
             best_idx: int | None = None
             best_mmr: float | None = None
@@ -225,32 +221,11 @@ class SearchHandler(BaseHandler):
                     if not selected_global
                     else max(similarity_matrix[idx][j] for j in selected_global)
                 )
-                tag_penalty = 0.0
-                if selected_global:
-                    current_tags = set(
-                        flat[idx][1].get("metadata", {}).get("tags", []) or []
-                    )
-                    if current_tags:
-                        max_jaccard = 0.0
-                        for j in selected_global:
-                            other_tags = set(
-                                flat[j][1].get("metadata", {}).get("tags", []) or []
-                            )
-                            if not other_tags:
-                                continue
-                            inter = current_tags.intersection(other_tags)
-                            if not inter:
-                                continue
-                            union = current_tags.union(other_tags)
-                            jaccard = float(len(inter)) / float(len(union)) if union else 0.0
-                            if jaccard > max_jaccard:
-                                max_jaccard = jaccard
-                        tag_penalty = max_jaccard
+                diversity_penalty = max(0.0, diversity - similarity_threshold)
 
                 mmr_score = (
                     lambda_relevance * relevance
-                    - (1.0 - lambda_relevance) * diversity
-                    - alpha_tag * tag_penalty
+                    - (1.0 - lambda_relevance) * diversity_penalty
                 )
 
                 if best_mmr is None or mmr_score > best_mmr:
@@ -274,6 +249,7 @@ class SearchHandler(BaseHandler):
 
         for bucket_idx, bucket in enumerate(buckets):
             selected_indices = selected_by_bucket.get(bucket_idx, [])
+            selected_indices = sorted(selected_indices, key=lambda i: flat[i][2], reverse=True)
             bucket["memories"] = [flat[i][1] for i in selected_indices]
 
         return results
