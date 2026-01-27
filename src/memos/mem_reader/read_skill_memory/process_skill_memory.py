@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import uuid
 import zipfile
 
@@ -578,6 +579,20 @@ def process_skill_memory_fine(
         except Exception as e:
             logger.error(f"Error uploading skill to OSS: {e}")
             skill_memory["url"] = ""  # Set to empty string if upload fails
+        finally:
+            # Clean up local files after upload
+            try:
+                zip_file = Path(zip_path)
+                skill_dir = zip_file.parent / zip_file.stem
+                # Delete zip file
+                if zip_file.exists():
+                    zip_file.unlink()
+                # Delete skill directory
+                if skill_dir.exists():
+                    shutil.rmtree(skill_dir)
+                logger.info(f"Cleaned up local files: {zip_path} and {skill_dir}")
+            except Exception as cleanup_error:
+                logger.warning(f"Error cleaning up local files: {cleanup_error}")
 
     # Create TextualMemoryItem objects
     skill_memory_items = []
