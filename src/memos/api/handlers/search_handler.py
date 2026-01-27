@@ -179,15 +179,6 @@ class SearchHandler(BaseHandler):
         if len(flat) <= 1:
             return results
 
-        ordered_by_relevance = sorted(range(len(flat)), key=lambda idx: flat[idx][2], reverse=True)
-        candidate_pool_size = min(len(flat), target_top_k * 3)
-        candidate_indices = ordered_by_relevance[:candidate_pool_size]
-        flat = [flat[i] for i in candidate_indices]
-        ordered_by_relevance = sorted(range(len(flat)), key=lambda idx: flat[idx][2], reverse=True)
-
-        if len(flat) <= 1:
-            return results
-
         embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
         if embeddings is None:
             documents = [mem.get("memory", "") for _, mem, _ in flat]
@@ -202,9 +193,11 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
-        # Prefill top5 by relevance to ensure high-relevance items are always selected
         prefill_top_n = min(5, target_top_k)
         if prefill_top_n > 0:
+            ordered_by_relevance = sorted(
+                range(len(flat)), key=lambda idx: flat[idx][2], reverse=True
+            )
             for idx in ordered_by_relevance:
                 if len(selected_global) >= prefill_top_n:
                     break
@@ -214,7 +207,6 @@ class SearchHandler(BaseHandler):
                 selected_global.append(idx)
                 selected_by_bucket[bucket_idx].append(idx)
 
-        # MMR selection with diversity and tag penalties
         lambda_relevance = 0.8
         alpha_tag = 0
         remaining = set(range(len(flat))) - set(selected_global)
@@ -233,30 +225,17 @@ class SearchHandler(BaseHandler):
                     if not selected_global
                     else max(similarity_matrix[idx][j] for j in selected_global)
                 )
-
-                # Tag penalty: compute max Jaccard similarity with selected memories
                 tag_penalty = 0.0
                 if selected_global:
-                    # Try metadata.tags first, fallback to memory_type
                     current_tags = set(
                         flat[idx][1].get("metadata", {}).get("tags", []) or []
                     )
-                    if not current_tags:
-                        # Fallback: use memory_type as a single-element tag set
-                        mem_type = flat[idx][1].get("memory_type")
-                        if mem_type:
-                            current_tags = {mem_type}
-
                     if current_tags:
                         max_jaccard = 0.0
                         for j in selected_global:
                             other_tags = set(
                                 flat[j][1].get("metadata", {}).get("tags", []) or []
                             )
-                            if not other_tags:
-                                other_mem_type = flat[j][1].get("memory_type")
-                                if other_mem_type:
-                                    other_tags = {other_mem_type}
                             if not other_tags:
                                 continue
                             inter = current_tags.intersection(other_tags)
@@ -295,6 +274,7 @@ class SearchHandler(BaseHandler):
 
         for bucket_idx, bucket in enumerate(buckets):
             selected_indices = selected_by_bucket.get(bucket_idx, [])
+            # Re-sort by original relevance score (descending) for better generation quality
             selected_indices = sorted(selected_indices, key=lambda i: flat[i][2], reverse=True)
             bucket["memories"] = [flat[i][1] for i in selected_indices]
 
