@@ -64,6 +64,9 @@ class SearchHandler(BaseHandler):
 
         search_req.dedup = "mmr"
 
+        # if getattr(search_req, "dedup", None) is None:
+        #     search_req.dedup = "mmr"
+
         try:
             if search_req.dedup == "sim":
                 search_req.top_k = original_top_k * 5
@@ -190,9 +193,23 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
-        lambda_relevance = 0.8
-        alpha_tag = 0.1
-        remaining = set(range(len(flat)))
+        prefill_top_n = min(5, target_top_k)
+        if prefill_top_n > 0:
+            ordered_by_relevance = sorted(
+                range(len(flat)), key=lambda idx: flat[idx][2], reverse=True
+            )
+            for idx in ordered_by_relevance:
+                if len(selected_global) >= prefill_top_n:
+                    break
+                bucket_idx = flat[idx][0]
+                if len(selected_by_bucket[bucket_idx]) >= target_top_k:
+                    continue
+                selected_global.append(idx)
+                selected_by_bucket[bucket_idx].append(idx)
+
+        lambda_relevance = 0.7
+        alpha_tag = 0.15
+        remaining = set(range(len(flat))) - set(selected_global)
         while remaining:
             best_idx: int | None = None
             best_mmr: float | None = None
