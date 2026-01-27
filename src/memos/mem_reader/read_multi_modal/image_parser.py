@@ -151,6 +151,17 @@ class ImageParser(BaseMessageParser):
             IMAGE_ANALYSIS_PROMPT_ZH if lang == "zh" else IMAGE_ANALYSIS_PROMPT_EN
         )
 
+        # Add context if available
+        context_text = ""
+        if context_items:
+            for item in context_items:
+                if hasattr(item, "memory") and item.memory:
+                    context_text += f"{item.memory}\n"
+        context_text = context_text.strip()
+
+        # Inject context into prompt when possible
+        image_analysis_prompt = image_analysis_prompt.replace("{context}", context_text)
+
         # Build messages with image content
         messages = [
             {
@@ -168,21 +179,6 @@ class ImageParser(BaseMessageParser):
             }
         ]
 
-        # Add context if available
-        if context_items:
-            context_text = ""
-            for item in context_items:
-                if hasattr(item, "memory") and item.memory:
-                    context_text += f"{item.memory}\n"
-            if context_text:
-                messages.insert(
-                    0,
-                    {
-                        "role": "system",
-                        "content": f"Context from previous conversation:\n{context_text}",
-                    },
-                )
-
         try:
             # Call LLM with vision model
             response_text = self.llm.generate(messages)
@@ -192,6 +188,9 @@ class ImageParser(BaseMessageParser):
 
             # Parse JSON response
             response_json = self._parse_json_result(response_text)
+            if not response_json:
+                logger.warning(f"[ImageParser] Fail to parse response from LLM: {response_text}")
+                return []
 
             # Extract memory items from response
             memory_items = []
@@ -323,8 +322,7 @@ class ImageParser(BaseMessageParser):
                     return json.loads(s)
                 except json.JSONDecodeError:
                     pass
-            logger.error(f"[ImageParser] Failed to parse JSON: {e}\nResponse: {response_text}")
-            return {}
+            logger.warning(f"[ImageParser] Failed to parse JSON: {e}\nResponse: {response_text}")
 
     def _create_memory_item(
         self,

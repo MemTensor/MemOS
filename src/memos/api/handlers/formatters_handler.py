@@ -155,7 +155,7 @@ def separate_knowledge_and_conversation_mem(memories: list[dict[str, Any]]):
     knowledge_mem = []
     conversation_mem = []
     for item in memories:
-        sources = item["metadata"]["sources"]
+        sources = item.get("metadata", {}).get("sources", [])
         if (
             len(sources) > 0
             and "type" in sources[0]
@@ -210,7 +210,7 @@ def rerank_knowledge_mem(
         item["metadata"]["sources"] = []
 
     for item in conversation_mem:
-        item["metadata"]["sources"] = []
+        item.setdefault("metadata", {})["sources"] = []
 
     # deduplicate: remove items with duplicate memory content
     original_count = len(reranked_knowledge_mem)
