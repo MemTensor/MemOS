@@ -9,9 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import alibabacloud_oss_v2 as oss
-
 from memos.context.context import ContextThreadPoolExecutor
+from memos.dependency import require_python_package
 from memos.embedders.base import BaseEmbedder
 from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.base import BaseLLM
@@ -37,7 +36,13 @@ SKILLS_OSS_DIR = os.getenv("SKILLS_OSS_DIR")
 SKILLS_LOCAL_DIR = os.getenv("SKILLS_LOCAL_DIR")
 
 
-def create_oss_client() -> oss.Client:
+@require_python_package(
+    import_name="alibabacloud_oss_v2",
+    install_command="pip install alibabacloud-oss-v2",
+)
+def create_oss_client() -> Any:
+    import alibabacloud_oss_v2 as oss
+
     credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
 
     # load SDK's default configuration, and set credential provider
@@ -242,7 +247,13 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
     return messages[0]["content"] if messages else ""
 
 
-def _upload_skills_to_oss(local_file_path: str, oss_file_path: str, client: oss.Client) -> str:
+@require_python_package(
+    import_name="alibabacloud_oss_v2",
+    install_command="pip install alibabacloud-oss-v2",
+)
+def _upload_skills_to_oss(local_file_path: str, oss_file_path: str, client: Any) -> str:
+    import alibabacloud_oss_v2 as oss
+
     result = client.put_object_from_file(
         request=oss.PutObjectRequest(
             bucket=os.getenv("OSS_BUCKET_NAME"),
@@ -262,7 +273,13 @@ def _upload_skills_to_oss(local_file_path: str, oss_file_path: str, client: oss.
     return url
 
 
-def _delete_skills_from_oss(oss_file_path: str, client: oss.Client) -> oss.DeleteObjectResult:
+@require_python_package(
+    import_name="alibabacloud_oss_v2",
+    install_command="pip install alibabacloud-oss-v2",
+)
+def _delete_skills_from_oss(oss_file_path: str, client: Any) -> Any:
+    import alibabacloud_oss_v2 as oss
+
     result = client.delete_object(
         oss.DeleteObjectRequest(
             bucket=os.getenv("OSS_BUCKET_NAME"),
