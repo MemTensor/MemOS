@@ -422,15 +422,22 @@ class AdvancedSearcher(Searcher):
                         for bi, (s, e, texts) in enumerate(batches)
                     }
 
-                    enhanced_memories = []
+                    batch_results = []
                     for fut in as_completed(future_map):
                         bi, s, e = future_map[fut]
                         batch_memories, ok = fut.result()
-                        enhanced_memories.extend(batch_memories)
+                        batch_results.append((bi, batch_memories))
 
                         if not ok:
                             all_success = False
                             failed_batches += 1
+
+                    # Sort by batch index to preserve original order
+                    batch_results.sort(key=lambda x: x[0])
+
+                    enhanced_memories = []
+                    for _, batch_mem in batch_results:
+                        enhanced_memories.extend(batch_mem)
 
                 logger.info(
                     f"[Enhance] ✅ multi-batch done | batches={len(batches)} | "
