@@ -146,7 +146,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     for item in all_memory_items
                     if (item.memory or "") and self._count_tokens(item.memory) > max_tokens
                 }
-                # 先收集无需切分的小文本
                 processed_items.extend(
                     [
                         item
