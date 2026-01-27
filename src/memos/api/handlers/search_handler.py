@@ -202,10 +202,23 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
-        # No prefill - let MMR handle all selections with threshold-based penalty
+        # Prefill top5 by relevance to ensure high-relevance items are always selected
+        prefill_top_n = min(5, target_top_k)
+        if prefill_top_n > 0:
+            for idx in ordered_by_relevance:
+                if len(selected_global) >= prefill_top_n:
+                    break
+                bucket_idx = flat[idx][0]
+                if len(selected_by_bucket[bucket_idx]) >= target_top_k:
+                    continue
+                selected_global.append(idx)
+                selected_by_bucket[bucket_idx].append(idx)
+
+        # MMR selection with threshold-based penalties
         lambda_relevance = 0.8
+        alpha_tag = 0.1
         similarity_threshold = 0.9
-        remaining = set(range(len(flat)))
+        remaining = set(range(len(flat))) - set(selected_global)
         while remaining:
             best_idx: int | None = None
             best_mmr: float | None = None
@@ -223,9 +236,44 @@ class SearchHandler(BaseHandler):
                 )
                 diversity_penalty = max(0.0, diversity - similarity_threshold)
 
+                # Tag penalty: compute max Jaccard similarity with selected memories
+                tag_penalty = 0.0
+                if selected_global:
+                    # Try metadata.tags first, fallback to memory_type
+                    current_tags = set(
+                        flat[idx][1].get("metadata", {}).get("tags", []) or []
+                    )
+                    if not current_tags:
+                        # Fallback: use memory_type as a single-element tag set
+                        mem_type = flat[idx][1].get("memory_type")
+                        if mem_type:
+                            current_tags = {mem_type}
+
+                    if current_tags:
+                        max_jaccard = 0.0
+                        for j in selected_global:
+                            other_tags = set(
+                                flat[j][1].get("metadata", {}).get("tags", []) or []
+                            )
+                            if not other_tags:
+                                other_mem_type = flat[j][1].get("memory_type")
+                                if other_mem_type:
+                                    other_tags = {other_mem_type}
+                            if not other_tags:
+                                continue
+                            inter = current_tags.intersection(other_tags)
+                            if not inter:
+                                continue
+                            union = current_tags.union(other_tags)
+                            jaccard = float(len(inter)) / float(len(union)) if union else 0.0
+                            if jaccard > max_jaccard:
+                                max_jaccard = jaccard
+                        tag_penalty = max_jaccard
+
                 mmr_score = (
                     lambda_relevance * relevance
                     - (1.0 - lambda_relevance) * diversity_penalty
+                    - alpha_tag * tag_penalty
                 )
 
                 if best_mmr is None or mmr_score > best_mmr:
