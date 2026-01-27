@@ -216,7 +216,7 @@ class SearchHandler(BaseHandler):
 
         # MMR selection with diversity and tag penalties
         lambda_relevance = 0.8
-        alpha_tag = 0.1
+        alpha_tag = 0
         remaining = set(range(len(flat))) - set(selected_global)
         while remaining:
             best_idx: int | None = None
