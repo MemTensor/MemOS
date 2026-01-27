@@ -213,7 +213,7 @@ def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemory
 def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
-    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": []}
+    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
     memories = naive_mem_cube.text_mem.get_all(
         user_name=get_mem_req.mem_cube_id,
         user_id=get_mem_req.user_id,
@@ -270,6 +270,7 @@ def handle_get_memories(
         "text_mem": results.get("text_mem", []),
         "pref_mem": results.get("pref_mem", []),
         "tool_mem": results.get("tool_mem", []),
+        "skill_mem": results.get("skill_mem", []),
     }
 
     return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
