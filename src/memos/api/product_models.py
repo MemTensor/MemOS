@@ -785,6 +785,7 @@ class GetMemoryRequest(BaseRequest):
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to return preference memory")
     include_tool_memory: bool = Field(False, description="Whether to return tool memory")
+    include_skill_memory: bool = Field(False, description="Whether to return skill memory")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     page: int | None = Field(
         None,
