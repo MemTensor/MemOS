@@ -39,6 +39,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Extract direct_markdown_hostnames before converting to SimpleStructMemReaderConfig
         direct_markdown_hostnames = getattr(config, "direct_markdown_hostnames", None)
 
+        # oss
+        self.oss_config = getattr(config, "oss_config", None)
+
+        # skills_dir
+        self.skills_dir_config = getattr(config, "skills_dir_config", None)
+
         # Create config_dict excluding direct_markdown_hostnames for SimpleStructMemReaderConfig
         config_dict = config.model_dump(exclude_none=True)
         config_dict.pop("direct_markdown_hostnames", None)
@@ -828,6 +834,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     graph_db=self.graph_db,
                     llm=self.llm,
                     embedder=self.embedder,
+                    oss_config=self.oss_config,
+                    skills_dir_config=self.skills_dir_config,
                     **kwargs,
                 )
 
@@ -893,6 +901,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 llm=self.llm,
                 embedder=self.embedder,
                 graph_db=self.graph_db,
+                oss_config=self.oss_config,
+                skills_dir_config=self.skills_dir_config,
                 **kwargs,
             )
 

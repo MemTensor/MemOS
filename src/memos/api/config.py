@@ -467,6 +467,35 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_oss_config() -> dict[str, Any] | None:
+        """Get OSS configuration and validate connection."""
+
+        config = {
+            "endpoint": os.getenv("OSS_ENDPOINT", "http://oss-cn-shanghai.aliyuncs.com"),
+            "access_key_id": os.getenv("OSS_ACCESS_KEY_ID", ""),
+            "access_key_secret": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+            "region": os.getenv("OSS_REGION", ""),
+            "bucket_name": os.getenv("OSS_BUCKET_NAME", ""),
+        }
+
+        # Validate that all required fields have values
+        required_fields = [
+            "endpoint",
+            "access_key_id",
+            "access_key_secret",
+            "region",
+            "bucket_name",
+        ]
+        missing_fields = [field for field in required_fields if not config.get(field)]
+
+        if missing_fields:
+            logger.warning(
+                f"OSS configuration incomplete. Missing fields: {', '.join(missing_fields)}"
+            )
+            return None
+
+        return config
+
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
         reader_config = APIConfig.get_reader_config()
@@ -746,6 +775,11 @@ class APIConfig:
                         ).split(",")
                         if h.strip()
                     ],
+                    "oss_config": APIConfig.get_oss_config(),
+                    "skills_dir_config": {
+                        "skills_oss_dir": os.getenv("SKILLS_OSS_DIR", "skill_memory/"),
+                        "skills_local_dir": os.getenv("SKILLS_LOCAL_DIR", "/tmp/skill_memory/"),
+                    },
                 },
             },
             "enable_textual_memory": True,

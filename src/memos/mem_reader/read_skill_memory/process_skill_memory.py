@@ -32,15 +32,11 @@ from memos.types import MessageList
 logger = get_logger(__name__)
 
 
-SKILLS_OSS_DIR = os.getenv("SKILLS_OSS_DIR")
-SKILLS_LOCAL_DIR = os.getenv("SKILLS_LOCAL_DIR")
-
-
 @require_python_package(
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
 )
-def create_oss_client() -> Any:
+def create_oss_client(oss_config: dict[str, Any] | None = None) -> Any:
     import alibabacloud_oss_v2 as oss
 
     credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
@@ -48,8 +44,8 @@ def create_oss_client() -> Any:
     # load SDK's default configuration, and set credential provider
     cfg = oss.config.load_default()
     cfg.credentials_provider = credentials_provider
-    cfg.region = os.getenv("OSS_REGION")
-    cfg.endpoint = os.getenv("OSS_ENDPOINT")
+    cfg.region = oss_config.get("region", os.getenv("OSS_REGION"))
+    cfg.endpoint = oss_config.get("endpoint", os.getenv("OSS_ENDPOINT"))
     client = oss.Client(cfg)
 
     return client
@@ -73,7 +69,7 @@ def _reconstruct_messages_from_memory_items(memory_items: list[TextualMemoryItem
                     reconstructed_messages.append({"role": role, "content": content})
                     seen.add(message_key)
             except Exception as e:
-                logger.error(f"Error reconstructing message: {e}")
+                logger.warning(f"Error reconstructing message: {e}")
                 continue
 
     return reconstructed_messages
@@ -238,7 +234,7 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
         except Exception as e:
             logger.warning(f"LLM query rewrite failed (attempt {attempt + 1}): {e}")
             if attempt == 2:
-                logger.error(
+                logger.warning(
                     "LLM query rewrite failed after 3 retries, returning first message content"
                 )
                 return messages[0]["content"] if messages else ""
@@ -263,7 +259,7 @@ def _upload_skills_to_oss(local_file_path: str, oss_file_path: str, client: Any)
     )
 
     if result.status_code != 200:
-        logger.error("Failed to upload skill to OSS")
+        logger.warning("Failed to upload skill to OSS")
         return ""
 
     # Construct and return the URL
@@ -289,12 +285,14 @@ def _delete_skills_from_oss(oss_file_path: str, client: Any) -> Any:
     return result
 
 
-def _write_skills_to_file(skill_memory: dict[str, Any], info: dict[str, Any]) -> str:
+def _write_skills_to_file(
+    skill_memory: dict[str, Any], info: dict[str, Any], skills_dir_config: dict[str, Any]
+) -> str:
     user_id = info.get("user_id", "unknown")
     skill_name = skill_memory.get("name", "unnamed_skill").replace(" ", "_").lower()
 
     # Create tmp directory for user if it doesn't exist
-    tmp_dir = Path(SKILLS_LOCAL_DIR) / user_id
+    tmp_dir = Path(skills_dir_config["skills_local_dir"]) / user_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Create skill directory directly in tmp_dir
@@ -472,9 +470,33 @@ def process_skill_memory_fine(
     llm: BaseLLM | None = None,
     embedder: BaseEmbedder | None = None,
     rewrite_query: bool = True,
+    oss_config: dict[str, Any] | None = None,
+    skills_dir_config: dict[str, Any] | None = None,
     **kwargs,
 ) -> list[TextualMemoryItem]:
-    oss_client = create_oss_client()
+    # Validate required configurations
+    if not oss_config:
+        logger.warning("OSS configuration is required for skill memory processing")
+        return []
+
+    if not skills_dir_config:
+        logger.warning("Skills directory configuration is required for skill memory processing")
+        return []
+
+    # Validate skills_dir has required keys
+    required_keys = ["skills_local_dir", "skills_oss_dir"]
+    missing_keys = [key for key in required_keys if key not in skills_dir_config]
+    if missing_keys:
+        logger.warning(
+            f"Skills directory configuration missing required keys: {', '.join(missing_keys)}"
+        )
+        return []
+
+    oss_client = create_oss_client(oss_config)
+    if not oss_client:
+        logger.warning("Failed to create OSS client")
+        return []
+
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
     messages = _add_index_to_message(messages)
 
@@ -502,7 +524,7 @@ def process_skill_memory_fine(
                 related_memories = future.result()
                 related_skill_memories_by_task[task_name] = related_memories
             except Exception as e:
-                logger.error(f"Error recalling skill memories for task '{task_name}': {e}")
+                logger.warning(f"Error recalling skill memories for task '{task_name}': {e}")
                 related_skill_memories_by_task[task_name] = []
 
     skill_memories = []
@@ -522,14 +544,16 @@ def process_skill_memory_fine(
                 if skill_memory:  # Only add non-None results
                     skill_memories.append(skill_memory)
             except Exception as e:
-                logger.error(f"Error extracting skill memory: {e}")
+                logger.warning(f"Error extracting skill memory: {e}")
                 continue
 
     # write skills to file and get zip paths
     skill_memory_with_paths = []
     with ContextThreadPoolExecutor(max_workers=min(len(skill_memories), 5)) as executor:
         futures = {
-            executor.submit(_write_skills_to_file, skill_memory, info): skill_memory
+            executor.submit(
+                _write_skills_to_file, skill_memory, info, skills_dir_config
+            ): skill_memory
             for skill_memory in skill_memories
         }
         for future in as_completed(futures):
@@ -538,7 +562,7 @@ def process_skill_memory_fine(
                 skill_memory = futures[future]
                 skill_memory_with_paths.append((skill_memory, zip_path))
             except Exception as e:
-                logger.error(f"Error writing skills to file: {e}")
+                logger.warning(f"Error writing skills to file: {e}")
                 continue
 
     # Create a mapping from old_memory_id to old memory for easy lookup
@@ -567,7 +591,7 @@ def process_skill_memory_fine(
                             # delete old skill from OSS
                             zip_filename = Path(old_oss_path).name
                             old_oss_path = (
-                                Path(SKILLS_OSS_DIR) / user_id / zip_filename
+                                Path(skills_dir_config["skills_oss_dir"]) / user_id / zip_filename
                             ).as_posix()
                             _delete_skills_from_oss(old_oss_path, oss_client)
                             logger.info(f"Deleted old skill from OSS: {old_oss_path}")
@@ -582,7 +606,9 @@ def process_skill_memory_fine(
             # Upload new skill to OSS
             # Use the same filename as the local zip file
             zip_filename = Path(zip_path).name
-            oss_path = (Path(SKILLS_OSS_DIR) / user_id / zip_filename).as_posix()
+            oss_path = (
+                Path(skills_dir_config["skills_oss_dir"]) / user_id / zip_filename
+            ).as_posix()
 
             # _upload_skills_to_oss returns the URL
             url = _upload_skills_to_oss(
@@ -594,7 +620,7 @@ def process_skill_memory_fine(
 
             logger.info(f"Uploaded skill to OSS: {url}")
         except Exception as e:
-            logger.error(f"Error uploading skill to OSS: {e}")
+            logger.warning(f"Error uploading skill to OSS: {e}")
             skill_memory["url"] = ""  # Set to empty string if upload fails
         finally:
             # Clean up local files after upload
@@ -618,7 +644,7 @@ def process_skill_memory_fine(
             memory_item = create_skill_memory_item(skill_memory, info, embedder)
             skill_memory_items.append(memory_item)
         except Exception as e:
-            logger.error(f"Error creating skill memory item: {e}")
+            logger.warning(f"Error creating skill memory item: {e}")
             continue
 
     return skill_memory_items
