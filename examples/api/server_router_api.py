@@ -136,6 +136,47 @@ def example_01b_standard_chat_triplet():
     call_add_api("example_01b_standard_chat_triplet", payload)
 
 
+def example_01c_sync_fast_minimal():
+    """
+    Sync fast mode example - immediate response required.
+    
+    - async_mode="sync": Blocks until processing completes
+    - mode="fast": Fast pipeline without LLM call
+    - Use case: User needs immediate confirmation
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": "紧急：明天上午10点开会。",
+        "async_mode": "sync", 
+        "mode": "fast",        
+    }
+    call_add_api("example_01c_sync_fast_minimal", payload)
+
+
+def example_01d_sync_fine_detailed():
+    """
+    Sync fine mode example - high-quality extraction required.
+    
+    - async_mode="sync": Blocks until processing completes
+    - mode="fine": Fine pipeline with LLM analysis
+    - Use case: Important information needs deep understanding
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": "明年计划去杭州西湖旅游，预算5000元，喜欢安静的酒店。",
+        "async_mode": "sync", 
+        "mode": "fine",        
+        "custom_tags": ["travel", "planning"],
+        "info": {
+            "priority": "high",
+            "source_type": "important_note"
+        }
+    }
+    call_add_api("example_01d_sync_fine_detailed", payload)
+
+
 # ===========================================================================
 # 2. Tool / function-calling related examples
 # ===========================================================================
@@ -144,6 +185,7 @@ def example_01b_standard_chat_triplet():
 def example_02a_assistant_with_tool_calls():
     """
     Assistant message containing tool_calls (function calls).
+    both multi_model_struct and simple_struct memreaders support this format.
 
     - `role = assistant`, `content = None`.
     - `tool_calls` contains a list of function calls with arguments.
@@ -177,6 +219,7 @@ def example_02a_assistant_with_tool_calls():
 def example_02b_tool_message_with_result():
     """
     Tool message returning the result of a tool call.
+    only multi_model_struct memreader supports this format.
 
     - `role = tool`, `content` contains the tool execution result.
     - `tool_call_id` links this message to the original tool call.
@@ -215,47 +258,12 @@ def example_02b_tool_message_with_result():
     call_add_api("example_02b_tool_message_with_result", payload)
 
 
-def example_02c_tool_description_input_output():
-    """
-    Custom tool message format: tool_description, tool_input, tool_output.
-
-    - This demonstrates the custom tool message format (not OpenAI standard).
-    - `tool_description`: describes the tool/function definition.
-    - `tool_input`: the input parameters for the tool call.
-    - `tool_output`: the result/output from the tool execution.
-    - These are alternative formats for representing tool interactions.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": [
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "tool-call-weather-1",
-                        "type": "function",
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": '{"location": "北京"}',
-                        },
-                    }
-                ],
-                "chat_time": "2025-11-24T10:12:00Z",
-                "message_id": "assistant-with-call-1",
-            }
-        ],
-    }
-    call_add_api("example_02c_tool_description_input_output", payload)
-
-
 # ===========================================================================
 # 3. Multimodal messages
 # ===========================================================================
 
 
-def example_03_multimodal_text_and_image():
+def example_03a_multimodal_text_and_image():
     """
     Multimodal user message: text + image_url.
 
@@ -288,6 +296,118 @@ def example_03_multimodal_text_and_image():
         "info": {"source_type": "image_analysis"},
     }
     call_add_api("example_03_multimodal_text_and_image", payload)
+
+
+def example_03b_multimodal_text_and_file():
+    """
+    Multimodal message: text + file.
+    
+    - Combines text description with attached document
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "这是旅游计划的详细文档，请帮我保存。",
+                    },
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_id": "file_travel_plan_123",
+                            "filename": "travel_plan.pdf",
+                        },
+                    },
+                ],
+                "chat_time": "2025-11-24T10:25:00Z",
+                "message_id": "mm-file-1",
+            }
+        ],
+        "info": {"source_type": "document_upload"},
+    }
+    call_add_api("example_03b_multimodal_text_and_file", payload)
+
+
+def example_03c_multimodal_image_fine_mode():
+    """
+    Multimodal message with image in fine mode.
+
+    - `mode="fine"`: Fine pipeline with LLM analysis for detailed understanding
+    - Combines text description with image_url for deep analysis
+    - Use case: When you need detailed image analysis and understanding
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "这是我最近去的旅游地点，请详细分析一下这个地方的特点和我可能的旅游偏好。",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/mountain_lake.jpg",
+                            "detail": "high",
+                        },
+                    },
+                ],
+                "chat_time": "2025-11-24T10:22:00Z",
+                "message_id": "mm-img-fine-1",
+            }
+        ],
+        "mode": "fine",
+        "async_mode": "sync",
+        "custom_tags": ["travel", "image_analysis", "preference"],
+        "info": {"source_type": "detailed_image_analysis"},
+    }
+    call_add_api("example_03c_multimodal_image_fine_mode", payload)
+
+
+def example_03d_multimodal_image_fast_mode():
+    """
+    Multimodal message with image in fast mode.
+
+    - `mode="fast"`: Fast pipeline for quick processing
+    - Combines text description with image_url for rapid extraction
+    - Use case: When you need quick image processing without deep analysis
+    """
+    payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "快速保存一下这张风景照片的记录。",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/mountain_lake.jpg",
+                            "detail": "high",
+                        },
+                    },
+                ],
+                "chat_time": "2025-11-24T10:23:00Z",
+                "message_id": "mm-img-fast-1",
+            }
+        ],
+        "mode": "fast",
+        "async_mode": "async",
+        "custom_tags": ["travel", "photo"],
+        "info": {"source_type": "quick_image_save"},
+    }
+    call_add_api("example_03d_multimodal_image_fast_mode", payload)
 
 
 # ===========================================================================
@@ -687,10 +807,14 @@ if __name__ == "__main__":
     # You can comment out some examples if you do not want to run all of them.
     example_01a_string_message_minimal()
     example_01b_standard_chat_triplet()
+    example_01c_sync_fast_minimal()
+    example_01d_sync_fine_detailed()
     example_02a_assistant_with_tool_calls()
     example_02b_tool_message_with_result()
-    example_02c_tool_description_input_output()
-    example_03_multimodal_text_and_image()
+    example_03a_multimodal_text_and_image()
+    example_03b_multimodal_text_and_file()
+    example_03c_multimodal_image_fine_mode()
+    example_03d_multimodal_image_fast_mode()
     example_04a_pure_text_input_items()
     example_04b_pure_file_input_by_file_id()
     example_04c_pure_file_input_by_file_data()
