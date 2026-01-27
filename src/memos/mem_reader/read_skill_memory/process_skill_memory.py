@@ -49,9 +49,6 @@ def create_oss_client() -> oss.Client:
     return client
 
 
-OSS_CLIENT = create_oss_client()
-
-
 def _reconstruct_messages_from_memory_items(memory_items: list[TextualMemoryItem]) -> MessageList:
     reconstructed_messages = []
     seen = set()  # Track (role, content) tuples to detect duplicates
@@ -459,6 +456,7 @@ def process_skill_memory_fine(
     rewrite_query: bool = True,
     **kwargs,
 ) -> list[TextualMemoryItem]:
+    oss_client = create_oss_client()
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
     messages = _add_index_to_message(messages)
 
@@ -553,7 +551,7 @@ def process_skill_memory_fine(
                             old_oss_path = (
                                 Path(SKILLS_OSS_DIR) / user_id / zip_filename
                             ).as_posix()
-                            _delete_skills_from_oss(old_oss_path, OSS_CLIENT)
+                            _delete_skills_from_oss(old_oss_path, oss_client)
                             logger.info(f"Deleted old skill from OSS: {old_oss_path}")
                         except Exception as e:
                             logger.warning(f"Failed to delete old skill from OSS: {e}")
@@ -570,7 +568,7 @@ def process_skill_memory_fine(
 
             # _upload_skills_to_oss returns the URL
             url = _upload_skills_to_oss(
-                local_file_path=str(zip_path), oss_file_path=oss_path, client=OSS_CLIENT
+                local_file_path=str(zip_path), oss_file_path=oss_path, client=oss_client
             )
 
             # Set URL directly to skill_memory
