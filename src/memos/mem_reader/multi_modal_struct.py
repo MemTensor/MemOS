@@ -79,12 +79,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             chunks = self.chunker.chunk(item_text)
             split_items = []
 
-            for chunk in chunks:
+            def _create_chunk_item(chunk):
                 # Chunk objects have a 'text' attribute
                 chunk_text = chunk.text
                 if not chunk_text or not chunk_text.strip():
-                    continue
-
+                    return None
                 # Create a new memory item for each chunk, preserving original metadata
                 split_item = self._make_memory_item(
                     value=chunk_text,
@@ -98,8 +97,17 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     key=item.metadata.key,
                     sources=item.metadata.sources or [],
                     background=item.metadata.background or "",
+                    need_embed=False,
                 )
-                split_items.append(split_item)
+                return split_item
+
+            # Use thread pool to parallel process chunks
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [executor.submit(_create_chunk_item, chunk) for chunk in chunks]
+                for future in concurrent.futures.as_completed(futures):
+                    split_item = future.result()
+                    if split_item is not None:
+                        split_items.append(split_item)
 
             return split_items if split_items else [item]
         except Exception as e:
@@ -127,15 +135,42 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         # Split large memory items before processing
         processed_items = []
-        for item in all_memory_items:
-            item_text = item.memory or ""
-            item_tokens = self._count_tokens(item_text)
-            if item_tokens > max_tokens:
-                # Split the large item into multiple chunks
-                split_items = self._split_large_memory_item(item, max_tokens)
-                processed_items.extend(split_items)
-            else:
-                processed_items.append(item)
+        # control whether to parallel chunk large memory items
+        parallel_chunking = True
+
+        if parallel_chunking:
+            # parallel chunk large memory items
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_item = {
+                    executor.submit(self._split_large_memory_item, item, max_tokens): item
+                    for item in all_memory_items
+                    if (item.memory or "") and self._count_tokens(item.memory) > max_tokens
+                }
+                # 先收集无需切分的小文本
+                processed_items.extend(
+                    [
+                        item
+                        for item in all_memory_items
+                        if not (
+                            (item.memory or "") and self._count_tokens(item.memory) > max_tokens
+                        )
+                    ]
+                )
+                # collect split items from futures
+                for future in concurrent.futures.as_completed(future_to_item):
+                    split_items = future.result()
+                    processed_items.extend(split_items)
+        else:
+            # serial chunk large memory items
+            for item in all_memory_items:
+                item_text = item.memory or ""
+                item_tokens = self._count_tokens(item_text)
+                if item_tokens > max_tokens:
+                    # Split the large item into multiple chunks
+                    split_items = self._split_large_memory_item(item, max_tokens)
+                    processed_items.extend(split_items)
+                else:
+                    processed_items.append(item)
 
         # If only one item after processing, return as-is
         if len(processed_items) == 1:
@@ -797,13 +832,29 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if isinstance(scene_data_info, list):
             # Parse each message in the list
             all_memory_items = []
-            for msg in scene_data_info:
-                items = self.multi_modal_parser.parse(msg, info, mode="fast", **kwargs)
-                all_memory_items.extend(items)
+            # Use thread pool to parse each message in parallel
+            with ContextThreadPoolExecutor(max_workers=30) as executor:
+                futures = [
+                    executor.submit(
+                        self.multi_modal_parser.parse,
+                        msg,
+                        info,
+                        mode="fast",
+                        need_emb=False,
+                        **kwargs,
+                    )
+                    for msg in scene_data_info
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        items = future.result()
+                        all_memory_items.extend(items)
+                    except Exception as e:
+                        logger.error(f"[MultiModalFine] Error in parallel parsing: {e}")
         else:
             # Parse as single message
             all_memory_items = self.multi_modal_parser.parse(
-                scene_data_info, info, mode="fast", **kwargs
+                scene_data_info, info, mode="fast", need_emb=False, **kwargs
             )
         fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
         if mode == "fast":

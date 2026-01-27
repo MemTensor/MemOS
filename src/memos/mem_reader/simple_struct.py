@@ -198,6 +198,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
         background: str = "",
         type_: str = "fact",
         confidence: float = 0.99,
+        need_embed: bool = True,
         **kwargs,
     ) -> TextualMemoryItem:
         """construct memory item"""
@@ -213,7 +214,7 @@ class SimpleStructMemReader(BaseMemReader, ABC):
                 status="activated",
                 tags=tags or [],
                 key=key if key is not None else derive_key(value),
-                embedding=self.embedder.embed([value])[0],
+                embedding=self.embedder.embed([value])[0] if need_embed else None,
                 usage=[],
                 sources=sources or [],
                 background=background,

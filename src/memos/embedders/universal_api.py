@@ -32,9 +32,15 @@ class UniversalAPIEmbedder(BaseEmbedder):
 
     @timed_with_status(
         log_prefix="model_timed_embedding",
-        log_extra_args={"model_name_or_path": "text-embedding-3-large"},
+        log_extra_args=lambda self, texts: {
+            "model_name_or_path": "text-embedding-3-large",
+            "text_len": len(texts),
+            "text_content": texts,
+        },
     )
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if isinstance(texts, str):
+            texts = [texts]
         # Truncate texts if max_tokens is configured
         texts = self._truncate_texts(texts)
 

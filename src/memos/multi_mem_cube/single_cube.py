@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import traceback
 
 from dataclasses import dataclass
@@ -790,7 +791,7 @@ class SingleCubeView(MemCubeView):
             extract_mode,
             add_req.mode,
         )
-
+        init_time = time.time()
         # Extract memories
         memories_local = self.mem_reader.get_memory(
             [add_req.messages],
@@ -803,6 +804,9 @@ class SingleCubeView(MemCubeView):
             },
             mode=extract_mode,
             user_name=user_context.mem_cube_id,
+        )
+        self.logger.info(
+            f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"
         )
         flattened_local = [mm for m in memories_local for mm in m]
 
