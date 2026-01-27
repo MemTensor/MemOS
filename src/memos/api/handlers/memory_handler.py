@@ -226,7 +226,6 @@ def handle_get_memories(
 
     if not get_mem_req.include_tool_memory:
         results["tool_mem"] = []
-
     if not get_mem_req.include_skill_memory:
         results["skill_mem"] = []
 
