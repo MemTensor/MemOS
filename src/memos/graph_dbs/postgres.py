@@ -181,6 +181,53 @@ class PostgresGraphDB(BaseGraphDB):
     # Node Management
     # =========================================================================
 
+    def remove_oldest_memory(
+        self, memory_type: str, keep_latest: int, user_name: str | None = None
+    ) -> None:
+        """
+        Remove all memories of a given type except the latest `keep_latest` entries.
+
+        Args:
+            memory_type: Memory type (e.g., 'WorkingMemory', 'LongTermMemory').
+            keep_latest: Number of latest entries to keep.
+            user_name: User to filter by.
+        """
+        user_name = user_name or self.user_name
+        keep_latest = int(keep_latest)
+
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                # Find IDs to delete (older than the keep_latest entries)
+                cur.execute(f"""
+                    WITH ranked AS (
+                        SELECT id, ROW_NUMBER() OVER (ORDER BY updated_at DESC) as rn
+                        FROM {self.schema}.memories
+                        WHERE user_name = %s
+                        AND properties->>'memory_type' = %s
+                    )
+                    SELECT id FROM ranked WHERE rn > %s
+                """, (user_name, memory_type, keep_latest))
+
+                ids_to_delete = [row[0] for row in cur.fetchall()]
+
+                if ids_to_delete:
+                    # Delete edges first
+                    cur.execute(f"""
+                        DELETE FROM {self.schema}.edges
+                        WHERE source_id = ANY(%s) OR target_id = ANY(%s)
+                    """, (ids_to_delete, ids_to_delete))
+
+                    # Delete nodes
+                    cur.execute(f"""
+                        DELETE FROM {self.schema}.memories
+                        WHERE id = ANY(%s)
+                    """, (ids_to_delete,))
+
+                    logger.info(f"Removed {len(ids_to_delete)} oldest {memory_type} memories for user {user_name}")
+        finally:
+            self._put_conn(conn)
+
     def add_node(
         self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
@@ -666,6 +713,74 @@ class PostgresGraphDB(BaseGraphDB):
     def deduplicate_nodes(self) -> None:
         """Not implemented - handled at application level."""
         pass
+
+    def get_grouped_counts(
+        self,
+        group_fields: list[str],
+        where_clause: str = "",
+        params: dict[str, Any] | None = None,
+        user_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Count nodes grouped by specified fields.
+
+        Args:
+            group_fields: Fields to group by, e.g., ["memory_type", "status"]
+            where_clause: Extra WHERE condition
+            params: Parameters for WHERE clause
+            user_name: User to filter by
+
+        Returns:
+            list[dict]: e.g., [{'memory_type': 'WorkingMemory', 'count': 10}, ...]
+        """
+        user_name = user_name or self.user_name
+        if not group_fields:
+            raise ValueError("group_fields cannot be empty")
+
+        # Build SELECT and GROUP BY clauses
+        # Fields come from JSONB properties column
+        select_fields = ", ".join([
+            f"properties->>'{field}' AS {field}" for field in group_fields
+        ])
+        group_by = ", ".join([f"properties->>'{field}'" for field in group_fields])
+
+        # Build WHERE clause
+        conditions = [f"user_name = %s"]
+        query_params = [user_name]
+
+        if where_clause:
+            # Parse simple where clause format
+            where_clause = where_clause.strip()
+            if where_clause.upper().startswith("WHERE"):
+                where_clause = where_clause[5:].strip()
+            if where_clause:
+                conditions.append(where_clause)
+                if params:
+                    query_params.extend(params.values())
+
+        where_sql = " AND ".join(conditions)
+
+        query = f"""
+            SELECT {select_fields}, COUNT(*) AS count
+            FROM {self.schema}.memories
+            WHERE {where_sql}
+            GROUP BY {group_by}
+        """
+
+        conn = self._get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query, query_params)
+                results = []
+                for row in cur.fetchall():
+                    result = {}
+                    for i, field in enumerate(group_fields):
+                        result[field] = row[i]
+                    result["count"] = row[len(group_fields)]
+                    results.append(result)
+                return results
+        finally:
+            self._put_conn(conn)
 
     def detect_conflicts(self) -> list[tuple[str, str]]:
         """Not implemented."""
