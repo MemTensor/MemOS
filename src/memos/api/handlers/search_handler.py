@@ -209,6 +209,8 @@ class SearchHandler(BaseHandler):
 
         lambda_relevance = 0.8
         alpha_tag = 0
+        beta_high_similarity = 5.0  # Penalty multiplier for similarity > 0.92
+        similarity_threshold = 0.92
         remaining = set(range(len(flat))) - set(selected_global)
         while remaining:
             best_idx: int | None = None
@@ -220,11 +222,17 @@ class SearchHandler(BaseHandler):
                     continue
 
                 relevance = flat[idx][2]
-                diversity = (
+                max_sim = (
                     0.0
                     if not selected_global
                     else max(similarity_matrix[idx][j] for j in selected_global)
                 )
+
+                # Apply progressive penalty for high similarity (> 0.92)
+                if max_sim > similarity_threshold:
+                    diversity = max_sim + (max_sim - similarity_threshold) * beta_high_similarity
+                else:
+                    diversity = max_sim
                 tag_penalty = 0.0
                 if selected_global:
                     current_tags = set(
