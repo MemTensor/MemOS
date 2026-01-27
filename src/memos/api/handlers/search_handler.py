@@ -165,7 +165,9 @@ class SearchHandler(BaseHandler):
             bucket["memories"] = [flat[i][1] for i in selected_indices]
         return results
 
-    def _mmr_dedup_text_memories(self, results: dict[str, Any], target_top_k: int) -> dict[str, Any]:
+    def _mmr_dedup_text_memories(
+        self, results: dict[str, Any], target_top_k: int
+    ) -> dict[str, Any]:
         buckets = results.get("text_mem", [])
         if not buckets:
             return results
@@ -235,15 +237,11 @@ class SearchHandler(BaseHandler):
                     diversity = max_sim
                 tag_penalty = 0.0
                 if selected_global:
-                    current_tags = set(
-                        flat[idx][1].get("metadata", {}).get("tags", []) or []
-                    )
+                    current_tags = set(flat[idx][1].get("metadata", {}).get("tags", []) or [])
                     if current_tags:
                         max_jaccard = 0.0
                         for j in selected_global:
-                            other_tags = set(
-                                flat[j][1].get("metadata", {}).get("tags", []) or []
-                            )
+                            other_tags = set(flat[j][1].get("metadata", {}).get("tags", []) or [])
                             if not other_tags:
                                 continue
                             inter = current_tags.intersection(other_tags)
