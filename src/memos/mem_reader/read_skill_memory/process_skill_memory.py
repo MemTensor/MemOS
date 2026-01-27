@@ -32,8 +32,8 @@ from memos.types import MessageList
 logger = get_logger(__name__)
 
 
-OSS_DIR = "skill_memory/"
-LOCAL_DIR = "tmp/skill_memory/"
+SKILLS_OSS_DIR = os.getenv("SKILLS_OSS_DIR")
+SKILLS_LOCAL_DIR = os.getenv("SKILLS_LOCAL_DIR")
 
 
 def create_oss_client() -> oss.Client:
@@ -279,7 +279,7 @@ def _write_skills_to_file(skill_memory: dict[str, Any], info: dict[str, Any]) ->
     skill_name = skill_memory.get("name", "unnamed_skill").replace(" ", "_").lower()
 
     # Create tmp directory for user if it doesn't exist
-    tmp_dir = Path(LOCAL_DIR) / user_id
+    tmp_dir = Path(SKILLS_LOCAL_DIR) / user_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Create skill directory directly in tmp_dir
@@ -550,7 +550,9 @@ def process_skill_memory_fine(
                         try:
                             # delete old skill from OSS
                             zip_filename = Path(old_oss_path).name
-                            old_oss_path = (Path(OSS_DIR) / user_id / zip_filename).as_posix()
+                            old_oss_path = (
+                                Path(SKILLS_OSS_DIR) / user_id / zip_filename
+                            ).as_posix()
                             _delete_skills_from_oss(old_oss_path, OSS_CLIENT)
                             logger.info(f"Deleted old skill from OSS: {old_oss_path}")
                         except Exception as e:
@@ -564,7 +566,7 @@ def process_skill_memory_fine(
             # Upload new skill to OSS
             # Use the same filename as the local zip file
             zip_filename = Path(zip_path).name
-            oss_path = (Path(OSS_DIR) / user_id / zip_filename).as_posix()
+            oss_path = (Path(SKILLS_OSS_DIR) / user_id / zip_filename).as_posix()
 
             # _upload_skills_to_oss returns the URL
             url = _upload_skills_to_oss(
