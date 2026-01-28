@@ -233,7 +233,7 @@ class SearchHandler(BaseHandler):
 
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
-        prefill_top_n = min(2, text_top_k, pref_top_k) if pref_buckets else min(2, text_top_k)
+        prefill_top_n = min(3, text_top_k, pref_top_k) if pref_buckets else min(3, text_top_k)
         ordered_by_relevance = sorted(
             range(len(flat)), key=lambda idx: flat[idx][3], reverse=True
         )
