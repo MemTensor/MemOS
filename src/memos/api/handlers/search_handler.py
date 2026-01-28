@@ -5,8 +5,9 @@ This module provides a class-based implementation of search handlers,
 using dependency injection for better modularity and testability.
 """
 
-import math
 import copy
+import math
+
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
