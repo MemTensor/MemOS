@@ -235,13 +235,10 @@ def handle_get_memory_by_ids(
                     collection_name, memory_ids
                 )
                 if result is not None:
+                    result = [format_memory_item(item, save_sources=False) for item in result]
                     memories.extend(result)
             except Exception:
                 continue
-
-    memories = [
-        format_memory_item(item, save_sources=False) for item in memories if item is not None
-    ]
 
     return GetMemoryResponse(
         message="Memories retrieved successfully", code=200, data={"memories": memories}
