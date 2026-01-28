@@ -1130,6 +1130,7 @@ class PolarDBGraphDB(BaseGraphDB):
             - Assumes all provided IDs are valid and exist.
             - Returns empty list if input is empty.
         """
+        logger.info(f"get_nodes ids:{ids},user_name:{user_name}")
         if not ids:
             return []
 
@@ -1151,9 +1152,12 @@ class PolarDBGraphDB(BaseGraphDB):
             WHERE ({where_clause})
         """
 
-        user_name = user_name if user_name else self.config.user_name
-        query += " AND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-        params.append(self.format_param_value(user_name))
+        # Only add user_name filter if provided
+        if user_name is not None:
+            query += " AND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            params.append(self.format_param_value(user_name))
+
+        logger.info(f"get_nodes query:{query},params:{params}")
 
         conn = None
         try:
@@ -2033,6 +2037,7 @@ class PolarDBGraphDB(BaseGraphDB):
         knowledgebase_ids: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
+        print("1111user_name:",user_name)
         """
         Retrieve node IDs based on vector similarity using PostgreSQL vector operations.
         """
@@ -2070,6 +2075,7 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self.config.user_name,
         )
+        print("2222user_name_conditions:", user_name_conditions)
 
         # Add OR condition if we have any user_name conditions
         if user_name_conditions:
@@ -3530,6 +3536,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+        print("222nodes:",nodes)
         batch_start_time = time.time()
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
@@ -3545,6 +3552,7 @@ class PolarDBGraphDB(BaseGraphDB):
         for node_data in nodes:
             try:
                 id = node_data["id"]
+                print("777777777id:",id)
                 memory = node_data["memory"]
                 metadata = node_data.get("metadata", {})
 
@@ -4313,7 +4321,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
 
-        if effective_user_name and default_user_name != "xxx":
+        if effective_user_name:
             user_name_conditions.append(
                 f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{effective_user_name}\"'::agtype"
             )
