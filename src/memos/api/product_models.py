@@ -358,6 +358,18 @@ class APISearchRequest(BaseRequest):
         description="Number of tool memories to retrieve (top-K). Default: 6.",
     )
 
+    include_skill_memory: bool = Field(
+        True,
+        description="Whether to retrieve skill memories along with general memories. "
+        "If enabled, the system will automatically recall skill memories "
+        "relevant to the query. Default: True.",
+    )
+    skill_mem_top_k: int = Field(
+        3,
+        ge=0,
+        description="Number of skill memories to retrieve (top-K). Default: 3.",
+    )
+
     # ==== Filter conditions ====
     # TODO: maybe add detailed description later
     filter: dict[str, Any] | None = Field(
@@ -393,7 +405,7 @@ class APISearchRequest(BaseRequest):
     # Internal field for search memory type
     search_memory_type: str = Field(
         "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, SkillMemory",
     )
 
     # ==== Context ====
@@ -772,7 +784,8 @@ class GetMemoryRequest(BaseRequest):
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to return preference memory")
-    include_tool_memory: bool = Field(False, description="Whether to return tool memory")
+    include_tool_memory: bool = Field(True, description="Whether to return tool memory")
+    include_skill_memory: bool = Field(True, description="Whether to return skill memory")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     page: int | None = Field(
         None,

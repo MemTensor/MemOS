@@ -210,10 +210,48 @@ def handle_get_memory(memory_id: str, naive_mem_cube: NaiveMemCube) -> GetMemory
     )
 
 
+def handle_get_memory_by_ids(
+    memory_ids: list[str], naive_mem_cube: NaiveMemCube
+) -> GetMemoryResponse:
+    """
+    Handler for getting multiple memories by their IDs.
+
+    Retrieves multiple memories and formats them as a list of dictionaries.
+    """
+    try:
+        memories = naive_mem_cube.text_mem.get_by_ids(memory_ids=memory_ids)
+    except Exception:
+        memories = []
+
+    # Ensure memories is not None
+    if memories is None:
+        memories = []
+
+    if naive_mem_cube.pref_mem is not None:
+        collection_names = ["explicit_preference", "implicit_preference"]
+        for collection_name in collection_names:
+            try:
+                result = naive_mem_cube.pref_mem.get_by_ids_with_collection_name(
+                    collection_name, memory_ids
+                )
+                if result is not None:
+                    memories.extend(result)
+            except Exception:
+                continue
+
+    memories = [
+        format_memory_item(item, save_sources=False) for item in memories if item is not None
+    ]
+
+    return GetMemoryResponse(
+        message="Memories retrieved successfully", code=200, data={"memories": memories}
+    )
+
+
 def handle_get_memories(
     get_mem_req: GetMemoryRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
-    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": []}
+    results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
     memories = naive_mem_cube.text_mem.get_all(
         user_name=get_mem_req.mem_cube_id,
         user_id=get_mem_req.user_id,
@@ -226,6 +264,8 @@ def handle_get_memories(
 
     if not get_mem_req.include_tool_memory:
         results["tool_mem"] = []
+    if not get_mem_req.include_skill_memory:
+        results["skill_mem"] = []
 
     preferences: list[TextualMemoryItem] = []
 
@@ -270,6 +310,7 @@ def handle_get_memories(
         "text_mem": results.get("text_mem", []),
         "pref_mem": results.get("pref_mem", []),
         "tool_mem": results.get("tool_mem", []),
+        "skill_mem": results.get("skill_mem", []),
     }
 
     return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
