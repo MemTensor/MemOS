@@ -6,7 +6,7 @@ using dependency injection for better modularity and testability.
 """
 
 import math
-
+import copy
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
@@ -57,54 +57,40 @@ class SearchHandler(BaseHandler):
         """
         self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
 
-        original_top_k = search_req.top_k
-        prev_text_mem_include_embedding: bool | None = None
-        prev_graph_retriever_include_embedding: bool | None = None
+        # Use deepcopy to avoid modifying the original request object
+        search_req_local = copy.deepcopy(search_req)
+        original_top_k = search_req_local.top_k
 
-        if getattr(search_req, "dedup", None) is None:
-            search_req.dedup = "mmr"
+        # Expand top_k for deduplication (5x to ensure enough candidates)
+        if search_req_local.dedup in ("sim", "mmr"):
+            search_req_local.top_k = original_top_k * 5
 
-        try:
-            # Expand top_k for deduplication (5x to ensure enough candidates)
-            if search_req.dedup in ("sim", "mmr"):
-                search_req.top_k = original_top_k * 5
+        # Create new searcher with include_embedding for MMR deduplication
+        searcher_to_use = self.searcher
+        if search_req_local.dedup == "mmr":
+            text_mem = getattr(self.naive_mem_cube, "text_mem", None)
+            if text_mem is not None:
+                # Create new searcher instance with include_embedding=True
+                searcher_to_use = text_mem.get_searcher(
+                    manual_close_internet=not getattr(self.searcher, "internet_retriever", None),
+                    moscube=False,
+                    process_llm=getattr(self.mem_reader, "llm", None),
+                )
+                # Override include_embedding for this searcher
+                if hasattr(searcher_to_use, "graph_retriever"):
+                    searcher_to_use.graph_retriever.include_embedding = True
 
-            # Enable embeddings for MMR deduplication
-            if search_req.dedup == "mmr":
-                text_mem = getattr(self.naive_mem_cube, "text_mem", None)
-                if text_mem is not None and hasattr(text_mem, "include_embedding"):
-                    prev_text_mem_include_embedding = text_mem.include_embedding
-                    text_mem.include_embedding = True
+        # Search and deduplicate
+        cube_view = self._build_cube_view(search_req_local, searcher_to_use)
+        results = cube_view.search_memories(search_req_local)
 
-                graph_retriever = getattr(self.searcher, "graph_retriever", None)
-                if graph_retriever is not None and hasattr(graph_retriever, "include_embedding"):
-                    prev_graph_retriever_include_embedding = graph_retriever.include_embedding
-                    graph_retriever.include_embedding = True
-
-            # Search and deduplicate
-            cube_view = self._build_cube_view(search_req)
-            results = cube_view.search_memories(search_req)
-
-            if search_req.dedup == "sim":
-                results = self._dedup_text_memories(results, original_top_k)
-                self._strip_embeddings(results)
-            elif search_req.dedup == "mmr":
-                pref_top_k = getattr(search_req, "pref_top_k", 6)
-                results = self._mmr_dedup_text_memories(results, original_top_k, pref_top_k)
-                self._strip_embeddings(results)
-        finally:
-            # Restore original states
-            search_req.top_k = original_top_k
-
-            if prev_text_mem_include_embedding is not None:
-                text_mem = getattr(self.naive_mem_cube, "text_mem", None)
-                if text_mem is not None and hasattr(text_mem, "include_embedding"):
-                    text_mem.include_embedding = prev_text_mem_include_embedding
-
-            if prev_graph_retriever_include_embedding is not None:
-                graph_retriever = getattr(self.searcher, "graph_retriever", None)
-                if graph_retriever is not None and hasattr(graph_retriever, "include_embedding"):
-                    graph_retriever.include_embedding = prev_graph_retriever_include_embedding
+        if search_req_local.dedup == "sim":
+            results = self._dedup_text_memories(results, original_top_k)
+            self._strip_embeddings(results)
+        elif search_req_local.dedup == "mmr":
+            pref_top_k = getattr(search_req_local, "pref_top_k", 6)
+            results = self._mmr_dedup_text_memories(results, original_top_k, pref_top_k)
+            self._strip_embeddings(results)
 
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
@@ -149,7 +135,7 @@ class SearchHandler(BaseHandler):
             if len(selected_by_bucket[bucket_idx]) >= target_top_k:
                 continue
             # Use 0.92 threshold strictly
-            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.9):
+            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.92):
                 selected_by_bucket[bucket_idx].append(idx)
                 selected_global.append(idx)
 
@@ -212,6 +198,7 @@ class SearchHandler(BaseHandler):
         # Get or compute embeddings
         embeddings = self._extract_embeddings([mem for _, _, mem, _ in flat])
         if embeddings is None:
+            self.logger.warning("[SearchHandler] Embedding is missing; recomputing embeddings")
             documents = [mem.get("memory", "") for _, _, mem, _ in flat]
             embeddings = self.searcher.embedder.embed(documents)
 
@@ -266,7 +253,7 @@ class SearchHandler(BaseHandler):
 
         # Phase 2: MMR selection for remaining slots
         lambda_relevance = 0.8
-        similarity_threshold = 0.9  # Start exponential penalty from 0.80 (lowered from 0.9)
+        similarity_threshold = 0.9  # Start exponential penalty from 0.9 (lowered from 0.9)
         alpha_exponential = 10.0  # Exponential penalty coefficient
         remaining = set(range(len(flat))) - set(selected_global)
 
@@ -574,8 +561,9 @@ class SearchHandler(BaseHandler):
 
         return [search_req.user_id]
 
-    def _build_cube_view(self, search_req: APISearchRequest) -> MemCubeView:
+    def _build_cube_view(self, search_req: APISearchRequest, searcher=None) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(search_req)
+        searcher_to_use = searcher if searcher is not None else self.searcher
 
         if len(cube_ids) == 1:
             cube_id = cube_ids[0]
@@ -585,7 +573,7 @@ class SearchHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
-                searcher=self.searcher,
+                searcher=searcher_to_use,
                 deepsearch_agent=self.deepsearch_agent,
             )
         else:
@@ -596,7 +584,7 @@ class SearchHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
-                    searcher=self.searcher,
+                    searcher=searcher_to_use,
                     deepsearch_agent=self.deepsearch_agent,
                 )
                 for cube_id in cube_ids

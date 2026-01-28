@@ -320,7 +320,7 @@ class APISearchRequest(BaseRequest):
     )
 
     dedup: Literal["no", "sim", "mmr"] | None = Field(
-        None,
+        "mmr",
         description=(
             "Optional dedup option for textual memories. "
             "Use 'no' for no dedup, 'sim' for similarity dedup, 'mmr' for MMR-based dedup. "
