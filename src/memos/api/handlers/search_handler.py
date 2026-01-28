@@ -6,10 +6,10 @@ using dependency injection for better modularity and testability.
 """
 
 import math
-import time
+
 from typing import Any
+
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
-from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -282,9 +282,7 @@ class SearchHandler(BaseHandler):
                 mem_type, bucket_idx, mem, _ = flat[idx]
 
                 # Check bucket capacity with correct top_k for each type
-                if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
-                    continue
-                elif mem_type == "preference" and len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
+                if (mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) >= text_top_k) or (mem_type == "preference" and len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k):
                     continue
 
                 # Check if exact text already exists - if so, skip this candidate entirely
