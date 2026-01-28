@@ -5,7 +5,6 @@ This module provides a class-based implementation of search handlers,
 using dependency injection for better modularity and testability.
 """
 
-import math
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
@@ -57,24 +56,18 @@ class SearchHandler(BaseHandler):
         self.logger.info(f"[SearchHandler] Search Req is: {search_req}")
 
         original_top_k = search_req.top_k
-        adjusted_top_k = False
-
         prev_text_mem_include_embedding: bool | None = None
         prev_graph_retriever_include_embedding: bool | None = None
 
-        search_req.dedup = "mmr"
-
-        # if getattr(search_req, "dedup", None) is None:
-        #     search_req.dedup = "mmr"
+        if getattr(search_req, "dedup", None) is None:
+            search_req.dedup = "mmr"
 
         try:
-            if search_req.dedup == "sim":
+            # Expand top_k for deduplication (5x to ensure enough candidates)
+            if search_req.dedup in ("sim", "mmr"):
                 search_req.top_k = original_top_k * 5
-                adjusted_top_k = True
-            elif search_req.dedup == "mmr":
-                search_req.top_k = original_top_k * 5
-                adjusted_top_k = True
 
+            # Enable embeddings for MMR deduplication
             if search_req.dedup == "mmr":
                 text_mem = getattr(self.naive_mem_cube, "text_mem", None)
                 if text_mem is not None and hasattr(text_mem, "include_embedding"):
@@ -86,6 +79,7 @@ class SearchHandler(BaseHandler):
                     prev_graph_retriever_include_embedding = graph_retriever.include_embedding
                     graph_retriever.include_embedding = True
 
+            # Search and deduplicate
             cube_view = self._build_cube_view(search_req)
             results = cube_view.search_memories(search_req)
 
@@ -96,8 +90,8 @@ class SearchHandler(BaseHandler):
                 results = self._mmr_dedup_text_memories(results, original_top_k)
                 self._strip_embeddings(results)
         finally:
-            if adjusted_top_k:
-                search_req.top_k = original_top_k
+            # Restore original states
+            search_req.top_k = original_top_k
 
             if prev_text_mem_include_embedding is not None:
                 text_mem = getattr(self.naive_mem_cube, "text_mem", None)
@@ -168,10 +162,19 @@ class SearchHandler(BaseHandler):
     def _mmr_dedup_text_memories(
         self, results: dict[str, Any], target_top_k: int
     ) -> dict[str, Any]:
+        """
+        MMR-based deduplication with progressive penalty for high similarity.
+
+        Algorithm:
+        1. Prefill top 5 by relevance
+        2. MMR selection: balance relevance vs diversity
+        3. Re-sort by original relevance for better generation quality
+        """
         buckets = results.get("text_mem", [])
         if not buckets:
             return results
 
+        # Flatten all memories with their scores
         flat: list[tuple[int, dict[str, Any], float]] = []
         for bucket_idx, bucket in enumerate(buckets):
             for mem in bucket.get("memories", []):
@@ -181,13 +184,17 @@ class SearchHandler(BaseHandler):
         if len(flat) <= 1:
             return results
 
+        # Get or compute embeddings
         embeddings = self._extract_embeddings([mem for _, mem, _ in flat])
         if embeddings is None:
             documents = [mem.get("memory", "") for _, mem, _ in flat]
             embeddings = self.searcher.embedder.embed(documents)
 
-        similarity_matrix = self._cosine_similarity_matrix_local(embeddings)
+        # Compute similarity matrix using NumPy-optimized method
+        # Returns numpy array but compatible with list[i][j] indexing
+        similarity_matrix = cosine_similarity_matrix(embeddings)
 
+        # Initialize selection tracking
         indices_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
         for flat_index, (bucket_idx, _, _) in enumerate(flat):
             indices_by_bucket[bucket_idx].append(flat_index)
@@ -195,25 +202,26 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(buckets))}
 
+        # Phase 1: Prefill top N by relevance
         prefill_top_n = min(5, target_top_k)
-        if prefill_top_n > 0:
-            ordered_by_relevance = sorted(
-                range(len(flat)), key=lambda idx: flat[idx][2], reverse=True
-            )
-            for idx in ordered_by_relevance:
-                if len(selected_global) >= prefill_top_n:
-                    break
-                bucket_idx = flat[idx][0]
-                if len(selected_by_bucket[bucket_idx]) >= target_top_k:
-                    continue
-                selected_global.append(idx)
-                selected_by_bucket[bucket_idx].append(idx)
+        ordered_by_relevance = sorted(
+            range(len(flat)), key=lambda idx: flat[idx][2], reverse=True
+        )
+        for idx in ordered_by_relevance[:len(flat)]:
+            if len(selected_global) >= prefill_top_n:
+                break
+            bucket_idx = flat[idx][0]
+            if len(selected_by_bucket[bucket_idx]) >= target_top_k:
+                continue
+            selected_global.append(idx)
+            selected_by_bucket[bucket_idx].append(idx)
 
+        # Phase 2: MMR selection for remaining slots
         lambda_relevance = 0.8
-        alpha_tag = 0
-        beta_high_similarity = 5.0  # Penalty multiplier for similarity > 0.92
         similarity_threshold = 0.92
+        beta_high_similarity = 5.0  # Penalty multiplier for similarity > 0.92
         remaining = set(range(len(flat))) - set(selected_global)
+
         while remaining:
             best_idx: int | None = None
             best_mmr: float | None = None
@@ -230,34 +238,13 @@ class SearchHandler(BaseHandler):
                     else max(similarity_matrix[idx][j] for j in selected_global)
                 )
 
-                # Apply progressive penalty for high similarity (> 0.92)
+                # Progressive penalty for high similarity (> 0.92)
                 if max_sim > similarity_threshold:
                     diversity = max_sim + (max_sim - similarity_threshold) * beta_high_similarity
                 else:
                     diversity = max_sim
-                tag_penalty = 0.0
-                if selected_global:
-                    current_tags = set(flat[idx][1].get("metadata", {}).get("tags", []) or [])
-                    if current_tags:
-                        max_jaccard = 0.0
-                        for j in selected_global:
-                            other_tags = set(flat[j][1].get("metadata", {}).get("tags", []) or [])
-                            if not other_tags:
-                                continue
-                            inter = current_tags.intersection(other_tags)
-                            if not inter:
-                                continue
-                            union = current_tags.union(other_tags)
-                            jaccard = float(len(inter)) / float(len(union)) if union else 0.0
-                            if jaccard > max_jaccard:
-                                max_jaccard = jaccard
-                        tag_penalty = max_jaccard
 
-                mmr_score = (
-                    lambda_relevance * relevance
-                    - (1.0 - lambda_relevance) * diversity
-                    - alpha_tag * tag_penalty
-                )
+                mmr_score = lambda_relevance * relevance - (1.0 - lambda_relevance) * diversity
 
                 if best_mmr is None or mmr_score > best_mmr:
                     best_mmr = mmr_score
@@ -270,17 +257,16 @@ class SearchHandler(BaseHandler):
             selected_by_bucket[flat[best_idx][0]].append(best_idx)
             remaining.remove(best_idx)
 
-            all_full = True
-            for bucket_idx, bucket_indices in indices_by_bucket.items():
-                if len(selected_by_bucket[bucket_idx]) < min(target_top_k, len(bucket_indices)):
-                    all_full = False
-                    break
-            if all_full:
+            # Early termination: all buckets are full
+            if all(
+                len(selected_by_bucket[b_idx]) >= min(target_top_k, len(bucket_indices))
+                for b_idx, bucket_indices in indices_by_bucket.items()
+            ):
                 break
 
+        # Phase 3: Re-sort by original relevance
         for bucket_idx, bucket in enumerate(buckets):
             selected_indices = selected_by_bucket.get(bucket_idx, [])
-            # Re-sort by original relevance score (descending) for better generation quality
             selected_indices = sorted(selected_indices, key=lambda i: flat[i][2], reverse=True)
             bucket["memories"] = [flat[i][1] for i in selected_indices]
 
@@ -325,34 +311,6 @@ class SearchHandler(BaseHandler):
                 metadata = mem.get("metadata", {})
                 if "embedding" in metadata:
                     metadata["embedding"] = []
-
-    @staticmethod
-    def _cosine_similarity_matrix_local(embeddings: list[list[float]]) -> list[list[float]]:
-        if not embeddings:
-            return []
-
-        normalized: list[list[float]] = []
-        for vec in embeddings:
-            norm_sq = 0.0
-            for x in vec:
-                xf = float(x)
-                norm_sq += xf * xf
-            denom = math.sqrt(norm_sq) if norm_sq > 0.0 else 1.0
-            normalized.append([float(x) / denom for x in vec])
-
-        n = len(normalized)
-        sim: list[list[float]] = [[0.0] * n for _ in range(n)]
-        for i in range(n):
-            sim[i][i] = 1.0
-            vi = normalized[i]
-            for j in range(i + 1, n):
-                vj = normalized[j]
-                dot = 0.0
-                for a, b in zip(vi, vj, strict=False):
-                    dot += a * b
-                sim[i][j] = dot
-                sim[j][i] = dot
-        return sim
 
     def _resolve_cube_ids(self, search_req: APISearchRequest) -> list[str]:
         """
