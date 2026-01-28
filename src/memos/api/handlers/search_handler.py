@@ -6,10 +6,10 @@ using dependency injection for better modularity and testability.
 """
 
 import math
-
+import time
 from typing import Any
-
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -202,9 +202,7 @@ class SearchHandler(BaseHandler):
         for bucket_idx, bucket in enumerate(pref_buckets):
             for mem in bucket.get("memories", []):
                 score = mem.get("metadata", {}).get("relativity", 0.0)
-                flat.append(
-                    ("preference", bucket_idx, mem, float(score) if score is not None else 0.0)
-                )
+                flat.append(("preference", bucket_idx, mem, float(score) if score is not None else 0.0))
 
         if len(flat) <= 1:
             return results
@@ -237,8 +235,10 @@ class SearchHandler(BaseHandler):
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
         prefill_top_n = min(2, text_top_k, pref_top_k) if pref_buckets else min(2, text_top_k)
-        ordered_by_relevance = sorted(range(len(flat)), key=lambda idx: flat[idx][3], reverse=True)
-        for idx in ordered_by_relevance[: len(flat)]:
+        ordered_by_relevance = sorted(
+            range(len(flat)), key=lambda idx: flat[idx][3], reverse=True
+        )
+        for idx in ordered_by_relevance[:len(flat)]:
             if len(selected_global) >= prefill_top_n:
                 break
             mem_type, bucket_idx, mem, _ = flat[idx]
@@ -250,7 +250,7 @@ class SearchHandler(BaseHandler):
 
             # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
             if SearchHandler._is_text_highly_similar_optimized(
-                idx, mem_text, selected_global, similarity_matrix, flat
+                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.9
             ):
                 continue
 
@@ -296,7 +296,7 @@ class SearchHandler(BaseHandler):
 
                 # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
                 if SearchHandler._is_text_highly_similar_optimized(
-                    idx, mem_text, selected_global, similarity_matrix, flat
+                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.9
                 ):
                     continue  # Skip highly similar text, don't participate in MMR competition
 
@@ -309,9 +309,7 @@ class SearchHandler(BaseHandler):
 
                 # Exponential penalty for similarity > 0.80
                 if max_sim > similarity_threshold:
-                    penalty_multiplier = math.exp(
-                        alpha_exponential * (max_sim - similarity_threshold)
-                    )
+                    penalty_multiplier = math.exp(alpha_exponential * (max_sim - similarity_threshold))
                     diversity = max_sim * penalty_multiplier
                 else:
                     diversity = max_sim
@@ -446,8 +444,8 @@ class SearchHandler(BaseHandler):
             return 0.0
 
         # Generate 2-grams
-        bigrams1 = {text1[i : i + 2] for i in range(len(text1) - 1)} if len(text1) >= 2 else {text1}
-        bigrams2 = {text2[i : i + 2] for i in range(len(text2) - 1)} if len(text2) >= 2 else {text2}
+        bigrams1 = {text1[i:i+2] for i in range(len(text1) - 1)} if len(text1) >= 2 else {text1}
+        bigrams2 = {text2[i:i+2] for i in range(len(text2) - 1)} if len(text2) >= 2 else {text2}
 
         intersection = len(bigrams1 & bigrams2)
         union = len(bigrams1 | bigrams2)

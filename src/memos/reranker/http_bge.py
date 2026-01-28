@@ -80,6 +80,8 @@ class HTTPBGEReranker(BaseReranker):
         token: str = "",
         model: str = "bge-reranker-v2-m3",
         timeout: int = 10,
+        max_query_tokens: int | None = None,
+        concate_len: int | None = None,
         headers_extra: dict | None = None,
         rerank_source: str | None = None,
         boost_weights: dict[str, float] | None = None,
@@ -107,6 +109,8 @@ class HTTPBGEReranker(BaseReranker):
         self.token = token or ""
         self.model = model
         self.timeout = timeout
+        self.max_query_tokens = max_query_tokens
+        self.concate_len = concate_len
         self.headers_extra = headers_extra or {}
         self.rerank_source = rerank_source
 
@@ -129,7 +133,7 @@ class HTTPBGEReranker(BaseReranker):
     def rerank(
         self,
         query: str,
-        graph_results: list[TextualMemoryItem],
+        graph_results: list[TextualMemoryItem] | list[dict[str, Any]],
         top_k: int,
         search_priority: dict | None = None,
         **kwargs,
@@ -155,6 +159,10 @@ class HTTPBGEReranker(BaseReranker):
             Re-ranked items with scores, sorted descending by score.
         """
 
+        if self.max_query_tokens and len(query) > self.max_query_tokens:
+            single_concate_len = self.concate_len // 2
+            query = query[:single_concate_len] + "\n" + query[-single_concate_len:]
+
         if not graph_results:
             return []
 
@@ -164,11 +172,15 @@ class HTTPBGEReranker(BaseReranker):
         if self.rerank_source:
             documents = concat_original_source(graph_results, self.rerank_source)
         else:
-            documents = [
-                (_TAG1.sub("", m) if isinstance((m := getattr(item, "memory", None)), str) else m)
-                for item in graph_results
-            ]
-            documents = [d for d in documents if isinstance(d, str) and d]
+            documents = []
+            filtered_graph_results = []
+            for item in graph_results:
+                m = item.get("memory") if isinstance(item, dict) else getattr(item, "memory", None)
+
+                if isinstance(m, str) and m:
+                    documents.append(_TAG1.sub("", m))
+                    filtered_graph_results.append(item)
+            graph_results = filtered_graph_results
 
         logger.info(f"[HTTPBGERerankerSample] query: {query} , documents: {documents[:5]}...")
 

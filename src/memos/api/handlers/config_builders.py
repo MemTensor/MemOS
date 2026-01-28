@@ -89,7 +89,7 @@ def build_chat_llm_config() -> list[dict[str, Any]]:
     Returns:
         Validated chat LLM configuration dictionary
     """
-    configs = json.loads(os.getenv("CHAT_MODEL_LIST"))
+    configs = json.loads(os.getenv("CHAT_MODEL_LIST", "[]"))
     return [
         {
             "config_class": LLMConfigFactory.model_validate(
@@ -188,3 +188,13 @@ def build_pref_retriever_config() -> dict[str, Any]:
         Validated retriever configuration dictionary
     """
     return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
+
+
+def build_nli_client_config() -> dict[str, Any]:
+    """
+    Build NLI client configuration.
+
+    Returns:
+        NLI client configuration dictionary
+    """
+    return APIConfig.get_nli_config()

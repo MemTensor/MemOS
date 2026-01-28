@@ -76,7 +76,8 @@ class MemFeedback(BaseMemFeedback):
         self.llm: OpenAILLM | OllamaLLM | AzureLLM = LLMFactory.from_config(config.extractor_llm)
         self.embedder: OllamaEmbedder = EmbedderFactory.from_config(config.embedder)
         self.graph_store: PolarDBGraphDB = GraphStoreFactory.from_config(config.graph_db)
-        self.mem_reader = MemReaderFactory.from_config(config.mem_reader)
+        # Pass graph_store to mem_reader for recall operations (deduplication, conflict detection)
+        self.mem_reader = MemReaderFactory.from_config(config.mem_reader, graph_db=self.graph_store)
 
         self.is_reorganize = config.reorganize
         self.memory_manager: MemoryManager = MemoryManager(
@@ -95,6 +96,7 @@ class MemFeedback(BaseMemFeedback):
         self.searcher: Searcher = None
         self.reranker = None
         self.pref_mem: SimplePreferenceTextMemory = None
+        self.pref_feedback: bool = False
         self.DB_IDX_READY = False
 
     @require_python_package(
@@ -629,11 +631,14 @@ class MemFeedback(BaseMemFeedback):
         )
         retrieved_mems = [item[0] for item in retrieved_mems if float(item[1]) > 0.01]
 
-        pref_info = {}
-        if "user_id" in info:
-            pref_info = {"user_id": info["user_id"]}
-        retrieved_prefs = self.pref_mem.search(query, top_k, pref_info)
-        return retrieved_mems + retrieved_prefs
+        if self.pref_feedback:
+            pref_info = {}
+            if "user_id" in info:
+                pref_info = {"user_id": info["user_id"]}
+            retrieved_prefs = self.pref_mem.search(query, top_k, pref_info)
+            return retrieved_mems + retrieved_prefs
+        else:
+            return retrieved_mems
 
     def _vec_query(self, new_memories_embedding: list[float], user_name=None):
         """Vector retrieval query"""

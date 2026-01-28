@@ -109,7 +109,7 @@ def build_chat_llm_config() -> list[dict[str, Any]]:
     Returns:
         Validated chat LLM configuration dictionary
     """
-    configs = json.loads(os.getenv("CHAT_MODEL_LIST"))
+    configs = json.loads(os.getenv("CHAT_MODEL_LIST", "[]"))
     return [
         {
             "config_class": LLMConfigFactory.model_validate(
@@ -305,7 +305,8 @@ def init_components() -> dict[str, Any]:
     )
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config)
+    # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
+    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(

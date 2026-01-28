@@ -1,31 +1,42 @@
-import re
-import shutil
-import sys
+# Prerequisites & Configuration
+# To run this script, you must have the following services
+# running and configured in your .env file (or environment variables):
+# 1. Redis (Required for TaskStatusTracker and Scheduler Queue)
+# 2. Graph Database (Required for Memory Storage)
+# 3. Vector Database (Required if using Neo4j Community or Preference Memory)
 
-from datetime import datetime
+import asyncio
+import json
+import os
+import sys
+import time
+
 from pathlib import Path
 
-from memos.configs.mem_cube import GeneralMemCubeConfig
-from memos.configs.mem_os import MOSConfig
-from memos.configs.mem_scheduler import AuthConfig
-from memos.log import get_logger
-from memos.mem_cube.general import GeneralMemCube
-from memos.mem_os.main import MOS
-from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
-from memos.mem_scheduler.schemas.task_schemas import (
-    ADD_TASK_LABEL,
-    ANSWER_TASK_LABEL,
-    MEM_ARCHIVE_TASK_LABEL,
-    MEM_ORGANIZE_TASK_LABEL,
-    MEM_UPDATE_TASK_LABEL,
-    QUERY_TASK_LABEL,
-)
-from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
 
-
+# Setup paths before imports that depend on them
 FILE_PATH = Path(__file__).absolute()
 BASE_DIR = FILE_PATH.parent.parent.parent
 sys.path.insert(0, str(BASE_DIR))  # Enable execution from any working directory
+
+# Set environment variables before importing server_router to ensure components are initialized correctly
+os.environ["ENABLE_CHAT_API"] = "true"
+
+from memos.api.product_models import APIADDRequest, ChatPlaygroundRequest  # noqa: E402
+
+# Import from server_router for initialization
+from memos.api.routers.server_router import (  # noqa: E402
+    add_handler,
+    chat_stream_playground,
+    mem_scheduler,
+)
+from memos.log import get_logger  # noqa: E402
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem  # noqa: E402
+from memos.mem_scheduler.schemas.task_schemas import (  # noqa: E402
+    MEM_UPDATE_TASK_LABEL,
+    QUERY_TASK_LABEL,
+)
+
 
 logger = get_logger(__name__)
 
@@ -73,150 +84,106 @@ def init_task():
     return conversations, questions
 
 
-def _truncate_with_rules(text: str) -> str:
-    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", text))
-    limit = 32 if has_cjk else 64
-    normalized = text.strip().replace("\n", " ")
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[:limit] + "..."
+working_memories = []
 
 
-def _format_title(ts: datetime, title_text: str) -> str:
-    return f"{ts.astimezone().strftime('%H:%M:%S')} {title_text}"
+# Define custom query handler function
+def custom_query_handler(messages: list[ScheduleMessageItem]):
+    for msg in messages:
+        # Print user input content
+        print(f"\n[scheduler] User input query: {msg.content}")
+        # Manually construct a new message with MEM_UPDATE label to trigger memory update
+        new_msg = msg.model_copy(update={"label": MEM_UPDATE_TASK_LABEL})
+        # Submit the message to the scheduler for processing
+        mem_scheduler.submit_messages([new_msg])
 
 
-def _cube_display_from(mem_cube_id: str) -> str:
-    if "public" in (mem_cube_id or "").lower():
-        return "PublicMemCube"
-    return "UserMemCube"
+# Define custom memory update handler function
+def custom_mem_update_handler(messages: list[ScheduleMessageItem]):
+    global working_memories
+    search_args = {}
+    top_k = 2
+    for msg in messages:
+        # Search for memories relevant to the current content in text memory (return top_k=2)
+        results = mem_scheduler.retriever.search(
+            query=msg.content,
+            user_id=msg.user_id,
+            mem_cube_id=msg.mem_cube_id,
+            mem_cube=mem_scheduler.current_mem_cube,
+            top_k=top_k,
+            method=mem_scheduler.search_method,
+            search_args=search_args,
+        )
+        working_memories.extend(results)
+        working_memories = working_memories[-5:]
+        for mem in results:
+            print(f"\n[scheduler] Retrieved memory: {mem.memory}")
 
 
-_TYPE_SHORT = {
-    "LongTermMemory": "LTM",
-    "UserMemory": "User",
-    "WorkingMemory": "Working",
-    "ActivationMemory": "Activation",
-    "ParameterMemory": "Parameter",
-    "TextMemory": "Text",
-    "UserInput": "Input",
-    "NotApplicable": "NA",
-}
-
-
-def _format_entry(item: ScheduleLogForWebItem) -> tuple[str, str]:
-    cube_display = getattr(item, "memcube_name", None) or _cube_display_from(item.mem_cube_id)
-    label = item.label
-    content = item.log_content or ""
-    memcube_content = getattr(item, "memcube_log_content", None) or []
-    memory_len = getattr(item, "memory_len", None) or len(memcube_content) or 1
-
-    def _first_content() -> str:
-        if memcube_content:
-            return memcube_content[0].get("content", "") or content
-        return content
-
-    if label in ("addMessage", QUERY_TASK_LABEL, ANSWER_TASK_LABEL):
-        target_cube = cube_display.replace("MemCube", "")
-        title = _format_title(item.timestamp, f"addMessages to {target_cube} MemCube")
-        return title, _truncate_with_rules(_first_content())
-
-    if label in ("addMemory", ADD_TASK_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display} added {memory_len} memories")
-        return title, _truncate_with_rules(_first_content())
-
-    if label in ("updateMemory", MEM_UPDATE_TASK_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display} updated {memory_len} memories")
-        return title, _truncate_with_rules(_first_content())
-
-    if label in ("archiveMemory", MEM_ARCHIVE_TASK_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display} archived {memory_len} memories")
-        return title, _truncate_with_rules(_first_content())
-
-    if label in ("mergeMemory", MEM_ORGANIZE_TASK_LABEL):
-        title = _format_title(item.timestamp, f"{cube_display} merged {memory_len} memories")
-        merged = [c for c in memcube_content if c.get("type") == "merged"]
-        post = [c for c in memcube_content if c.get("type") == "postMerge"]
-        parts = []
-        if merged:
-            parts.append("Merged: " + " | ".join(c.get("content", "") for c in merged))
-        if post:
-            parts.append("Result: " + " | ".join(c.get("content", "") for c in post))
-        detail = " ".join(parts) if parts else _first_content()
-        return title, _truncate_with_rules(detail)
-
-    if label == "scheduleMemory":
-        title = _format_title(item.timestamp, f"{cube_display} scheduled {memory_len} memories")
-        if memcube_content:
-            return title, _truncate_with_rules(memcube_content[0].get("content", ""))
-        key = transform_name_to_key(content)
-        from_short = _TYPE_SHORT.get(item.from_memory_type, item.from_memory_type)
-        to_short = _TYPE_SHORT.get(item.to_memory_type, item.to_memory_type)
-        return title, _truncate_with_rules(f"[{from_short}→{to_short}] {key}: {content}")
-
-    title = _format_title(item.timestamp, f"{cube_display} event")
-    return title, _truncate_with_rules(_first_content())
-
-
-def run_with_scheduler_init():
+async def run_with_scheduler():
     print("==== run_with_automatic_scheduler_init ====")
     conversations, questions = init_task()
 
-    # set configs
-    mos_config = MOSConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/memos_config_w_optimized_scheduler.yaml"
-    )
-
-    mem_cube_config = GeneralMemCubeConfig.from_yaml_file(
-        f"{BASE_DIR}/examples/data/config/mem_scheduler/mem_cube_config_neo4j.yaml"
-    )
-
-    # default local graphdb uri
-    if AuthConfig.default_config_exists():
-        auth_config = AuthConfig.from_local_config()
-
-        mos_config.mem_reader.config.llm.config.api_key = auth_config.openai.api_key
-        mos_config.mem_reader.config.llm.config.api_base = auth_config.openai.base_url
-
-        mem_cube_config.text_mem.config.graph_db.config.uri = auth_config.graph_db.uri
-        mem_cube_config.text_mem.config.graph_db.config.user = auth_config.graph_db.user
-        mem_cube_config.text_mem.config.graph_db.config.password = auth_config.graph_db.password
-        mem_cube_config.text_mem.config.graph_db.config.db_name = auth_config.graph_db.db_name
-        mem_cube_config.text_mem.config.graph_db.config.auto_create = (
-            auth_config.graph_db.auto_create
-        )
-
-    # Initialization
-    mos = MOS(mos_config)
+    # Initialization using server_router components
+    # Configs are loaded via environment variables in init_server()
 
     user_id = "user_1"
-    mos.create_user(user_id)
-
     mem_cube_id = "mem_cube_5"
-    mem_cube_name_or_path = f"{BASE_DIR}/outputs/mem_scheduler/{user_id}/{mem_cube_id}"
 
-    if Path(mem_cube_name_or_path).exists():
-        shutil.rmtree(mem_cube_name_or_path)
-        print(f"{mem_cube_name_or_path} is not empty, and has been removed.")
+    print(f"Adding conversations for user {user_id}...")
 
-    mem_cube = GeneralMemCube(mem_cube_config)
-    mem_cube.dump(mem_cube_name_or_path)
-    mos.register_mem_cube(
-        mem_cube_name_or_path=mem_cube_name_or_path, mem_cube_id=mem_cube_id, user_id=user_id
+    # Use add_handler to add memories
+    add_req = APIADDRequest(
+        user_id=user_id,
+        writable_cube_ids=[mem_cube_id],
+        messages=conversations,
+        async_mode="sync",  # Use sync mode for immediate addition in this example
     )
-
-    mos.add(conversations, user_id=user_id, mem_cube_id=mem_cube_id)
-    mos.mem_scheduler.current_mem_cube = mem_cube
+    add_handler.handle_add_memories(add_req)
 
     for item in questions:
         print("===== Chat Start =====")
         query = item["question"]
         print(f"Query:\n {query}\n")
-        response = mos.chat(query=query, user_id=user_id)
-        print(f"Answer:\n {response}\n")
 
-    mos.mem_scheduler.stop()
+        # Use chat_handler to chat
+        chat_req = ChatPlaygroundRequest(
+            user_id=user_id,
+            query=query,
+            readable_cube_ids=[mem_cube_id],
+            writable_cube_ids=[mem_cube_id],
+        )
+        response = chat_stream_playground(chat_req)
+
+        answer = ""
+        buffer = ""
+        async for chunk in response.body_iterator:
+            if isinstance(chunk, bytes):
+                chunk = chunk.decode("utf-8")
+            buffer += chunk
+            while "\n\n" in buffer:
+                msg, buffer = buffer.split("\n\n", 1)
+                for line in msg.split("\n"):
+                    if line.startswith("data: "):
+                        json_str = line[6:]
+                        try:
+                            data = json.loads(json_str)
+                            if data.get("type") == "text":
+                                answer += data["data"]
+                        except json.JSONDecodeError:
+                            pass
+        print(f"\nAnswer: {answer}")
 
 
 if __name__ == "__main__":
-    run_with_scheduler_init()
+    mem_scheduler.register_handlers(
+        {
+            QUERY_TASK_LABEL: custom_query_handler,  # Query task
+            MEM_UPDATE_TASK_LABEL: custom_mem_update_handler,  # Memory update task
+        }
+    )
+
+    asyncio.run(run_with_scheduler())
+
+    time.sleep(20)
+    mem_scheduler.stop()
