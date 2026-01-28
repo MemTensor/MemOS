@@ -148,7 +148,7 @@ class SearchHandler(BaseHandler):
             if len(selected_by_bucket[bucket_idx]) >= target_top_k:
                 continue
             # Use 0.92 threshold strictly
-            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.92):
+            if self._is_unrelated(idx, selected_global, similarity_matrix, 0.9):
                 selected_by_bucket[bucket_idx].append(idx)
                 selected_global.append(idx)
 
@@ -233,7 +233,7 @@ class SearchHandler(BaseHandler):
 
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
-        prefill_top_n = min(3, text_top_k, pref_top_k) if pref_buckets else min(3, text_top_k)
+        prefill_top_n = min(2, text_top_k, pref_top_k) if pref_buckets else min(2, text_top_k)
         ordered_by_relevance = sorted(
             range(len(flat)), key=lambda idx: flat[idx][3], reverse=True
         )
@@ -249,7 +249,7 @@ class SearchHandler(BaseHandler):
 
             # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
             if SearchHandler._is_text_highly_similar_optimized(
-                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.6
+                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.9
             ):
                 continue
 
@@ -269,8 +269,8 @@ class SearchHandler(BaseHandler):
 
         # Phase 2: MMR selection for remaining slots
         lambda_relevance = 0.8
-        similarity_threshold = 0.60  # Start exponential penalty from 0.80 (lowered from 0.92)
-        alpha_exponential = 20.0  # Exponential penalty coefficient
+        similarity_threshold = 0.9  # Start exponential penalty from 0.80 (lowered from 0.9)
+        alpha_exponential = 10.0  # Exponential penalty coefficient
         remaining = set(range(len(flat))) - set(selected_global)
 
         while remaining:
@@ -295,7 +295,7 @@ class SearchHandler(BaseHandler):
 
                 # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
                 if SearchHandler._is_text_highly_similar_optimized(
-                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.6
+                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.9
                 ):
                     continue  # Skip highly similar text, don't participate in MMR competition
 
@@ -504,7 +504,7 @@ class SearchHandler(BaseHandler):
         selected_global: list[int],
         similarity_matrix,
         flat: list,
-        threshold: float = 0.75,
+        threshold: float = 0.9,
     ) -> bool:
         """
         Multi-algorithm text similarity check with embedding pre-filtering.
@@ -542,7 +542,7 @@ class SearchHandler(BaseHandler):
         max_sim = similarity_matrix[candidate_idx][max_sim_idx]
 
         # If highest embedding similarity < 0.60, skip text comparison entirely
-        if max_sim <= 0.60:
+        if max_sim <= 0.9:
             return False
 
         # Get text of most similar memory
