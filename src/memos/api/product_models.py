@@ -141,7 +141,7 @@ class ChatRequest(BaseRequest):
         # ---- mem_cube_id backward compatibility ----
         if self.mem_cube_id is not None:
             logger.warning(
-                "ChatRequest.mem_cube_id is deprecated and will be removed in a future version. "
+                "ChatRequest.mem_cube_id is deprecated and will be removed in a short future version. "
                 "Please migrate to `readable_cube_ids` / `writable_cube_ids`."
             )
             if not self.readable_cube_ids:
