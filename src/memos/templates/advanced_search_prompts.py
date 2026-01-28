@@ -163,38 +163,34 @@ Answer:
 """
 
 MEMORY_RECREATE_ENHANCEMENT_PROMPT = """
-You are a precise and detail-oriented AI assistant specialized in temporal memory reconstruction, reference resolution, and relevance-aware memory fusion.
+You are a knowledgeable and precise AI assistant.
 
 # GOAL
-Transform the original memories into a clean, unambiguous, and consolidated set of factual statements that:
-1. **Resolve all vague or relative references** (e.g., “yesterday” → actual date, “she” → full name, “last weekend” → specific dates, "home" → actual address) **using only information present in the provided memories**.
-2. **Fuse memory entries that are related by time, topic, participants, or explicit context**—prioritizing the merging of entries that clearly belong together.
-3. **Preserve every explicit fact from every original memory entry**—no deletion, no loss of detail. Redundant phrasing may be streamlined, but all distinct information must appear in the output.
-4. **Return at most {top_k} fused and disambiguated memory segments in <answer>, ordered by relevance to the user query** (most relevant first).
+Transform raw memories into clean, complete, and fully disambiguated statements that preserve original meaning and explicit details.
 
-# RULES
-- **You MUST retain all information from all original memory entries.** Even if an entry seems minor, repetitive, or less relevant, its content must be represented in the output.
-- **Do not add, assume, or invent any information** not grounded in the original memories.
-- **Disambiguate pronouns, time expressions, and vague terms ONLY when the necessary context exists within the memories** (e.g., if “yesterday” appears in a message dated July 3, resolve it to July 2).
-- **If you cannot resolve a vague reference (e.g., “she”, “back home”, “recently”, “a few days ago”) due to insufficient context, DO NOT guess or omit it—include the original phrasing verbatim in the output.**
-- **Prioritize merging memory entries that are semantically or contextually related** (e.g., same event, same conversation thread, shared participants, or consecutive timestamps). Grouping should reflect natural coherence, not just proximity.
-- **The total number of bullets in <answer> must not exceed {top_k}.** To meet this limit, fuse related entries as much as possible while ensuring **no factual detail is omitted**.
-- **Never sacrifice factual completeness for brevity or conciseness.** If needed, create broader but fully informative fused segments rather than dropping information.
-- **Each bullet in <answer> must be a self-contained, fluent sentence or clause** that includes all resolved details from the original entries it represents. If part of the entry cannot be resolved, preserve that part exactly as written.
-- **Sort the final list by how directly and specifically it addresses the user’s query**—not by chronology or source.
+# RULES & THINKING STEPS
+1. Preserve ALL explicit timestamps (e.g., “on October 6”, “daily”).
+2. Resolve all ambiguities using only memory content. If disambiguation cannot be performed using only the provided memories, retain the original phrasing exactly as written. Never guess, infer, or fabricate missing information:
+    - Pronouns → full name (e.g., “she” → “Caroline”)
+    - Relative time expressions → concrete dates or full context (e.g., “last night” → “on the evening of November 25, 2025”)
+    - Vague references → specific, grounded details (e.g., “the event” → “the LGBTQ+ art workshop in Malmö”)
+    - Incomplete descriptions → full version from memory (e.g., “the activity” → “the abstract painting session at the community center”)
+3. Merge memories that are largely repetitive in content but contain complementary or distinct details. Combine them into a single, cohesive statement that preserves all unique information from each original memory. Do not merge memories that describe different events, even if they share a theme.
+4. Keep ONLY what’s relevant to the user’s query. Delete irrelevant memories entirely.
 
 # OUTPUT FORMAT (STRICT)
-Return ONLY the following structure:
+Return ONLY the following block, with **one enhanced memory per line**.
+Each line MUST start with "- " (dash + space).
 
+Wrap the final output inside:
 <answer>
-- [Fully resolved, fused memory segment most relevant to the query — containing all facts from the original entries it covers; unresolved parts kept verbatim]
-- [Next most relevant resolved and fused segment — again, with no factual loss]
-- [...]
+- enhanced memory 1
+- enhanced memory 2
+...
 </answer>
 
-
 ## User Query
-{query}
+{query_history}
 
 ## Original Memories
 {memories}
