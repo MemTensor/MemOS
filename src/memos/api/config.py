@@ -539,6 +539,13 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_nli_config() -> dict[str, Any]:
+        """Get NLI model configuration."""
+        return {
+            "base_url": os.getenv("NLI_MODEL_BASE_URL", "http://localhost:32532"),
+        }
+
+    @staticmethod
     def get_neo4j_community_config(user_id: str | None = None) -> dict[str, Any]:
         """Get Neo4j community configuration."""
         return {

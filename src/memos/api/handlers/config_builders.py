@@ -188,3 +188,13 @@ def build_pref_retriever_config() -> dict[str, Any]:
         Validated retriever configuration dictionary
     """
     return RetrieverConfigFactory.model_validate({"backend": "naive", "config": {}})
+
+
+def build_nli_client_config() -> dict[str, Any]:
+    """
+    Build NLI client configuration.
+
+    Returns:
+        NLI client configuration dictionary
+    """
+    return APIConfig.get_nli_config()
