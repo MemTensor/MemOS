@@ -62,7 +62,7 @@ class UniversalAPIEmbedder(BaseEmbedder):
                     init_time = time.time()
                     response = asyncio.run(
                         asyncio.wait_for(
-                            _create_embeddings(), timeout=os.getenv("MOS_EMBEDDER_TIMEOUT", 5)
+                            _create_embeddings(), timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
                         )
                     )
                     logger.info(
