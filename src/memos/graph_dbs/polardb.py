@@ -2037,7 +2037,6 @@ class PolarDBGraphDB(BaseGraphDB):
         knowledgebase_ids: list[str] | None = None,
         **kwargs,
     ) -> list[dict]:
-        print("1111user_name:",user_name)
         """
         Retrieve node IDs based on vector similarity using PostgreSQL vector operations.
         """
@@ -2075,7 +2074,6 @@ class PolarDBGraphDB(BaseGraphDB):
             knowledgebase_ids=knowledgebase_ids,
             default_user_name=self.config.user_name,
         )
-        print("2222user_name_conditions:", user_name_conditions)
 
         # Add OR condition if we have any user_name conditions
         if user_name_conditions:
@@ -3536,7 +3534,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
-        print("222nodes:",nodes)
+        print("222nodes:", nodes)
         batch_start_time = time.time()
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
@@ -3552,7 +3550,7 @@ class PolarDBGraphDB(BaseGraphDB):
         for node_data in nodes:
             try:
                 id = node_data["id"]
-                print("777777777id:",id)
+                print("777777777id:", id)
                 memory = node_data["memory"]
                 metadata = node_data.get("metadata", {})
 
