@@ -282,12 +282,10 @@ class SearchHandler(BaseHandler):
                 mem_type, bucket_idx, mem, _ = flat[idx]
 
                 # Check bucket capacity with correct top_k for each type
-                if mem_type == "text":
-                    if len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
-                        continue
-                elif mem_type == "preference":
-                    if len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
-                        continue
+                if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
+                    continue
+                elif mem_type == "preference" and len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
+                    continue
 
                 # Check if exact text already exists - if so, skip this candidate entirely
                 mem_text = mem.get("memory", "").strip()
