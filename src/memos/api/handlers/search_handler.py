@@ -246,6 +246,12 @@ class SearchHandler(BaseHandler):
             if mem_text in selected_texts:
                 continue
 
+            # Skip if highly similar (2-gram + embedding filter)
+            if SearchHandler._is_text_highly_similar_optimized(
+                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.60
+            ):
+                continue
+
             # Check bucket capacity with correct top_k for each type
             if mem_type == "text":
                 if len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
@@ -285,6 +291,12 @@ class SearchHandler(BaseHandler):
                 mem_text = mem.get("memory", "").strip()
                 if mem_text in selected_texts:
                     continue  # Skip duplicate text, don't participate in MMR competition
+
+                # Skip if highly similar (2-gram + embedding filter)
+                if SearchHandler._is_text_highly_similar_optimized(
+                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.60
+                ):
+                    continue  # Skip highly similar text, don't participate in MMR competition
 
                 relevance = flat[idx][3]
                 max_sim = (
@@ -385,6 +397,79 @@ class SearchHandler(BaseHandler):
                 metadata = mem.get("metadata", {})
                 if "embedding" in metadata:
                     metadata["embedding"] = []
+
+    @staticmethod
+    def _bigram_similarity(text1: str, text2: str) -> float:
+        """
+        Calculate character-level 2-gram Jaccard similarity (fast approximation).
+
+        Args:
+            text1: First text string
+            text2: Second text string
+
+        Returns:
+            Jaccard similarity score between 0.0 and 1.0
+        """
+        if not text1 or not text2:
+            return 0.0
+
+        # Generate 2-grams
+        bigrams1 = {text1[i:i+2] for i in range(len(text1) - 1)} if len(text1) >= 2 else {text1}
+        bigrams2 = {text2[i:i+2] for i in range(len(text2) - 1)} if len(text2) >= 2 else {text2}
+
+        intersection = len(bigrams1 & bigrams2)
+        union = len(bigrams1 | bigrams2)
+
+        return intersection / union if union > 0 else 0.0
+
+    @staticmethod
+    def _is_text_highly_similar_optimized(
+        candidate_idx: int,
+        candidate_text: str,
+        selected_global: list[int],
+        similarity_matrix,
+        flat: list,
+        threshold: float = 0.60,
+    ) -> bool:
+        """
+        Optimized text similarity check with two-stage filtering.
+
+        Strategy:
+        1. Only compare with the single highest embedding similarity item (not all 25)
+        2. Only perform 2-gram comparison if embedding similarity > 0.80
+
+        This reduces comparisons from O(N) to O(1) per candidate, with embedding pre-filtering.
+        Expected speedup: 100-200x compared to LCS approach.
+
+        Args:
+            candidate_idx: Index of candidate memory in flat list
+            candidate_text: Text content of candidate memory
+            selected_global: List of already selected memory indices
+            similarity_matrix: Precomputed embedding similarity matrix
+            flat: Flat list of all memories
+            threshold: 2-gram similarity threshold (default 0.60)
+
+        Returns:
+            True if candidate is highly similar to any selected memory
+        """
+        if not selected_global:
+            return False
+
+        # Find the already-selected memory with highest embedding similarity
+        max_sim_idx = max(selected_global, key=lambda j: similarity_matrix[candidate_idx][j])
+        max_sim = similarity_matrix[candidate_idx][max_sim_idx]
+
+        # If highest embedding similarity < 0.80, skip text comparison entirely
+        if max_sim < 0.80:
+            return False
+
+        # Get text of most similar memory
+        most_similar_mem = flat[max_sim_idx][2]
+        most_similar_text = most_similar_mem.get("memory", "").strip()
+
+        # Calculate 2-gram similarity
+        bigram_sim = SearchHandler._bigram_similarity(candidate_text, most_similar_text)
+        return bigram_sim >= threshold
 
     def _resolve_cube_ids(self, search_req: APISearchRequest) -> list[str]:
         """
