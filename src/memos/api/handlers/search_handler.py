@@ -228,6 +228,7 @@ class SearchHandler(BaseHandler):
         selected_global: list[int] = []
         text_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(text_buckets))}
         pref_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(pref_buckets))}
+        selected_texts: set[str] = set()  # Track exact text content to avoid duplicates
 
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
@@ -238,7 +239,12 @@ class SearchHandler(BaseHandler):
         for idx in ordered_by_relevance[:len(flat)]:
             if len(selected_global) >= prefill_top_n:
                 break
-            mem_type, bucket_idx, _, _ = flat[idx]
+            mem_type, bucket_idx, mem, _ = flat[idx]
+
+            # Skip if exact text already exists in selected set
+            mem_text = mem.get("memory", "").strip()
+            if mem_text in selected_texts:
+                continue
 
             # Check bucket capacity with correct top_k for each type
             if mem_type == "text":
@@ -246,16 +252,18 @@ class SearchHandler(BaseHandler):
                     continue
                 selected_global.append(idx)
                 text_selected_by_bucket[bucket_idx].append(idx)
+                selected_texts.add(mem_text)
             elif mem_type == "preference":
                 if len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
                     continue
                 selected_global.append(idx)
                 pref_selected_by_bucket[bucket_idx].append(idx)
+                selected_texts.add(mem_text)
 
         # Phase 2: MMR selection for remaining slots
         lambda_relevance = 0.8
         similarity_threshold = 0.92
-        beta_high_similarity = 5.0  # Penalty multiplier for similarity > 0.92
+        beta_high_similarity = 12.0  # Penalty multiplier for similarity > 0.92
         remaining = set(range(len(flat))) - set(selected_global)
 
         while remaining:
@@ -263,7 +271,7 @@ class SearchHandler(BaseHandler):
             best_mmr: float | None = None
 
             for idx in remaining:
-                mem_type, bucket_idx, _, _ = flat[idx]
+                mem_type, bucket_idx, mem, _ = flat[idx]
 
                 # Check bucket capacity with correct top_k for each type
                 if mem_type == "text":
@@ -272,6 +280,11 @@ class SearchHandler(BaseHandler):
                 elif mem_type == "preference":
                     if len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
                         continue
+
+                # Check if exact text already exists - if so, skip this candidate entirely
+                mem_text = mem.get("memory", "").strip()
+                if mem_text in selected_texts:
+                    continue  # Skip duplicate text, don't participate in MMR competition
 
                 relevance = flat[idx][3]
                 max_sim = (
@@ -295,8 +308,13 @@ class SearchHandler(BaseHandler):
             if best_idx is None:
                 break
 
-            mem_type, bucket_idx, _, _ = flat[best_idx]
+            mem_type, bucket_idx, mem, _ = flat[best_idx]
+
+            # Add to selected set and track text
+            mem_text = mem.get("memory", "").strip()
             selected_global.append(best_idx)
+            selected_texts.add(mem_text)
+
             if mem_type == "text":
                 text_selected_by_bucket[bucket_idx].append(best_idx)
             elif mem_type == "preference":
