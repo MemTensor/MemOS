@@ -771,7 +771,9 @@ class GetMemoryRequest(BaseRequest):
 
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
-    include_preference: bool = Field(True, description="Whether to handle preference memory")
+    include_preference: bool = Field(True, description="Whether to return preference memory")
+    include_tool_memory: bool = Field(False, description="Whether to return tool memory")
+    filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     page: int | None = Field(
         None,
         description="Page number (starts from 1). If None, exports all data without pagination.",

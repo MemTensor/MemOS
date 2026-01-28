@@ -61,6 +61,19 @@ def load_default_config(user_id="default_user"):
         "SCHEDULER_TOP_N": "scheduler_top_n",
     }
 
+    # Fields that should always be kept as strings (not converted to numbers)
+    string_only_fields = {
+        "openai_api_key",
+        "openai_api_base",
+        "neo4j_uri",
+        "neo4j_user",
+        "neo4j_password",
+        "neo4j_db_name",
+        "text_mem_type",
+        "model_name",
+        "embedder_model",
+    }
+
     kwargs = {"user_id": user_id}
     for env_key, param_key in env_mapping.items():
         val = os.getenv(env_key)
@@ -74,6 +87,9 @@ def load_default_config(user_id="default_user"):
             # Handle boolean conversions
             if val.lower() in ("true", "false"):
                 kwargs[param_key] = val.lower() == "true"
+            # Keep certain fields as strings
+            elif param_key in string_only_fields:
+                kwargs[param_key] = val
             else:
                 # Try numeric conversions (int first, then float)
                 try:
@@ -93,6 +109,10 @@ def load_default_config(user_id="default_user"):
     openai_api_base = kwargs.pop("openai_api_base", "https://api.openai.com/v1")
     text_mem_type = kwargs.pop("text_mem_type", "tree_text")
 
+    # Ensure embedder_model has a default value if not set
+    if "embedder_model" not in kwargs:
+        kwargs["embedder_model"] = os.getenv("EMBEDDER_MODEL", "nomic-embed-text:latest")
+
     config, cube = get_default(
         openai_api_key=openai_api_key,
         openai_api_base=openai_api_base,
@@ -108,6 +128,21 @@ class MOSMCPStdioServer:
         config, cube = load_default_config()
         self.mos_core = MOS(config=config)
         self.mos_core.register_mem_cube(cube)
+        self._setup_tools()
+
+
+class MOSMCPServer:
+    """MCP Server that accepts an existing MOS instance."""
+
+    def __init__(self, mos_instance: MOS | None = None):
+        self.mcp = FastMCP("MOS Memory System")
+        if mos_instance is None:
+            # Fall back to creating from default config
+            config, cube = load_default_config()
+            self.mos_core = MOS(config=config)
+            self.mos_core.register_mem_cube(cube)
+        else:
+            self.mos_core = mos_instance
         self._setup_tools()
 
     def _setup_tools(self):
@@ -133,7 +168,10 @@ class MOSMCPStdioServer:
                 response = self.mos_core.chat(query, user_id)
                 return response
             except Exception as e:
-                return f"Chat error: {e!s}"
+                import traceback
+
+                error_details = traceback.format_exc()
+                return f"Chat error: {e!s}\nTraceback:\n{error_details}"
 
         @self.mcp.tool()
         async def create_user(
@@ -261,7 +299,10 @@ class MOSMCPStdioServer:
                 result = self.mos_core.search(query, user_id, cube_ids)
                 return result
             except Exception as e:
-                return {"error": str(e)}
+                import traceback
+
+                error_details = traceback.format_exc()
+                return {"error": str(e), "traceback": error_details}
 
         @self.mcp.tool()
         async def add_memory(
@@ -527,23 +568,24 @@ class MOSMCPStdioServer:
             except Exception as e:
                 return f"Error controlling memory scheduler: {e!s}"
 
-    def run(self, transport: str = "stdio", **kwargs):
-        """Run MCP server with specified transport"""
-        if transport == "stdio":
-            # Run stdio mode (default for local usage)
-            self.mcp.run(transport="stdio")
-        elif transport == "http":
-            # Run HTTP mode
-            host = kwargs.get("host", "localhost")
-            port = kwargs.get("port", 8000)
-            asyncio.run(self.mcp.run_http_async(host=host, port=port))
-        elif transport == "sse":
-            # Run SSE mode (deprecated but still supported)
-            host = kwargs.get("host", "localhost")
-            port = kwargs.get("port", 8000)
-            self.mcp.run(transport="sse", host=host, port=port)
-        else:
-            raise ValueError(f"Unsupported transport: {transport}")
+
+def _run_mcp(self, transport: str = "stdio", **kwargs):
+    if transport == "stdio":
+        self.mcp.run(transport="stdio")
+    elif transport == "http":
+        host = kwargs.get("host", "localhost")
+        port = kwargs.get("port", 8000)
+        asyncio.run(self.mcp.run_http_async(host=host, port=port))
+    elif transport == "sse":
+        host = kwargs.get("host", "localhost")
+        port = kwargs.get("port", 8000)
+        self.mcp.run(transport="sse", host=host, port=port)
+    else:
+        raise ValueError(f"Unsupported transport: {transport}")
+
+
+MOSMCPStdioServer.run = _run_mcp
+MOSMCPServer.run = _run_mcp
 
 
 # Usage example

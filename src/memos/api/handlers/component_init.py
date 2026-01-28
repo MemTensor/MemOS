@@ -133,19 +133,22 @@ def init_server() -> dict[str, Any]:
     logger.info("Initializing MemOS server components...")
 
     # Initialize Redis client first as it is a core dependency for features like scheduler status tracking
-    try:
-        from memos.mem_scheduler.orm_modules.api_redis_model import APIRedisDBManager
+    if os.getenv("MEMSCHEDULER_USE_REDIS_QUEUE", "False").lower() == "true":
+        try:
+            from memos.mem_scheduler.orm_modules.api_redis_model import APIRedisDBManager
 
-        redis_client = APIRedisDBManager.load_redis_engine_from_env()
-        if redis_client:
-            logger.info("Redis client initialized successfully.")
-        else:
-            logger.error(
-                "Failed to initialize Redis client. Check REDIS_HOST etc. in environment variables."
-            )
-    except Exception as e:
-        logger.error(f"Failed to initialize Redis client: {e}", exc_info=True)
-        redis_client = None  # Ensure redis_client exists even on failure
+            redis_client = APIRedisDBManager.load_redis_engine_from_env()
+            if redis_client:
+                logger.info("Redis client initialized successfully.")
+            else:
+                logger.error(
+                    "Failed to initialize Redis client. Check REDIS_HOST etc. in environment variables."
+                )
+        except Exception as e:
+            logger.error(f"Failed to initialize Redis client: {e}", exc_info=True)
+            redis_client = None  # Ensure redis_client exists even on failure
+    else:
+        redis_client = None
 
     # Get default cube configuration
     default_cube_config = APIConfig.get_default_cube_config()
@@ -183,7 +186,8 @@ def init_server() -> dict[str, Any]:
         else None
     )
     embedder = EmbedderFactory.from_config(embedder_config)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config)
+    # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
+    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(

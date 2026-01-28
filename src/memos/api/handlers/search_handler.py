@@ -6,9 +6,12 @@ using dependency injection for better modularity and testability.
 """
 
 import math
+import time
+
 from typing import Any
 
 from memos.api.handlers.base_handler import BaseHandler, HandlerDependencies
+from memos.api.handlers.formatters_handler import rerank_knowledge_mem
 from memos.api.product_models import APISearchRequest, SearchResponse
 from memos.log import get_logger
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import (
@@ -105,6 +108,18 @@ class SearchHandler(BaseHandler):
                 if graph_retriever is not None and hasattr(graph_retriever, "include_embedding"):
                     graph_retriever.include_embedding = prev_graph_retriever_include_embedding
 
+        start_time = time.time()
+        text_mem = results["text_mem"]
+        results["text_mem"] = rerank_knowledge_mem(
+            self.reranker,
+            query=search_req.query,
+            text_mem=text_mem,
+            top_k=original_top_k,
+            file_mem_proportion=0.5,
+        )
+        rerank_time = time.time() - start_time
+
+        self.logger.info(f"[Knowledge_replace_memory_time] Rerank time: {rerank_time} seconds")
         self.logger.info(
             f"[SearchHandler] Final search results: count={len(results)} results={results}"
         )
