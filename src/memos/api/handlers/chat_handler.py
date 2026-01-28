@@ -588,6 +588,8 @@ class ChatHandler(BaseHandler):
                     # get internet reference
                     internet_reference = self._get_internet_reference(
                         search_response.data.get("text_mem")[0]["memories"]
+                        if search_response.data.get("text_mem")
+                        else []
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference}, ensure_ascii=False)}\n\n"
 
