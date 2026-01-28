@@ -55,7 +55,6 @@ class UniversalAPIEmbedder(BaseEmbedder):
                     return self.client.embeddings.create(
                         model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
                         input=texts,
-                        timeout=self.config.timeout,
                     )
 
                 try:
