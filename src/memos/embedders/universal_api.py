@@ -1,3 +1,7 @@
+import asyncio
+import os
+import time
+
 from openai import AzureOpenAI as AzureClient
 from openai import OpenAI as OpenAIClient
 
@@ -43,14 +47,49 @@ class UniversalAPIEmbedder(BaseEmbedder):
             texts = [texts]
         # Truncate texts if max_tokens is configured
         texts = self._truncate_texts(texts)
-
+        logger.info(f"Embeddings request with input: {texts}")
         if self.provider == "openai" or self.provider == "azure":
             try:
-                response = self.client.embeddings.create(
-                    model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
-                    input=texts,
-                )
-                return [r.embedding for r in response.data]
+                # use asyncio.wait_for to implement 3 seconds timeout, fallback to default client if timeout
+                async def _create_embeddings():
+                    return self.client.embeddings.create(
+                        model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
+                        input=texts,
+                        timeout=self.config.timeout,
+                    )
+
+                try:
+                    # wait for environment variable specified timeout (5 seconds), trigger asyncio.TimeoutError if timeout
+                    init_time = time.time()
+                    response = asyncio.run(
+                        asyncio.wait_for(
+                            _create_embeddings(), timeout=os.getenv("MOS_EMBEDDER_TIMEOUT", 5)
+                        )
+                    )
+                    logger.info(
+                        f"Embeddings request succeeded with {time.time() - init_time} seconds"
+                    )
+                    return [r.embedding for r in response.data]
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"Embeddings request timed out after {os.getenv('MOS_EMBEDDER_TIMEOUT', 5)} seconds, fallback to default client"
+                    )
+                    client = OpenAIClient(
+                        api_key=os.getenv("OPENAI_API_KEY", "sk-xxxx"),
+                        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                        default_headers=self.config.headers_extra
+                        if self.config.headers_extra
+                        else None,
+                    )
+                    init_time = time.time()
+                    response = client.embeddings.create(
+                        model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
+                        input=texts,
+                    )
+                    logger.info(
+                        f"Embeddings request using default client succeeded with {time.time() - init_time} seconds"
+                    )
+                    return [r.embedding for r in response.data]
             except Exception as e:
                 raise Exception(f"Embeddings request ended with error: {e}") from e
         else:
