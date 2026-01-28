@@ -440,6 +440,18 @@ class APIConfig:
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
+                    "backup_client": os.getenv("MOS_EMBEDDER_BACKUP_CLIENT", "false").lower()
+                    == "true",
+                    "backup_base_url": os.getenv(
+                        "MOS_EMBEDDER_BACKUP_API_BASE", "http://openai.com"
+                    ),
+                    "backup_api_key": os.getenv("MOS_EMBEDDER_BACKUP_API_KEY", "sk-xxxx"),
+                    "backup_headers_extra": json.loads(
+                        os.getenv("MOS_EMBEDDER_BACKUP_HEADERS_EXTRA", "{}")
+                    ),
+                    "backup_model_name_or_path": os.getenv(
+                        "MOS_EMBEDDER_BACKUP_MODEL", "text-embedding-3-large"
+                    ),
                 },
             }
         else:  # ollama

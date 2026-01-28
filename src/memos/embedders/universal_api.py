@@ -33,6 +33,15 @@ class UniversalAPIEmbedder(BaseEmbedder):
             )
         else:
             raise ValueError(f"Embeddings unsupported provider: {self.provider}")
+        self.use_backup_client = config.backup_client
+        if self.use_backup_client:
+            self.backup_client = OpenAIClient(
+                api_key=config.backup_api_key,
+                base_url=config.backup_base_url,
+                default_headers=config.backup_headers_extra
+                if config.backup_headers_extra
+                else None,
+            )
 
     @timed_with_status(
         log_prefix="model_timed_embedding",
@@ -50,46 +59,54 @@ class UniversalAPIEmbedder(BaseEmbedder):
         logger.info(f"Embeddings request with input: {texts}")
         if self.provider == "openai" or self.provider == "azure":
             try:
-                # use asyncio.wait_for to implement 3 seconds timeout, fallback to default client if timeout
+
                 async def _create_embeddings():
                     return self.client.embeddings.create(
                         model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
                         input=texts,
                     )
 
-                try:
-                    # wait for environment variable specified timeout (5 seconds), trigger asyncio.TimeoutError if timeout
-                    init_time = time.time()
-                    response = asyncio.run(
-                        asyncio.wait_for(
-                            _create_embeddings(), timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
-                        )
+                init_time = time.time()
+                response = asyncio.run(
+                    asyncio.wait_for(
+                        _create_embeddings(), timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5))
                     )
-                    logger.info(
-                        f"Embeddings request succeeded with {time.time() - init_time} seconds"
-                    )
-                    return [r.embedding for r in response.data]
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        f"Embeddings request timed out after {os.getenv('MOS_EMBEDDER_TIMEOUT', 5)} seconds, fallback to default client"
-                    )
-                    client = OpenAIClient(
-                        api_key=os.getenv("OPENAI_API_KEY", "sk-xxxx"),
-                        base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                        default_headers=self.config.headers_extra
-                        if self.config.headers_extra
-                        else None,
-                    )
-                    init_time = time.time()
-                    response = client.embeddings.create(
-                        model=getattr(self.config, "model_name_or_path", "text-embedding-3-large"),
-                        input=texts,
-                    )
-                    logger.info(
-                        f"Embeddings request using default client succeeded with {time.time() - init_time} seconds"
-                    )
-                    return [r.embedding for r in response.data]
+                )
+                logger.info(f"Embeddings request succeeded with {time.time() - init_time} seconds")
+                logger.info(f"Embeddings request response: {response}")
+                return [r.embedding for r in response.data]
             except Exception as e:
-                raise Exception(f"Embeddings request ended with error: {e}") from e
+                logger.warning(
+                    f"Embeddings request ended with {type(e).__name__} error: {e}, try backup client"
+                )
+                if self.use_backup_client:
+                    try:
+
+                        async def _create_embeddings_backup():
+                            return self.backup_client.embeddings.create(
+                                model=getattr(
+                                    self.config,
+                                    "backup_model_name_or_path",
+                                    "text-embedding-3-large",
+                                ),
+                                input=texts,
+                            )
+
+                        init_time = time.time()
+                        response = asyncio.run(
+                            asyncio.wait_for(
+                                _create_embeddings_backup(),
+                                timeout=int(os.getenv("MOS_EMBEDDER_TIMEOUT", 5)),
+                            )
+                        )
+                        logger.info(
+                            f"Backup embeddings request succeeded with {time.time() - init_time} seconds"
+                        )
+                        logger.info(f"Backup embeddings request response: {response}")
+                        return [r.embedding for r in response.data]
+                    except Exception as e:
+                        raise ValueError(f"Backup embeddings request ended with error: {e}") from e
+                else:
+                    raise ValueError(f"Embeddings request ended with error: {e}") from e
         else:
             raise ValueError(f"Embeddings unsupported provider: {self.provider}")
