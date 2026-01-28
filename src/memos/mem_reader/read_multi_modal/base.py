@@ -15,6 +15,7 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
+from memos.utils import timed
 
 from .utils import detect_lang, get_text_splitter
 
@@ -245,6 +246,7 @@ class BaseMessageParser(ABC):
         else:
             raise ValueError(f"Unknown mode: {mode}. Must be 'fast' or 'fine'")
 
+    @timed
     def _split_text(self, text: str, is_markdown: bool = False) -> list[str]:
         """
         Split text into chunks using text splitter from utils.
