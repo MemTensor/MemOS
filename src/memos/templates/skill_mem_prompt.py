@@ -13,12 +13,13 @@ Please analyze the provided conversation records, identify all independent "task
 3. **Filter Chit-chat**: Only extract tasks with clear goals, instructions, or knowledge-based discussions. Ignore meaningless greetings (such as "Hello", "Are you there?") or closing remarks unless they are part of the task context.
 4. **Output Format**: Please strictly follow the JSON format for output to facilitate my subsequent processing.
 5. **Language Consistency**: The language used in the task_name field must match the language used in the conversation records.
+6. **Generic Task Names**: Use generic, reusable task names, not specific descriptions. For example, use "Travel Planning" instead of "Planning a 5-day trip to Chengdu".
 
 ```json
 [
   {
     "task_id": 1,
-    "task_name": "Brief description of the task (e.g., Making travel plans)",
+    "task_name": "Generic task name (e.g., Travel Planning, Code Review, Data Analysis)",
     "message_indices": [[0, 5],[16, 17]], # 0-5 and 16-17 are the message indices for this task
     "reasoning": "Briefly explain why these messages are grouped together"
   },
@@ -46,12 +47,13 @@ TASK_CHUNKING_PROMPT_ZH = """
 3. **过滤闲聊**：仅提取具有明确目标、指令或基于知识的讨论的任务。忽略无意义的问候（例如"你好"、"在吗？"）或结束语，除非它们是任务上下文的一部分。
 4. **输出格式**：请严格遵循 JSON 格式输出，以便我后续处理。
 5. **语言一致性**：task_name 字段使用的语言必须与对话记录中使用的语言相匹配。
+6. **通用任务名称**：使用通用的、可复用的任务名称，而不是具体的描述。例如，使用"旅行规划"而不是"规划成都5日游"。
 
 ```json
 [
   {
     "task_id": 1,
-    "task_name": "任务的简要描述（例如：制定旅行计划）",
+    "task_name": "通用任务名称（例如：旅行规划、代码审查、数据分析）",
     "message_indices": [[0, 5],[16, 17]], # 0-5 和 16-17 是此任务的消息索引
     "reasoning": "简要解释为什么这些消息被分组在一起"
   },
@@ -66,10 +68,10 @@ TASK_CHUNKING_PROMPT_ZH = """
 
 SKILL_MEMORY_EXTRACTION_PROMPT = """
 # Role
-You are an expert in general skill extraction and skill memory management. You excel at analyzing conversations to extract actionable, transferable, and reusable skills, procedures, experiences, and user preferences. The skills you extract should be general and applicable across similar scenarios, not overly specific to a single instance.
+You are an expert in skill abstraction and knowledge extraction. You excel at distilling general, reusable methodologies from specific conversations.
 
 # Task
-Based on the provided conversation messages and existing skill memories, extract new skill memory or update existing ones. You need to determine whether the current conversation contains skills similar to existing memories.
+Extract a universal skill template from the conversation that can be applied to similar scenarios. Compare with existing skills to determine if this is new or an update.
 
 # Existing Skill Memories
 {old_memories}
@@ -77,26 +79,22 @@ Based on the provided conversation messages and existing skill memories, extract
 # Conversation Messages
 {messages}
 
-# Extraction Rules
-1. **Similarity Check**: Compare the current conversation with existing skill memories. If a similar skill exists, set "update": true and provide the "old_memory_id". Otherwise, set "update": false and leave "old_memory_id" empty.
-2. **Completeness**: Extract comprehensive information including procedures, experiences, preferences, and examples.
-3. **Clarity**: Ensure procedures are step-by-step and easy to follow.
-4. **Specificity**: Capture specific user preferences and lessons learned from experiences.
-5. **Language Consistency**: Use the same language as the conversation.
-6. **Accuracy**: Only extract information that is explicitly present or strongly implied in the conversation.
+# Core Principles
+1. **Generalization**: Extract abstract methodologies applicable across scenarios. Avoid specific details (e.g., "Travel Planning" not "Beijing Travel Planning").
+2. **Universality**: All fields except "example" must remain general and scenario-independent.
+3. **Similarity Check**: If similar skill exists, set "update": true with "old_memory_id". Otherwise, set "update": false and leave "old_memory_id" empty.
+4. **Language Consistency**: Match the conversation language.
 
 # Output Format
-Please output in strict JSON format:
-
 ```json
 {
-  "name": "A concise name for this skill or task type",
-  "description": "A clear description of what this skill does or accomplishes",
-  "procedure": "Step-by-step procedure: 1. First step 2. Second step 3. Third step...",
-  "experience": ["Lesson 1: Specific experience or insight learned", "Lesson 2: Another valuable experience..."],
-  "preference": ["User preference 1", "User preference 2", "User preference 3..."],
-  "example": ["Example case 1 demonstrating how to complete the task following this skill's guidance", "Example case 2..."],
-  "tags": ["tag1", "tag2", "tag3"],
+  "name": "General skill name (e.g., 'Travel Itinerary Planning', 'Code Review Workflow')",
+  "description": "Universal description of what this skill accomplishes",
+  "procedure": "Generic step-by-step process: 1. Step one 2. Step two...",
+  "experience": ["General principle or lesson learned", "Best practice applicable to similar cases..."],
+  "preference": ["User's general preference pattern", "Preferred approach or constraint..."],
+  "examples": ["Complete formatted output example in markdown format showing the final deliverable structure, content can be abbreviated with '...' but should demonstrate the format and structure", "Another complete output template..."],
+  "tags": ["keyword1", "keyword2"],
   "scripts": {"script_name.py": "# Python code here\nprint('Hello')", "another_script.py": "# More code\nimport os"},
   "others": {"Section Title": "Content here", "reference.md": "# Reference content for this skill"},
   "update": false,
@@ -104,39 +102,39 @@ Please output in strict JSON format:
 }
 ```
 
-# Field Descriptions
-- **name**: Brief identifier for the skill (e.g., "Travel Planning", "Code Review Process")
-- **description**: What this skill accomplishes or its purpose
-- **procedure**: Sequential steps to complete the task
-- **experience**: Lessons learned, best practices, things to avoid
-- **preference**: User's specific preferences, likes, dislikes
-- **example**: Concrete example cases demonstrating how to complete the task by following this skill's guidance
-- **tags**: Relevant keywords for categorization
-- **scripts**: Dictionary of scripts where key is the .py filename and value is the executable code snippet. Use null if not applicable
-- **others**: Flexible additional information in key-value format. Can be either:
+# Field Specifications
+- **name**: Generic skill identifier without specific instances
+- **description**: Universal purpose and applicability
+- **procedure**: Abstract, reusable process steps without specific details. Should be generalizable to similar tasks
+- **experience**: General lessons, principles, or insights
+- **preference**: User's overarching preference patterns
+- **examples**: Complete output templates showing the final deliverable format and structure. Should demonstrate how the task result looks when this skill is applied, including format, sections, and content organization. Content can be abbreviated but must show the complete structure. Use markdown format for better readability
+- **tags**: Generic keywords for categorization
+- **scripts**: Dictionary of scripts where key is the .py filename and value is the executable code snippet. Only applicable for code-related tasks (e.g., data processing, automation). Use null for non-coding tasks
+- **others**: Supplementary information beyond standard fields or lengthy content unsuitable for other fields. Can be either:
   - Simple key-value pairs where key is a title and value is content
   - Separate markdown files where key is .md filename and value is the markdown content
-  Use null if not applicable
-- **update**: true if updating existing memory, false if creating new
-- **old_memory_id**: The ID of the existing memory being updated, or empty string if new
+  - Use null if not applicable
+- **update**: true if updating existing skill, false if new
+- **old_memory_id**: ID of skill being updated, or empty string if new
 
-# Important Notes
-- If no clear skill can be extracted from the conversation, return null
-- Ensure all string values are properly formatted and contain meaningful information
-- Arrays should contain at least one item if the field is populated
-- Be thorough but avoid redundancy
+# Critical Guidelines
+- Keep all fields general except "examples"
+- "examples" should demonstrate complete final output format and structure with all necessary sections
+- "others" contains supplementary context or extended information
+- Return null if no extractable skill exists
 
-# Output
-Please output only the JSON object, without any additional formatting, markdown code blocks, or explanation.
+# Output Format
+Output the JSON object only.
 """
 
 
 SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 # 角色
-你是通用技能提取和技能记忆管理的专家。你擅长分析对话，提取可操作的、可迁移的、可复用的技能、流程、经验和用户偏好。你提取的技能应该是通用的，能够应用于类似场景，而不是过于针对单一实例。
+你是技能抽象和知识提取的专家。你擅长从具体对话中提炼通用的、可复用的方法论。
 
 # 任务
-基于提供的对话消息和现有的技能记忆，提取新的技能记忆或更新现有的技能记忆。你需要判断当前对话中是否包含与现有记忆相似的技能。
+从对话中提取可应用于类似场景的通用技能模板。对比现有技能判断是新建还是更新。
 
 # 现有技能记忆
 {old_memories}
@@ -144,26 +142,22 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 # 对话消息
 {messages}
 
-# 提取规则
-1. **相似性检查**：将当前对话与现有技能记忆进行比较。如果存在相似的技能，设置 "update": true 并提供 "old_memory_id"。否则，设置 "update": false 并将 "old_memory_id" 留空。
-2. **完整性**：提取全面的信息，包括流程、经验、偏好和示例。
-3. **清晰性**：确保流程是逐步的，易于遵循。
-4. **具体性**：捕获具体的用户偏好和从经验中学到的教训。
-5. **语言一致性**：使用与对话相同的语言。
-6. **准确性**：仅提取对话中明确存在或强烈暗示的信息。
+# 核心原则
+1. **通用化**：提取可跨场景应用的抽象方法论。避免具体细节（如"旅行规划"而非"北京旅行规划"）。
+2. **普适性**：除"examples"外，所有字段必须保持通用，与具体场景无关。
+3. **相似性检查**：如存在相似技能，设置"update": true 及"old_memory_id"。否则设置"update": false 并将"old_memory_id"留空。
+4. **语言一致性**：与对话语言保持一致。
 
 # 输出格式
-请以严格的 JSON 格式输出：
-
 ```json
 {
-  "name": "技能或任务类型的简洁名称",
-  "description": "对该技能的作用或目的的清晰描述",
-  "procedure": "逐步流程：1. 第一步 2. 第二步 3. 第三步...",
-  "experience": ["经验教训 1：学到的具体经验或见解", "经验教训 2：另一个有价值的经验..."],
-  "preference": ["用户偏好 1", "用户偏好 2", "用户偏好 3..."],
-  "example": ["示例案例 1：展示按照此技能的指引完成任务的过程", "示例案例 2..."],
-  "tags": ["标签1", "标签2", "标签3"],
+  "name": "通用技能名称（如：'旅行行程规划'、'代码审查流程'）",
+  "description": "技能作用的通用描述",
+  "procedure": "通用的分步流程：1. 步骤一 2. 步骤二...",
+  "experience": ["通用原则或经验教训", "可应用于类似场景的最佳实践..."],
+  "preference": ["用户的通用偏好模式", "偏好的方法或约束..."],
+  "examples": ["展示最终交付成果的完整格式范本（使用 markdown 格式）, 内容可用'...'省略，但需展示完整格式和结构", "另一个完整输出模板..."],
+  "tags": ["关键词1", "关键词2"],
   "scripts": {"script_name.py": "# Python 代码\nprint('Hello')", "another_script.py": "# 更多代码\nimport os"},
   "others": {"章节标题": "这里的内容", "reference.md": "# 此技能的参考内容"},
   "update": false,
@@ -171,30 +165,30 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 }
 ```
 
-# 字段说明
-- **name**：技能的简短标识符（例如："旅行计划"、"代码审查流程"）
-- **description**：该技能完成什么或其目的
-- **procedure**：完成任务的顺序步骤
-- **experience**：学到的经验教训、最佳实践、要避免的事项
-- **preference**：用户的具体偏好、喜好、厌恶
-- **example**：具体的示例案例，展示如何按照此技能的指引完成任务
-- **tags**：用于分类的相关关键词
-- **scripts**：脚本字典，其中 key 是 .py 文件名，value 是可执行代码片段。如果不适用则使用 null
-- **others**：灵活的附加信息，采用键值对格式。可以是：
+# 字段规范
+- **name**：通用技能标识符，不含具体实例
+- **description**：通用用途和适用范围
+- **procedure**：抽象的、可复用的流程步骤，不含具体细节。应当能够推广到类似任务
+- **experience**：通用经验、原则或见解
+- **preference**：用户的整体偏好模式
+- **examples**：展示最终任务成果的输出模板，包括格式、章节和内容组织结构。应展示应用此技能后任务结果的样子，包含所有必要的部分。内容可以省略但必须展示完整结构。使用 markdown 格式以提高可读性
+- **tags**：通用分类关键词
+- **scripts**：脚本字典，其中 key 是 .py 文件名，value 是可执行代码片段。仅适用于代码相关任务（如数据处理、自动化脚本等）。非编程任务直接使用 null
+- **others**：标准字段之外的补充信息或不适合放在其他字段的较长内容。可以是：
   - 简单的键值对，其中 key 是标题，value 是内容
   - 独立的 markdown 文件，其中 key 是 .md 文件名，value 是 markdown 内容
-  如果不适用则使用 null
-- **update**：如果更新现有记忆则为 true，如果创建新记忆则为 false
-- **old_memory_id**：正在更新的现有记忆的 ID，如果是新记忆则为空字符串
+  - 如果不适用则使用 null
+- **update**：更新现有技能为true，新建为false
+- **old_memory_id**：被更新技能的ID，新建则为空字符串
 
-# 重要说明
-- 如果无法从对话中提取清晰的技能，返回 null
-- 确保所有字符串值格式正确且包含有意义的信息
-- 如果填充数组，则数组应至少包含一项
-- 要全面但避免冗余
+# 关键指导
+- 除"examples"外保持所有字段通用
+- "examples"应展示完整的最终输出格式和结构，包含所有必要章节
+- "others"包含补充说明或扩展信息
+- 无法提取技能时返回null
 
-# 输出
-请仅输出 JSON 对象，不要添加任何额外的格式、markdown 代码块或解释。
+# 输出格式
+仅输出JSON对象。
 """
 
 

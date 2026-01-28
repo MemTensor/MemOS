@@ -32,6 +32,27 @@ from memos.types import MessageList
 logger = get_logger(__name__)
 
 
+def add_id_to_mysql(memory_id: str, mem_cube_id: str):
+    """Add id to mysql, will deprecate this function in the future"""
+    # TODO: tmp function, deprecate soon
+    import requests
+
+    skill_mysql_url = os.getenv("SKILLS_MYSQL_URL", "")
+    skill_mysql_bearer = os.getenv("SKILLS_MYSQL_BEARER", "")
+
+    if not skill_mysql_url or not skill_mysql_bearer:
+        logger.warning("SKILLS_MYSQL_URL or SKILLS_MYSQL_BEARER is not set")
+        return None
+    headers = {"Authorization": skill_mysql_bearer, "Content-Type": "application/json"}
+    data = {"memCubeId": mem_cube_id, "skillId": memory_id}
+    try:
+        response = requests.post(skill_mysql_url, headers=headers, json=data)
+        return response.json()
+    except Exception as e:
+        logger.warning(f"Error adding id to mysql: {e}")
+        return None
+
+
 @require_python_package(
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
@@ -108,7 +129,14 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
     for item in response_json:
         task_name = item["task_name"]
         message_indices = item["message_indices"]
-        for start, end in message_indices:
+        for indices in message_indices:
+            # Validate that indices is a list/tuple with exactly 2 elements
+            if not isinstance(indices, list | tuple) or len(indices) != 2:
+                logger.warning(
+                    f"Invalid message indices format for task '{task_name}': {indices}, skipping"
+                )
+                continue
+            start, end = indices
             task_chunks.setdefault(task_name, []).extend(messages[start : end + 1])
     return task_chunks
 
@@ -125,7 +153,7 @@ def _extract_skill_memory_by_llm(
             "procedure": mem["metadata"]["procedure"],
             "experience": mem["metadata"]["experience"],
             "preference": mem["metadata"]["preference"],
-            "example": mem["metadata"]["example"],
+            "examples": mem["metadata"]["examples"],
             "tags": mem["metadata"]["tags"],
             "scripts": mem["metadata"].get("scripts"),
             "others": mem["metadata"]["others"],
@@ -153,7 +181,10 @@ def _extract_skill_memory_by_llm(
     # Call LLM to extract skill memory with retry logic
     for attempt in range(3):
         try:
-            response_text = llm.generate(prompt)
+            # Only pass model_name_or_path if SKILLS_LLM is set
+            skills_llm = os.getenv("SKILLS_LLM", None)
+            llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
+            response_text = llm.generate(prompt, **llm_kwargs)
             # Clean up response (remove markdown code blocks if present)
             response_text = response_text.strip()
             response_text = response_text.replace("```json", "").replace("```", "").strip()
@@ -195,7 +226,7 @@ def _recall_related_skill_memories(
     query = _rewrite_query(task_type, messages, llm, rewrite_query)
     related_skill_memories = searcher.search(
         query,
-        top_k=10,
+        top_k=5,
         memory_type="SkillMemory",
         info=info,
         include_skill_memory=True,
@@ -326,11 +357,11 @@ description: {skill_memory.get("description", "")}
             skill_md_content += f"- {pref}\n"
 
     # Add Examples section only if there are items
-    examples = skill_memory.get("example", [])
+    examples = skill_memory.get("examples", [])
     if examples:
         skill_md_content += "\n## Examples\n"
         for idx, example in enumerate(examples, 1):
-            skill_md_content += f"\n### Example {idx}\n{example}\n"
+            skill_md_content += f"\n### Example {idx}\n```markdown\n{example}\n```\n"
 
     # Add scripts reference if present
     scripts = skill_memory.get("scripts")
@@ -444,7 +475,7 @@ def create_skill_memory_item(
         procedure=skill_memory.get("procedure", ""),
         experience=skill_memory.get("experience", []),
         preference=skill_memory.get("preference", []),
-        example=skill_memory.get("example", []),
+        examples=skill_memory.get("examples", []),
         scripts=skill_memory.get("scripts"),
         others=skill_memory.get("others"),
         url=skill_memory.get("url", ""),
@@ -501,6 +532,9 @@ def process_skill_memory_fine(
     messages = _add_index_to_message(messages)
 
     task_chunks = _split_task_chunk_by_llm(llm, messages)
+    if not task_chunks:
+        logger.warning("No task chunks found")
+        return []
 
     # recall - get related skill memories for each task separately (parallel)
     related_skill_memories_by_task = {}
@@ -646,5 +680,11 @@ def process_skill_memory_fine(
         except Exception as e:
             logger.warning(f"Error creating skill memory item: {e}")
             continue
+
+    # TODO: deprecate this funtion and call
+    for skill_memory in skill_memory_items:
+        add_id_to_mysql(
+            memory_id=skill_memory.id, mem_cube_id=kwargs.get("user_name", info.get("user_id", ""))
+        )
 
     return skill_memory_items

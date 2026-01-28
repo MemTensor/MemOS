@@ -323,7 +323,8 @@ class TreeTextMemory(BaseTextMemory):
     def get_by_ids(
         self, memory_ids: list[str], user_name: str | None = None
     ) -> list[TextualMemoryItem]:
-        raise NotImplementedError
+        graph_output = self.graph_store.get_nodes(ids=memory_ids, user_name=user_name)
+        return graph_output
 
     def get_all(
         self,
