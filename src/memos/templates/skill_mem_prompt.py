@@ -108,13 +108,13 @@ Extract a universal skill template from the conversation that can be applied to 
 - **procedure**: Abstract, reusable process steps without specific details. Should be generalizable to similar tasks
 - **experience**: General lessons, principles, or insights
 - **preference**: User's overarching preference patterns
-- **examples**: Complete output templates showing the final deliverable format and structure. Should demonstrate how the task result looks when this skill is applied, including format, sections, and content organization. Content can be abbreviated but must show the complete structure. Use markdown format for better readability
 - **tags**: Generic keywords for categorization
 - **scripts**: Dictionary of scripts where key is the .py filename and value is the executable code snippet. Only applicable for code-related tasks (e.g., data processing, automation). Use null for non-coding tasks
 - **others**: Supplementary information beyond standard fields or lengthy content unsuitable for other fields. Can be either:
   - Simple key-value pairs where key is a title and value is content
   - Separate markdown files where key is .md filename and value is the markdown content
   - Use null if not applicable
+- **examples**: Complete output templates showing the final deliverable format and structure. Should demonstrate how the task result looks when this skill is applied, including format, sections, and content organization. Content can be abbreviated but must show the complete structure. Use markdown format for better readability
 - **update**: true if updating existing skill, false if new
 - **old_memory_id**: ID of skill being updated, or empty string if new
 
@@ -171,13 +171,13 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 - **procedure**：抽象的、可复用的流程步骤，不含具体细节。应当能够推广到类似任务
 - **experience**：通用经验、原则或见解
 - **preference**：用户的整体偏好模式
-- **examples**：展示最终任务成果的输出模板，包括格式、章节和内容组织结构。应展示应用此技能后任务结果的样子，包含所有必要的部分。内容可以省略但必须展示完整结构。使用 markdown 格式以提高可读性
 - **tags**：通用分类关键词
 - **scripts**：脚本字典，其中 key 是 .py 文件名，value 是可执行代码片段。仅适用于代码相关任务（如数据处理、自动化脚本等）。非编程任务直接使用 null
 - **others**：标准字段之外的补充信息或不适合放在其他字段的较长内容。可以是：
   - 简单的键值对，其中 key 是标题，value 是内容
   - 独立的 markdown 文件，其中 key 是 .md 文件名，value 是 markdown 内容
   - 如果不适用则使用 null
+- **examples**：展示最终任务成果的输出模板，包括格式、章节和内容组织结构。应展示应用此技能后任务结果的样子，包含所有必要的部分。内容可以省略但必须展示完整结构。使用 markdown 格式以提高可读性
 - **update**：更新现有技能为true，新建为false
 - **old_memory_id**：被更新技能的ID，新建则为空字符串
 

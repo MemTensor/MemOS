@@ -115,7 +115,9 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
     prompt = [{"role": "user", "content": template.replace("{{messages}}", messages_context)}]
     for attempt in range(3):
         try:
-            response_text = llm.generate(prompt)
+            skills_llm = os.getenv("SKILLS_LLM", None)
+            llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
+            response_text = llm.generate(prompt, **llm_kwargs)
             response_json = json.loads(response_text.replace("```json", "").replace("```", ""))
             break
         except Exception as e:
