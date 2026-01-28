@@ -3534,7 +3534,6 @@ class PolarDBGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
-        print("222nodes:", nodes)
         batch_start_time = time.time()
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
@@ -3550,7 +3549,6 @@ class PolarDBGraphDB(BaseGraphDB):
         for node_data in nodes:
             try:
                 id = node_data["id"]
-                print("777777777id:", id)
                 memory = node_data["memory"]
                 metadata = node_data.get("metadata", {})
 
