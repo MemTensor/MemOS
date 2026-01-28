@@ -255,15 +255,11 @@ class SearchHandler(BaseHandler):
                 continue
 
             # Check bucket capacity with correct top_k for each type
-            if mem_type == "text":
-                if len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
-                    continue
+            if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) < text_top_k:
                 selected_global.append(idx)
                 text_selected_by_bucket[bucket_idx].append(idx)
                 selected_texts.add(mem_text)
-            elif mem_type == "preference":
-                if len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
-                    continue
+            elif mem_type == "preference" and len(pref_selected_by_bucket[bucket_idx]) < pref_top_k:
                 selected_global.append(idx)
                 pref_selected_by_bucket[bucket_idx].append(idx)
                 selected_texts.add(mem_text)
