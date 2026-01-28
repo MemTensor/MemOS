@@ -320,7 +320,7 @@ def get_memory_by_id(memory_id: str):
     )
 
 
-@router.get("/get_memory_by_ids", summary="Get memory by ids", response_model=GetMemoryResponse)
+@router.post("/get_memory_by_ids", summary="Get memory by ids", response_model=GetMemoryResponse)
 def get_memory_by_ids(memory_ids: list[str]):
     return handlers.memory_handler.handle_get_memory_by_ids(
         memory_ids=memory_ids,
