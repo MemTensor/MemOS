@@ -618,7 +618,6 @@ PROMPT_MAPPING = {
     "memory_redundancy_filtering": MEMORY_REDUNDANCY_FILTERING_PROMPT,
     "memory_combined_filtering": MEMORY_COMBINED_FILTERING_PROMPT,
     "memory_answer_ability_evaluation": MEMORY_ANSWER_ABILITY_EVALUATION_PROMPT,
-    "memory_recreate_enhancement": MEMORY_RECREATE_ENHANCEMENT_PROMPT,
     "memory_rewrite_enhancement": MEMORY_REWRITE_ENHANCEMENT_PROMPT,
     "enlarge_recall": ENLARGE_RECALL_PROMPT_ONE_SENTENCE,
 }

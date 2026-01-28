@@ -16,6 +16,7 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_CONTEXT_WINDOW_SIZE,
     DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
+    DEFAULT_MONITOR_INTERVAL_SECONDS,
     DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,
     DEFAULT_SCHEDULER_RETRIEVER_BATCH_SIZE,
     DEFAULT_SCHEDULER_RETRIEVER_RETRIES,
@@ -67,6 +68,10 @@ class BaseSchedulerConfig(BaseConfig):
     max_internal_message_queue_size: int = Field(
         default=DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
         description="Maximum size of internal message queue when not using Redis",
+    )
+    monitor_interval_seconds: int = Field(
+        default=DEFAULT_MONITOR_INTERVAL_SECONDS,
+        description="Interval in seconds for monitoring memory usage",
     )
     multi_task_running_timeout: int = Field(
         default=DEFAULT_MULTI_TASK_RUNNING_TIMEOUT,

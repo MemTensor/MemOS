@@ -25,9 +25,12 @@ from memos.mem_cube.base import BaseMemCube
 from memos.mem_cube.general import GeneralMemCube
 from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
-from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
-from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.memory_manage_modules.activation_memory_manager import (
+    ActivationMemoryManager,
+)
+from memos.mem_scheduler.memory_manage_modules.post_processor import MemoryPostProcessor
+from memos.mem_scheduler.memory_manage_modules.search_service import SchedulerSearchService
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.monitors.task_schedule_monitor import TaskScheduleMonitor
@@ -37,7 +40,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_CONSUME_INTERVAL_SECONDS,
     DEFAULT_CONTEXT_WINDOW_SIZE,
     DEFAULT_MAX_INTERNAL_MESSAGE_QUEUE_SIZE,
-    DEFAULT_MAX_WEB_LOG_QUEUE_SIZE,
     DEFAULT_STARTUP_MODE,
     DEFAULT_THREAD_POOL_MAX_WORKERS,
     DEFAULT_TOP_K,
@@ -46,17 +48,10 @@ from memos.mem_scheduler.schemas.general_schemas import (
     TreeTextMemory_SEARCH_METHOD,
 )
 from memos.mem_scheduler.schemas.message_schemas import (
-    ScheduleLogForWebItem,
     ScheduleMessageItem,
 )
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
 from memos.mem_scheduler.schemas.task_schemas import (
-    ADD_TASK_LABEL,
-    ANSWER_TASK_LABEL,
-    MEM_ARCHIVE_TASK_LABEL,
-    MEM_ORGANIZE_TASK_LABEL,
-    MEM_UPDATE_TASK_LABEL,
-    QUERY_TASK_LABEL,
     TaskPriorityLevel,
 )
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
@@ -72,12 +67,10 @@ from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
-from memos.memories.activation.kv import KVCacheMemory
-from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
+from memos.mem_scheduler.webservice_modules.web_log_service import WebLogSchedulerModule
 from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
 from memos.types.general_types import (
     MemCubeID,
     UserID,
@@ -93,7 +86,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLoggerModule):
+class BaseScheduler(
+    RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLoggerModule, WebLogSchedulerModule
+):
     """Base class for all mem_scheduler."""
 
     def __init__(self, config: BaseSchedulerConfig):
@@ -122,12 +117,8 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # optional configs
         self.disabled_handlers: list | None = self.config.get("disabled_handlers", None)
 
-        self.max_web_log_queue_size = self.config.get(
-            "max_web_log_queue_size", DEFAULT_MAX_WEB_LOG_QUEUE_SIZE
-        )
-        self._web_log_message_queue: Queue[ScheduleLogForWebItem] = Queue(
-            maxsize=self.max_web_log_queue_size
-        )
+        self.init_web_log_module(config=self.config)
+
         self._consumer_thread = None  # Reference to our consumer thread/process
         self._consumer_process = None  # Reference to our consumer process
         self._running = False
@@ -144,14 +135,15 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         self.orchestrator = SchedulerOrchestrator()
 
         self.searcher: Searcher | None = None
-        self.retriever: SchedulerRetriever | None = None
+        self.search_service: SchedulerSearchService | None = None
+        self.post_processor: MemoryPostProcessor | None = None
+        self.activation_memory_manager: ActivationMemoryManager | None = None
         self.db_engine: Engine | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
         self.dispatcher_monitor: SchedulerDispatcherMonitor | None = None
         self.mem_reader = None  # Will be set by MOSCore
         self._status_tracker: TaskStatusTracker | None = None
         self.metrics = metrics
-        self._monitor_thread = None
         self.memos_message_queue = ScheduleTaskQueue(
             use_redis_queue=self.use_redis_queue,
             maxsize=self.max_internal_message_queue_size,
@@ -175,6 +167,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             memos_message_queue=self.memos_message_queue.memos_message_queue,
             dispatcher=self.dispatcher,
             get_status_parallel=self.get_status_parallel,
+            check_interval=self.config.get("monitor_interval_seconds", 15),
         )
 
         # other attributes
@@ -213,6 +206,9 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             self.searcher = searcher
         self.feedback_server = feedback_server
 
+        # Initialize search service with the searcher
+        self.search_service = SchedulerSearchService(searcher=self.searcher)
+
     def initialize_modules(
         self,
         chat_llm: BaseLLM,
@@ -241,7 +237,21 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
-            self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
+
+            # Initialize search service (will be updated with searcher when mem_cube is initialized)
+            self.search_service = SchedulerSearchService(searcher=self.searcher)
+
+            # Initialize post-processor for memory enhancement and filtering
+            self.post_processor = MemoryPostProcessor(
+                process_llm=self.process_llm, config=self.config
+            )
+
+            self.activation_memory_manager = ActivationMemoryManager(
+                act_mem_dump_path=self.act_mem_dump_path,
+                monitor=self.monitor,
+                log_func_callback=self._submit_web_logs,
+                log_activation_memory_update_func=self.log_activation_memory_update,
+            )
 
             if mem_reader:
                 self.mem_reader = mem_reader
@@ -352,7 +362,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
     def mem_cube(self, value: BaseMemCube) -> None:
         """The memory cube associated with this MemChat."""
         self.current_mem_cube = value
-        self.retriever.mem_cube = value
+        # No need to set mem_cube on retriever anymore (it's passed per-search now)
 
     @property
     def mem_cubes(self) -> dict[str, BaseMemCube]:
@@ -478,7 +488,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             original_memory = filtered_original_memory
 
             memories_with_new_order, rerank_success_flag = (
-                self.retriever.process_and_rerank_memories(
+                self.post_processor.process_and_rerank_memories(
                     queries=query_history,
                     original_memory=original_memory,
                     new_memory=new_memory,
@@ -488,7 +498,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
 
             # Filter completely unrelated memories according to query_history
             logger.info(f"Filtering memories based on query history: {len(query_history)} queries")
-            filtered_memories, filter_success_flag = self.retriever.filter_unrelated_memories(
+            filtered_memories, filter_success_flag = self.post_processor.filter_unrelated_memories(
                 query_history=query_history,
                 memories=memories_with_new_order,
             )
@@ -586,74 +596,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Update activation memory by extracting KVCacheItems from new_memory (list of str),
         add them to a KVCacheMemory instance, and dump to disk.
         """
-        if len(new_memories) == 0:
-            logger.error("update_activation_memory: new_memory is empty.")
-            return
-        if isinstance(new_memories[0], TextualMemoryItem):
-            new_text_memories = [mem.memory for mem in new_memories]
-        elif isinstance(new_memories[0], str):
-            new_text_memories = new_memories
-        else:
-            logger.error("Not Implemented.")
-            return
-
-        try:
-            if isinstance(mem_cube.act_mem, VLLMKVCacheMemory):
-                act_mem: VLLMKVCacheMemory = mem_cube.act_mem
-            elif isinstance(mem_cube.act_mem, KVCacheMemory):
-                act_mem: KVCacheMemory = mem_cube.act_mem
-            else:
-                logger.error("Not Implemented.")
-                return
-
-            new_text_memory = MEMORY_ASSEMBLY_TEMPLATE.format(
-                memory_text="".join(
-                    [
-                        f"{i + 1}. {sentence.strip()}\n"
-                        for i, sentence in enumerate(new_text_memories)
-                        if sentence.strip()  # Skip empty strings
-                    ]
-                )
-            )
-
-            # huggingface or vllm kv cache
-            original_cache_items: list[VLLMKVCacheItem] = act_mem.get_all()
-            original_text_memories = []
-            if len(original_cache_items) > 0:
-                pre_cache_item: VLLMKVCacheItem = original_cache_items[-1]
-                original_text_memories = pre_cache_item.records.text_memories
-                original_composed_text_memory = pre_cache_item.records.composed_text_memory
-                if original_composed_text_memory == new_text_memory:
-                    logger.warning(
-                        "Skipping memory update - new composition matches existing cache: %s",
-                        new_text_memory[:50] + "..."
-                        if len(new_text_memory) > 50
-                        else new_text_memory,
-                    )
-                    return
-                act_mem.delete_all()
-
-            cache_item = act_mem.extract(new_text_memory)
-            cache_item.records.text_memories = new_text_memories
-            cache_item.records.timestamp = get_utc_now()
-
-            act_mem.add([cache_item])
-            act_mem.dump(self.act_mem_dump_path)
-
-            self.log_activation_memory_update(
-                original_text_memories=original_text_memories,
-                new_text_memories=new_text_memories,
+        if self.activation_memory_manager:
+            self.activation_memory_manager.update_activation_memory(
+                new_memories=new_memories,
                 label=label,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
-                log_func_callback=self._submit_web_logs,
             )
-
-        except Exception as e:
-            logger.error(f"MOS-based activation memory update failed: {e}", exc_info=True)
-            # Re-raise the exception if it's critical for the operation
-            # For now, we'll continue execution but this should be reviewed
+        else:
+            logger.warning("Activation memory manager not initialized")
 
     def update_activation_memory_periodically(
         self,
@@ -663,73 +615,16 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         mem_cube_id: MemCubeID | str,
         mem_cube: GeneralMemCube,
     ):
-        try:
-            if (
-                self.monitor.last_activation_mem_update_time == datetime.min
-                or self.monitor.timed_trigger(
-                    last_time=self.monitor.last_activation_mem_update_time,
-                    interval_seconds=interval_seconds,
-                )
-            ):
-                logger.info(
-                    f"Updating activation memory for user {user_id} and mem_cube {mem_cube_id}"
-                )
-
-                if (
-                    user_id not in self.monitor.working_memory_monitors
-                    or mem_cube_id not in self.monitor.working_memory_monitors[user_id]
-                    or len(self.monitor.working_memory_monitors[user_id][mem_cube_id].obj.memories)
-                    == 0
-                ):
-                    logger.warning(
-                        "No memories found in working_memory_monitors, activation memory update is skipped"
-                    )
-                    return
-
-                self.monitor.update_activation_memory_monitors(
-                    user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
-                )
-
-                # Sync with database to get latest activation memories
-                activation_db_manager = self.monitor.activation_memory_monitors[user_id][
-                    mem_cube_id
-                ]
-                activation_db_manager.sync_with_orm()
-                new_activation_memories = [
-                    m.memory_text for m in activation_db_manager.obj.memories
-                ]
-
-                logger.info(
-                    f"Collected {len(new_activation_memories)} new memory entries for processing"
-                )
-                # Print the content of each new activation memory
-                for i, memory in enumerate(new_activation_memories[:5], 1):
-                    logger.info(
-                        f"Part of New Activation Memorires | {i}/{len(new_activation_memories)}: {memory[:20]}"
-                    )
-
-                self.update_activation_memory(
-                    new_memories=new_activation_memories,
-                    label=label,
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    mem_cube=mem_cube,
-                )
-
-                self.monitor.last_activation_mem_update_time = get_utc_now()
-
-                logger.debug(
-                    f"Activation memory update completed at {self.monitor.last_activation_mem_update_time}"
-                )
-
-            else:
-                logger.info(
-                    f"Skipping update - {interval_seconds} second interval not yet reached. "
-                    f"Last update time is {self.monitor.last_activation_mem_update_time} and now is "
-                    f"{get_utc_now()}"
-                )
-        except Exception as e:
-            logger.error(f"Error in update_activation_memory_periodically: {e}", exc_info=True)
+        if self.activation_memory_manager:
+            self.activation_memory_manager.update_activation_memory_periodically(
+                interval_seconds=interval_seconds,
+                label=label,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+            )
+        else:
+            logger.warning("Activation memory manager not initialized")
 
     def submit_messages(self, messages: ScheduleMessageItem | list[ScheduleMessageItem]):
         """Submit messages for processing, with priority-aware dispatch.
@@ -856,103 +751,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         if queued_msgs:
             self.memos_message_queue.submit_messages(messages=queued_msgs)
 
-    def _submit_web_logs(
-        self,
-        messages: ScheduleLogForWebItem | list[ScheduleLogForWebItem],
-        additional_log_info: str | None = None,
-    ) -> None:
-        """Submit log messages to the web log queue and optionally to RabbitMQ.
-
-        Args:
-            messages: Single log message or list of log messages
-        """
-        if isinstance(messages, ScheduleLogForWebItem):
-            messages = [messages]  # transform single message to list
-
-        for message in messages:
-            if self.rabbitmq_config is None:
-                return
-            try:
-                # Always call publish; the publisher now caches when offline and flushes after reconnect
-                logger.info(
-                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs: enqueue publish {message.model_dump_json(indent=2)}"
-                )
-                self.rabbitmq_publish_message(message=message.to_dict())
-                logger.info(
-                    "[DIAGNOSTIC] base_scheduler._submit_web_logs: publish dispatched "
-                    "item_id=%s task_id=%s label=%s",
-                    message.item_id,
-                    message.task_id,
-                    message.label,
-                )
-            except Exception as e:
-                logger.error(
-                    f"[DIAGNOSTIC] base_scheduler._submit_web_logs failed: {e}", exc_info=True
-                )
-
-        logger.debug(
-            f"{len(messages)} submitted. {self._web_log_message_queue.qsize()} in queue. additional_log_info: {additional_log_info}"
-        )
-
-    def get_web_log_messages(self) -> list[dict]:
-        """
-        Retrieve structured log messages from the queue and return JSON-serializable dicts.
-        """
-        raw_items: list[ScheduleLogForWebItem] = []
-        while True:
-            try:
-                raw_items.append(self._web_log_message_queue.get_nowait())
-            except Exception:
-                break
-
-        def _map_label(label: str) -> str:
-            mapping = {
-                QUERY_TASK_LABEL: "addMessage",
-                ANSWER_TASK_LABEL: "addMessage",
-                ADD_TASK_LABEL: "addMemory",
-                MEM_UPDATE_TASK_LABEL: "updateMemory",
-                MEM_ORGANIZE_TASK_LABEL: "mergeMemory",
-                MEM_ARCHIVE_TASK_LABEL: "archiveMemory",
-            }
-            return mapping.get(label, label)
-
-        def _normalize_item(item: ScheduleLogForWebItem) -> dict:
-            data = item.to_dict()
-            data["label"] = _map_label(data.get("label"))
-            memcube_content = getattr(item, "memcube_log_content", None) or []
-            metadata = getattr(item, "metadata", None) or []
-
-            memcube_name = getattr(item, "memcube_name", None)
-            if not memcube_name and hasattr(self, "_map_memcube_name"):
-                memcube_name = self._map_memcube_name(item.mem_cube_id)
-            data["memcube_name"] = memcube_name
-
-            memory_len = getattr(item, "memory_len", None)
-            if memory_len is None:
-                if data["label"] == "mergeMemory":
-                    memory_len = len([c for c in memcube_content if c.get("type") != "postMerge"])
-                elif memcube_content:
-                    memory_len = len(memcube_content)
-                else:
-                    memory_len = 1 if item.log_content else 0
-
-            data["memcube_log_content"] = memcube_content
-            data["memory_len"] = memory_len
-
-            def _with_memory_time(meta: dict) -> dict:
-                enriched = dict(meta)
-                if "memory_time" not in enriched:
-                    enriched["memory_time"] = enriched.get("updated_at") or enriched.get(
-                        "update_at"
-                    )
-                return enriched
-
-            data["metadata"] = [_with_memory_time(m) for m in metadata]
-            data["log_title"] = ""
-            return data
-
-        return [_normalize_item(it) for it in raw_items]
-
     def _message_consumer(self) -> None:
         """
         Continuously checks the queue for messages and dispatches them.
@@ -1041,39 +839,6 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
                     logger.error(f"Unexpected error in message consumer: {e!s}", exc_info=True)
                 time.sleep(self._consume_interval)  # Prevent tight error loops
 
-    def _monitor_loop(self):
-        while self._running:
-            try:
-                q_sizes = self.memos_message_queue.qsize()
-
-                if not isinstance(q_sizes, dict):
-                    continue
-
-                for stream_key, queue_length in q_sizes.items():
-                    # Skip aggregate keys like 'total_size'
-                    if stream_key == "total_size":
-                        continue
-
-                    # Key format: ...:{user_id}:{mem_cube_id}:{task_label}
-                    # We want to extract user_id, which is the 3rd component from the end.
-                    parts = stream_key.split(":")
-                    if len(parts) >= 3:
-                        user_id = parts[-3]
-                        self.metrics.update_queue_length(queue_length, user_id)
-                    else:
-                        # Fallback for unexpected key formats (e.g. legacy or testing)
-                        # Try to use the key itself if it looks like a user_id (no colons)
-                        # or just log a warning?
-                        # For now, let's assume if it's not total_size and short, it might be a direct user_id key
-                        # (though that shouldn't happen with current queue implementations)
-                        if ":" not in stream_key:
-                            self.metrics.update_queue_length(queue_length, stream_key)
-
-            except Exception as e:
-                logger.error(f"Error in metrics monitor loop: {e}", exc_info=True)
-
-            time.sleep(15)  # 每 15 秒采样一次
-
     def start(self) -> None:
         """
         Start the message consumer thread/process and initialize dispatcher resources.
@@ -1081,6 +846,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         Initializes and starts:
         1. Message consumer thread or process (based on startup_mode)
         2. Dispatcher thread pool (if parallel dispatch enabled)
+        3. Task schedule monitor
         """
         # Initialize dispatcher resources
         if self.enable_parallel_dispatch:
@@ -1089,16 +855,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
             )
 
         self.start_consumer()
-        self.start_background_monitor()
-
-    def start_background_monitor(self):
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            return
-        self._monitor_thread = ContextThread(
-            target=self._monitor_loop, daemon=True, name="SchedulerMetricsMonitor"
-        )
-        self._monitor_thread.start()
-        logger.info("Scheduler metrics monitor thread started.")
+        self.task_schedule_monitor.start()
 
     def start_consumer(self) -> None:
         """
@@ -1186,8 +943,7 @@ class BaseScheduler(RabbitMQSchedulerModule, RedisSchedulerModule, SchedulerLogg
         # Stop consumer first
         self.stop_consumer()
 
-        if self._monitor_thread:
-            self._monitor_thread.join(timeout=2.0)
+        self.task_schedule_monitor.stop()
 
         # Shutdown dispatcher
         if self.dispatcher:
