@@ -265,12 +265,12 @@ class SearchHandler(BaseHandler):
             for idx in remaining:
                 mem_type, bucket_idx, _, _ = flat[idx]
 
-                # Check bucket capacity
+                # Check bucket capacity with correct top_k for each type
                 if mem_type == "text":
-                    if len(text_selected_by_bucket[bucket_idx]) >= target_top_k:
+                    if len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
                         continue
                 elif mem_type == "preference":
-                    if len(pref_selected_by_bucket[bucket_idx]) >= target_top_k:
+                    if len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k:
                         continue
 
                 relevance = flat[idx][3]
@@ -305,11 +305,11 @@ class SearchHandler(BaseHandler):
 
             # Early termination: all buckets are full
             text_all_full = all(
-                len(text_selected_by_bucket[b_idx]) >= min(target_top_k, len(bucket_indices))
+                len(text_selected_by_bucket[b_idx]) >= min(text_top_k, len(bucket_indices))
                 for b_idx, bucket_indices in text_indices_by_bucket.items()
             )
             pref_all_full = all(
-                len(pref_selected_by_bucket[b_idx]) >= min(target_top_k, len(bucket_indices))
+                len(pref_selected_by_bucket[b_idx]) >= min(pref_top_k, len(bucket_indices))
                 for b_idx, bucket_indices in pref_indices_by_bucket.items()
             )
             if text_all_full and pref_all_full:
