@@ -246,6 +246,10 @@ class SearchHandler(BaseHandler):
             if mem_text in selected_texts:
                 continue
 
+            # Skip if highly similar (85% LCS) to any selected text
+            if SearchHandler._is_text_highly_similar(mem_text, selected_texts, threshold=0.85):
+                continue
+
             # Check bucket capacity with correct top_k for each type
             if mem_type == "text":
                 if len(text_selected_by_bucket[bucket_idx]) >= text_top_k:
@@ -285,6 +289,10 @@ class SearchHandler(BaseHandler):
                 mem_text = mem.get("memory", "").strip()
                 if mem_text in selected_texts:
                     continue  # Skip duplicate text, don't participate in MMR competition
+
+                # Skip if highly similar (95% LCS) to any selected text
+                if SearchHandler._is_text_highly_similar(mem_text, selected_texts, threshold=0.95):
+                    continue  # Skip highly similar text, don't participate in MMR competition
 
                 relevance = flat[idx][3]
                 max_sim = (
@@ -345,6 +353,82 @@ class SearchHandler(BaseHandler):
             bucket["memories"] = [flat[i][2] for i in selected_indices]
 
         return results
+
+    @staticmethod
+    def _lcs_ratio(text1: str, text2: str) -> float:
+        """
+        计算最长公共子序列（LCS）占较短文本的比例
+        使用空间优化的动态规划算法，只保留一行
+
+        Args:
+            text1: 第一个文本
+            text2: 第二个文本
+
+        Returns:
+            LCS长度 / min(len(text1), len(text2))
+        """
+        if not text1 or not text2:
+            return 0.0
+
+        m, n = len(text1), len(text2)
+        min_len = min(m, n)
+
+        # 优化：如果长度差异太大（超过20%），不可能达到95%相似
+        if abs(m - n) > min_len * 0.2:
+            return 0.0
+
+        # 空间优化的DP，只保留一行
+        prev = [0] * (n + 1)
+
+        for i in range(1, m + 1):
+            curr = [0] * (n + 1)
+            for j in range(1, n + 1):
+                if text1[i-1] == text2[j-1]:
+                    curr[j] = prev[j-1] + 1
+                else:
+                    curr[j] = max(curr[j-1], prev[j])
+            prev = curr
+
+        lcs_len = prev[n]
+        return lcs_len / min_len if min_len > 0 else 0.0
+
+    @staticmethod
+    def _is_text_highly_similar(candidate: str, selected_texts: set[str], threshold: float = 0.85) -> bool:
+        """
+        快速检查候选文本是否与已选择的任何文本高度相似（基于LCS）
+
+        优化策略：
+        1. 先检查长度差异（超过20%直接跳过）
+        2. 计算LCS比例，如果 >= threshold 则认为高度相似
+
+        Args:
+            candidate: 候选文本
+            selected_texts: 已选择的文本集合
+            threshold: 相似度阈值（默认0.85，表示85%相似）
+
+        Returns:
+            True if 高度相似，False otherwise
+        """
+        candidate = candidate.strip()
+        if not candidate:
+            return False
+
+        for selected in selected_texts:
+            selected = selected.strip()
+            if not selected:
+                continue
+
+            # 快速检查：长度差异超过20%则不可能95%相似
+            min_len = min(len(candidate), len(selected))
+            if abs(len(candidate) - len(selected)) > min_len * 0.2:
+                continue
+
+            # 计算LCS比例
+            lcs_ratio = SearchHandler._lcs_ratio(candidate, selected)
+            if lcs_ratio >= threshold:
+                return True
+
+        return False
 
     @staticmethod
     def _is_unrelated(
