@@ -10,6 +10,7 @@ from memos.configs.mem_reader import MultiModalStructMemReaderConfig
 from memos.context.context import ContextThreadPoolExecutor
 from memos.mem_reader.read_multi_modal import MultiModalParser, detect_lang
 from memos.mem_reader.read_multi_modal.base import _derive_key
+from memos.mem_reader.read_skill_memory.process_skill_memory import process_skill_memory_fine
 from memos.mem_reader.simple_struct import PROMPT_DICT, SimpleStructMemReader
 from memos.mem_reader.utils import parse_json_result
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -37,6 +38,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         # Extract direct_markdown_hostnames before converting to SimpleStructMemReaderConfig
         direct_markdown_hostnames = getattr(config, "direct_markdown_hostnames", None)
+
+        # oss
+        self.oss_config = getattr(config, "oss_config", None)
+
+        # skills_dir
+        self.skills_dir_config = getattr(config, "skills_dir_config", None)
 
         # Create config_dict excluding direct_markdown_hostnames for SimpleStructMemReaderConfig
         config_dict = config.model_dump(exclude_none=True)
@@ -812,13 +819,27 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 future_tool = executor.submit(
                     self._process_tool_trajectory_fine, fast_memory_items, info, **kwargs
                 )
+                future_skill = executor.submit(
+                    process_skill_memory_fine,
+                    fast_memory_items=fast_memory_items,
+                    info=info,
+                    searcher=self.searcher,
+                    graph_db=self.graph_db,
+                    llm=self.llm,
+                    embedder=self.embedder,
+                    oss_config=self.oss_config,
+                    skills_dir_config=self.skills_dir_config,
+                    **kwargs,
+                )
 
                 # Collect results
                 fine_memory_items_string_parser = future_string.result()
                 fine_memory_items_tool_trajectory_parser = future_tool.result()
+                fine_memory_items_skill_memory_parser = future_skill.result()
 
             fine_memory_items.extend(fine_memory_items_string_parser)
             fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
+            fine_memory_items.extend(fine_memory_items_skill_memory_parser)
 
             # Part B: get fine multimodal items
             for fast_item in fast_memory_items:
@@ -837,7 +858,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
     @timed
     def _process_transfer_multi_modal_data(
-        self, raw_node: TextualMemoryItem, custom_tags: list[str] | None = None, **kwargs
+        self, raw_nodes: list[TextualMemoryItem], custom_tags: list[str] | None = None, **kwargs
     ) -> list[TextualMemoryItem]:
         """
         Process transfer for multimodal data.
@@ -845,42 +866,56 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         Each source is processed independently by its corresponding parser,
         which knows how to rebuild the original message and parse it in fine mode.
         """
-        sources = raw_node.metadata.sources or []
-        if not sources:
-            logger.warning("[MultiModalStruct] No sources found in raw_node")
+        if not raw_nodes:
+            logger.warning("[MultiModalStruct] No raw nodes found.")
             return []
 
-        # Extract info from raw_node (same as simple_struct.py)
+        # Extract info from raw_nodes (same as simple_struct.py)
         info = {
-            "user_id": raw_node.metadata.user_id,
-            "session_id": raw_node.metadata.session_id,
-            **(raw_node.metadata.info or {}),
+            "user_id": raw_nodes[0].metadata.user_id,
+            "session_id": raw_nodes[0].metadata.session_id,
+            **(raw_nodes[0].metadata.info or {}),
         }
 
         fine_memory_items = []
         # Part A: call llm in parallel using thread pool
         with ContextThreadPoolExecutor(max_workers=2) as executor:
             future_string = executor.submit(
-                self._process_string_fine, [raw_node], info, custom_tags, **kwargs
+                self._process_string_fine, raw_nodes, info, custom_tags, **kwargs
             )
             future_tool = executor.submit(
-                self._process_tool_trajectory_fine, [raw_node], info, **kwargs
+                self._process_tool_trajectory_fine, raw_nodes, info, **kwargs
+            )
+            future_skill = executor.submit(
+                process_skill_memory_fine,
+                raw_nodes,
+                info,
+                searcher=self.searcher,
+                llm=self.llm,
+                embedder=self.embedder,
+                graph_db=self.graph_db,
+                oss_config=self.oss_config,
+                skills_dir_config=self.skills_dir_config,
+                **kwargs,
             )
 
             # Collect results
             fine_memory_items_string_parser = future_string.result()
             fine_memory_items_tool_trajectory_parser = future_tool.result()
-
+            fine_memory_items_skill_memory_parser = future_skill.result()
         fine_memory_items.extend(fine_memory_items_string_parser)
         fine_memory_items.extend(fine_memory_items_tool_trajectory_parser)
+        fine_memory_items.extend(fine_memory_items_skill_memory_parser)
 
         # Part B: get fine multimodal items
-        for source in sources:
-            lang = getattr(source, "lang", "en")
-            items = self.multi_modal_parser.process_transfer(
-                source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
-            )
-            fine_memory_items.extend(items)
+        for raw_node in raw_nodes:
+            sources = raw_node.metadata.sources
+            for source in sources:
+                lang = getattr(source, "lang", "en")
+                items = self.multi_modal_parser.process_transfer(
+                    source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
+                )
+                fine_memory_items.extend(items)
         return fine_memory_items
 
     def get_scene_data_info(self, scene_data: list, type: str) -> list[list[Any]]:
@@ -937,22 +972,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if not input_memories:
             return []
 
-        memory_list = []
-
         # Process Q&A pairs concurrently with context propagation
-        with ContextThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(
-                    self._process_transfer_multi_modal_data, scene_data_info, custom_tags, **kwargs
-                )
-                for scene_data_info in input_memories
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    res_memory = future.result()
-                    if res_memory is not None:
-                        memory_list.append(res_memory)
-                except Exception as e:
-                    logger.error(f"Task failed with exception: {e}")
-                    logger.error(traceback.format_exc())
-        return memory_list
+        memory_list = self._process_transfer_multi_modal_data(input_memories, custom_tags, **kwargs)
+
+        return [memory_list]

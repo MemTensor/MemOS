@@ -67,6 +67,7 @@ class GraphMemoryRetriever:
             "UserMemory",
             "ToolSchemaMemory",
             "ToolTrajectoryMemory",
+            "SkillMemory",
         ]:
             raise ValueError(f"Unsupported memory scope: {memory_scope}")
 
