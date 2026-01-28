@@ -1134,22 +1134,15 @@ class PolarDBGraphDB(BaseGraphDB):
         if not ids:
             return []
 
-        # Build WHERE clause using agtype_access_operator like get_node method
-        where_conditions = []
-        params = []
-
-        for id_val in ids:
-            where_conditions.append(
-                "ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = %s::agtype"
-            )
-            params.append(self.format_param_value(id_val))
-
-        where_clause = " OR ".join(where_conditions)
+        # Build WHERE clause using IN operator with agtype array
+        # Use ANY operator with array for better performance
+        placeholders = ",".join(["%s"] * len(ids))
+        params = [self.format_param_value(id_val) for id_val in ids]
 
         query = f"""
             SELECT id, properties, embedding
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ({where_clause})
+            WHERE ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = ANY(ARRAY[{placeholders}]::agtype[])
         """
 
         # Only add user_name filter if provided
