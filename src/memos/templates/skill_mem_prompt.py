@@ -1,4 +1,7 @@
 TASK_CHUNKING_PROMPT = """
+# Context (Conversation Records)
+{{messages}}
+
 # Role
 You are an expert in natural language processing (NLP) and dialogue logic analysis. You excel at organizing logical threads from complex long conversations and accurately extracting users' core intentions.
 
@@ -11,9 +14,10 @@ Please analyze the provided conversation records, identify all independent "task
 1. **Task Independence**: If multiple unrelated topics are discussed in the conversation, identify them as different tasks.
 2. **Non-continuous Processing**: Pay attention to identifying "jumping" conversations. For example, if the user made travel plans in messages 8-11, switched to consulting about weather in messages 12-22, and then returned to making travel plans in messages 23-24, be sure to assign both 8-11 and 23-24 to the task "Making travel plans". However, if messages are continuous and belong to the same task, do not split them apart.
 3. **Filter Chit-chat**: Only extract tasks with clear goals, instructions, or knowledge-based discussions. Ignore meaningless greetings (such as "Hello", "Are you there?") or closing remarks unless they are part of the task context.
-4. **Output Format**: Please strictly follow the JSON format for output to facilitate my subsequent processing.
-5. **Language Consistency**: The language used in the task_name field must match the language used in the conversation records.
-6. **Generic Task Names**: Use generic, reusable task names, not specific descriptions. For example, use "Travel Planning" instead of "Planning a 5-day trip to Chengdu".
+4. **Main Task and Subtasks**: Carefully identify whether subtasks serve a main task. If a subtask supports the main task (e.g., "checking weather" serves "travel planning"), do NOT separate it as an independent task. Instead, include all related conversations in the main task. Only split tasks when they are truly independent and unrelated.
+5. **Output Format**: Please strictly follow the JSON format for output to facilitate my subsequent processing.
+6. **Language Consistency**: The language used in the task_name field must match the language used in the conversation records.
+7. **Generic Task Names**: Use generic, reusable task names, not specific descriptions. For example, use "Travel Planning" instead of "Planning a 5-day trip to Chengdu".
 
 ```json
 [
@@ -26,13 +30,13 @@ Please analyze the provided conversation records, identify all independent "task
   ...
 ]
 ```
-
-# Context (Conversation Records)
-{{messages}}
 """
 
 
 TASK_CHUNKING_PROMPT_ZH = """
+# 上下文（对话记录）
+{{messages}}
+
 # 角色
 你是自然语言处理（NLP）和对话逻辑分析的专家。你擅长从复杂的长对话中整理逻辑线索，准确提取用户的核心意图。
 
@@ -45,9 +49,10 @@ TASK_CHUNKING_PROMPT_ZH = """
 1. **任务独立性**：如果对话中讨论了多个不相关的话题，请将它们识别为不同的任务。
 2. **非连续处理**：注意识别"跳跃式"对话。例如，如果用户在消息 8-11 中制定旅行计划，在消息 12-22 中切换到咨询天气，然后在消息 23-24 中返回到制定旅行计划，请务必将 8-11 和 23-24 都分配给"制定旅行计划"任务。但是，如果消息是连续的且属于同一任务，不能将其分开。
 3. **过滤闲聊**：仅提取具有明确目标、指令或基于知识的讨论的任务。忽略无意义的问候（例如"你好"、"在吗？"）或结束语，除非它们是任务上下文的一部分。
-4. **输出格式**：请严格遵循 JSON 格式输出，以便我后续处理。
-5. **语言一致性**：task_name 字段使用的语言必须与对话记录中使用的语言相匹配。
-6. **通用任务名称**：使用通用的、可复用的任务名称，而不是具体的描述。例如，使用"旅行规划"而不是"规划成都5日游"。
+4. **主任务与子任务识别**：仔细识别子任务是否服务于主任务。如果子任务是为主任务服务的（例如"查天气"服务于"旅行规划"），不要将其作为独立任务分离出来，而是将所有相关对话都划分到主任务中。只有真正独立且无关联的任务才需要分开。
+5. **输出格式**：请严格遵循 JSON 格式输出，以便我后续处理。
+6. **语言一致性**：task_name 字段使用的语言必须与对话记录中使用的语言相匹配。
+7. **通用任务名称**：使用通用的、可复用的任务名称，而不是具体的描述。例如，使用"旅行规划"而不是"规划成都5日游"。
 
 ```json
 [
@@ -60,9 +65,6 @@ TASK_CHUNKING_PROMPT_ZH = """
   ...
 ]
 ```
-
-# 上下文（对话记录）
-{{messages}}
 """
 
 
