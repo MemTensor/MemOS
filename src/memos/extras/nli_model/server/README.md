@@ -6,6 +6,7 @@ This directory contains the standalone server for the Natural Language Inference
 
 - Python 3.10+
 - CUDA-capable GPU (Recommended for performance)
+- `torch` and `transformers` libraries (required for the server)
 
 ## Running the Server
 

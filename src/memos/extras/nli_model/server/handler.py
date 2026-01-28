@@ -1,11 +1,13 @@
 import re
 
-import torch
-
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
 from memos.extras.nli_model.server.config import NLI_MODEL_NAME, logger
 from memos.extras.nli_model.types import NLIResult
+
+
+# Placeholder for lazy imports
+torch = None
+AutoModelForSequenceClassification = None
+AutoTokenizer = None
 
 
 def _map_label_to_result(raw: str) -> NLIResult:
@@ -36,7 +38,23 @@ def _clean_temporal_markers(s: str) -> str:
 
 
 class NLIHandler:
+    """
+    NLI Model Handler for inference.
+    Requires `torch` and `transformers` to be installed.
+    """
+
     def __init__(self, device: str = "cpu", use_fp16: bool = True, use_compile: bool = True):
+        global torch, AutoModelForSequenceClassification, AutoTokenizer
+        try:
+            import torch
+
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        except ImportError as e:
+            raise ImportError(
+                "NLIHandler requires 'torch' and 'transformers'. "
+                "Please install them via 'pip install torch transformers' or use the requirements.txt."
+            ) from e
+
         self.device = self._resolve_device(device)
         logger.info(f"Final resolved device: {self.device}")
 
