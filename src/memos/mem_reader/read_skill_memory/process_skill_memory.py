@@ -109,8 +109,8 @@ def _preprocess_extract_messages(history: MessageList, messages: MessageList) ->
     """Process data and check whether to extract skill memory"""
     history = history[-20:]
     if (len(history) + len(messages)) < 10:
+        # TODO: maybe directly return []
         logger.warning("[PROCESS_SKILLS] Not enough messages to extract skill memory")
-        return []
     return history + messages
 
 
@@ -547,7 +547,8 @@ def process_skill_memory_fine(
         return []
 
     chat_history = kwargs.get("chat_history")
-    if not chat_history:
+    if not chat_history or not isinstance(chat_history, list):
+        chat_history = []
         logger.warning("[PROCESS_SKILLS] History is None in Skills")
 
     # Validate skills_dir has required keys
