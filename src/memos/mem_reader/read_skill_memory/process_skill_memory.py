@@ -546,8 +546,8 @@ def process_skill_memory_fine(
         )
         return []
 
-    history = kwargs.get("chat_history")
-    if not history:
+    chat_history = kwargs.get("chat_history")
+    if not chat_history:
         logger.warning("[PROCESS_SKILLS] History is None in Skills")
 
     # Validate skills_dir has required keys
@@ -566,7 +566,7 @@ def process_skill_memory_fine(
 
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
 
-    messages = _preprocess_extract_messages(history, messages)
+    messages = _preprocess_extract_messages(chat_history, messages)
     if not messages:
         return []
 
@@ -733,9 +733,10 @@ def process_skill_memory_fine(
     # TODO: deprecate this funtion and call
     for skill_memory, skill_memory_item in zip(skill_memories, skill_memory_items, strict=False):
         if skill_memory.get("update", False) and skill_memory.get("old_memory_id", ""):
-            add_id_to_mysql(
-                memory_id=skill_memory_item.id,
-                mem_cube_id=kwargs.get("user_name", info.get("user_id", "")),
-            )
+            continue
+        add_id_to_mysql(
+            memory_id=skill_memory_item.id,
+            mem_cube_id=kwargs.get("user_name", info.get("user_id", "")),
+        )
 
     return skill_memory_items
