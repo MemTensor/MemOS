@@ -527,7 +527,6 @@ class SingleCubeView(MemCubeView):
         user_context: UserContext,
         mem_ids: list[str],
         sync_mode: str,
-        **kwargs,
     ) -> None:
         """
         Schedule memory processing tasks based on sync mode.
@@ -554,6 +553,7 @@ class SingleCubeView(MemCubeView):
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
                     info=add_req.info,
+                    chat_history=add_req.chat_history,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -808,7 +808,7 @@ class SingleCubeView(MemCubeView):
             },
             mode=extract_mode,
             user_name=user_context.mem_cube_id,
-            history=add_req.chat_history,
+            chat_history=add_req.chat_history,
         )
         self.logger.info(
             f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"
@@ -839,7 +839,6 @@ class SingleCubeView(MemCubeView):
             user_context=user_context,
             mem_ids=mem_ids_local,
             sync_mode=sync_mode,
-            history=add_req.chat_history,
         )
 
         # Mark merged_from memories as archived when provided in add_req.info
