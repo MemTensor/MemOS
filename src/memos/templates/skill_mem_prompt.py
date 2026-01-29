@@ -78,6 +78,9 @@ Extract a universal skill template from the conversation that can be applied to 
 # Existing Skill Memories
 {old_memories}
 
+# Chat_history
+{chat_history}
+
 # Conversation Messages
 {messages}
 
@@ -86,6 +89,11 @@ Extract a universal skill template from the conversation that can be applied to 
 2. **Universality**: All fields except "example" must remain general and scenario-independent.
 3. **Similarity Check**: If similar skill exists, set "update": true with "old_memory_id". Otherwise, set "update": false and leave "old_memory_id" empty.
 4. **Language Consistency**: Match the conversation language.
+5. **History Usage Constraints**:
+   - `chat_history` serves only as auxiliary context to supplement stable preferences or methodologies that are not explicitly stated in `messages` but may affect skill abstraction.
+   - `chat_history` may be considered only when it provides information **missing from `messages`** and **relevant to the current task’s goals, execution approach, or constraints**.
+   - `chat_history` must not be the primary source of a skill, and may only be used to enrich auxiliary fields such as `preference` or `experience`.
+   - If `chat_history` does not provide any valid information beyond what already exists in `messages`, or contains only greetings or background content, it must be completely ignored.
 
 # Output Format
 ```json
@@ -100,7 +108,9 @@ Extract a universal skill template from the conversation that can be applied to 
   "scripts": {"script_name.py": "# Python code here\nprint('Hello')", "another_script.py": "# More code\nimport os"},
   "others": {"Section Title": "Content here", "reference.md": "# Reference content for this skill"},
   "update": false,
-  "old_memory_id": ""
+  "old_memory_id": "",
+  "whether_use_chat_history": false,
+  "content_of_related_chat_history": ""
 }
 ```
 
@@ -119,6 +129,10 @@ Extract a universal skill template from the conversation that can be applied to 
 - **examples**: Complete output templates showing the final deliverable format and structure. Should demonstrate how the task result looks when this skill is applied, including format, sections, and content organization. Content can be abbreviated but must show the complete structure. Use markdown format for better readability
 - **update**: true if updating existing skill, false if new
 - **old_memory_id**: ID of skill being updated, or empty string if new
+- **whether_use_chat_history**: Indicates whether information from chat_history that does not appear in messages was incorporated into the skill
+- **content_of_related_chat_history**:
+  If whether_use_chat_history is true, provide a high-level summary of the type of historical information used (e.g., “long-term preference: prioritizes cultural attractions”); do not quote the original dialogue verbatim
+  If not used, leave this field as an empty string
 
 # Critical Guidelines
 - Keep all fields general except "examples"
@@ -141,6 +155,9 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 # 现有技能记忆
 {old_memories}
 
+# 对话消息的上下文chat_history
+{chat_history}
+
 # 对话消息
 {messages}
 
@@ -149,6 +166,11 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 2. **普适性**：除"examples"外，所有字段必须保持通用，与具体场景无关。
 3. **相似性检查**：如存在相似技能，设置"update": true 及"old_memory_id"。否则设置"update": false 并将"old_memory_id"留空。
 4. **语言一致性**：与对话语言保持一致。
+5. **历史使用约束**：
+   - chat_history 仅作为辅助上下文，用于补充 messages 中未明确出现的、但会影响技能抽象的稳定偏好或方法论。
+   - 当 chat_history 能提供 messages 中缺失、且与当前任务目标、执行方式或约束相关的信息增量时，可以纳入考虑。
+   - chat_history 不得作为技能的主要来源，仅可用于完善 preference、experience 等辅助字段。
+   - 若 chat_history 未提供任何 messages 中不存在的有效信息，或仅包含寒暄、背景性内容，应完全忽略。
 
 # 输出格式
 ```json
@@ -163,7 +185,9 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
   "scripts": {"script_name.py": "# Python 代码\nprint('Hello')", "another_script.py": "# 更多代码\nimport os"},
   "others": {"章节标题": "这里的内容", "reference.md": "# 此技能的参考内容"},
   "update": false,
-  "old_memory_id": ""
+  "old_memory_id": "",
+  "whether_use_chat_history": false,
+  "content_of_related_chat_history": "",
 }
 ```
 
@@ -182,12 +206,18 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 - **examples**：展示最终任务成果的输出模板，包括格式、章节和内容组织结构。应展示应用此技能后任务结果的样子，包含所有必要的部分。内容可以省略但必须展示完整结构。使用 markdown 格式以提高可读性
 - **update**：更新现有技能为true，新建为false
 - **old_memory_id**：被更新技能的ID，新建则为空字符串
+- **whether_use_chat_history**：是否从 chat_history 中引用了 messages 中没有的内容并提取到skill中
+- **content_of_related_chat_history**：若 whether_use_chat_history 为 true，
+  仅需概括性说明所使用的历史信息类型（如“长期偏好：文化类景点优先”），
+  不要求逐字引用原始对话内容；
+  若未使用，则置为空字符串。
 
 # 关键指导
 - 除"examples"外保持所有字段通用
 - "examples"应展示完整的最终输出格式和结构，包含所有必要章节
 - "others"包含补充说明或扩展信息
 - 无法提取技能时返回null
+- 注意区分chat_history与对话消息
 
 # 输出格式
 仅输出JSON对象。

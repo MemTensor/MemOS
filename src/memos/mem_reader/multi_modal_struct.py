@@ -862,7 +862,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             # Part A: call llm in parallel using thread pool
             fine_memory_items = []
 
-            with ContextThreadPoolExecutor(max_workers=2) as executor:
+            with ContextThreadPoolExecutor(max_workers=3) as executor:
                 future_string = executor.submit(
                     self._process_string_fine, fast_memory_items, info, custom_tags, **kwargs
                 )
