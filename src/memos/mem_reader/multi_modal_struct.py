@@ -464,13 +464,6 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 status="activated",
                 threshold=merge_threshold,
                 user_name=user_name,
-                filter={
-                    "or": [
-                        {"memory_type": "LongTermMemory"},
-                        {"memory_type": "UserMemory"},
-                        {"memory_type": "WorkingMemory"},
-                    ]
-                },
             )
 
             if not search_results:
