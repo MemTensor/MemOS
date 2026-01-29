@@ -46,6 +46,7 @@ class CompositeCubeView(MemCubeView):
             "pref_mem": [],
             "pref_note": "",
             "tool_mem": [],
+            "skill_mem": [],
         }
 
         def _search_single_cube(view: SingleCubeView) -> dict[str, Any]:
@@ -65,7 +66,7 @@ class CompositeCubeView(MemCubeView):
                 merged_results["para_mem"].extend(cube_result.get("para_mem", []))
                 merged_results["pref_mem"].extend(cube_result.get("pref_mem", []))
                 merged_results["tool_mem"].extend(cube_result.get("tool_mem", []))
-
+                merged_results["skill_mem"].extend(cube_result.get("skill_mem", []))
                 note = cube_result.get("pref_note")
                 if note:
                     if merged_results["pref_note"]:

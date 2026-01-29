@@ -159,7 +159,12 @@ class MemoryManager:
         for memory in memories:
             working_id = str(uuid.uuid4())
 
-            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+            if memory.metadata.memory_type in (
+                "WorkingMemory",
+                "LongTermMemory",
+                "UserMemory",
+                "OuterMemory",
+            ):
                 working_metadata = memory.metadata.model_copy(
                     update={"memory_type": "WorkingMemory"}
                 ).model_dump(exclude_none=True)
@@ -176,8 +181,11 @@ class MemoryManager:
                 "UserMemory",
                 "ToolSchemaMemory",
                 "ToolTrajectoryMemory",
+                "SkillMemory",
             ):
-                graph_node_id = str(uuid.uuid4())
+                if not memory.id:
+                    logger.error("Memory ID is not set, generating a new one")
+                graph_node_id = memory.id or str(uuid.uuid4())
                 metadata_dict = memory.metadata.model_dump(exclude_none=True)
                 metadata_dict["updated_at"] = datetime.now().isoformat()
 
@@ -310,7 +318,12 @@ class MemoryManager:
         working_id = str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            if memory.metadata.memory_type not in ("ToolSchemaMemory", "ToolTrajectoryMemory"):
+            if memory.metadata.memory_type in (
+                "WorkingMemory",
+                "LongTermMemory",
+                "UserMemory",
+                "OuterMemory",
+            ):
                 f_working = ex.submit(
                     self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
                 )
@@ -321,6 +334,7 @@ class MemoryManager:
                 "UserMemory",
                 "ToolSchemaMemory",
                 "ToolTrajectoryMemory",
+                "SkillMemory",
             ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
@@ -372,7 +386,9 @@ class MemoryManager:
         """
         Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
         """
-        node_id = str(uuid.uuid4())
+        if not memory.id:
+            logger.error("Memory ID is not set, generating a new one")
+        node_id = memory.id or str(uuid.uuid4())
         # Step 2: Add new node to graph
         metadata_dict = memory.metadata.model_dump(exclude_none=True)
         tags = metadata_dict.get("tags") or []

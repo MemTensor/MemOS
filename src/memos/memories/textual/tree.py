@@ -161,6 +161,8 @@ class TreeTextMemory(BaseTextMemory):
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
         dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
@@ -208,6 +210,8 @@ class TreeTextMemory(BaseTextMemory):
             user_name=user_name,
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            include_skill_memory=include_skill_memory,
+            skill_mem_top_k=skill_mem_top_k,
             dedup=dedup,
             **kwargs,
         )
@@ -319,7 +323,8 @@ class TreeTextMemory(BaseTextMemory):
     def get_by_ids(
         self, memory_ids: list[str], user_name: str | None = None
     ) -> list[TextualMemoryItem]:
-        raise NotImplementedError
+        graph_output = self.graph_store.get_nodes(ids=memory_ids, user_name=user_name)
+        return graph_output
 
     def get_all(
         self,

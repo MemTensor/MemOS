@@ -1130,30 +1130,27 @@ class PolarDBGraphDB(BaseGraphDB):
             - Assumes all provided IDs are valid and exist.
             - Returns empty list if input is empty.
         """
+        logger.info(f"get_nodes ids:{ids},user_name:{user_name}")
         if not ids:
             return []
 
-        # Build WHERE clause using agtype_access_operator like get_node method
-        where_conditions = []
-        params = []
-
-        for id_val in ids:
-            where_conditions.append(
-                "ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = %s::agtype"
-            )
-            params.append(self.format_param_value(id_val))
-
-        where_clause = " OR ".join(where_conditions)
+        # Build WHERE clause using IN operator with agtype array
+        # Use ANY operator with array for better performance
+        placeholders = ",".join(["%s"] * len(ids))
+        params = [self.format_param_value(id_val) for id_val in ids]
 
         query = f"""
             SELECT id, properties, embedding
             FROM "{self.db_name}_graph"."Memory"
-            WHERE ({where_clause})
+            WHERE ag_catalog.agtype_access_operator(properties, '\"id\"'::agtype) = ANY(ARRAY[{placeholders}]::agtype[])
         """
 
-        user_name = user_name if user_name else self.config.user_name
-        query += " AND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
-        params.append(self.format_param_value(user_name))
+        # Only add user_name filter if provided
+        if user_name is not None:
+            query += " AND ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
+            params.append(self.format_param_value(user_name))
+
+        logger.info(f"get_nodes query:{query},params:{params}")
 
         conn = None
         try:
@@ -4313,7 +4310,7 @@ class PolarDBGraphDB(BaseGraphDB):
         user_name_conditions = []
         effective_user_name = user_name if user_name else default_user_name
 
-        if effective_user_name and default_user_name != "xxx":
+        if effective_user_name:
             user_name_conditions.append(
                 f"ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = '\"{effective_user_name}\"'::agtype"
             )

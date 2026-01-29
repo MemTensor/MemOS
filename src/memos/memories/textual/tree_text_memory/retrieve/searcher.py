@@ -81,6 +81,8 @@ class Searcher:
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
         logger.info(
@@ -108,6 +110,8 @@ class Searcher:
             user_name,
             search_tool_memory,
             tool_mem_top_k,
+            include_skill_memory,
+            skill_mem_top_k,
         )
         return results
 
@@ -119,6 +123,8 @@ class Searcher:
         info=None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
         dedup: str | None = None,
         plugin=False,
     ):
@@ -127,7 +133,13 @@ class Searcher:
         else:
             deduped = self._deduplicate_results(retrieved_results)
         final_results = self._sort_and_trim(
-            deduped, top_k, plugin, search_tool_memory, tool_mem_top_k
+            deduped,
+            top_k,
+            plugin,
+            search_tool_memory,
+            tool_mem_top_k,
+            include_skill_memory,
+            skill_mem_top_k,
         )
         self._update_usage_history(final_results, info, user_name)
         return final_results
@@ -145,6 +157,8 @@ class Searcher:
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
         dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
@@ -192,6 +206,8 @@ class Searcher:
                 user_name=user_name,
                 search_tool_memory=search_tool_memory,
                 tool_mem_top_k=tool_mem_top_k,
+                include_skill_memory=include_skill_memory,
+                skill_mem_top_k=skill_mem_top_k,
                 **kwargs,
             )
 
@@ -207,6 +223,8 @@ class Searcher:
             plugin=kwargs.get("plugin", False),
             search_tool_memory=search_tool_memory,
             tool_mem_top_k=tool_mem_top_k,
+            include_skill_memory=include_skill_memory,
+            skill_mem_top_k=skill_mem_top_k,
             dedup=dedup,
         )
 
@@ -305,8 +323,10 @@ class Searcher:
         user_name: str | None = None,
         search_tool_memory: bool = False,
         tool_mem_top_k: int = 6,
+        include_skill_memory: bool = False,
+        skill_mem_top_k: int = 3,
     ):
-        """Run A/B/C retrieval paths in parallel"""
+        """Run A/B/C/D/E retrieval paths in parallel"""
         tasks = []
         id_filter = {
             "user_id": info.get("user_id", None),
@@ -314,7 +334,7 @@ class Searcher:
         }
         id_filter = {k: v for k, v in id_filter.items() if v is not None}
 
-        with ContextThreadPoolExecutor(max_workers=3) as executor:
+        with ContextThreadPoolExecutor(max_workers=5) as executor:
             tasks.append(
                 executor.submit(
                     self._retrieve_from_working_memory,
@@ -365,6 +385,22 @@ class Searcher:
                         parsed_goal,
                         query_embedding,
                         tool_mem_top_k,
+                        memory_type,
+                        search_filter,
+                        search_priority,
+                        user_name,
+                        id_filter,
+                        mode=mode,
+                    )
+                )
+            if include_skill_memory:
+                tasks.append(
+                    executor.submit(
+                        self._retrieve_from_skill_memory,
+                        query,
+                        parsed_goal,
+                        query_embedding,
+                        skill_mem_top_k,
                         memory_type,
                         search_filter,
                         search_priority,
@@ -642,6 +678,58 @@ class Searcher:
         )
         return schema_reranked + trajectory_reranked
 
+    # --- Path E
+    @timed
+    def _retrieve_from_skill_memory(
+        self,
+        query,
+        parsed_goal,
+        query_embedding,
+        top_k,
+        memory_type,
+        search_filter: dict | None = None,
+        search_priority: dict | None = None,
+        user_name: str | None = None,
+        id_filter: dict | None = None,
+        mode: str = "fast",
+    ):
+        """Retrieve and rerank from SkillMemory"""
+        if memory_type not in ["All", "SkillMemory"]:
+            logger.info(f"[PATH-E] '{query}' Skipped (memory_type does not match)")
+            return []
+
+        # chain of thinking
+        cot_embeddings = []
+        if self.vec_cot:
+            queries = self._cot_query(query, mode=mode, context=parsed_goal.context)
+            if len(queries) > 1:
+                cot_embeddings = self.embedder.embed(queries)
+            cot_embeddings.extend(query_embedding)
+        else:
+            cot_embeddings = query_embedding
+
+        items = self.graph_retriever.retrieve(
+            query=query,
+            parsed_goal=parsed_goal,
+            query_embedding=cot_embeddings,
+            top_k=top_k * 2,
+            memory_scope="SkillMemory",
+            search_filter=search_filter,
+            search_priority=search_priority,
+            user_name=user_name,
+            id_filter=id_filter,
+            use_fast_graph=self.use_fast_graph,
+        )
+
+        return self.reranker.rerank(
+            query=query,
+            query_embedding=query_embedding[0],
+            graph_results=items,
+            top_k=top_k,
+            parsed_goal=parsed_goal,
+            search_filter=search_filter,
+        )
+
     @timed
     def _retrieve_simple(
         self,
@@ -704,7 +792,14 @@ class Searcher:
 
     @timed
     def _sort_and_trim(
-        self, results, top_k, plugin=False, search_tool_memory=False, tool_mem_top_k=6
+        self,
+        results,
+        top_k,
+        plugin=False,
+        search_tool_memory=False,
+        tool_mem_top_k=6,
+        include_skill_memory=False,
+        skill_mem_top_k=3,
     ):
         """Sort results by score and trim to top_k"""
         final_items = []
@@ -749,11 +844,35 @@ class Searcher:
                         metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
                     )
                 )
+
+        if include_skill_memory:
+            skill_results = [
+                (item, score)
+                for item, score in results
+                if item.metadata.memory_type == "SkillMemory"
+            ]
+            sorted_skill_results = sorted(skill_results, key=lambda pair: pair[1], reverse=True)[
+                :skill_mem_top_k
+            ]
+            for item, score in sorted_skill_results:
+                if plugin and round(score, 2) == 0.00:
+                    continue
+                meta_data = item.metadata.model_dump()
+                meta_data["relativity"] = score
+                final_items.append(
+                    TextualMemoryItem(
+                        id=item.id,
+                        memory=item.memory,
+                        metadata=SearchedTreeNodeTextualMemoryMetadata(**meta_data),
+                    )
+                )
+
         # separate textual results
         results = [
             (item, score)
             for item, score in results
-            if item.metadata.memory_type not in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+            if item.metadata.memory_type
+            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
         ]
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]

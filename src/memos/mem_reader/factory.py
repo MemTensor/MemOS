@@ -10,6 +10,7 @@ from memos.memos_tools.singleton import singleton_factory
 
 if TYPE_CHECKING:
     from memos.graph_dbs.base import BaseGraphDB
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 
 
 class MemReaderFactory(BaseMemReader):
@@ -27,6 +28,7 @@ class MemReaderFactory(BaseMemReader):
         cls,
         config_factory: MemReaderConfigFactory,
         graph_db: Optional["BaseGraphDB | None"] = None,
+        searcher: Optional["Searcher | None"] = None,
     ) -> BaseMemReader:
         """
         Create a MemReader instance from configuration.
@@ -49,5 +51,8 @@ class MemReaderFactory(BaseMemReader):
         # Set graph_db if provided (for recall operations)
         if graph_db is not None:
             reader.set_graph_db(graph_db)
+
+        if searcher is not None:
+            reader.set_searcher(searcher)
 
         return reader

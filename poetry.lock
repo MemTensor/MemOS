@@ -13,6 +13,23 @@ files = [
 ]
 
 [[package]]
+name = "alibabacloud-oss-v2"
+version = "1.2.2"
+description = "Alibaba Cloud OSS (Object Storage Service) SDK V2 for Python"
+optional = true
+python-versions = ">=3.8"
+groups = ["main"]
+markers = "extra == \"skill-mem\" or extra == \"all\""
+files = [
+    {file = "alibabacloud_oss_v2-1.2.2-py3-none-any.whl", hash = "sha256:d138d1bdb38da6cc20d96b96faaeb099062a710a7f3d50f4b4b39a8cfcbdc120"},
+]
+
+[package.dependencies]
+crcmod-plus = ">=2.1.0"
+pycryptodome = ">=3.4.7"
+requests = ">=2.18.4"
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 description = "Reusable constraint types to use with typing.Annotated"
@@ -581,6 +598,65 @@ docs = ["furo", "sphinx (>=7.2)", "sphinx-copybutton"]
 mypy = ["bokeh", "contourpy[bokeh,docs]", "docutils-stubs", "mypy (==1.15.0)", "types-Pillow"]
 test = ["Pillow", "contourpy[test-no-images]", "matplotlib"]
 test-no-images = ["pytest", "pytest-cov", "pytest-rerunfailures", "pytest-xdist", "wurlitzer"]
+
+[[package]]
+name = "crcmod-plus"
+version = "2.3.1"
+description = "CRC generator - modernized"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "extra == \"skill-mem\" or extra == \"all\""
+files = [
+    {file = "crcmod_plus-2.3.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:466d5fb9a05549a401164a2ba46a560779f7240f43f0b864e9fd277c5c12133a"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:b31f039c440d59b808d1d90afbfd90ad901dc6e4a81d32a0fefa8d2c118064b9"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:24088832717435fc94d948e3140518c5a19fea99d1f6180b3396320398aca4c1"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e5632576426e78c51ad4ed0569650e397f282cec2751862f3fd8a88dd9d5019a"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:0313488db8e9048deee987f04859b9ad46c8e6fa26385fb1d3e481c771530961"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:c1d8ae3ed019e9c164f1effee61cbc509ca39695738f7556fc0685e4c9218c86"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-win32.whl", hash = "sha256:bb54ac5623938726f4e92c18af0ccd9d119011e1821e949440bbfd24552ca539"},
+    {file = "crcmod_plus-2.3.1-cp310-cp310-win_amd64.whl", hash = "sha256:79c58a3118e0c95cedffb48745fa1071982f8ba84309267b6020c2fffdbfaea7"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-macosx_10_9_universal2.whl", hash = "sha256:b7e35e0f7d93d7571c2c9c3d6760e456999ea4c1eae5ead6acac247b5a79e469"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:6853243120db84677b94b625112116f0ef69cd581741d20de58dce4c34242654"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:17735bc4e944d552ea18c8609fc6d08a5e64ee9b29cc216ba4d623754029cc3a"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8ac755040a2a35f43ab331978c48a9acb4ff64b425f282a296be467a410f00c3"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:7bdcfb838ca093ca673a3bbb37f62d1e5ec7182e00cc5ee2d00759f9f9f8ab11"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:9166bc3c9b5e7b07b4e6854cac392b4a451b31d58d3950e48c140ab7b5d05394"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-win32.whl", hash = "sha256:cb99b694cce5c862560cf332a8b5e793620e28f0de3726995608bbd6f9b6e09a"},
+    {file = "crcmod_plus-2.3.1-cp311-abi3-win_amd64.whl", hash = "sha256:82b0f7e968c430c5a80fe0fc59e75cb54f2e84df2ed0cee5a3ff9cadfbf8a220"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:fcb7a64648d70cac0a90c23bc6c58de6c13b28a0841c742039ba8528e23f51d1"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-macosx_10_13_x86_64.whl", hash = "sha256:abcf3ac30e41a58dd8d2659930e357d2fd47ab4fabb52382698ed1003c9a2598"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:693d2791af64aaf4467efe1473e02acd0ef1da229100262f29198f3ad59d42f8"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ab075292b41b33be4d2f349e1139ea897023c3ebffc28c0d4c2ed7f2b31f1bce"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:ccdc48e0af53c68304d60bbccfd5f51aed9979b5721016c3e097d51e0692b35e"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:283d23e4f13629413e6c963ffcc49c6166c9829b1e4ec6488e0d3703bd218dce"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-win32.whl", hash = "sha256:53319d2e9697a8d68260709aa61987fb89c49dd02b7f585b82c578659c1922b6"},
+    {file = "crcmod_plus-2.3.1-cp313-cp313t-win_amd64.whl", hash = "sha256:c9ebd256f792ef01a1d0335419f679e7501d4fdf132a5206168c5269fcea65d0"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-macosx_10_13_universal2.whl", hash = "sha256:52abc724f5232eddbe565c258878123337339bf9cfe9ac9c154e38557b8affc5"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-macosx_10_13_x86_64.whl", hash = "sha256:8b0e644395d68bbfb576ee28becb69d962b173fa648ce269aec260f538841fa9"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:07962695c53eedf3c9f0bacb2d7d6c00064394d4c88c0eb7d5b082808812fe82"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:43acb79630192f91e60ec5b979a0e1fc2a4734182ce8b37d657f11fcd27c1f86"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:52aacdfc0f04510c9c0e6ecf7c09528543cb00f4d4edd0871be8c9b8e03f2c08"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:ac4ce5a423f3ccf143a42ce6af4661e2f806f09a6124c24996689b3457f1afcb"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-win32.whl", hash = "sha256:cf2df1058d6bf674c8b7b6f56c7ecdc0479707c81860f032abf69526f0111f70"},
+    {file = "crcmod_plus-2.3.1-cp314-cp314t-win_amd64.whl", hash = "sha256:ba925ca53a1e00233a1b93380a46c0e821f6b797a19fc401aec85219cd85fd6f"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-macosx_10_9_universal2.whl", hash = "sha256:22600072de422632531e92d7675faf223a5b2548d45c5cd6f77ec4575339900f"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:f940704e359607b47b4a8e98c4d0f453f15bea039eb183cd0ffb14a8268fea78"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:f939fc1f7d143962a8fbed2305ce5931627fea1ea3a7f1865c04dbba9d41bf67"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c3c6e8c7cf7ef49bcae7d3293996f82edde98e5fa202752ae58bf37a0289d35d"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-musllinux_1_2_aarch64.whl", hash = "sha256:728f68d0e3049ba23978aaf277f3eb405dd21e78be6ba96382739ba09bba473c"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:b3829ed0dba48765f9b4139cb70b9bdf6553d2154302d9e3de6377556357892f"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-win32.whl", hash = "sha256:855fcbd07c3eb9162c701c1c7ed1a8b5a5f7b1e8c2dd3fd8ed2273e2f141ecc9"},
+    {file = "crcmod_plus-2.3.1-cp39-cp39-win_amd64.whl", hash = "sha256:5422081be6403b6fba736c544e79c68410307f7a1a8ac1925b421a5c6f4591d3"},
+    {file = "crcmod_plus-2.3.1-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:9397324da1be2729f894744d9031a21ed97584c17fb0289e69e0c3c60916fc5f"},
+    {file = "crcmod_plus-2.3.1-pp311-pypy311_pp73-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:073c7a3b832652e66c41c8b8705eaecda704d1cbe850b9fa05fdee36cd50745a"},
+    {file = "crcmod_plus-2.3.1-pp311-pypy311_pp73-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:2e5f4c62553f772ea7ae12d9484801b752622c9c288e49ee7ea34a20b94e4920"},
+    {file = "crcmod_plus-2.3.1-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:5e80a9860f66f339956f540d86a768f4fe8c8bfcb139811f14be864425c48d64"},
+    {file = "crcmod_plus-2.3.1.tar.gz", hash = "sha256:732ffe3c3ce3ef9b272e1827d8fb894590c4d6ff553f2a2b41ae30f4f94b0f5d"},
+]
+
+[package.extras]
+dev = ["pytest"]
 
 [[package]]
 name = "cryptography"
@@ -2853,14 +2929,14 @@ markers = {main = "platform_system == \"Linux\" and platform_machine == \"x86_64
 
 [[package]]
 name = "ollama"
-version = "0.4.9"
+version = "0.5.0"
 description = "The official Python client for Ollama."
 optional = false
 python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "ollama-0.4.9-py3-none-any.whl", hash = "sha256:18c8c85358c54d7f73d6a66cda495b0e3ba99fdb88f824ae470d740fbb211a50"},
-    {file = "ollama-0.4.9.tar.gz", hash = "sha256:5266d4d29b5089a01489872b8e8f980f018bccbdd1082b3903448af1d5615ce7"},
+    {file = "ollama-0.5.0-py3-none-any.whl", hash = "sha256:625371de663ccb48f14faa49bd85ae409da5e40d84cab42366371234b4dbaf68"},
+    {file = "ollama-0.5.0.tar.gz", hash = "sha256:ed6a343b64de22f69309ac930d8ac12b46775aebe21cbb91b859b99f59c53fa7"},
 ]
 
 [package.dependencies]
@@ -3506,6 +3582,58 @@ files = [
     {file = "pycparser-2.22.tar.gz", hash = "sha256:491c8be9c040f5390f5bf44a5b07752bd07f56edf992381b05c701439eec10f6"},
 ]
 markers = {main = "extra == \"mem-reader\" or extra == \"all\" or platform_python_implementation != \"PyPy\"", eval = "platform_python_implementation == \"PyPy\""}
+
+[[package]]
+name = "pycryptodome"
+version = "3.23.0"
+description = "Cryptographic library for Python"
+optional = true
+python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,>=2.7"
+groups = ["main"]
+markers = "extra == \"skill-mem\" or extra == \"all\""
+files = [
+    {file = "pycryptodome-3.23.0-cp27-cp27m-macosx_10_9_x86_64.whl", hash = "sha256:a176b79c49af27d7f6c12e4b178b0824626f40a7b9fed08f712291b6d54bf566"},
+    {file = "pycryptodome-3.23.0-cp27-cp27m-manylinux2010_i686.whl", hash = "sha256:573a0b3017e06f2cffd27d92ef22e46aa3be87a2d317a5abf7cc0e84e321bd75"},
+    {file = "pycryptodome-3.23.0-cp27-cp27m-manylinux2010_x86_64.whl", hash = "sha256:63dad881b99ca653302b2c7191998dd677226222a3f2ea79999aa51ce695f720"},
+    {file = "pycryptodome-3.23.0-cp27-cp27m-win32.whl", hash = "sha256:b34e8e11d97889df57166eda1e1ddd7676da5fcd4d71a0062a760e75060514b4"},
+    {file = "pycryptodome-3.23.0-cp27-cp27mu-manylinux2010_i686.whl", hash = "sha256:7ac1080a8da569bde76c0a104589c4f414b8ba296c0b3738cf39a466a9fb1818"},
+    {file = "pycryptodome-3.23.0-cp27-cp27mu-manylinux2010_x86_64.whl", hash = "sha256:6fe8258e2039eceb74dfec66b3672552b6b7d2c235b2dfecc05d16b8921649a8"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-macosx_10_13_universal2.whl", hash = "sha256:0011f7f00cdb74879142011f95133274741778abba114ceca229adbf8e62c3e4"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-macosx_10_13_x86_64.whl", hash = "sha256:90460fc9e088ce095f9ee8356722d4f10f86e5be06e2354230a9880b9c549aae"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4764e64b269fc83b00f682c47443c2e6e85b18273712b98aa43bcb77f8570477"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:eb8f24adb74984aa0e5d07a2368ad95276cf38051fe2dc6605cbcf482e04f2a7"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:d97618c9c6684a97ef7637ba43bdf6663a2e2e77efe0f863cce97a76af396446"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:9a53a4fe5cb075075d515797d6ce2f56772ea7e6a1e5e4b96cf78a14bac3d265"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-musllinux_1_2_i686.whl", hash = "sha256:763d1d74f56f031788e5d307029caef067febf890cd1f8bf61183ae142f1a77b"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:954af0e2bd7cea83ce72243b14e4fb518b18f0c1649b576d114973e2073b273d"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-win32.whl", hash = "sha256:257bb3572c63ad8ba40b89f6fc9d63a2a628e9f9708d31ee26560925ebe0210a"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-win_amd64.whl", hash = "sha256:6501790c5b62a29fcb227bd6b62012181d886a767ce9ed03b303d1f22eb5c625"},
+    {file = "pycryptodome-3.23.0-cp313-cp313t-win_arm64.whl", hash = "sha256:9a77627a330ab23ca43b48b130e202582e91cc69619947840ea4d2d1be21eb39"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:187058ab80b3281b1de11c2e6842a357a1f71b42cb1e15bce373f3d238135c27"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-macosx_10_9_x86_64.whl", hash = "sha256:cfb5cd445280c5b0a4e6187a7ce8de5a07b5f3f897f235caa11f1f435f182843"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:67bd81fcbe34f43ad9422ee8fd4843c8e7198dd88dd3d40e6de42ee65fbe1490"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c8987bd3307a39bc03df5c8e0e3d8be0c4c3518b7f044b0f4c15d1aa78f52575"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:aa0698f65e5b570426fc31b8162ed4603b0c2841cbb9088e2b01641e3065915b"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:53ecbafc2b55353edcebd64bf5da94a2a2cdf5090a6915bcca6eca6cc452585a"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-musllinux_1_2_i686.whl", hash = "sha256:156df9667ad9f2ad26255926524e1c136d6664b741547deb0a86a9acf5ea631f"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:dea827b4d55ee390dc89b2afe5927d4308a8b538ae91d9c6f7a5090f397af1aa"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-win32.whl", hash = "sha256:507dbead45474b62b2bbe318eb1c4c8ee641077532067fec9c1aa82c31f84886"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-win_amd64.whl", hash = "sha256:c75b52aacc6c0c260f204cbdd834f76edc9fb0d8e0da9fbf8352ef58202564e2"},
+    {file = "pycryptodome-3.23.0-cp37-abi3-win_arm64.whl", hash = "sha256:11eeeb6917903876f134b56ba11abe95c0b0fd5e3330def218083c7d98bbcb3c"},
+    {file = "pycryptodome-3.23.0-pp27-pypy_73-manylinux2010_x86_64.whl", hash = "sha256:350ebc1eba1da729b35ab7627a833a1a355ee4e852d8ba0447fafe7b14504d56"},
+    {file = "pycryptodome-3.23.0-pp27-pypy_73-win32.whl", hash = "sha256:93837e379a3e5fd2bb00302a47aee9fdf7940d83595be3915752c74033d17ca7"},
+    {file = "pycryptodome-3.23.0-pp310-pypy310_pp73-macosx_10_15_x86_64.whl", hash = "sha256:ddb95b49df036ddd264a0ad246d1be5b672000f12d6961ea2c267083a5e19379"},
+    {file = "pycryptodome-3.23.0-pp310-pypy310_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d8e95564beb8782abfd9e431c974e14563a794a4944c29d6d3b7b5ea042110b4"},
+    {file = "pycryptodome-3.23.0-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:14e15c081e912c4b0d75632acd8382dfce45b258667aa3c67caf7a4d4c13f630"},
+    {file = "pycryptodome-3.23.0-pp310-pypy310_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a7fc76bf273353dc7e5207d172b83f569540fc9a28d63171061c42e361d22353"},
+    {file = "pycryptodome-3.23.0-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:45c69ad715ca1a94f778215a11e66b7ff989d792a4d63b68dc586a1da1392ff5"},
+    {file = "pycryptodome-3.23.0-pp39-pypy39_pp73-macosx_10_15_x86_64.whl", hash = "sha256:865d83c906b0fc6a59b510deceee656b6bc1c4fa0d82176e2b77e97a420a996a"},
+    {file = "pycryptodome-3.23.0-pp39-pypy39_pp73-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:89d4d56153efc4d81defe8b65fd0821ef8b2d5ddf8ed19df31ba2f00872b8002"},
+    {file = "pycryptodome-3.23.0-pp39-pypy39_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e3f2d0aaf8080bda0587d58fc9fe4766e012441e2eed4269a77de6aea981c8be"},
+    {file = "pycryptodome-3.23.0-pp39-pypy39_pp73-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:64093fc334c1eccfd3933c134c4457c34eaca235eeae49d69449dc4728079339"},
+    {file = "pycryptodome-3.23.0-pp39-pypy39_pp73-win_amd64.whl", hash = "sha256:ce64e84a962b63a47a592690bdc16a7eaf709d2c2697ababf24a0def566899a6"},
+    {file = "pycryptodome-3.23.0.tar.gz", hash = "sha256:447700a657182d60338bab09fdb27518f8856aecd80ae4c6bdddb67ff5da44ef"},
+]
 
 [[package]]
 name = "pydantic"
@@ -6234,14 +6362,15 @@ cffi = {version = ">=1.11", markers = "platform_python_implementation == \"PyPy\
 cffi = ["cffi (>=1.11)"]
 
 [extras]
-all = ["cachetools", "chonkie", "datasketch", "jieba", "langchain-text-splitters", "markitdown", "neo4j", "nltk", "pika", "pymilvus", "pymysql", "qdrant-client", "rake-nltk", "rank-bm25", "redis", "schedule", "sentence-transformers", "torch", "volcengine-python-sdk"]
+all = ["alibabacloud-oss-v2", "cachetools", "chonkie", "datasketch", "jieba", "langchain-text-splitters", "markitdown", "neo4j", "nltk", "pika", "pymilvus", "pymysql", "qdrant-client", "rake-nltk", "rank-bm25", "redis", "schedule", "sentence-transformers", "torch", "volcengine-python-sdk"]
 mem-reader = ["chonkie", "langchain-text-splitters", "markitdown"]
 mem-scheduler = ["pika", "redis"]
 mem-user = ["pymysql"]
 pref-mem = ["datasketch", "pymilvus"]
+skill-mem = ["alibabacloud-oss-v2"]
 tree-mem = ["neo4j", "schedule"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "22bfcac5ed0be1e3aea294e3da96ff1a4bd9d7b62865ad827e1508f5ade6b708"
+content-hash = "faff240c05a74263a404e8d9324ffd2f342cb4f0a4c1f5455b87349f6ccc61a5"

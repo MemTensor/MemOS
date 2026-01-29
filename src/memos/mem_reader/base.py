@@ -7,6 +7,7 @@ from memos.memories.textual.item import TextualMemoryItem
 
 if TYPE_CHECKING:
     from memos.graph_dbs.base import BaseGraphDB
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 
 
 class BaseMemReader(ABC):
@@ -31,6 +32,12 @@ class BaseMemReader(ABC):
 
         Args:
             graph_db: The graph database instance, or None to disable recall operations.
+        """
+
+    @abstractmethod
+    def set_searcher(self, searcher: "Searcher | None") -> None:
+        """
+        Set the searcher instance for recall operations.
         """
 
     @abstractmethod

@@ -59,7 +59,9 @@ class BaseTextMemory(BaseMemory):
         """
 
     @abstractmethod
-    def get_by_ids(self, memory_ids: list[str]) -> list[TextualMemoryItem]:
+    def get_by_ids(
+        self, memory_ids: list[str], user_name: str | None = None
+    ) -> list[TextualMemoryItem]:
         """Get memories by their IDs.
         Args:
             memory_ids (list[str]): List of memory IDs to retrieve.
