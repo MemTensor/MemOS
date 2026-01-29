@@ -155,13 +155,18 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
         message_indices = item["message_indices"]
         for indices in message_indices:
             # Validate that indices is a list/tuple with exactly 2 elements
-            if not isinstance(indices, list | tuple) or len(indices) != 2:
+            if isinstance(indices, list) and len(indices) == 1:
+                start, end = indices[0], indices[0] + 1
+            elif isinstance(indices, int):
+                start, end = indices, indices + 1
+            elif isinstance(indices, list) and len(indices) == 2:
+                start, end = indices[0], indices[1] + 1
+            else:
                 logger.warning(
                     f"[PROCESS_SKILLS] Invalid message indices format for task '{task_name}': {indices}, skipping"
                 )
                 continue
-            start, end = indices
-            task_chunks.setdefault(task_name, []).extend(messages[start : end + 1])
+            task_chunks.setdefault(task_name, []).extend(messages[start:end])
     return task_chunks
 
 
