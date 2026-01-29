@@ -553,6 +553,7 @@ class SingleCubeView(MemCubeView):
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
                     info=add_req.info,
+                    chat_history=add_req.chat_history,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -807,6 +808,7 @@ class SingleCubeView(MemCubeView):
             },
             mode=extract_mode,
             user_name=user_context.mem_cube_id,
+            chat_history=add_req.chat_history,
         )
         self.logger.info(
             f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"

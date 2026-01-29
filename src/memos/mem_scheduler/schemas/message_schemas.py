@@ -54,6 +54,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         default=None,
         description="Optional business-level task ID. Multiple items can share the same task_id.",
     )
+    chat_history: list | None = Field(default=None, description="user chat history")
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(
@@ -89,6 +90,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "timestamp": self.timestamp.isoformat(),
             "user_name": self.user_name,
             "task_id": self.task_id if self.task_id is not None else "",
+            "chat_history": self.chat_history if self.chat_history is not None else [],
         }
 
     @classmethod
@@ -104,6 +106,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             timestamp=datetime.fromisoformat(data["timestamp"]),
             user_name=data.get("user_name"),
             task_id=data.get("task_id"),
+            chat_history=data.get("chat_history"),
         )
 
 
@@ -158,6 +161,7 @@ class ScheduleLogForWebItem(BaseModel, DictConversionMixin):
         default=None, description="Completion status of the task (e.g., 'completed', 'failed')"
     )
     source_doc_id: str | None = Field(default=None, description="Source document ID")
+    chat_history: list | None = Field(default=None, description="user chat history")
 
     def debug_info(self) -> dict[str, Any]:
         """Return structured debug information for logging purposes."""

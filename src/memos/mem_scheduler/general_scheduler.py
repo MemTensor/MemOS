@@ -764,6 +764,7 @@ class GeneralScheduler(BaseScheduler):
                 content = message.content
                 user_name = message.user_name
                 info = message.info or {}
+                chat_history = message.chat_history
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
@@ -790,6 +791,7 @@ class GeneralScheduler(BaseScheduler):
                     custom_tags=info.get("custom_tags", None),
                     task_id=message.task_id,
                     info=info,
+                    chat_history=chat_history,
                 )
 
                 logger.info(
@@ -817,6 +819,7 @@ class GeneralScheduler(BaseScheduler):
         custom_tags: list[str] | None = None,
         task_id: str | None = None,
         info: dict | None = None,
+        chat_history: list | None = None,
     ) -> None:
         logger.info(
             f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader called. mem_ids: {mem_ids}, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}"
@@ -878,6 +881,7 @@ class GeneralScheduler(BaseScheduler):
                     type="chat",
                     custom_tags=custom_tags,
                     user_name=user_name,
+                    chat_history=chat_history,
                 )
             except Exception as e:
                 logger.warning(f"{e}: Fail to transfer mem: {memory_items}")
