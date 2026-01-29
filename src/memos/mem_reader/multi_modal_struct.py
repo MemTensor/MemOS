@@ -879,7 +879,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     embedder=self.embedder,
                     oss_config=self.oss_config,
                     skills_dir_config=self.skills_dir_config,
-                    history=kwargs.get("chat_history"),
+                    **kwargs,
                 )
 
                 # Collect results
@@ -946,7 +946,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 graph_db=self.graph_db,
                 oss_config=self.oss_config,
                 skills_dir_config=self.skills_dir_config,
-                history=kwargs.get("chat_history"),
+                **kwargs,
             )
 
             # Collect results

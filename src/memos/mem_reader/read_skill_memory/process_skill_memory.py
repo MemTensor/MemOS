@@ -524,7 +524,6 @@ def process_skill_memory_fine(
     rewrite_query: bool = True,
     oss_config: dict[str, Any] | None = None,
     skills_dir_config: dict[str, Any] | None = None,
-    history: list | None = None,
     **kwargs,
 ) -> list[TextualMemoryItem]:
     # Validate required configurations
@@ -537,6 +536,10 @@ def process_skill_memory_fine(
             "[PROCESS_SKILLS] Skills directory configuration is required for skill memory processing"
         )
         return []
+
+    chat_history = kwargs.get("chat_history")
+    if not chat_history:
+        logger.warning("[PROCESS_SKILLS] History is None in Skills")
 
     # Validate skills_dir has required keys
     required_keys = ["skills_local_dir", "skills_oss_dir"]
