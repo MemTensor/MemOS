@@ -183,7 +183,9 @@ class MemoryManager:
                 "ToolTrajectoryMemory",
                 "SkillMemory",
             ):
-                graph_node_id = str(uuid.uuid4())
+                if not memory.id:
+                    logger.error("Memory ID is not set, generating a new one")
+                graph_node_id = memory.id or str(uuid.uuid4())
                 metadata_dict = memory.metadata.model_dump(exclude_none=True)
                 metadata_dict["updated_at"] = datetime.now().isoformat()
 
@@ -384,7 +386,9 @@ class MemoryManager:
         """
         Generalized method to add memory to a graph-based memory type (e.g., LongTermMemory, UserMemory).
         """
-        node_id = str(uuid.uuid4())
+        if not memory.id:
+            logger.error("Memory ID is not set, generating a new one")
+        node_id = memory.id or str(uuid.uuid4())
         # Step 2: Add new node to graph
         metadata_dict = memory.metadata.model_dump(exclude_none=True)
         tags = metadata_dict.get("tags") or []
