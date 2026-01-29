@@ -105,6 +105,15 @@ def _reconstruct_messages_from_memory_items(memory_items: list[TextualMemoryItem
     return reconstructed_messages
 
 
+def _preprocess_extract_messages(history: MessageList, messages: MessageList) -> MessageList:
+    """Process data and check whether to extract skill memory"""
+    history = history[-20:]
+    if (len(history) + len(messages)) < 10:
+        logger.warning("[PROCESS_SKILLS] Not enough messages to extract skill memory")
+        return []
+    return history + messages
+
+
 def _add_index_to_message(messages: MessageList) -> MessageList:
     for i, message in enumerate(messages):
         message["idx"] = i
@@ -537,8 +546,8 @@ def process_skill_memory_fine(
         )
         return []
 
-    chat_history = kwargs.get("chat_history")
-    if not chat_history:
+    history = kwargs.get("chat_history")
+    if not history:
         logger.warning("[PROCESS_SKILLS] History is None in Skills")
 
     # Validate skills_dir has required keys
@@ -556,6 +565,11 @@ def process_skill_memory_fine(
         return []
 
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
+
+    messages = _preprocess_extract_messages(history, messages)
+    if not messages:
+        return []
+
     messages = _add_index_to_message(messages)
 
     task_chunks = _split_task_chunk_by_llm(llm, messages)
@@ -717,9 +731,11 @@ def process_skill_memory_fine(
             continue
 
     # TODO: deprecate this funtion and call
-    for skill_memory in skill_memory_items:
-        add_id_to_mysql(
-            memory_id=skill_memory.id, mem_cube_id=kwargs.get("user_name", info.get("user_id", ""))
-        )
+    for skill_memory, skill_memory_item in zip(skill_memories, skill_memory_items, strict=False):
+        if skill_memory.get("update", False) and skill_memory.get("old_memory_id", ""):
+            add_id_to_mysql(
+                memory_id=skill_memory_item.id,
+                mem_cube_id=kwargs.get("user_name", info.get("user_id", "")),
+            )
 
     return skill_memory_items
