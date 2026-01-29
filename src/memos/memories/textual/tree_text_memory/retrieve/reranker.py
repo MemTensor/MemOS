@@ -78,7 +78,11 @@ class MemoryReranker:
         embeddings = [item.metadata.embedding for item in items_with_embeddings]
 
         if not embeddings:
-            return [(item, 0.5) for item in graph_results[:top_k]]
+            # Use relativity from recall stage if available, otherwise default to 0.5
+            return [
+                (item, getattr(item.metadata, "relativity", None) or 0.5)
+                for item in graph_results[:top_k]
+            ]
 
         # Step 2: Compute cosine similarities
         similarity_scores = batch_cosine_similarity(query_embedding, embeddings)

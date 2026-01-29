@@ -122,15 +122,6 @@ def load_default_config(user_id="default_user"):
     return config, cube
 
 
-class MOSMCPStdioServer:
-    def __init__(self):
-        self.mcp = FastMCP("MOS Memory System")
-        config, cube = load_default_config()
-        self.mos_core = MOS(config=config)
-        self.mos_core.register_mem_cube(cube)
-        self._setup_tools()
-
-
 class MOSMCPServer:
     """MCP Server that accepts an existing MOS instance."""
 
@@ -584,7 +575,6 @@ def _run_mcp(self, transport: str = "stdio", **kwargs):
         raise ValueError(f"Unsupported transport: {transport}")
 
 
-MOSMCPStdioServer.run = _run_mcp
 MOSMCPServer.run = _run_mcp
 
 
@@ -610,5 +600,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Create and run MCP server
-    server = MOSMCPStdioServer()
+    server = MOSMCPServer()
     server.run(transport=args.transport, host=args.host, port=args.port)

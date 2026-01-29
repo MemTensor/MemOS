@@ -1,0 +1,65 @@
+# MemOS with Krolik Security Extensions
+# 
+# This Dockerfile builds MemOS with authentication, rate limiting, and admin API.
+# It uses the overlay pattern to keep customizations separate from base code.
+
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    build-essential \
+    libffi-dev \
+    python3-dev \
+    curl \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r memos && useradd -r -g memos -u 1000 memos
+
+WORKDIR /app
+
+# Use official Hugging Face
+ENV HF_ENDPOINT=https://huggingface.co
+
+# Copy base MemOS source
+COPY src/ ./src/
+COPY pyproject.toml ./
+
+# Install base dependencies
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-dev --extras "tree-mem mem-scheduler"
+
+# Install additional dependencies for Krolik
+RUN pip install --no-cache-dir \
+    sentence-transformers \
+    torch \
+    transformers \
+    psycopg2-binary \
+    redis
+
+# Apply Krolik overlay (AFTER base install to allow easy updates)
+COPY overlays/krolik/ ./src/memos/
+
+# Create data directory
+RUN mkdir -p /data/memos && chown -R memos:memos /data/memos
+RUN chown -R memos:memos /app
+
+# Set Python path
+ENV PYTHONPATH=/app/src
+
+# Switch to non-root user
+USER memos
+
+EXPOSE 8000
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Use extended entry point with security features
+CMD ["gunicorn", "memos.api.server_api_ext:app", "--preload", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "120"]
