@@ -377,16 +377,13 @@ class SearchHandler(BaseHandler):
 
     @staticmethod
     def _strip_embeddings(results: dict[str, Any]) -> None:
-        for bucket in results.get("text_mem", []):
-            for mem in bucket.get("memories", []):
-                metadata = mem.get("metadata", {})
-                if "embedding" in metadata:
-                    metadata["embedding"] = []
-        for bucket in results.get("tool_mem", []):
-            for mem in bucket.get("memories", []):
-                metadata = mem.get("metadata", {})
-                if "embedding" in metadata:
-                    metadata["embedding"] = []
+        for _mem_type, mem_results in results.items():
+            if isinstance(mem_results, list):
+                for bucket in mem_results:
+                    for mem in bucket.get("memories", []):
+                        metadata = mem.get("metadata", {})
+                        if "embedding" in metadata:
+                            metadata["embedding"] = []
 
     @staticmethod
     def _dice_similarity(text1: str, text2: str) -> float:
