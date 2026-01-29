@@ -222,7 +222,7 @@ class SearchHandler(BaseHandler):
 
             # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
             if SearchHandler._is_text_highly_similar_optimized(
-                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.9
+                idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.92
             ):
                 continue
 
@@ -265,7 +265,7 @@ class SearchHandler(BaseHandler):
 
                 # Skip if highly similar (Dice + TF-IDF + 2-gram combined, with embedding filter)
                 if SearchHandler._is_text_highly_similar_optimized(
-                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.9
+                    idx, mem_text, selected_global, similarity_matrix, flat, threshold=0.92
                 ):
                     continue  # Skip highly similar text, don't participate in MMR competition
 
@@ -476,7 +476,7 @@ class SearchHandler(BaseHandler):
         selected_global: list[int],
         similarity_matrix,
         flat: list,
-        threshold: float = 0.9,
+        threshold: float = 0.92,
     ) -> bool:
         """
         Multi-algorithm text similarity check with embedding pre-filtering.
