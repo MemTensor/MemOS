@@ -122,6 +122,7 @@ class SingleCubeView(MemCubeView):
             "pref_mem": [],
             "pref_note": "",
             "tool_mem": [],
+            "skill_mem": [],
         }
 
         # Determine search mode
@@ -266,7 +267,7 @@ class SingleCubeView(MemCubeView):
             info=info,
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in enhanced_memories
         ]
         return formatted_memories
@@ -278,7 +279,7 @@ class SingleCubeView(MemCubeView):
             search_req.query, user_id=user_context.mem_cube_id
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in deepsearch_results
         ]
         return formatted_memories
@@ -390,7 +391,7 @@ class SingleCubeView(MemCubeView):
             enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in deduped_memories
         ]
 
@@ -476,11 +477,13 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            include_skill_memory=search_req.include_skill_memory,
+            skill_mem_top_k=search_req.skill_mem_top_k,
             dedup=search_req.dedup,
         )
 
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in search_results
         ]
 

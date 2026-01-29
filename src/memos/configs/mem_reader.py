@@ -57,6 +57,15 @@ class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
         "If None, reads from FILE_PARSER_DIRECT_MARKDOWN_HOSTNAMES environment variable.",
     )
 
+    oss_config: dict[str, Any] | None = Field(
+        default=None,
+        description="OSS configuration for the MemReader",
+    )
+    skills_dir_config: dict[str, Any] | None = Field(
+        default=None,
+        description="Skills directory for the MemReader",
+    )
+
 
 class StrategyStructMemReaderConfig(BaseMemReaderConfig):
     """StrategyStruct MemReader configuration class."""

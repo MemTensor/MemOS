@@ -89,7 +89,7 @@ nvidia-cusparselt-cu12==0.6.3
 nvidia-nccl-cu12==2.26.2
 nvidia-nvjitlink-cu12==12.6.85
 nvidia-nvtx-cu12==12.6.77
-ollama==0.4.9
+ollama==0.5.0
 onnxruntime==1.22.1
 openai==1.97.0
 openapi-pydantic==0.5.1
@@ -184,3 +184,4 @@ py-key-value-aio==0.2.8
 py-key-value-shared==0.2.8
 PyJWT==2.10.1
 pytest==9.0.2
+alibabacloud-oss-v2==1.2.2
