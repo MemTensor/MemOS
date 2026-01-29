@@ -218,6 +218,7 @@ def _extract_skill_memory_by_llm(
     )
 
     prompt = [{"role": "user", "content": prompt_content}]
+    logger.info(f"[Skill Memory]: Prompt {prompt_content}")
 
     # Call LLM to extract skill memory with retry logic
     for attempt in range(3):
@@ -227,6 +228,7 @@ def _extract_skill_memory_by_llm(
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
             # Clean up response (remove Markdown code blocks if present)
+            logger.info(f"[Skill Memory]: response_text {response_text}")
             response_text = response_text.strip()
             response_text = response_text.replace("```json", "").replace("```", "").strip()
 

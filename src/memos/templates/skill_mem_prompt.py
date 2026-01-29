@@ -158,7 +158,7 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 # 对话消息的上下文chat_history
 {chat_history}
 
-# 对话消息
+# 当前对话消息
 {messages}
 
 # 核心原则
@@ -186,6 +186,7 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
   "others": {"章节标题": "这里的内容", "reference.md": "# 此技能的参考内容"},
   "update": false,
   "old_memory_id": "",
+  "content_of_current_message": "",
   "whether_use_chat_history": false,
   "content_of_related_chat_history": "",
 }
@@ -206,6 +207,7 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 - **examples**：展示最终任务成果的输出模板，包括格式、章节和内容组织结构。应展示应用此技能后任务结果的样子，包含所有必要的部分。内容可以省略但必须展示完整结构。使用 markdown 格式以提高可读性
 - **update**：更新现有技能为true，新建为false
 - **old_memory_id**：被更新技能的ID，新建则为空字符串
+- **content_of_current_message**: 从当前对话消息中提取的核心内容（简写但必填）,
 - **whether_use_chat_history**：是否从 chat_history 中引用了 messages 中没有的内容并提取到skill中
 - **content_of_related_chat_history**：若 whether_use_chat_history 为 true，
   仅需概括性说明所使用的历史信息类型（如“长期偏好：文化类景点优先”），
@@ -217,7 +219,7 @@ SKILL_MEMORY_EXTRACTION_PROMPT_ZH = """
 - "examples"应展示完整的最终输出格式和结构，包含所有必要章节
 - "others"包含补充说明或扩展信息
 - 无法提取技能时返回null
-- 注意区分chat_history与对话消息
+- 注意区分chat_history与当前对话消息，如果能提出skill，必须有一部分来自于当前对话消息
 
 # 输出格式
 仅输出JSON对象。
