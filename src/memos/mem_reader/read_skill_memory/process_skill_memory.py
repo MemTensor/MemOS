@@ -524,6 +524,7 @@ def process_skill_memory_fine(
     rewrite_query: bool = True,
     oss_config: dict[str, Any] | None = None,
     skills_dir_config: dict[str, Any] | None = None,
+    history: list | None = None,
     **kwargs,
 ) -> list[TextualMemoryItem]:
     # Validate required configurations

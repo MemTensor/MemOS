@@ -879,7 +879,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     embedder=self.embedder,
                     oss_config=self.oss_config,
                     skills_dir_config=self.skills_dir_config,
-                    **kwargs,
+                    history=kwargs.get("history"),
                 )
 
                 # Collect results
@@ -963,7 +963,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for source in sources:
                 lang = getattr(source, "lang", "en")
                 items = self.multi_modal_parser.process_transfer(
-                    source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
+                    source,
+                    context_items=[raw_node],
+                    info=info,
+                    custom_tags=custom_tags,
+                    lang=lang,
+                    history=kwargs.get("history"),
                 )
                 fine_memory_items.extend(items)
         return fine_memory_items

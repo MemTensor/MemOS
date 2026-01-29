@@ -42,7 +42,7 @@ class BaseMemReader(ABC):
 
     @abstractmethod
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast"
+        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast", **kwargs
     ) -> list[list[TextualMemoryItem]]:
         """Various types of memories extracted from scene_data"""
 
