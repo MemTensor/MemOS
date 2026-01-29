@@ -76,10 +76,10 @@ class UniversalAPIEmbedder(BaseEmbedder):
                 logger.info(f"Embeddings request response: {response}")
                 return [r.embedding for r in response.data]
             except Exception as e:
-                logger.warning(
-                    f"Embeddings request ended with {type(e).__name__} error: {e}, try backup client"
-                )
                 if self.use_backup_client:
+                    logger.warning(
+                        f"Embeddings request ended with {type(e).__name__} error: {e}, try backup client"
+                    )
                     try:
 
                         async def _create_embeddings_backup():
