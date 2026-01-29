@@ -60,37 +60,21 @@ class SearchHandler(BaseHandler):
 
         # Use deepcopy to avoid modifying the original request object
         search_req_local = copy.deepcopy(search_req)
-        original_top_k = search_req_local.top_k
 
         # Expand top_k for deduplication (5x to ensure enough candidates)
         if search_req_local.dedup in ("sim", "mmr"):
-            search_req_local.top_k = original_top_k * 5
-
-        # Create new searcher with include_embedding for MMR deduplication
-        searcher_to_use = self.searcher
-        if search_req_local.dedup == "mmr":
-            text_mem = getattr(self.naive_mem_cube, "text_mem", None)
-            if text_mem is not None:
-                # Create new searcher instance with include_embedding=True
-                searcher_to_use = text_mem.get_searcher(
-                    manual_close_internet=not getattr(self.searcher, "internet_retriever", None),
-                    moscube=False,
-                    process_llm=getattr(self.mem_reader, "llm", None),
-                )
-                # Override include_embedding for this searcher
-                if hasattr(searcher_to_use, "graph_retriever"):
-                    searcher_to_use.graph_retriever.include_embedding = True
+            search_req_local.top_k = search_req_local.top_k * 5
 
         # Search and deduplicate
-        cube_view = self._build_cube_view(search_req_local, searcher_to_use)
+        cube_view = self._build_cube_view(search_req_local)
         results = cube_view.search_memories(search_req_local)
 
         if search_req_local.dedup == "sim":
-            results = self._dedup_text_memories(results, original_top_k)
+            results = self._dedup_text_memories(results, search_req.top_k)
             self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
             pref_top_k = getattr(search_req_local, "pref_top_k", 6)
-            results = self._mmr_dedup_text_memories(results, original_top_k, pref_top_k)
+            results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
             self._strip_embeddings(results)
 
         self.logger.info(
@@ -562,9 +546,8 @@ class SearchHandler(BaseHandler):
 
         return [search_req.user_id]
 
-    def _build_cube_view(self, search_req: APISearchRequest, searcher=None) -> MemCubeView:
+    def _build_cube_view(self, search_req: APISearchRequest) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(search_req)
-        searcher_to_use = searcher if searcher is not None else self.searcher
 
         if len(cube_ids) == 1:
             cube_id = cube_ids[0]
@@ -574,7 +557,7 @@ class SearchHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
-                searcher=searcher_to_use,
+                searcher=self.searcher,
                 deepsearch_agent=self.deepsearch_agent,
             )
         else:
@@ -585,7 +568,7 @@ class SearchHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
-                    searcher=searcher_to_use,
+                    searcher=self.searcher,
                     deepsearch_agent=self.deepsearch_agent,
                 )
                 for cube_id in cube_ids
