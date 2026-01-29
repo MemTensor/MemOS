@@ -963,12 +963,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             for source in sources:
                 lang = getattr(source, "lang", "en")
                 items = self.multi_modal_parser.process_transfer(
-                    source,
-                    context_items=[raw_node],
-                    info=info,
-                    custom_tags=custom_tags,
-                    lang=lang,
-                    history=kwargs.get("history"),
+                    source, context_items=[raw_node], info=info, custom_tags=custom_tags, lang=lang
                 )
                 fine_memory_items.extend(items)
         return fine_memory_items
