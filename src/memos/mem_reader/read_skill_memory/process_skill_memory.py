@@ -602,7 +602,7 @@ def process_skill_memory_fine(
 
     # recall - get related skill memories for each task separately (parallel)
     related_skill_memories_by_task = {}
-    with ContextThreadPoolExecutor(max_workers=min(len(task_chunks), 5)) as executor:
+    with ContextThreadPoolExecutor(max_workers=5) as executor:
         recall_futures = {
             executor.submit(
                 _recall_related_skill_memories,
@@ -628,7 +628,7 @@ def process_skill_memory_fine(
                 related_skill_memories_by_task[task_name] = []
 
     skill_memories = []
-    with ContextThreadPoolExecutor(max_workers=min(len(task_chunks), 5)) as executor:
+    with ContextThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(
                 _extract_skill_memory_by_llm,
