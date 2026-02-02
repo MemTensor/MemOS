@@ -68,6 +68,10 @@ class SearchHandler(BaseHandler):
         # Search and deduplicate
         cube_view = self._build_cube_view(search_req_local)
         results = cube_view.search_memories(search_req_local)
+        if not search_req_local.relativity:
+            search_req_local.relativity = 0
+        self.logger.info(f"[SearchHandler] Relativity filter: {search_req_local.relativity}")
+        results = self._apply_relativity_threshold(results, search_req_local.relativity)
 
         if search_req_local.dedup == "sim":
             results = self._dedup_text_memories(results, search_req.top_k)
@@ -85,6 +89,41 @@ class SearchHandler(BaseHandler):
             message="Search completed successfully",
             data=results,
         )
+
+    @staticmethod
+    def _apply_relativity_threshold(results: dict[str, Any], relativity: float) -> dict[str, Any]:
+
+        if relativity <= 0:
+            return results
+
+        for key in ("text_mem", "pref_mem"):
+            buckets = results.get(key)
+            if not isinstance(buckets, list):
+                continue
+
+            for bucket in buckets:
+                memories = bucket.get("memories")
+                if not isinstance(memories, list):
+                    continue
+
+                filtered: list[dict[str, Any]] = []
+                for mem in memories:
+                    if not isinstance(mem, dict):
+                        continue
+                    meta = mem.get("metadata", {})
+                    score = meta.get("relativity", 0.0) if isinstance(meta, dict) else 0.0
+                    try:
+                        score_val = float(score) if score is not None else 0.0
+                    except (TypeError, ValueError):
+                        score_val = 0.0
+                    if score_val >= relativity:
+                        filtered.append(mem)
+
+                bucket["memories"] = filtered
+                if "total_nodes" in bucket:
+                    bucket["total_nodes"] = len(filtered)
+
+        return results
 
     def _dedup_text_memories(self, results: dict[str, Any], target_top_k: int) -> dict[str, Any]:
         buckets = results.get("text_mem", [])
