@@ -502,7 +502,9 @@ class Neo4jGraphDB(BaseGraphDB):
             return result.single() is not None
 
     # Graph Query & Reasoning
-    def get_node(self, id: str, **kwargs) -> dict[str, Any] | None:
+    def get_node(
+            self, id: str, include_embedding: bool = False, **kwargs
+    ) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a node.
         Args:
@@ -510,18 +512,28 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             Dictionary of node fields, or None if not found.
         """
-        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+        logger.info(f"[get_node] id: {id}")
+        user_name = kwargs.get("user_name")
         where_user = ""
         params = {"id": id}
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
+        if user_name is not None:
             where_user = " AND n.user_name = $user_name"
             params["user_name"] = user_name
 
         query = f"MATCH (n:Memory) WHERE n.id = $id {where_user} RETURN n"
+        logger.info(f"[get_node] query: {query}")
 
         with self.driver.session(database=self.db_name) as session:
             record = session.run(query, params).single()
-            return self._parse_node(dict(record["n"])) if record else None
+            if not record:
+                return None
+
+            node_dict = dict(record["n"])
+            if include_embedding is False:
+                for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                    node_dict.pop(key, None)
+
+            return self._parse_node(node_dict)
 
     def get_nodes(self, ids: list[str], **kwargs) -> list[dict[str, Any]]:
         """
