@@ -106,7 +106,7 @@ class SearchHandler(BaseHandler):
                 if not isinstance(memories, list):
                     continue
 
-                filtered: list[dict[str, Any]] = []
+                filtered: list[dict[str, Any]]
                 for mem in memories:
                     if not isinstance(mem, dict):
                         continue
@@ -192,7 +192,7 @@ class SearchHandler(BaseHandler):
         3. Re-sort by original relevance for better generation quality
         """
         text_buckets = results.get("text_mem", [])
-        pref_buckets = results.get("preference", [])
+        pref_buckets = results.get("pref_mem", [])
 
         # Early return if no memories to deduplicate
         if not text_buckets and not pref_buckets:
