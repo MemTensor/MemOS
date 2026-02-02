@@ -110,6 +110,7 @@ class ChatHandler(BaseHandler):
         Raises:
             HTTPException: If chat fails
         """
+        self.logger.info(f"[ChatHandler] Chat Req is: {chat_req}")
         try:
             # Resolve readable cube IDs (for search)
             readable_cube_ids = chat_req.readable_cube_ids or [chat_req.user_id]
@@ -241,6 +242,7 @@ class ChatHandler(BaseHandler):
         Raises:
             HTTPException: If stream initialization fails
         """
+        self.logger.info(f"[ChatHandler] Chat Req is: {chat_req}")
         try:
 
             def generate_chat_response() -> Generator[str, None, None]:
@@ -422,6 +424,7 @@ class ChatHandler(BaseHandler):
         Raises:
             HTTPException: If stream initialization fails
         """
+        self.logger.info(f"[ChatHandler] Chat Req is: {chat_req}")
         try:
 
             def generate_chat_response() -> Generator[str, None, None]:
@@ -585,6 +588,8 @@ class ChatHandler(BaseHandler):
                     # get internet reference
                     internet_reference = self._get_internet_reference(
                         search_response.data.get("text_mem")[0]["memories"]
+                        if search_response.data.get("text_mem")
+                        else []
                     )
                     yield f"data: {json.dumps({'type': 'reference', 'data': reference}, ensure_ascii=False)}\n\n"
 
