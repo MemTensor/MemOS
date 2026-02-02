@@ -412,7 +412,6 @@ class FileContentParser(BaseMessageParser):
         # Extract file parameters (all are optional)
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
-        filename = file_info.get("filename", "")
         file_url_flag = False
         # Build content string based on available information
         content_parts = []
@@ -433,24 +432,11 @@ class FileContentParser(BaseMessageParser):
                 # Check if it looks like a URL
                 elif file_data.startswith(("http://", "https://", "file://")):
                     file_url_flag = True
-                    content_parts.append(f"[File URL: {file_data}]")
                 else:
                     # TODO: split into multiple memory items
                     content_parts.append(file_data)
             else:
                 content_parts.append(f"[File Data: {type(file_data).__name__}]")
-
-        # Priority 2: If file_id is provided, reference it
-        if file_id:
-            content_parts.append(f"[File ID: {file_id}]")
-
-        # Priority 3: If filename is provided, include it
-        if filename:
-            content_parts.append(f"[Filename: {filename}]")
-
-        # If no content can be extracted, create a placeholder
-        if not content_parts:
-            content_parts.append("[File: unknown]")
 
         # Combine content parts
         content = " ".join(content_parts)
