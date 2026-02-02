@@ -58,6 +58,23 @@ class UniversalAPIEmbedderConfig(BaseEmbedderConfig):
     base_url: str | None = Field(
         default=None, description="Optional base URL for custom or proxied endpoint"
     )
+    backup_client: bool = Field(
+        default=False,
+        description="Whether to use backup client",
+    )
+    backup_base_url: str | None = Field(
+        default=None, description="Optional backup base URL for custom or proxied endpoint"
+    )
+    backup_api_key: str | None = Field(
+        default=None, description="Optional backup API key for the embedding provider"
+    )
+    backup_headers_extra: dict[str, Any] | None = Field(
+        default=None,
+        description="Extra headers for the backup embedding model",
+    )
+    backup_model_name_or_path: str | None = Field(
+        default=None, description="Optional backup model name or path"
+    )
 
 
 class EmbedderConfigFactory(BaseConfig):

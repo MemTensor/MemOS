@@ -105,6 +105,17 @@ def _reconstruct_messages_from_memory_items(memory_items: list[TextualMemoryItem
     return reconstructed_messages
 
 
+def _preprocess_extract_messages(
+    history: MessageList, messages: MessageList
+) -> (MessageList, MessageList):
+    """Process data and check whether to extract skill memory"""
+    history = history[-20:]
+    if (len(history) + len(messages)) < 10:
+        # TODO: maybe directly return []
+        logger.warning("[PROCESS_SKILLS] Not enough messages to extract skill memory")
+    return history, messages
+
+
 def _add_index_to_message(messages: MessageList) -> MessageList:
     for i, message in enumerate(messages):
         message["idx"] = i
@@ -144,18 +155,27 @@ def _split_task_chunk_by_llm(llm: BaseLLM, messages: MessageList) -> dict[str, M
         message_indices = item["message_indices"]
         for indices in message_indices:
             # Validate that indices is a list/tuple with exactly 2 elements
-            if not isinstance(indices, list | tuple) or len(indices) != 2:
+            if isinstance(indices, list) and len(indices) == 1:
+                start, end = indices[0], indices[0] + 1
+            elif isinstance(indices, int):
+                start, end = indices, indices + 1
+            elif isinstance(indices, list) and len(indices) == 2:
+                start, end = indices[0], indices[1] + 1
+            else:
                 logger.warning(
                     f"[PROCESS_SKILLS] Invalid message indices format for task '{task_name}': {indices}, skipping"
                 )
                 continue
-            start, end = indices
-            task_chunks.setdefault(task_name, []).extend(messages[start : end + 1])
+            task_chunks.setdefault(task_name, []).extend(messages[start:end])
     return task_chunks
 
 
 def _extract_skill_memory_by_llm(
-    messages: MessageList, old_memories: list[TextualMemoryItem], llm: BaseLLM
+    messages: MessageList,
+    old_memories: list[TextualMemoryItem],
+    llm: BaseLLM,
+    chat_history: MessageList,
+    chat_history_max_length: int = 5000,
 ) -> dict[str, Any]:
     old_memories_dict = [skill_memory.model_dump() for skill_memory in old_memories]
     old_mem_references = [
@@ -169,7 +189,7 @@ def _extract_skill_memory_by_llm(
             "examples": mem["metadata"]["examples"],
             "tags": mem["metadata"]["tags"],
             "scripts": mem["metadata"].get("scripts"),
-            "others": mem["metadata"]["others"],
+            "others": mem["metadata"].get("others"),
         }
         for mem in old_memories_dict
     ]
@@ -179,17 +199,26 @@ def _extract_skill_memory_by_llm(
         [f"{message['role']}: {message['content']}" for message in messages]
     )
 
+    # Prepare history context
+    chat_history_context = "\n".join(
+        [f"{history['role']}: {history['content']}" for history in chat_history]
+    )
+    chat_history_context = chat_history_context[-chat_history_max_length:]
+
     # Prepare old memories context
     old_memories_context = json.dumps(old_mem_references, ensure_ascii=False, indent=2)
 
     # Prepare prompt
     lang = detect_lang(messages_context)
     template = SKILL_MEMORY_EXTRACTION_PROMPT_ZH if lang == "zh" else SKILL_MEMORY_EXTRACTION_PROMPT
-    prompt_content = template.replace("{old_memories}", old_memories_context).replace(
-        "{messages}", messages_context
+    prompt_content = (
+        template.replace("{old_memories}", old_memories_context)
+        .replace("{messages}", messages_context)
+        .replace("{chat_history}", chat_history_context)
     )
 
     prompt = [{"role": "user", "content": prompt_content}]
+    logger.info(f"[Skill Memory]: Prompt {prompt_content}")
 
     # Call LLM to extract skill memory with retry logic
     for attempt in range(3):
@@ -198,7 +227,8 @@ def _extract_skill_memory_by_llm(
             skills_llm = os.getenv("SKILLS_LLM", None)
             llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
             response_text = llm.generate(prompt, **llm_kwargs)
-            # Clean up response (remove markdown code blocks if present)
+            # Clean up response (remove Markdown code blocks if present)
+            logger.info(f"[Skill Memory]: response_text {response_text}")
             response_text = response_text.strip()
             response_text = response_text.replace("```json", "").replace("```", "").strip()
 
@@ -537,6 +567,11 @@ def process_skill_memory_fine(
         )
         return []
 
+    chat_history = kwargs.get("chat_history")
+    if not chat_history or not isinstance(chat_history, list):
+        chat_history = []
+        logger.warning("[PROCESS_SKILLS] History is None in Skills")
+
     # Validate skills_dir has required keys
     required_keys = ["skills_local_dir", "skills_oss_dir"]
     missing_keys = [key for key in required_keys if key not in skills_dir_config]
@@ -552,7 +587,13 @@ def process_skill_memory_fine(
         return []
 
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
+
+    chat_history, messages = _preprocess_extract_messages(chat_history, messages)
+    if not messages:
+        return []
+
     messages = _add_index_to_message(messages)
+    chat_history = _add_index_to_message(chat_history)
 
     task_chunks = _split_task_chunk_by_llm(llm, messages)
     if not task_chunks:
@@ -561,7 +602,7 @@ def process_skill_memory_fine(
 
     # recall - get related skill memories for each task separately (parallel)
     related_skill_memories_by_task = {}
-    with ContextThreadPoolExecutor(max_workers=min(len(task_chunks), 5)) as executor:
+    with ContextThreadPoolExecutor(max_workers=5) as executor:
         recall_futures = {
             executor.submit(
                 _recall_related_skill_memories,
@@ -587,13 +628,14 @@ def process_skill_memory_fine(
                 related_skill_memories_by_task[task_name] = []
 
     skill_memories = []
-    with ContextThreadPoolExecutor(max_workers=min(len(task_chunks), 5)) as executor:
+    with ContextThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(
                 _extract_skill_memory_by_llm,
                 messages,
                 related_skill_memories_by_task.get(task_type, []),
                 llm,
+                chat_history,
             ): task_type
             for task_type, messages in task_chunks.items()
         }
@@ -608,7 +650,7 @@ def process_skill_memory_fine(
 
     # write skills to file and get zip paths
     skill_memory_with_paths = []
-    with ContextThreadPoolExecutor(max_workers=min(len(skill_memories), 5)) as executor:
+    with ContextThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(
                 _write_skills_to_file, skill_memory, info, skills_dir_config
@@ -713,9 +755,11 @@ def process_skill_memory_fine(
             continue
 
     # TODO: deprecate this funtion and call
-    for skill_memory in skill_memory_items:
+    for skill_memory, skill_memory_item in zip(skill_memories, skill_memory_items, strict=False):
+        if skill_memory.get("update", False) and skill_memory.get("old_memory_id", ""):
+            continue
         add_id_to_mysql(
-            memory_id=skill_memory.id, mem_cube_id=kwargs.get("user_name", info.get("user_id", ""))
+            memory_id=skill_memory_item.id,
+            mem_cube_id=kwargs.get("user_name", info.get("user_id", "")),
         )
-
     return skill_memory_items
