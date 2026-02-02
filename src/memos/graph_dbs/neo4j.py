@@ -502,9 +502,7 @@ class Neo4jGraphDB(BaseGraphDB):
             return result.single() is not None
 
     # Graph Query & Reasoning
-    def get_node(
-            self, id: str, include_embedding: bool = False, **kwargs
-    ) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a node.
         Args:

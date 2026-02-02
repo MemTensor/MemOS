@@ -1072,7 +1072,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if not memory_ids:
             return {}
 
-        logger.info(f"[ neo4j_community get_user_names_by_memory_ids] Querying memory_ids {memory_ids}")
+        logger.info(
+            f"[ neo4j_community get_user_names_by_memory_ids] Querying memory_ids {memory_ids}"
+        )
 
         try:
             with self.driver.session(database=self.db_name) as session:
