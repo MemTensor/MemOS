@@ -15,6 +15,7 @@ from memos.memories.textual.item import (
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 from memos.utils import timed
 
 from .utils import detect_lang, get_text_splitter
@@ -90,6 +91,7 @@ class BaseMessageParser(ABC):
         """
         self.embedder = embedder
         self.llm = llm
+        self.tokenizer = FastTokenizer(use_jieba=True, use_stopwords=True)
 
     @abstractmethod
     def create_source(
