@@ -466,7 +466,12 @@ def find_best_unrelated_subgroup(sentences: list, similarity_matrix: list, bar: 
 
 
 def cosine_similarity_matrix(embeddings: list[list[float]]) -> list[list[float]]:
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    x_normalized = embeddings / norms
+    embeddings_array = np.asarray(embeddings)
+    norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+    # Handle zero vectors to avoid division by zero
+    norms[norms == 0] = 1.0
+    x_normalized = embeddings_array / norms
     similarity_matrix = np.dot(x_normalized, x_normalized.T)
+    # Handle any NaN or Inf values
+    similarity_matrix = np.nan_to_num(similarity_matrix, nan=0.0, posinf=0.0, neginf=0.0)
     return similarity_matrix

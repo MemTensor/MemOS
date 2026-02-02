@@ -7,6 +7,7 @@ from memos.memories.textual.item import TextualMemoryItem
 
 if TYPE_CHECKING:
     from memos.graph_dbs.base import BaseGraphDB
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 
 
 class BaseMemReader(ABC):
@@ -34,8 +35,14 @@ class BaseMemReader(ABC):
         """
 
     @abstractmethod
+    def set_searcher(self, searcher: "Searcher | None") -> None:
+        """
+        Set the searcher instance for recall operations.
+        """
+
+    @abstractmethod
     def get_memory(
-        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast"
+        self, scene_data: list, type: str, info: dict[str, Any], mode: str = "fast", **kwargs
     ) -> list[list[TextualMemoryItem]]:
         """Various types of memories extracted from scene_data"""
 

@@ -18,6 +18,7 @@ from memos.api.handlers.config_builders import (
     build_internet_retriever_config,
     build_llm_config,
     build_mem_reader_config,
+    build_nli_client_config,
     build_pref_adder_config,
     build_pref_extractor_config,
     build_pref_retriever_config,
@@ -42,12 +43,14 @@ from memos.memories.textual.prefer_text_memory.factory import (
 )
 from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
+from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 
 
 if TYPE_CHECKING:
     from memos.memories.textual.tree import TreeTextMemory
+from memos.extras.nli_model.client import NLIClient
 from memos.mem_agent.deepsearch_agent import DeepSearchMemAgent
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
@@ -161,6 +164,7 @@ def init_server() -> dict[str, Any]:
     llm_config = build_llm_config()
     chat_llm_config = build_chat_llm_config()
     embedder_config = build_embedder_config()
+    nli_client_config = build_nli_client_config()
     mem_reader_config = build_mem_reader_config()
     reranker_config = build_reranker_config()
     feedback_reranker_config = build_feedback_reranker_config()
@@ -186,6 +190,8 @@ def init_server() -> dict[str, Any]:
         else None
     )
     embedder = EmbedderFactory.from_config(embedder_config)
+    nli_client = NLIClient(base_url=nli_client_config["base_url"])
+    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
     mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
     reranker = RerankerFactory.from_config(reranker_config)
@@ -307,6 +313,9 @@ def init_server() -> dict[str, Any]:
     )
     logger.debug("Searcher created")
 
+    # Set searcher to mem_reader
+    mem_reader.set_searcher(searcher)
+
     # Initialize feedback server
     feedback_server = SimpleMemFeedback(
         llm=llm,
@@ -385,4 +394,6 @@ def init_server() -> dict[str, Any]:
         "feedback_server": feedback_server,
         "redis_client": redis_client,
         "deepsearch_agent": deepsearch_agent,
+        "nli_client": nli_client,
+        "memory_history_manager": memory_history_manager,
     }
