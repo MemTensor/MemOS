@@ -5596,7 +5596,9 @@ class PolarDBGraphDB(BaseGraphDB):
         Returns:
             int: Number of nodes recovered (updated).
         """
-        logger.info(f"recover_memory_by_mem_kube_id mem_kube_id:{mem_kube_id},delete_record_id:{delete_record_id}")
+        logger.info(
+            f"recover_memory_by_mem_kube_id mem_kube_id:{mem_kube_id},delete_record_id:{delete_record_id}"
+        )
         # Validate required parameters
         if not mem_kube_id:
             logger.warning(
