@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import traceback
 
 from dataclasses import dataclass
@@ -121,6 +122,7 @@ class SingleCubeView(MemCubeView):
             "pref_mem": [],
             "pref_note": "",
             "tool_mem": [],
+            "skill_mem": [],
         }
 
         # Determine search mode
@@ -265,7 +267,7 @@ class SingleCubeView(MemCubeView):
             info=info,
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in enhanced_memories
         ]
         return formatted_memories
@@ -277,7 +279,7 @@ class SingleCubeView(MemCubeView):
             search_req.query, user_id=user_context.mem_cube_id
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in deepsearch_results
         ]
         return formatted_memories
@@ -389,7 +391,7 @@ class SingleCubeView(MemCubeView):
             enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
         )
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in deduped_memories
         ]
 
@@ -475,11 +477,13 @@ class SingleCubeView(MemCubeView):
             plugin=plugin,
             search_tool_memory=search_req.search_tool_memory,
             tool_mem_top_k=search_req.tool_mem_top_k,
+            include_skill_memory=search_req.include_skill_memory,
+            skill_mem_top_k=search_req.skill_mem_top_k,
             dedup=search_req.dedup,
         )
 
         formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
+            format_memory_item(data, include_embedding=search_req.dedup in ("sim", "mmr"))
             for data in search_results
         ]
 
@@ -549,6 +553,7 @@ class SingleCubeView(MemCubeView):
                     timestamp=datetime.utcnow(),
                     user_name=self.cube_id,
                     info=add_req.info,
+                    chat_history=add_req.chat_history,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -790,7 +795,7 @@ class SingleCubeView(MemCubeView):
             extract_mode,
             add_req.mode,
         )
-
+        init_time = time.time()
         # Extract memories
         memories_local = self.mem_reader.get_memory(
             [add_req.messages],
@@ -803,6 +808,10 @@ class SingleCubeView(MemCubeView):
             },
             mode=extract_mode,
             user_name=user_context.mem_cube_id,
+            chat_history=add_req.chat_history,
+        )
+        self.logger.info(
+            f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"
         )
         flattened_local = [mm for m in memories_local for mm in m]
 

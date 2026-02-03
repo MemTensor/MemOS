@@ -149,6 +149,7 @@ class MultiModalParser:
             logger.warning(f"[MultiModalParser] No parser found for message: {message}")
             return []
 
+        logger.info(f"[{parser.__class__.__name__}] Parsing message in {mode} mode: {message}")
         # Parse using the appropriate parser
         try:
             return parser.parse(message, info, mode=mode, **kwargs)

@@ -112,12 +112,16 @@ def post_process_textual_mem(
     fact_mem = [
         mem
         for mem in text_formatted_mem
-        if mem["metadata"]["memory_type"] not in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+        if mem["metadata"]["memory_type"]
+        in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
     ]
     tool_mem = [
         mem
         for mem in text_formatted_mem
         if mem["metadata"]["memory_type"] in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+    ]
+    skill_mem = [
+        mem for mem in text_formatted_mem if mem["metadata"]["memory_type"] == "SkillMemory"
     ]
 
     memories_result["text_mem"].append(
@@ -132,6 +136,13 @@ def post_process_textual_mem(
             "cube_id": mem_cube_id,
             "memories": tool_mem,
             "total_nodes": len(tool_mem),
+        }
+    )
+    memories_result["skill_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": skill_mem,
+            "total_nodes": len(skill_mem),
         }
     )
     return memories_result
