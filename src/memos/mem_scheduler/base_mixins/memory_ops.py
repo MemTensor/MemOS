@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
@@ -11,7 +12,10 @@ from memos.memories.activation.vllmkv import VLLMKVCacheItem, VLLMKVCacheMemory
 from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.tree import TextualMemoryItem, TreeTextMemory
 from memos.templates.mem_scheduler_prompts import MEMORY_ASSEMBLY_TEMPLATE
-from memos.types.general_types import MemCubeID, UserID
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import MemCubeID, UserID
 
 
 logger = get_logger(__name__)
@@ -65,8 +69,6 @@ class BaseSchedulerMemoryMixin:
     ) -> None | list[TextualMemoryItem]:
         text_mem_base = mem_cube.text_mem
         if isinstance(text_mem_base, TreeTextMemory):
-            text_mem_base = text_mem_base
-
             query_db_manager = self.monitor.query_monitors[user_id][mem_cube_id]
             query_db_manager.sync_with_orm()
 
@@ -238,7 +240,9 @@ class BaseSchedulerMemoryMixin:
                 if original_composed_text_memory == new_text_memory:
                     logger.warning(
                         "Skipping memory update - new composition matches existing cache: %s",
-                        new_text_memory[:50] + "..." if len(new_text_memory) > 50 else new_text_memory,
+                        new_text_memory[:50] + "..."
+                        if len(new_text_memory) > 50
+                        else new_text_memory,
                     )
                     return
                 act_mem.delete_all()
@@ -300,7 +304,9 @@ class BaseSchedulerMemoryMixin:
                     user_id=user_id, mem_cube_id=mem_cube_id, mem_cube=mem_cube
                 )
 
-                activation_db_manager = self.monitor.activation_memory_monitors[user_id][mem_cube_id]
+                activation_db_manager = self.monitor.activation_memory_monitors[user_id][
+                    mem_cube_id
+                ]
                 activation_db_manager.sync_with_orm()
                 new_activation_memories = [
                     m.memory_text for m in activation_db_manager.obj.memories
@@ -312,7 +318,7 @@ class BaseSchedulerMemoryMixin:
                 )
                 for i, memory in enumerate(new_activation_memories[:5], 1):
                     logger.info(
-                        "Part of New Activation Memorires | %s/%s: %s",
+                        "Part of New Activation Memories | %s/%s: %s",
                         i,
                         len(new_activation_memories),
                         memory[:20],

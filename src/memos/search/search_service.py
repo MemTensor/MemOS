@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from memos.api.product_models import APISearchRequest
-from memos.types import SearchMode, UserContext
+
+if TYPE_CHECKING:
+    from memos.api.product_models import APISearchRequest
+    from memos.types import SearchMode, UserContext
 
 
 @dataclass(frozen=True)
@@ -18,7 +20,6 @@ class SearchContext:
 
 def build_search_context(
     search_req: APISearchRequest,
-    user_context: UserContext,
 ) -> SearchContext:
     target_session_id = search_req.session_id or "default_session"
     search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
@@ -44,7 +45,7 @@ def search_text_memories(
     """
     Shared text-memory search logic for API and scheduler paths.
     """
-    ctx = build_search_context(search_req=search_req, user_context=user_context)
+    ctx = build_search_context(search_req=search_req)
     return text_mem.search(
         query=search_req.query,
         user_name=user_context.mem_cube_id,

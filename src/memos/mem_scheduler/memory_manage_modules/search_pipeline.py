@@ -89,6 +89,6 @@ class SearchPipeline:
             else:
                 raise NotImplementedError(str(type(text_mem_base)))
         except Exception as e:
-            logger.error("Fail to search. The exeption is %s.", e, exc_info=True)
+            logger.error("Fail to search. The exception is %s.", e, exc_info=True)
             results = []
         return results

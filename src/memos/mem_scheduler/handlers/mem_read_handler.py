@@ -5,10 +5,11 @@ import contextlib
 import json
 import traceback
 
+from typing import TYPE_CHECKING
+
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     LONG_TERM_MEMORY_TYPE,
     MEM_READ_TASK_LABEL,
@@ -20,6 +21,9 @@ from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 class MemReadMessageHandler(BaseSchedulerHandler):
@@ -117,7 +121,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
         try:
             mem_reader = self.ctx.get_mem_reader()
             if mem_reader is None:
-                logger.warning("mem_reader not available in scheduler, skipping enhanced processing")
+                logger.warning(
+                    "mem_reader not available in scheduler, skipping enhanced processing"
+                )
                 return
 
             memory_items = []
@@ -126,7 +132,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
-                    logger.warning("[_process_memories_with_reader] Failed to get memory %s: %s", mem_id, e)
+                    logger.warning(
+                        "[_process_memories_with_reader] Failed to get memory %s: %s", mem_id, e
+                    )
                     continue
 
             if not memory_items:
@@ -212,7 +220,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         for item in flattened_memories:
                             metadata = getattr(item, "metadata", None)
                             file_ids = getattr(metadata, "file_ids", None) if metadata else None
-                            source_doc_id = file_ids[0] if isinstance(file_ids, list) and file_ids else None
+                            source_doc_id = (
+                                file_ids[0] if isinstance(file_ids, list) and file_ids else None
+                            )
                             kb_log_content.append(
                                 {
                                     "log_source": "KNOWLEDGE_BASE_LOG",
@@ -254,7 +264,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     else:
                         add_content_legacy: list[dict] = []
                         add_meta_legacy: list[dict] = []
-                        for item_id, item in zip(enhanced_mem_ids, flattened_memories, strict=False):
+                        for item_id, item in zip(
+                            enhanced_mem_ids, flattened_memories, strict=False
+                        ):
                             key = getattr(item.metadata, "key", None) or transform_name_to_key(
                                 name=item.memory
                             )
@@ -302,7 +314,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
             if delete_ids:
                 try:
                     text_mem.delete(delete_ids, user_name=user_name)
-                    logger.info("Delete raw/working mem_ids: %s for user_name: %s", delete_ids, user_name)
+                    logger.info(
+                        "Delete raw/working mem_ids: %s for user_name: %s", delete_ids, user_name
+                    )
                 except Exception as e:
                     logger.warning("Failed to delete some mem_ids %s: %s", delete_ids, e)
             else:
@@ -322,7 +336,9 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 cloud_env = is_cloud_env()
                 if cloud_env:
                     if not kb_log_content:
-                        trigger_source = info.get("trigger_source", "Messages") if info else "Messages"
+                        trigger_source = (
+                            info.get("trigger_source", "Messages") if info else "Messages"
+                        )
                         kb_log_content = [
                             {
                                 "log_source": "KNOWLEDGE_BASE_LOG",

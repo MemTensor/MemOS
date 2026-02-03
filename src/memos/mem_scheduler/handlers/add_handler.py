@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 
+from typing import TYPE_CHECKING
+
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
     LONG_TERM_MEMORY_TYPE,
@@ -12,7 +13,11 @@ from memos.mem_scheduler.schemas.task_schemas import (
 )
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube, is_cloud_env
-from memos.memories.textual.item import TextualMemoryItem
+
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+    from memos.memories.textual.item import TextualMemoryItem
 
 
 logger = get_logger(__name__)
@@ -233,7 +238,9 @@ class AddMessageHandler(BaseSchedulerHandler):
             events.append(event)
         logger.info("send_add_log_messages_to_local_env: %s", len(events))
         if events:
-            self.ctx.services.submit_web_logs(events, additional_log_info="send_add_log_messages_to_cloud_env")
+            self.ctx.services.submit_web_logs(
+                events, additional_log_info="send_add_log_messages_to_cloud_env"
+            )
 
     def send_add_log_messages_to_cloud_env(
         self,

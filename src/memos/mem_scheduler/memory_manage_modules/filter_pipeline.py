@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from memos.mem_scheduler.memory_manage_modules.memory_filter import MemoryFilter
-from memos.memories.textual.tree import TextualMemoryItem
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.tree import TextualMemoryItem
 
 
 class FilterPipeline:

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.base import BaseSchedulerModule
 from memos.mem_scheduler.memory_manage_modules.enhancement_pipeline import EnhancementPipeline
 from memos.mem_scheduler.memory_manage_modules.filter_pipeline import FilterPipeline
 from memos.mem_scheduler.memory_manage_modules.rerank_pipeline import RerankPipeline
 from memos.mem_scheduler.memory_manage_modules.search_pipeline import SearchPipeline
-from memos.memories.textual.item import TextualMemoryItem
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.item import TextualMemoryItem
 
 
 logger = get_logger(__name__)

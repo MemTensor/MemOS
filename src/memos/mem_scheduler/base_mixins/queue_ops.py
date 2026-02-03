@@ -3,14 +3,20 @@ from __future__ import annotations
 import multiprocessing
 import time
 
-from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from memos.context.context import ContextThread, RequestContext, get_current_context, get_current_trace_id, set_request_context
+from memos.context.context import (
+    ContextThread,
+    RequestContext,
+    get_current_context,
+    get_current_trace_id,
+    set_request_context,
+)
 from memos.log import get_logger
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.general_schemas import STARTUP_BY_PROCESS
+from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import TaskPriorityLevel
 from memos.mem_scheduler.utils.db_utils import get_utc_now
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
@@ -18,6 +24,9 @@ from memos.mem_scheduler.utils.monitor_event_utils import emit_monitor_event, to
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class BaseSchedulerQueueMixin:
@@ -174,7 +183,9 @@ class BaseSchedulerQueueMixin:
                                 msg,
                                 {
                                     "enqueue_ts": to_iso(enqueue_ts_obj),
-                                    "dequeue_ts": datetime.fromtimestamp(now, tz=timezone.utc).isoformat(),
+                                    "dequeue_ts": datetime.fromtimestamp(
+                                        now, tz=timezone.utc
+                                    ).isoformat(),
                                     "queue_wait_ms": queue_wait_ms,
                                     "event_duration_ms": queue_wait_ms,
                                     "total_duration_ms": queue_wait_ms,
@@ -324,7 +335,9 @@ class BaseSchedulerQueueMixin:
 
         return self.dispatcher.handlers
 
-    def register_handlers(self, handlers: dict[str, Callable[[list[ScheduleMessageItem]], None]]) -> None:
+    def register_handlers(
+        self, handlers: dict[str, Callable[[list[ScheduleMessageItem]], None]]
+    ) -> None:
         if not self.dispatcher:
             logger.warning("Dispatcher is not initialized, cannot register handlers")
             return

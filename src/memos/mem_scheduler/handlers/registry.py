@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from memos.mem_scheduler.handlers.context import SchedulerHandlerContext
 
 from memos.mem_scheduler.handlers.add_handler import AddMessageHandler
 from memos.mem_scheduler.handlers.answer_handler import AnswerMessageHandler
-from memos.mem_scheduler.handlers.context import SchedulerHandlerContext
 from memos.mem_scheduler.handlers.feedback_handler import FeedbackMessageHandler
 from memos.mem_scheduler.handlers.mem_read_handler import MemReadMessageHandler
 from memos.mem_scheduler.handlers.mem_reorganize_handler import MemReorganizeMessageHandler

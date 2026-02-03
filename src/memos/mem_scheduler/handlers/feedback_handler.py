@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import json
 
+from typing import TYPE_CHECKING
+
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import LONG_TERM_MEMORY_TYPE, USER_INPUT_TYPE
 from memos.mem_scheduler.utils.misc_utils import is_cloud_env
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 class FeedbackMessageHandler(BaseSchedulerHandler):
@@ -27,10 +31,14 @@ class FeedbackMessageHandler(BaseSchedulerHandler):
             try:
                 feedback_data = json.loads(content) if isinstance(content, str) else content
                 if not isinstance(feedback_data, dict):
-                    logger.error("Failed to decode feedback_data or it is not a dict: %s", feedback_data)
+                    logger.error(
+                        "Failed to decode feedback_data or it is not a dict: %s", feedback_data
+                    )
                     return
             except json.JSONDecodeError:
-                logger.error("Invalid JSON content for feedback message: %s", content, exc_info=True)
+                logger.error(
+                    "Invalid JSON content for feedback message: %s", content, exc_info=True
+                )
                 return
 
             task_id = feedback_data.get("task_id") or message.task_id

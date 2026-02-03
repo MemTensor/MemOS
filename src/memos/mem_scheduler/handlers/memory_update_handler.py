@@ -1,22 +1,27 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 from memos.mem_scheduler.schemas.task_schemas import (
     DEFAULT_MAX_QUERY_KEY_WORDS,
     MEM_UPDATE_TASK_LABEL,
+    QUERY_TASK_LABEL,
 )
 from memos.mem_scheduler.utils.filter_utils import is_all_chinese, is_all_english
 from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
-from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.tree import TreeTextMemory
-from memos.types import MemCubeID, UserID
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+    from memos.memories.textual.item import TextualMemoryItem
+    from memos.types import MemCubeID, UserID
 
 
 class MemoryUpdateHandler(BaseSchedulerHandler):
@@ -159,7 +164,7 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
         if self.ctx.get_enable_activation_memory():
             self.ctx.services.update_activation_memory_periodically(
                 interval_seconds=monitor.act_mem_update_interval,
-                label=MEM_UPDATE_TASK_LABEL,
+                label=QUERY_TASK_LABEL,
                 user_id=user_id,
                 mem_cube_id=mem_cube_id,
                 mem_cube=mem_cube,
@@ -203,7 +208,9 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
 
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
         monitor = self.ctx.get_monitor()
-        intent_result = monitor.detect_intent(q_list=queries, text_working_memory=text_working_memory)
+        intent_result = monitor.detect_intent(
+            q_list=queries, text_working_memory=text_working_memory
+        )
 
         time_trigger_flag = False
         if monitor.timed_trigger(

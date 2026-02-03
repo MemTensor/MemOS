@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from memos.log import get_logger
 from memos.mem_scheduler.utils.filter_utils import (
     filter_too_short_memories,
@@ -7,7 +9,10 @@ from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
 )
 from memos.mem_scheduler.utils.misc_utils import extract_json_obj
-from memos.memories.textual.item import TextualMemoryItem
+
+
+if TYPE_CHECKING:
+    from memos.memories.textual.item import TextualMemoryItem
 
 
 logger = get_logger(__name__)

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
-from memos.memories.textual.item import TextualMemoryItem
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+    from memos.mem_scheduler.schemas.monitor_schemas import MemoryMonitorItem
+    from memos.memories.textual.item import TextualMemoryItem
 
 
 @dataclass(frozen=True)

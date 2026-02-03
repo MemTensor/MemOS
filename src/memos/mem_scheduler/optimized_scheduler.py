@@ -142,7 +142,7 @@ class OptimizedScheduler(GeneralScheduler):
             ]
 
         # Get mem_cube for fast search
-        search_ctx = build_search_context(search_req=search_req, user_context=user_context)
+        search_ctx = build_search_context(search_req=search_req)
         search_priority = search_ctx.search_priority
         search_filter = search_ctx.search_filter
 

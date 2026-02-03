@@ -3,15 +3,19 @@ from __future__ import annotations
 import concurrent.futures
 import json
 
+from typing import TYPE_CHECKING
+
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import PREF_ADD_TASK_LABEL
 from memos.memories.textual.preference import PreferenceTextMemory
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 class PrefAddMessageHandler(BaseSchedulerHandler):
@@ -36,7 +40,9 @@ class PrefAddMessageHandler(BaseSchedulerHandler):
                 messages_list = json.loads(content)
                 info = message.info or {}
 
-                logger.info("Processing pref_add for user_id=%s, mem_cube_id=%s", user_id, mem_cube_id)
+                logger.info(
+                    "Processing pref_add for user_id=%s, mem_cube_id=%s", user_id, mem_cube_id
+                )
 
                 pref_mem = mem_cube.pref_mem
                 if pref_mem is None:

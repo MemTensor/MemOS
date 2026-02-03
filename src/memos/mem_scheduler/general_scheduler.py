@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from memos.configs.mem_scheduler import GeneralSchedulerConfig
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.handlers import (
     SchedulerHandlerContext,

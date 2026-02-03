@@ -5,17 +5,21 @@ import contextlib
 import json
 import traceback
 
+from typing import TYPE_CHECKING
+
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import LONG_TERM_MEMORY_TYPE, MEM_ORGANIZE_TASK_LABEL
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
-from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree import TreeTextMemory
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+    from memos.memories.textual.item import TextualMemoryItem
 
 
 class MemReorganizeMessageHandler(BaseSchedulerHandler):
@@ -80,16 +84,14 @@ class MemReorganizeMessageHandler(BaseSchedulerHandler):
                                     )
                                     for edge in edges:
                                         target = (
-                                            edge.get("to")
-                                            or edge.get("dst")
-                                            or edge.get("target")
+                                            edge.get("to") or edge.get("dst") or edge.get("target")
                                         )
                                         if target:
                                             merged_target_ids.add(target)
                         for item in mem_items:
-                            key = getattr(getattr(item, "metadata", {}), "key", None) or transform_name_to_key(
-                                getattr(item, "memory", "")
-                            )
+                            key = getattr(
+                                getattr(item, "metadata", {}), "key", None
+                            ) or transform_name_to_key(getattr(item, "memory", ""))
                             keys.append(key)
                             memcube_content.append(
                                 {"content": key or "(no key)", "ref_id": item.id, "type": "merged"}
@@ -132,7 +134,9 @@ class MemReorganizeMessageHandler(BaseSchedulerHandler):
                                 post_meta = {
                                     "ref_id": post_ref_id,
                                     "id": post_ref_id,
-                                    "key": getattr(getattr(merged_item, "metadata", {}), "key", None),
+                                    "key": getattr(
+                                        getattr(merged_item, "metadata", {}), "key", None
+                                    ),
                                     "memory": getattr(merged_item, "memory", None),
                                     "memory_type": getattr(
                                         getattr(merged_item, "metadata", {}), "memory_type", None
@@ -157,7 +161,8 @@ class MemReorganizeMessageHandler(BaseSchedulerHandler):
                             import hashlib
 
                             post_ref_id = (
-                                "merge-" + hashlib.md5("".join(sorted(mem_ids)).encode()).hexdigest()
+                                "merge-"
+                                + hashlib.md5("".join(sorted(mem_ids)).encode()).hexdigest()
                             )
                             post_meta["ref_id"] = post_ref_id
                             post_meta["id"] = post_ref_id
@@ -216,7 +221,9 @@ class MemReorganizeMessageHandler(BaseSchedulerHandler):
         try:
             mem_reader = self.ctx.get_mem_reader()
             if mem_reader is None:
-                logger.warning("mem_reader not available in scheduler, skipping enhanced processing")
+                logger.warning(
+                    "mem_reader not available in scheduler, skipping enhanced processing"
+                )
                 return
 
             memory_items = []
@@ -225,7 +232,9 @@ class MemReorganizeMessageHandler(BaseSchedulerHandler):
                     memory_item = text_mem.get(mem_id, user_name=user_name)
                     memory_items.append(memory_item)
                 except Exception as e:
-                    logger.warning("Failed to get memory %s: %s|%s", mem_id, e, traceback.format_exc())
+                    logger.warning(
+                        "Failed to get memory %s: %s|%s", mem_id, e, traceback.format_exc()
+                    )
                     continue
 
             if not memory_items:

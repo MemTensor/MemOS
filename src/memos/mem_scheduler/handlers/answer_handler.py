@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from memos.log import get_logger
 from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
-from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 from memos.mem_scheduler.schemas.task_schemas import (
     ANSWER_TASK_LABEL,
     NOT_APPLICABLE_TYPE,
@@ -12,6 +13,9 @@ from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
 
 
 class AnswerMessageHandler(BaseSchedulerHandler):

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+
+from typing import TYPE_CHECKING
 
 from memos.log import get_logger
 from memos.mem_scheduler.schemas.general_schemas import (
@@ -14,6 +15,9 @@ from memos.types.general_types import FINE_STRATEGY, FineStrategy
 
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class EnhancementPipeline:
@@ -114,6 +118,7 @@ class EnhancementPipeline:
                                 )
                             )
                     elif FINE_STRATEGY == FineStrategy.REWRITE:
+
                         def _parse_index_and_text(s: str) -> tuple[int | None, str]:
                             import re
 
@@ -153,8 +158,9 @@ class EnhancementPipeline:
                     )
                     return enhanced_memories, True
                 raise ValueError(
-                    "Fail to run memory enhancement; retry %s/%s; processed_text_memories: %s"
-                    % (attempt, max(1, retries) + 1, processed_text_memories)
+                    "Fail to run memory enhancement; retry "
+                    f"{attempt}/{max(1, retries) + 1}; "
+                    f"processed_text_memories: {processed_text_memories}"
                 )
             except Exception as e:
                 attempt += 1
@@ -237,8 +243,9 @@ class EnhancementPipeline:
 
                 all_success = True
                 failed_batches = 0
-                from memos.context.context import ContextThreadPoolExecutor
                 from concurrent.futures import as_completed
+
+                from memos.context.context import ContextThreadPoolExecutor
 
                 with ContextThreadPoolExecutor(max_workers=len(batches)) as executor:
                     future_map = {
@@ -249,7 +256,7 @@ class EnhancementPipeline:
                     }
                     enhanced_memories = []
                     for fut in as_completed(future_map):
-                        bi, s, e = future_map[fut]
+                        _bi, _s, _e = future_map[fut]
 
                         batch_memories, ok = fut.result()
                         enhanced_memories.extend(batch_memories)

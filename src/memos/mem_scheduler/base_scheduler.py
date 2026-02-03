@@ -1,21 +1,18 @@
+from __future__ import annotations
+
 import os
 import threading
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Union
-
-from sqlalchemy.engine import Engine
+from typing import TYPE_CHECKING
 
 from memos.configs.mem_scheduler import AuthConfig, BaseSchedulerConfig
+from memos.log import get_logger
 from memos.mem_scheduler.base_mixins import (
     BaseSchedulerMemoryMixin,
     BaseSchedulerQueueMixin,
     BaseSchedulerWebLogMixin,
 )
-from memos.llms.base import BaseLLM
-from memos.log import get_logger
-from memos.mem_cube.base import BaseMemCube
-from memos.mem_feedback.simple_feedback import SimpleMemFeedback
 from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
@@ -36,7 +33,6 @@ from memos.mem_scheduler.schemas.general_schemas import (
     DEFAULT_USE_REDIS_QUEUE,
     TreeTextMemory_SEARCH_METHOD,
 )
-from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
 from memos.mem_scheduler.task_schedule_modules.dispatcher import SchedulerDispatcher
 from memos.mem_scheduler.task_schedule_modules.orchestrator import SchedulerOrchestrator
 from memos.mem_scheduler.task_schedule_modules.task_queue import ScheduleTaskQueue
@@ -44,18 +40,21 @@ from memos.mem_scheduler.utils import metrics
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
 from memos.mem_scheduler.webservice_modules.rabbitmq_service import RabbitMQSchedulerModule
 from memos.mem_scheduler.webservice_modules.redis_service import RedisSchedulerModule
-from memos.memories.textual.tree import TreeTextMemory
-from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
-from memos.types.general_types import (
-    MemCubeID,
-    UserID,
-)
 
 
 if TYPE_CHECKING:
     import redis
 
+    from sqlalchemy.engine import Engine
+
+    from memos.llms.base import BaseLLM
+    from memos.mem_cube.base import BaseMemCube
+    from memos.mem_feedback.simple_feedback import SimpleMemFeedback
+    from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
+    from memos.memories.textual.tree import TreeTextMemory
+    from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
     from memos.reranker.http_bge import HTTPBGEReranker
+    from memos.types.general_types import MemCubeID, UserID
 
 
 logger = get_logger(__name__)
@@ -194,7 +193,7 @@ class BaseScheduler(
         process_llm: BaseLLM | None = None,
         db_engine: Engine | None = None,
         mem_reader=None,
-        redis_client: Union["redis.Redis", None] = None,
+        redis_client: redis.Redis | None = None,
     ):
         if process_llm is None:
             process_llm = chat_llm
@@ -365,6 +364,5 @@ class BaseScheduler(
             logger.warning(
                 f"Failed to initialize current_mem_cube from mem_cubes: {e}", exc_info=True
             )
-
 
     # Methods moved to mixins in mem_scheduler.base_mixins.
