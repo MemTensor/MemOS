@@ -92,7 +92,6 @@ class SearchHandler(BaseHandler):
 
     @staticmethod
     def _apply_relativity_threshold(results: dict[str, Any], relativity: float) -> dict[str, Any]:
-
         if relativity <= 0:
             return results
 
