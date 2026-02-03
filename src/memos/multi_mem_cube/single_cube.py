@@ -264,11 +264,12 @@ class SingleCubeView(MemCubeView):
             search_filter=search_filter,
             info=info,
         )
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
-            for data in enhanced_memories
-        ]
-        return formatted_memories
+        return self._postformat_memories(
+            enhanced_memories,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
     def _agentic_search(
         self, search_req: APISearchRequest, user_context: UserContext, max_thinking_depth: int
@@ -276,11 +277,12 @@ class SingleCubeView(MemCubeView):
         deepsearch_results = self.deepsearch_agent.run(
             search_req.query, user_id=user_context.mem_cube_id
         )
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
-            for data in deepsearch_results
-        ]
-        return formatted_memories
+        return self._postformat_memories(
+            deepsearch_results,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
     def _fine_search(
         self,
@@ -389,10 +391,12 @@ class SingleCubeView(MemCubeView):
         deduped_memories = (
             enhanced_memories if search_req.dedup == "no" else _dedup_by_content(enhanced_memories)
         )
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
-            for data in deduped_memories
-        ]
+        formatted_memories = self._postformat_memories(
+            deduped_memories,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
         logger.info(f"Found {len(formatted_memories)} memories for user {search_req.user_id}")
 
@@ -434,7 +438,7 @@ class SingleCubeView(MemCubeView):
                 },
                 search_filter=search_req.filter,
             )
-            return [format_memory_item(data) for data in results]
+            return self._postformat_memories(results, user_context.mem_cube_id)
         except Exception as e:
             self.logger.error("Error in _search_pref: %s; traceback: %s", e, traceback.format_exc())
             return []
@@ -479,12 +483,54 @@ class SingleCubeView(MemCubeView):
             dedup=search_req.dedup,
         )
 
-        formatted_memories = [
-            format_memory_item(data, include_embedding=search_req.dedup == "sim")
-            for data in search_results
-        ]
+        return self._postformat_memories(
+            search_results,
+            user_context.mem_cube_id,
+            include_embedding=search_req.dedup == "sim",
+            neighbor_discovery=search_req.neighbor_discovery,
+        )
 
-        return formatted_memories
+    def _postformat_memories(
+        self,
+        search_results: list,
+        user_name: str,
+        include_embedding: bool = False,
+        neighbor_discovery: bool = False,
+    ) -> list:
+        """
+        Postprocess search results.
+        """
+        final_items = []
+        if neighbor_discovery:
+            for item in search_results:
+                edges = []
+                if item.metadata.memory_type == "RawFileMemory":
+                    edges.extend(
+                        self.graph_store.get_edges(
+                            item.id, type="PRECEDING", direction="OUTGOING", user_name=user_name
+                        )
+                    )
+                    edges.extend(
+                        self.graph_store.get_edges(
+                            item.id, type="FOLLOWING", direction="OUTGOING", user_name=user_name
+                        )
+                    )
+
+                    for edge in edges:
+                        chunk_target_id = edge.get("to")
+                        item_neighbor = self.graph_store.get_node(chunk_target_id)
+                        if item_neighbor:
+                            final_items.append(item_neighbor)
+
+                    final_items.append(item)
+                else:
+                    final_items.append(item)
+        else:
+            final_items = search_results
+
+        return [
+            format_memory_item(data, include_embedding=include_embedding) for data in final_items
+        ]
 
     def _mix_search(
         self,

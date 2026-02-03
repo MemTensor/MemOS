@@ -431,6 +431,13 @@ class APISearchRequest(BaseRequest):
         description="Source of the search query [plugin will router diff search]",
     )
 
+    neighbor_discovery: bool = Field(
+        False,
+        description="Whether to enable neighbor discovery. "
+        "If enabled, the system will automatically recall neighbor chunks "
+        "relevant to the query. Default: False.",
+    )
+
     @model_validator(mode="after")
     def _convert_deprecated_fields(self) -> "APISearchRequest":
         """
