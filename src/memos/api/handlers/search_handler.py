@@ -106,7 +106,7 @@ class SearchHandler(BaseHandler):
                 if not isinstance(memories, list):
                     continue
 
-                filtered: list[dict[str, Any]]
+                filtered: list[dict[str, Any]] = []
                 for mem in memories:
                     if not isinstance(mem, dict):
                         continue
