@@ -838,8 +838,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if isinstance(scene_data_info, list):
             # Parse each message in the list
             all_memory_items = []
-            # Use thread pool to parse each message in parallel
+            # Use thread pool to parse each message in parallel, but keep the original order
             with ContextThreadPoolExecutor(max_workers=30) as executor:
+                # submit tasks and keep the original order
                 futures = [
                     executor.submit(
                         self.multi_modal_parser.parse,
@@ -851,7 +852,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     )
                     for msg in scene_data_info
                 ]
-                for future in concurrent.futures.as_completed(futures):
+                # collect results in original order
+                for future in futures:
                     try:
                         items = future.result()
                         all_memory_items.extend(items)
