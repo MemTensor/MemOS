@@ -5,12 +5,14 @@ Protected by master key or admin scope.
 """
 
 import os
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 import memos.log
+
 from memos.api.middleware.auth import require_scope, verify_api_key
 from memos.api.utils.api_keys import (
     create_api_key_in_db,
@@ -18,6 +20,7 @@ from memos.api.utils.api_keys import (
     list_api_keys,
     revoke_api_key,
 )
+
 
 logger = memos.log.get_logger(__name__)
 
@@ -75,7 +78,7 @@ def _get_db_connection():
 )
 def create_key(
     request: CreateKeyRequest,
-    auth: dict = Depends(verify_api_key),
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """
     Create a new API key for a user.
@@ -111,7 +114,7 @@ def create_key(
             conn.close()
     except Exception as e:
         logger.error(f"Failed to create API key: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create API key")
+        raise HTTPException(status_code=500, detail="Failed to create API key") from e
 
 
 @router.get(
@@ -122,7 +125,7 @@ def create_key(
 )
 def list_keys(
     user_name: str | None = None,
-    auth: dict = Depends(verify_api_key),
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """
     List all API keys (admin) or keys for a specific user.
@@ -141,7 +144,7 @@ def list_keys(
             conn.close()
     except Exception as e:
         logger.error(f"Failed to list API keys: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list API keys")
+        raise HTTPException(status_code=500, detail="Failed to list API keys") from e
 
 
 @router.delete(
@@ -152,7 +155,7 @@ def list_keys(
 )
 def revoke_key(
     key_id: str,
-    auth: dict = Depends(verify_api_key),
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """
     Revoke an API key by ID.
@@ -174,7 +177,7 @@ def revoke_key(
         raise
     except Exception as e:
         logger.error(f"Failed to revoke API key: {e}")
-        raise HTTPException(status_code=500, detail="Failed to revoke API key")
+        raise HTTPException(status_code=500, detail="Failed to revoke API key") from e
 
 
 @router.post(
@@ -184,7 +187,7 @@ def revoke_key(
     dependencies=[Depends(require_scope("admin"))],
 )
 def generate_new_master_key(
-    auth: dict = Depends(verify_api_key),
+    auth: dict = Depends(verify_api_key),  # noqa: B008
 ):
     """
     Generate a new master key.

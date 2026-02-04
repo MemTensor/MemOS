@@ -7,14 +7,17 @@ Falls back to in-memory limiting if Redis is unavailable.
 
 import os
 import time
+
 from collections import defaultdict
-from typing import Callable
+from collections.abc import Callable
+from typing import ClassVar
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 import memos.log
+
 
 logger = memos.log.get_logger(__name__)
 
@@ -131,7 +134,11 @@ def _check_rate_limit_memory(key: str) -> tuple[bool, int, int]:
     current_count = len(_memory_store[key])
 
     if current_count >= RATE_LIMIT:
-        reset_time = int(min(_memory_store[key]) + RATE_WINDOW) if _memory_store[key] else int(now + RATE_WINDOW)
+        reset_time = (
+            int(min(_memory_store[key]) + RATE_WINDOW)
+            if _memory_store[key]
+            else int(now + RATE_WINDOW)
+        )
         return False, 0, reset_time
 
     # Add current request
@@ -156,7 +163,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """
 
     # Paths exempt from rate limiting
-    EXEMPT_PATHS = {"/health", "/openapi.json", "/docs", "/redoc"}
+    EXEMPT_PATHS: ClassVar[set[str]] = {"/health", "/openapi.json", "/docs", "/redoc"}
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # Skip rate limiting for exempt paths

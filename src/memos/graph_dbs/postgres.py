@@ -11,6 +11,7 @@ Tables:
 
 import json
 import time
+
 from contextlib import suppress
 from datetime import datetime
 from typing import Any, Literal
@@ -19,6 +20,7 @@ from memos.configs.graph_db import PostgresGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -199,7 +201,8 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 # Find IDs to delete (older than the keep_latest entries)
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     WITH ranked AS (
                         SELECT id, ROW_NUMBER() OVER (ORDER BY updated_at DESC) as rn
                         FROM {self.schema}.memories
@@ -207,24 +210,34 @@ class PostgresGraphDB(BaseGraphDB):
                         AND properties->>'memory_type' = %s
                     )
                     SELECT id FROM ranked WHERE rn > %s
-                """, (user_name, memory_type, keep_latest))
+                """,
+                    (user_name, memory_type, keep_latest),
+                )
 
                 ids_to_delete = [row[0] for row in cur.fetchall()]
 
                 if ids_to_delete:
                     # Delete edges first
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         DELETE FROM {self.schema}.edges
                         WHERE source_id = ANY(%s) OR target_id = ANY(%s)
-                    """, (ids_to_delete, ids_to_delete))
+                    """,
+                        (ids_to_delete, ids_to_delete),
+                    )
 
                     # Delete nodes
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         DELETE FROM {self.schema}.memories
                         WHERE id = ANY(%s)
-                    """, (ids_to_delete,))
+                    """,
+                        (ids_to_delete,),
+                    )
 
-                    logger.info(f"Removed {len(ids_to_delete)} oldest {memory_type} memories for user {user_name}")
+                    logger.info(
+                        f"Removed {len(ids_to_delete)} oldest {memory_type} memories for user {user_name}"
+                    )
         finally:
             self._put_conn(conn)
 
@@ -243,15 +256,15 @@ class PostgresGraphDB(BaseGraphDB):
         # Serialize sources if present
         if metadata.get("sources"):
             metadata["sources"] = [
-                json.dumps(s) if not isinstance(s, str) else s
-                for s in metadata["sources"]
+                json.dumps(s) if not isinstance(s, str) else s for s in metadata["sources"]
             ]
 
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
                 if embedding:
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         INSERT INTO {self.schema}.memories
                         (id, memory, properties, embedding, user_name, created_at, updated_at)
                         VALUES (%s, %s, %s, %s::vector, %s, %s, %s)
@@ -260,9 +273,20 @@ class PostgresGraphDB(BaseGraphDB):
                             properties = EXCLUDED.properties,
                             embedding = EXCLUDED.embedding,
                             updated_at = EXCLUDED.updated_at
-                    """, (id, memory, json.dumps(metadata), embedding, user_name, created_at, updated_at))
+                    """,
+                        (
+                            id,
+                            memory,
+                            json.dumps(metadata),
+                            embedding,
+                            user_name,
+                            created_at,
+                            updated_at,
+                        ),
+                    )
                 else:
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         INSERT INTO {self.schema}.memories
                         (id, memory, properties, user_name, created_at, updated_at)
                         VALUES (%s, %s, %s, %s, %s, %s)
@@ -270,13 +294,13 @@ class PostgresGraphDB(BaseGraphDB):
                             memory = EXCLUDED.memory,
                             properties = EXCLUDED.properties,
                             updated_at = EXCLUDED.updated_at
-                    """, (id, memory, json.dumps(metadata), user_name, created_at, updated_at))
+                    """,
+                        (id, memory, json.dumps(metadata), user_name, created_at, updated_at),
+                    )
         finally:
             self._put_conn(conn)
 
-    def add_nodes_batch(
-        self, nodes: list[dict[str, Any]], user_name: str | None = None
-    ) -> None:
+    def add_nodes_batch(self, nodes: list[dict[str, Any]], user_name: str | None = None) -> None:
         """Batch add memory nodes."""
         for node in nodes:
             self.add_node(
@@ -308,17 +332,23 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 if embedding:
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         UPDATE {self.schema}.memories
                         SET memory = %s, properties = %s, embedding = %s::vector, updated_at = NOW()
                         WHERE id = %s AND user_name = %s
-                    """, (memory, json.dumps(props), embedding, id, user_name))
+                    """,
+                        (memory, json.dumps(props), embedding, id, user_name),
+                    )
                 else:
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         UPDATE {self.schema}.memories
                         SET memory = %s, properties = %s, updated_at = NOW()
                         WHERE id = %s AND user_name = %s
-                    """, (memory, json.dumps(props), id, user_name))
+                    """,
+                        (memory, json.dumps(props), id, user_name),
+                    )
         finally:
             self._put_conn(conn)
 
@@ -329,15 +359,21 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 # Delete edges
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     DELETE FROM {self.schema}.edges
                     WHERE source_id = %s OR target_id = %s
-                """, (id, id))
+                """,
+                    (id, id),
+                )
                 # Delete node
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     DELETE FROM {self.schema}.memories
                     WHERE id = %s AND user_name = %s
-                """, (id, user_name))
+                """,
+                    (id, user_name),
+                )
         finally:
             self._put_conn(conn)
 
@@ -350,10 +386,13 @@ class PostgresGraphDB(BaseGraphDB):
                 cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {cols} FROM {self.schema}.memories
                     WHERE id = %s AND user_name = %s
-                """, (id, user_name))
+                """,
+                    (id, user_name),
+                )
                 row = cur.fetchone()
                 if not row:
                     return None
@@ -374,10 +413,13 @@ class PostgresGraphDB(BaseGraphDB):
                 cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {cols} FROM {self.schema}.memories
                     WHERE id = ANY(%s) AND user_name = %s
-                """, (ids, user_name))
+                """,
+                    (ids, user_name),
+                )
                 return [self._parse_row(row, include_embedding) for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
@@ -407,11 +449,14 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     INSERT INTO {self.schema}.edges (source_id, target_id, edge_type)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
-                """, (source_id, target_id, type))
+                """,
+                    (source_id, target_id, type),
+                )
         finally:
             self._put_conn(conn)
 
@@ -422,10 +467,13 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     DELETE FROM {self.schema}.edges
                     WHERE source_id = %s AND target_id = %s AND edge_type = %s
-                """, (source_id, target_id, type))
+                """,
+                    (source_id, target_id, type),
+                )
         finally:
             self._put_conn(conn)
 
@@ -434,11 +482,14 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT 1 FROM {self.schema}.edges
                     WHERE source_id = %s AND target_id = %s AND edge_type = %s
                     LIMIT 1
-                """, (source_id, target_id, type))
+                """,
+                    (source_id, target_id, type),
+                )
                 return cur.fetchone() is not None
         finally:
             self._put_conn(conn)
@@ -455,21 +506,30 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 if direction == "out":
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT target_id FROM {self.schema}.edges
                         WHERE source_id = %s AND edge_type = %s
-                    """, (id, type))
+                    """,
+                        (id, type),
+                    )
                 elif direction == "in":
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT source_id FROM {self.schema}.edges
                         WHERE target_id = %s AND edge_type = %s
-                    """, (id, type))
+                    """,
+                        (id, type),
+                    )
                 else:  # both
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT target_id FROM {self.schema}.edges WHERE source_id = %s AND edge_type = %s
                         UNION
                         SELECT source_id FROM {self.schema}.edges WHERE target_id = %s AND edge_type = %s
-                    """, (id, type, id, type))
+                    """,
+                        (id, type, id, type),
+                    )
                 return [row[0] for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
@@ -479,7 +539,8 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     WITH RECURSIVE path AS (
                         SELECT source_id, target_id, ARRAY[source_id] as nodes, 1 as depth
                         FROM {self.schema}.edges
@@ -495,7 +556,9 @@ class PostgresGraphDB(BaseGraphDB):
                     WHERE target_id = %s
                     ORDER BY depth
                     LIMIT 1
-                """, (source_id, max_depth, target_id))
+                """,
+                    (source_id, max_depth, target_id),
+                )
                 row = cur.fetchone()
                 return row[0] if row else []
         finally:
@@ -506,7 +569,8 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     WITH RECURSIVE subgraph AS (
                         SELECT %s::text as node_id, 0 as level
                         UNION
@@ -517,7 +581,9 @@ class PostgresGraphDB(BaseGraphDB):
                         WHERE s.level < %s
                     )
                     SELECT DISTINCT node_id FROM subgraph
-                """, (center_id, depth))
+                """,
+                    (center_id, depth),
+                )
                 return [row[0] for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
@@ -562,7 +628,9 @@ class PostgresGraphDB(BaseGraphDB):
             conditions.append("properties->>'status' = %s")
             params.append(status)
         else:
-            conditions.append("(properties->>'status' = 'activated' OR properties->>'status' IS NULL)")
+            conditions.append(
+                "(properties->>'status' = 'activated' OR properties->>'status' IS NULL)"
+            )
 
         if search_filter:
             for k, v in search_filter.items():
@@ -575,13 +643,16 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT id, 1 - (embedding <=> %s::vector) as score
                     FROM {self.schema}.memories
                     WHERE {where_clause}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
-                """, (vector, *params, vector, top_k))
+                """,
+                    (vector, *params, vector, top_k),
+                )
 
                 results = []
                 for row in cur.fetchall():
@@ -639,10 +710,13 @@ class PostgresGraphDB(BaseGraphDB):
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT id FROM {self.schema}.memories
                     WHERE {where_clause}
-                """, params)
+                """,
+                    params,
+                )
                 return [row[0] for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
@@ -674,10 +748,13 @@ class PostgresGraphDB(BaseGraphDB):
                 cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {cols} FROM {self.schema}.memories
                     WHERE {where_clause}
-                """, params)
+                """,
+                    params,
+                )
                 return [self._parse_row(row, include_embedding) for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
@@ -691,7 +768,8 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 cols = "m.id, m.memory, m.properties, m.created_at, m.updated_at"
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {cols}
                     FROM {self.schema}.memories m
                     LEFT JOIN {self.schema}.edges e1 ON m.id = e1.source_id
@@ -701,7 +779,9 @@ class PostgresGraphDB(BaseGraphDB):
                       AND m.properties->>'status' = 'activated'
                       AND e1.id IS NULL
                       AND e2.id IS NULL
-                """, (scope, user_name))
+                """,
+                    (scope, user_name),
+                )
                 return [self._parse_row(row, False) for row in cur.fetchall()]
         finally:
             self._put_conn(conn)
@@ -712,7 +792,6 @@ class PostgresGraphDB(BaseGraphDB):
 
     def deduplicate_nodes(self) -> None:
         """Not implemented - handled at application level."""
-        pass
 
     def get_grouped_counts(
         self,
@@ -739,13 +818,11 @@ class PostgresGraphDB(BaseGraphDB):
 
         # Build SELECT and GROUP BY clauses
         # Fields come from JSONB properties column
-        select_fields = ", ".join([
-            f"properties->>'{field}' AS {field}" for field in group_fields
-        ])
+        select_fields = ", ".join([f"properties->>'{field}' AS {field}" for field in group_fields])
         group_by = ", ".join([f"properties->>'{field}'" for field in group_fields])
 
         # Build WHERE clause
-        conditions = [f"user_name = %s"]
+        conditions = ["user_name = %s"]
         query_params = [user_name]
 
         if where_clause:
@@ -797,22 +874,31 @@ class PostgresGraphDB(BaseGraphDB):
         try:
             with conn.cursor() as cur:
                 # Get all node IDs for user
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT id FROM {self.schema}.memories WHERE user_name = %s
-                """, (user_name,))
+                """,
+                    (user_name,),
+                )
                 ids = [row[0] for row in cur.fetchall()]
 
                 if ids:
                     # Delete edges
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         DELETE FROM {self.schema}.edges
                         WHERE source_id = ANY(%s) OR target_id = ANY(%s)
-                    """, (ids, ids))
+                    """,
+                        (ids, ids),
+                    )
 
                 # Delete nodes
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     DELETE FROM {self.schema}.memories WHERE user_name = %s
-                """, (user_name,))
+                """,
+                    (user_name,),
+                )
                 logger.info(f"Cleared all data for user {user_name}")
         finally:
             self._put_conn(conn)
@@ -827,21 +913,27 @@ class PostgresGraphDB(BaseGraphDB):
                 cols = "id, memory, properties, created_at, updated_at"
                 if include_embedding:
                     cols += ", embedding"
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT {cols} FROM {self.schema}.memories
                     WHERE user_name = %s
                     ORDER BY created_at DESC
-                """, (user_name,))
+                """,
+                    (user_name,),
+                )
                 nodes = [self._parse_row(row, include_embedding) for row in cur.fetchall()]
 
                 # Get edges
                 node_ids = [n["id"] for n in nodes]
                 if node_ids:
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT source_id, target_id, edge_type
                         FROM {self.schema}.edges
                         WHERE source_id = ANY(%s) OR target_id = ANY(%s)
-                    """, (node_ids, node_ids))
+                    """,
+                        (node_ids, node_ids),
+                    )
                     edges = [
                         {"source": row[0], "target": row[1], "type": row[2]}
                         for row in cur.fetchall()
