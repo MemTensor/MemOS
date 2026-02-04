@@ -24,60 +24,46 @@ body {
 #stage {
   position: relative;
   height: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
-#backdrop {
-  position: absolute;
-  inset: 0;
-  background: url("./assets/bg_trailhead.svg") center / cover no-repeat;
-  filter: saturate(1.1) contrast(1.05);
-  image-rendering: pixelated;
-}
 
 #game-root {
-  position: absolute;
-  left: 0;
-  top: 0;
-  right: 0;
-  height: 45%;
+  flex: 1 1 auto;
+  min-height: 320px;
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
+  padding: 2px 8px 2px;
 }
 
 canvas {
   image-rendering: pixelated;
 }
 
-#ui-root {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  pointer-events: none;
-}
 
 #titlebar {
   pointer-events: auto;
-  padding: 10px 12px 8px;
+  padding: 6px 12px 4px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
 }
 
 .title {
   color: var(--accent);
-  font-size: 14px;
+  font-size: 13px;
 }
 .sub {
-  margin-top: 6px;
+  margin-top: 3px;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.4;
 }
 #status {
-  margin-top: 8px;
+  margin-top: 4px;
   color: var(--text);
   font-size: 10px;
   line-height: 1.5;
@@ -85,14 +71,14 @@ canvas {
 
 /* NEW: party status strip */
 .party-strip {
-  margin-top: 10px;
+  margin-top: 4px;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
-  padding-bottom: 6px;
+  padding-bottom: 3px;
 }
 .party-strip::-webkit-scrollbar {
-  height: 10px;
+  height: 8px;
 }
 .party-strip::-webkit-scrollbar-thumb {
   background: rgba(124, 242, 255, 0.25);
@@ -101,7 +87,7 @@ canvas {
 
 .party-card {
   flex: 0 0 auto;
-  width: 240px;
+  width: 200px;
   border: 2px solid var(--border);
   background: rgba(10, 16, 28, 0.72);
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
@@ -118,50 +104,50 @@ canvas {
 
 .party-head {
   display: grid;
-  grid-template-columns: 44px 1fr;
+  grid-template-columns: 36px 1fr;
   gap: 8px;
   align-items: center;
 }
 .party-ava {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   image-rendering: pixelated;
   border: 2px solid rgba(255, 255, 255, 0.08);
   background: rgba(0, 0, 0, 0.2);
 }
 .party-name {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text);
   line-height: 1.3;
 }
 .party-sub {
-  margin-top: 4px;
+  margin-top: 3px;
   font-size: 9px;
   color: var(--muted);
   line-height: 1.5;
 }
 
 .stat {
-  margin-top: 8px;
+  margin-top: 5px;
 }
 .stat-row {
   display: grid;
-  grid-template-columns: 70px 1fr 32px;
+  grid-template-columns: 62px 1fr 28px;
   gap: 8px;
   align-items: center;
-  margin-top: 6px;
+  margin-top: 5px;
 }
 .stat-label {
-  font-size: 9px;
+  font-size: 8px;
   color: var(--muted);
 }
 .stat-val {
-  font-size: 9px;
+  font-size: 8px;
   color: var(--text);
   text-align: right;
 }
 .stat-bar {
-  height: 10px;
+  height: 8px;
   border: 2px solid rgba(255, 255, 255, 0.08);
   background: rgba(0, 0, 0, 0.25);
   position: relative;
@@ -183,20 +169,23 @@ canvas {
 }
 
 #panels {
+  flex: 0 0 auto;
   pointer-events: auto;
   margin-top: auto;
   display: grid;
   grid-template-columns: 320px 1fr 520px;
-  gap: 10px;
-  padding: 10px 12px 12px;
+  gap: 6px;
+  padding: 6px 12px 10px;
 }
 
 .panel {
   background: var(--panel);
   border: 2px solid var(--border);
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
-  padding: 10px;
-  min-height: 280px;
+  padding: 8px;
+  min-height: 0;
+  max-height: 42vh;
+  overflow: hidden;
 }
 
 .panel-title {
@@ -208,7 +197,7 @@ canvas {
 .row {
   display: flex;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 5px;
   align-items: center;
 }
 
@@ -239,7 +228,7 @@ input:focus {
 }
 
 .hint {
-  margin-top: 10px;
+  margin-top: 5px;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
@@ -263,7 +252,9 @@ input:focus {
 }
 
 #chat {
-  height: 240px;
+  height: 22vh;
+  min-height: 140px;
+  max-height: 260px;
   overflow: auto;
   background: rgba(0, 0, 0, 0.25);
   border: 2px solid rgba(255, 255, 255, 0.08);

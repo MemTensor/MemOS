@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from aotai_hike.adapters.background import StaticBackgroundProvider
+from aotai_hike.adapters.background import BackgroundRequest, StaticBackgroundProvider
 from aotai_hike.adapters.companion import MockCompanionBrain
 from aotai_hike.adapters.memory import InMemoryMemoryAdapter
 from aotai_hike.schemas import (
     ActRequest,
     ActResponse,
+    BackgroundAsset,
     MapResponse,
     RoleUpsertRequest,
     RoleUpsertResponse,
@@ -24,10 +25,11 @@ from aotai_hike.world.map_data import AO_TAI_NODES
 router = APIRouter(prefix="/api/demo/ao-tai", tags=["AoTai Demo"])
 
 _sessions = InMemorySessionStore()
+_background = StaticBackgroundProvider()
 _game = GameService(
     memory=InMemoryMemoryAdapter(),
     companion=MockCompanionBrain(),
-    background=StaticBackgroundProvider(),
+    background=_background,
 )
 
 
@@ -41,6 +43,11 @@ def _get_ws(session_id: str) -> WorldState:
 @router.get("/map", response_model=MapResponse)
 def get_map():
     return MapResponse(nodes=AO_TAI_NODES)
+
+
+@router.get("/background/{scene_id}", response_model=BackgroundAsset)
+def get_background(scene_id: str):
+    return _background.get_background(BackgroundRequest(scene_id=scene_id))
 
 
 @router.post("/session/new", response_model=SessionNewResponse)
