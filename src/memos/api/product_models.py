@@ -46,6 +46,7 @@ class GetMemoryPlaygroundRequest(BaseRequest):
     )
     mem_cube_ids: list[str] | None = Field(None, description="Cube IDs")
     search_query: str | None = Field(None, description="Search query")
+    search_type: Literal["embedding", "fulltext"] = Field("fulltext", description="Search type")
 
 
 # Start API Models
@@ -1224,3 +1225,26 @@ class ExistMemCubeIdRequest(BaseRequest):
 
 class ExistMemCubeIdResponse(BaseResponse[dict[str, bool]]):
     """Response model for checking if mem cube id exists."""
+
+
+class DeleteMemoryByRecordIdRequest(BaseRequest):
+    """Request model for deleting memory by record id."""
+
+    mem_cube_id: str = Field(..., description="Mem cube ID")
+    record_id: str = Field(..., description="Record ID")
+    hard_delete: bool = Field(False, description="Hard delete")
+
+
+class DeleteMemoryByRecordIdResponse(BaseResponse[dict]):
+    """Response model for deleting memory by record id."""
+
+
+class RecoverMemoryByRecordIdRequest(BaseRequest):
+    """Request model for recovering memory by record id."""
+
+    mem_cube_id: str = Field(..., description="Mem cube ID")
+    delete_record_id: str = Field(..., description="Delete record ID")
+
+
+class RecoverMemoryByRecordIdResponse(BaseResponse[dict]):
+    """Response model for recovering memory by record id."""
