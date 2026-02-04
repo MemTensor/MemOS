@@ -12,6 +12,7 @@ from memos.configs.mem_reader import MemReaderConfigFactory
 from memos.configs.reranker import RerankerConfigFactory
 from memos.configs.vec_db import VectorDBConfigFactory
 from memos.embedders.factory import EmbedderFactory
+from memos.extras.nli_model.client import NLIClient
 from memos.graph_dbs.factory import GraphStoreFactory
 from memos.llms.factory import LLMFactory
 from memos.log import get_logger
@@ -30,10 +31,12 @@ from memos.memories.textual.prefer_text_memory.factory import (
 )
 from memos.memories.textual.simple_preference import SimplePreferenceTextMemory
 from memos.memories.textual.simple_tree import SimpleTreeTextMemory
+from memos.memories.textual.tree_text_memory.organize.history_manager import MemoryHistoryManager
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
+from memos.memories.textual.tree_text_memory.retrieve.pre_update import PreUpdateRetriever
 from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import FastTokenizer
 
 
@@ -287,6 +290,7 @@ def init_components() -> dict[str, Any]:
     graph_db_config = build_graph_db_config()
     llm_config = build_llm_config()
     embedder_config = build_embedder_config()
+    nli_client_config = APIConfig.get_nli_config()
     mem_reader_config = build_mem_reader_config()
     reranker_config = build_reranker_config()
     feedback_reranker_config = build_feedback_reranker_config()
@@ -307,8 +311,16 @@ def init_components() -> dict[str, Any]:
     )
     llm = LLMFactory.from_config(llm_config)
     embedder = EmbedderFactory.from_config(embedder_config)
+    nli_client = NLIClient(base_url=nli_client_config["base_url"])
+    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
+    pre_update_retriever = PreUpdateRetriever(graph_db=graph_db, embedder=embedder)
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
-    mem_reader = MemReaderFactory.from_config(mem_reader_config, graph_db=graph_db)
+    mem_reader = MemReaderFactory.from_config(
+        mem_reader_config,
+        graph_db=graph_db,
+        pre_update_retriever=pre_update_retriever,
+        history_manager=memory_history_manager,
+    )
     reranker = RerankerFactory.from_config(reranker_config)
     feedback_reranker = RerankerFactory.from_config(feedback_reranker_config)
     internet_retriever = InternetRetrieverFactory.from_config(

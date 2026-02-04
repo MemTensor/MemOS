@@ -52,6 +52,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         simple_config = SimpleStructMemReaderConfig(**config_dict)
         super().__init__(simple_config)
 
+        self.pre_update_retriever = None
+        self.history_manager = None
+        self.memory_version_switch = getattr(config, "memory_version_switch", "off")
+
         # Initialize MultiModalParser for routing to different parsers
         self.multi_modal_parser = MultiModalParser(
             embedder=self.embedder,
@@ -808,6 +812,39 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         return fine_memory_items
 
+    def _fast_resolve_memory_duplicates_and_conflicts(
+        self, fast_memory_items: list[TextualMemoryItem], user_name: str
+    ) -> None:
+        """
+        1. Recall related memories
+        2. Fast conflict/duplication check with NLI model
+        3. Attach conflicting/duplicate old memory contents onto fast memory items
+        4. Mark conflicting/duplicate old memory nodes as "resolving", making them invisible to /search,
+           but still visible for other conflict/duplication checks' recalls.
+        """
+        if not self.pre_update_retriever or not self.history_manager:
+            logger.warning(
+                "[MultiModalStruct] PreUpdateRetriever or HistoryManager is not initialized."
+            )
+            return
+
+        for item in fast_memory_items:
+            try:
+                # recall related memories
+                related = self.pre_update_retriever.retrieve(
+                    item=item,
+                    user_name=user_name,
+                )
+                # NLI check & attaching contents
+                conflicting_or_duplicate_items = self.history_manager.resolve_history_via_nli(
+                    item, related
+                )
+                # mark delete
+                self.history_manager.mark_memory_status(conflicting_or_duplicate_items, "resolving")
+
+            except Exception as e:
+                logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")
+
     @timed
     def _process_multi_modal_data(
         self, scene_data_info: MessagesType, info, mode: str = "fine", **kwargs
@@ -856,6 +893,13 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 scene_data_info, info, mode="fast", need_emb=False, **kwargs
             )
         fast_memory_items = self._concat_multi_modal_memories(all_memory_items)
+
+        # Perform conflict/duplicate check with old memories
+        # TODO: find a better way to pass in the user_name
+        user_name = kwargs.get("user_name")
+        if self.memory_version_switch == "on":
+            self._fast_resolve_memory_duplicates_and_conflicts(fast_memory_items, user_name)
+
         if mode == "fast":
             return fast_memory_items
         else:
