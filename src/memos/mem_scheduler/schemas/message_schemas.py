@@ -107,6 +107,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     @classmethod
     def from_dict(cls, data: dict) -> "ScheduleMessageItem":
         """Create model from Redis Stream dictionary"""
+
         def _decode(val: Any) -> Any:
             if isinstance(val, bytes | bytearray):
                 return val.decode("utf-8")
@@ -125,11 +126,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             chat_history = raw_chat_history
 
         raw_timestamp = _decode(data.get("timestamp"))
-        timestamp = (
-            datetime.fromisoformat(raw_timestamp)
-            if raw_timestamp
-            else get_utc_now()
-        )
+        timestamp = datetime.fromisoformat(raw_timestamp) if raw_timestamp else get_utc_now()
         return cls(
             item_id=_decode(data.get("item_id", str(uuid4()))),
             user_id=_decode(data["user_id"]),
