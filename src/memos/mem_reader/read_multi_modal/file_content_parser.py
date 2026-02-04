@@ -710,7 +710,7 @@ class FileContentParser(BaseMessageParser):
             chunk_idx: int, chunk_text: str, reason: str = "raw"
         ) -> TextualMemoryItem:
             """Create fallback memory item with raw chunk text."""
-            return _make_memory_item(
+            raw_chunk_mem = _make_memory_item(
                 value=chunk_text,
                 tags=[
                     "mode:fine",
@@ -721,6 +721,11 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx=chunk_idx,
                 chunk_content=chunk_text,
             )
+            tags_list = self.tokenizer.tokenize_mixed(raw_chunk_mem.metadata.key)
+            tags_list = [tag for tag in tags_list if len(tag) > 1]
+            tags_list = sorted(tags_list, key=len, reverse=True)
+            raw_chunk_mem.metadata.tags.extend(tags_list[:5])
+            return raw_chunk_mem
 
         # Handle empty chunks case
         if not valid_chunks:
