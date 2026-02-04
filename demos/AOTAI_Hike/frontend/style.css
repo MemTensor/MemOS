@@ -292,3 +292,25 @@ input:focus {
     width: 220px;
   }
 }
+
+
+/* Branch choice UI */
+.branch-choices {
+  margin-top: 8px;
+  padding: 8px;
+  border: 2px dashed rgba(124, 242, 255, 0.35);
+  background: rgba(0, 0, 0, 0.18);
+}
+.branch-choices .label {
+  font-size: 9px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.branch-choices .choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.branch-choices button {
+  padding: 6px 8px;
+}

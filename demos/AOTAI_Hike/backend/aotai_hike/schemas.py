@@ -21,6 +21,18 @@ class AoTaiNode(BaseModel):
     scene_id: str = Field(..., description="Background scene identifier")
     hint: str | None = None
 
+    # For frontend map rendering (0-100 coordinate space, scaled by client)
+    x: int = Field(0, ge=0, le=100)
+    y: int = Field(0, ge=0, le=100)
+    kind: Literal["main", "camp", "lake", "peak", "exit", "junction", "start", "end"] = "main"
+
+
+class AoTaiEdge(BaseModel):
+    from_node_id: str
+    to_node_id: str
+    kind: Literal["main", "branch", "exit"] = "main"
+    label: str | None = None
+
 
 class RoleAttrs(BaseModel):
     stamina: int = Field(70, ge=0, le=100)
@@ -40,9 +52,18 @@ class Role(BaseModel):
 class WorldState(BaseModel):
     session_id: str
     user_id: str
+
     active_role_id: str | None = None
     roles: list[Role] = Field(default_factory=list)
+
+    # Map state (graph-based)
+    current_node_id: str = "start"
+    visited_node_ids: list[str] = Field(default_factory=lambda: ["start"])
+    available_next_node_ids: list[str] = Field(default_factory=list)
+
+    # Backward compatibility: interpreted as progress count
     route_node_index: int = 0
+
     day: int = 1
     time_of_day: Literal["morning", "noon", "afternoon", "evening", "night"] = "morning"
     weather: Literal["sunny", "cloudy", "windy", "rainy", "snowy", "foggy"] = "cloudy"
@@ -68,7 +89,9 @@ class BackgroundAsset(BaseModel):
 
 
 class MapResponse(BaseModel):
+    start_node_id: str
     nodes: list[AoTaiNode]
+    edges: list[AoTaiEdge]
 
 
 class SessionNewRequest(BaseModel):

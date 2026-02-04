@@ -19,7 +19,7 @@ from aotai_hike.schemas import (
 )
 from aotai_hike.services.game_service import GameService
 from aotai_hike.stores.session_store import InMemorySessionStore
-from aotai_hike.world.map_data import AO_TAI_NODES
+from aotai_hike.world.map_data import AoTaiGraph
 
 
 router = APIRouter(prefix="/api/demo/ao-tai", tags=["AoTai Demo"])
@@ -42,7 +42,9 @@ def _get_ws(session_id: str) -> WorldState:
 
 @router.get("/map", response_model=MapResponse)
 def get_map():
-    return MapResponse(nodes=AO_TAI_NODES)
+    return MapResponse(
+        start_node_id=AoTaiGraph.start_node_id, nodes=AoTaiGraph.nodes(), edges=AoTaiGraph.edges()
+    )
 
 
 @router.get("/background/{scene_id}", response_model=BackgroundAsset)

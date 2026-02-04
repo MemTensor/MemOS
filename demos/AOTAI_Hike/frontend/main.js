@@ -5,8 +5,11 @@ const chatEl = $("#chat");
 const rolesEl = $("#roles");
 const statusEl = $("#status");
 const partyEl = $("#party-status");
+const branchEl = $("#branch-choices");
 
 let mapNodes = [];
+let mapEdges = [];
+let mapStartNodeId = "start";
 let sessionId = null;
 let worldState = null;
 
@@ -31,6 +34,15 @@ function avatarUrl(role) {
   return `./assets/avatars/ava_${key}.svg`;
 }
 
+function nodeById(id) {
+  if (!id) return null;
+  return (mapNodes || []).find((n) => n.node_id === id) || null;
+}
+
+function edgeByToId(fromId, toId) {
+  return (mapEdges || []).find((e) => e.from_node_id === fromId && e.to_node_id === toId) || null;
+}
+
 function logMsg(msg) {
   const div = document.createElement("div");
   div.className = `msg ${msg.kind}`;
@@ -49,7 +61,7 @@ function logMsg(msg) {
 
 function setStatus() {
   if (!worldState) return;
-  const node = mapNodes[Math.min(worldState.route_node_index, mapNodes.length - 1)];
+  const node = nodeById(worldState.current_node_id) || mapNodes[Math.min(worldState.route_node_index, mapNodes.length - 1)];
   const active = (worldState.roles || []).find((r) => r.role_id === worldState.active_role_id);
   statusEl.textContent = `Session: ${worldState.session_id} | 位置: ${node?.name || "?"} | Day ${
     worldState.day
@@ -67,6 +79,46 @@ function renderRoles() {
     };
     rolesEl.appendChild(pill);
   }
+}
+
+function renderBranchChoices() {
+  if (!branchEl || !worldState) return;
+  const fromId = worldState.current_node_id;
+  const nextIds = worldState.available_next_node_ids || [];
+  if (!nextIds || nextIds.length <= 1) {
+    branchEl.style.display = "none";
+    branchEl.innerHTML = "";
+    return;
+  }
+
+  const items = [];
+  for (const id of nextIds) {
+    const n = nodeById(id);
+    const e = edgeByToId(fromId, id);
+    const label = (e && e.label) ? e.label : "下一步";
+    const name = n ? n.name : id;
+    items.push({ id: id, text: label + "：" + name });
+  }
+
+  branchEl.style.display = "block";
+  branchEl.innerHTML = "";
+
+  const label = document.createElement("div");
+  label.className = "label";
+  label.textContent = "分岔口：请选择下一步";
+
+  const box = document.createElement("div");
+  box.className = "choices";
+
+  for (const it of items) {
+    const btn = document.createElement("button");
+    btn.textContent = it.text;
+    btn.onclick = () => apiAct("MOVE_FORWARD", { next_node_id: it.id });
+    box.appendChild(btn);
+  }
+
+  branchEl.appendChild(label);
+  branchEl.appendChild(box);
 }
 
 function renderPartyStatus() {
@@ -158,8 +210,12 @@ async function api(path, body, method = "POST") {
 
 async function apiGetMap() {
   const resp = await fetch(`${API_BASE}/map`);
-  mapNodes = (await resp.json()).nodes || [];
+  const data = await resp.json();
+  mapNodes = data.nodes || [];
+  mapEdges = data.edges || [];
+  mapStartNodeId = data.start_node_id || "start";
 }
+
 
 async function apiNewSession() {
   const data = await api("/session/new", { user_id: "demo_user" });
@@ -168,7 +224,8 @@ async function apiNewSession() {
   logMsg({ kind: "system", content: "已创建新 Session。", timestamp_ms: Date.now() });
   setStatus();
   renderPartyStatus();
-  if (window.__aoTaiMapView) window.__aoTaiMapView.setIndex(worldState.route_node_index || 0);
+  renderBranchChoices();
+  if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
 }
 
 async function apiUpsertRole(role) {
@@ -177,6 +234,7 @@ async function apiUpsertRole(role) {
   worldState.active_role_id = data.active_role_id;
   renderRoles();
   renderPartyStatus();
+  renderBranchChoices();
   setStatus();
 }
 
@@ -189,6 +247,7 @@ async function apiSetActiveRole(roleId) {
   worldState = ws;
   renderRoles();
   renderPartyStatus();
+  renderBranchChoices();
   setStatus();
   const active = (worldState.roles || []).find((r) => r.role_id === roleId);
   logMsg({
@@ -205,7 +264,8 @@ async function apiAct(action, payload = {}) {
   setStatus();
   renderRoles();
   renderPartyStatus();
-  if (window.__aoTaiMapView) window.__aoTaiMapView.setIndex(worldState.route_node_index);
+  renderBranchChoices();
+  if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
 }
 
 
@@ -228,26 +288,20 @@ function makeRole(name) {
 //   Later you can swap `renderChunkToTexture()` to draw real tiles from your tileset.
 function initPhaser() {
   const root = document.getElementById("game-root");
-  const VIEW_W = Math.max(480, Math.floor(root?.clientWidth || 640));
-  const VIEW_H = Math.max(200, Math.floor(root?.clientHeight || 260));
+  const VIEW_W = Math.max(860, Math.floor(root?.clientWidth || 960));
+  const VIEW_H = Math.max(420, Math.floor(root?.clientHeight || 540));
 
-  // ---- Tunable parameters ----
-  const TILE = 48; // base ground tile (grass/brick/fence)
-  const TILE_S = 16; // small overlay (leaves/pumpkin)
+  const TILE = 48; // matches your pixel assets scale
 
-  const CHUNK_W_T = 10; // 10 * 48 = 480px
-  const CHUNK_H_T = 5;  // 5 * 48 = 240px
-  const CHUNK_W = CHUNK_W_T * TILE;
-  const CHUNK_H = CHUNK_H_T * TILE;
+  const hash32 = (s) => {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  };
 
-  const KEEP_CHUNKS = 6;
-  const AHEAD_CHUNKS = 3;
-
-  // How far one backend index step advances, in tiles.
-  const STEP_TILES = 2; // 2*48 = 96px
-  const STEP_PX = STEP_TILES * TILE;
-
-  // Deterministic-ish RNG (seed per session)
   const mulberry32 = (seed) => {
     let t = seed >>> 0;
     return () => {
@@ -258,23 +312,28 @@ function initPhaser() {
     };
   };
 
-  class TrailScene extends Phaser.Scene {
+  class HikeScene extends Phaser.Scene {
     constructor() {
-      super({ key: "TrailScene" });
-      this._chunks = [];
-      this._pool = [];
-      this._walker = null;
-      this._pathY = 0;
-      this._rng = null;
-      this._index = 0;
-      this._isAdvancing = false;
-      this._queuedSteps = 0;
-      this._tex = null;
+      super({ key: "HikeScene" });
       this.world = null;
+      this.worldRT = null;
+      this.worldOverlay = null;
+
+      this.minimap = null;
+      this.minimapG = null;
+      this.minimapMarker = null;
+
+      this._curNodeId = null;
+      this._visited = new Set();
+      this._weather = null;
+      this._tod = null;
+
+      this.mainCam = null;
+      this.miniCam = null;
     }
 
     preload() {
-      // Uses your local pixel assets under `./assets/`
+      // Your pixel assets (already in frontend/assets)
       this.load.image("grass", "./assets/Dark grass 1.png");
       this.load.image("brick", "./assets/Dark Brick 1.png");
       this.load.image("bush", "./assets/Dark Bush 1.png");
@@ -285,225 +344,272 @@ function initPhaser() {
     }
 
     create() {
-      const seedStr = (worldState && worldState.session_id) || "seed";
-      const seed = Array.from(seedStr).reduce((acc, c) => (acc * 131 + c.charCodeAt(0)) >>> 0, 7);
-      this._rng = mulberry32(seed);
-
-      // Base path line is roughly centered vertically inside the chunk
-      this._pathY = Math.floor(CHUNK_H_T / 2);
-
+      // --- containers ---
       this.world = this.add.container(0, 0);
+      this.minimap = this.add.container(0, 0);
 
-      const sizeOf = (key) => {
-        const img = this.textures.get(key)?.getSourceImage?.();
-        return img ? { w: img.width, h: img.height } : { w: TILE, h: TILE };
-      };
-      this._tex = {
-        grass: sizeOf("grass"),
-        brick: sizeOf("brick"),
-        bush: sizeOf("bush"),
-        tree: sizeOf("tree"),
-        fence: sizeOf("fence"),
-        leaves: sizeOf("leaves"),
-        pumpkin: sizeOf("pumpkin"),
-      };
+      // --- main world render texture ---
+      this.worldRT = this.add.renderTexture(0, 0, VIEW_W, VIEW_H).setOrigin(0, 0);
+      this.world.add(this.worldRT);
 
-      // Initial chunks
-      for (let i = 0; i < KEEP_CHUNKS; i++) {
-        const cx = i * CHUNK_W;
-        const chunk = this._spawnChunk(cx);
-        this._chunks.push(chunk);
-      }
+      // --- player marker in main view ---
+      const mg = this.add.graphics();
+      mg.fillStyle(0xffd27c, 1);
+      mg.fillRect(0, 0, 10, 18);
+      const pKey = "player_marker";
+      if (!this.textures.exists(pKey)) mg.generateTexture(pKey, 10, 18);
+      mg.destroy();
 
-      // Walker marker (replace with your sprite later)
-      const g = this.add.graphics();
-      g.fillStyle(0xffd27c, 1);
-      g.fillRect(0, 0, 8, 16);
-      const texKey = "walker_marker";
-      if (!this.textures.exists(texKey)) {
-        g.generateTexture(texKey, 8, 16);
-      }
-      g.destroy();
+      this.player = this.add.image(Math.floor(VIEW_W * 0.52), Math.floor(VIEW_H * 0.58), pKey);
+      this.player.setOrigin(0.5, 1);
+      this.world.add(this.player);
 
-      this._walker = this.add.image(0, 0, texKey).setOrigin(0.5, 1);
-      this._walker.setPosition(TILE * 3, TILE * (this._pathY + 1));
-      this.world.add(this._walker);
+      // --- overlay for weather/time mood ---
+      this.worldOverlay = this.add.rectangle(0, 0, VIEW_W, VIEW_H, 0x000000, 0.0).setOrigin(0, 0);
+      this.worldOverlay.setDepth(10);
+      this.world.add(this.worldOverlay);
 
-      // Camera
-      this.cameras.main.setBounds(0, 0, 999999, VIEW_H);
-      this.cameras.main.startFollow(this._walker, true, 0.08, 0.08);
-      this.cameras.main.setDeadzone(180, 80);
-      this.cameras.main.setBackgroundColor("rgba(0,0,0,0)");
+      // --- cameras ---
+      this.mainCam = this.cameras.main;
+      this.mainCam.setViewport(0, 0, VIEW_W, VIEW_H);
+      this.mainCam.setBackgroundColor("rgba(0,0,0,0)");
 
-      // Expose API to page
+      // minimap camera (top-right)
+      const MINI_W = 280;
+      const MINI_H = 180;
+      this.miniCam = this.cameras.add(VIEW_W - MINI_W - 10, 10, MINI_W, MINI_H);
+      this.miniCam.setBackgroundColor("rgba(10,16,28,0.75)");
+
+      // Make cameras see different containers
+      this.mainCam.ignore(this.minimap);
+      this.miniCam.ignore(this.world);
+
+      // minimap graphics + marker
+      this.minimapG = this.add.graphics();
+      this.minimap.add(this.minimapG);
+
+      const mm = this.add.graphics();
+      mm.fillStyle(0xffd27c, 1);
+      mm.fillRect(0, 0, 8, 12);
+      const mKey = "minimap_marker";
+      if (!this.textures.exists(mKey)) mm.generateTexture(mKey, 8, 12);
+      mm.destroy();
+      this.minimapMarker = this.add.image(0, 0, mKey).setOrigin(0.5, 1);
+      this.minimap.add(this.minimapMarker);
+
+      // Expose API
       window.__aoTaiMapView = {
-        setIndex: (i) => this.setIndex(i),
+        setState: (ws) => this.setState(ws),
+        // compat
+        setNode: (nodeId, visitedIds) => this.setState({ current_node_id: nodeId, visited_node_ids: visitedIds }),
       };
 
-      this.setIndex(0);
+      // initial paint
+      this.setState({ current_node_id: mapStartNodeId || "start", visited_node_ids: [mapStartNodeId || "start"], weather: "cloudy", time_of_day: "morning" });
     }
 
-    setIndex(i) {
-      const next = Math.max(0, Math.floor(Number(i) || 0));
-      const delta = next - this._index;
-      this._index = next;
-      if (delta > 0) this.advanceSteps(delta);
-      if (delta < 0) {
-        // Simple reset behavior (e.g. new session)
-        if (this._walker) this._walker.x = TILE * 3;
+    setState(ws) {
+      const nodeId = ws?.current_node_id || mapStartNodeId || "start";
+      const visited = ws?.visited_node_ids || [nodeId];
+      const weather = ws?.weather || "cloudy";
+      const tod = ws?.time_of_day || "morning";
+
+      const nodeChanged = nodeId !== this._curNodeId;
+      const moodChanged = weather !== this._weather || tod !== this._tod;
+
+      this._curNodeId = nodeId;
+      this._visited = new Set(visited);
+      this._weather = weather;
+      this._tod = tod;
+
+      // 1) update minimap always
+      this._drawMinimap(nodeId);
+
+      // 2) update main world if needed
+      if (nodeChanged || moodChanged) {
+        this._renderWorld(nodeId, weather, tod);
+      }
+
+      // 3) small "step" animation on move
+      if (nodeChanged) {
+        this.tweens.add({
+          targets: this.player,
+          x: Math.floor(VIEW_W * 0.52) + 8,
+          duration: 160,
+          yoyo: true,
+          ease: "Sine.easeInOut",
+        });
       }
     }
 
-    advanceSteps(steps) {
-      if (steps <= 0) return;
-      if (this._isAdvancing) {
-        this._queuedSteps += steps;
-        return;
-      }
-      this._isAdvancing = true;
+    _renderWorld(nodeId, weather, tod) {
+      // Deterministic seed from session + node + mood
+      const seedStr = String((window.worldState && window.worldState.session_id) || "seed") + "|" + String(nodeId) + "|" + String(weather) + "|" + String(tod);
+      const rng = mulberry32(hash32(seedStr));
 
-      const targetX = this._walker.x + steps * STEP_PX;
-      this.tweens.add({
-        targets: this._walker,
-        x: targetX,
-        duration: 420 + steps * 120,
-        ease: "Sine.easeInOut",
-        onUpdate: () => this._ensureChunks(),
-        onComplete: () => {
-          this._ensureChunks(true);
-          this._isAdvancing = false;
-          if (this._queuedSteps > 0) {
-            const q = this._queuedSteps;
-            this._queuedSteps = 0;
-            this.advanceSteps(q);
-          }
-        },
-      });
-    }
+      // Clear
+      this.worldRT.clear();
 
-    _ensureChunks(force = false) {
-      const cam = this.cameras.main;
-      const camLeft = cam.scrollX;
-      const camRight = cam.scrollX + VIEW_W;
-
-      while (
-        this._chunks.length < KEEP_CHUNKS ||
-        this._lastChunkRight() < camRight + AHEAD_CHUNKS * CHUNK_W
-      ) {
-        const nextX = this._lastChunkRight();
-        const c = this._spawnChunk(nextX);
-        this._chunks.push(c);
-      }
-
-      while (this._chunks.length > 0) {
-        const first = this._chunks[0];
-        if (!force && first.x + CHUNK_W > camLeft - CHUNK_W) break;
-        if (first.x + CHUNK_W <= camLeft - CHUNK_W || force) {
-          const old = this._chunks.shift();
-          this._recycleChunk(old);
-        } else {
-          break;
-        }
-      }
-    }
-
-    _lastChunkRight() {
-      if (this._chunks.length === 0) return 0;
-      const last = this._chunks[this._chunks.length - 1];
-      return last.x + CHUNK_W;
-    }
-
-    _spawnChunk(x) {
-      const chunk = this._pool.pop() || this._createChunkObject();
-      chunk.x = x;
-      chunk.rt.setPosition(x, Math.floor((VIEW_H - CHUNK_H) / 2));
-
-      // Slight drift for organic feel
-      const drift = this._rng() < 0.4 ? (this._rng() < 0.5 ? -1 : 1) : 0;
-      this._pathY = Phaser.Math.Clamp(this._pathY + drift, 2, CHUNK_H_T - 3);
-
-      this._renderChunkToTexture(chunk.rt, this._pathY);
-
-      if (!chunk.added) {
-        this.world.add(chunk.rt);
-        chunk.added = true;
-      }
-
-      return chunk;
-    }
-
-    _createChunkObject() {
-      const rt = this.add.renderTexture(0, 0, CHUNK_W, CHUNK_H).setOrigin(0, 0);
-      rt.setDepth(0);
-      return { rt, x: 0, added: false };
-    }
-
-    _recycleChunk(chunk) {
-      this._pool.push(chunk);
-    }
-
-    _renderChunkToTexture(rt, pathY) {
-      rt.clear();
-
-      // 1) Ground
-      for (let y = 0; y < CHUNK_H_T; y++) {
-        for (let x = 0; x < CHUNK_W_T; x++) {
-          rt.draw("grass", x * TILE, y * TILE);
+      // Base tiling (grass)
+      const tilesX = Math.ceil(VIEW_W / TILE) + 1;
+      const tilesY = Math.ceil(VIEW_H / TILE) + 1;
+      for (let y = 0; y < tilesY; y++) {
+        for (let x = 0; x < tilesX; x++) {
+          this.worldRT.draw("grass", x * TILE, y * TILE);
         }
       }
 
-      // 2) Sprinkle leaves (lightweight)
-      const leavesN = Phaser.Math.Between(18, 42);
-      for (let i = 0; i < leavesN; i++) {
-        const px = Phaser.Math.Between(0, CHUNK_W - TILE_S);
-        const py = Phaser.Math.Between(0, CHUNK_H - TILE_S);
-        rt.draw("leaves", px, py);
-      }
+      // Path depending on node kind
+      const n = nodeById(nodeId);
+      const kind = n?.kind || "main";
+      const centerY = Math.floor(tilesY / 2);
+      const pathW = kind === "camp" ? 4 : kind === "lake" ? 2 : 3;
+      const wobbleAmp = kind === "junction" ? 2 : 1;
 
-      // 3) Path
-      const pathW = this._rng() < 0.55 ? 2 : 3;
-      for (let x = 0; x < CHUNK_W_T; x++) {
-        const wobble = this._rng() < 0.25 ? (this._rng() < 0.5 ? -1 : 1) : 0;
-        const cy = Phaser.Math.Clamp(pathY + wobble, 2, CHUNK_H_T - 3);
+      for (let x = 0; x < tilesX; x++) {
+        const wobble = rng() < 0.25 ? (rng() < 0.5 ? -wobbleAmp : wobbleAmp) : 0;
+        const cy = clamp(centerY + wobble, 2, tilesY - 3);
         for (let dy = -Math.floor(pathW / 2); dy <= Math.floor(pathW / 2); dy++) {
           const yy = cy + dy;
-          if (yy >= 0 && yy < CHUNK_H_T) rt.draw("brick", x * TILE, yy * TILE);
+          this.worldRT.draw("brick", x * TILE, yy * TILE);
         }
       }
 
-      // Helper: bottom-anchored placement
-      const placeBottomAnchored = (key, px, groundTileY) => {
-        const { w, h } = this._tex[key] || { w: TILE, h: TILE };
-        const groundY = groundTileY * TILE;
-        const topY = Math.floor(groundY - (h - TILE));
-        rt.draw(key, px, topY);
+      // Sprinkle leaves
+      const leafN = 40 + Math.floor(rng() * 80);
+      for (let i = 0; i < leafN; i++) {
+        const px = Math.floor(rng() * (VIEW_W - 16));
+        const py = Math.floor(rng() * (VIEW_H - 16));
+        this.worldRT.draw("leaves", px, py);
+      }
+
+      // Trees/bushes/fence depending on kind
+      const bigCount = kind === "lake" ? 2 : 4;
+      for (let i = 0; i < bigCount; i++) {
+        const left = rng() < 0.5;
+        const x = left ? Math.floor(rng() * (VIEW_W * 0.25)) : Math.floor(VIEW_W * 0.75 + rng() * (VIEW_W * 0.25));
+        const y = Math.floor(VIEW_H * 0.38 + rng() * (VIEW_H * 0.32));
+        this.worldRT.draw("tree", x, y - 64);
+      }
+
+      const bushN = 6 + Math.floor(rng() * 6);
+      for (let i = 0; i < bushN; i++) {
+        const x = Math.floor(rng() * (VIEW_W - 32));
+        const y = Math.floor(VIEW_H * 0.45 + rng() * (VIEW_H * 0.45));
+        this.worldRT.draw("bush", x, y - 24);
+      }
+
+      if (kind === "camp" || rng() < 0.35) {
+        const fx = Math.floor(VIEW_W * 0.12);
+        this.worldRT.draw("fence", fx, Math.floor(VIEW_H * 0.6));
+        this.worldRT.draw("fence", fx + 140, Math.floor(VIEW_H * 0.6));
+      }
+
+      if (rng() < 0.18) {
+        const x = Math.floor(VIEW_W * 0.45 + rng() * 120);
+        const y = Math.floor(VIEW_H * 0.72);
+        this.worldRT.draw("pumpkin", x, y);
+      }
+
+      // Weather/time overlay
+      let overlayColor = 0x000000;
+      let overlayAlpha = 0.0;
+
+      if (tod === "evening" || tod === "night") {
+        overlayColor = 0x000000;
+        overlayAlpha = tod === "night" ? 0.35 : 0.18;
+      }
+      if (tod === "morning") {
+        overlayColor = 0x0b1630;
+        overlayAlpha = 0.08;
+      }
+
+      if (weather === "foggy") {
+        overlayColor = 0xc6d0e8;
+        overlayAlpha = 0.18;
+      }
+      if (weather === "rainy") {
+        overlayColor = 0x2b3c66;
+        overlayAlpha = 0.16;
+      }
+      if (weather === "sunny") {
+        overlayColor = 0xffd27c;
+        overlayAlpha = 0.06;
+      }
+
+      this.worldOverlay.fillColor = overlayColor;
+      this.worldOverlay.setAlpha(overlayAlpha);
+    }
+
+    _drawMinimap(nodeId) {
+      const MINI_W = this.miniCam.width;
+      const MINI_H = this.miniCam.height;
+
+      const pad = 14;
+      const mapW = MINI_W - pad * 2;
+      const mapH = MINI_H - pad * 2;
+
+      const toMini = (n) => {
+        const x = pad + (clamp(n.x, 0, 100) / 100) * mapW;
+        const y = pad + (clamp(n.y, 0, 100) / 100) * mapH;
+        return { x: x, y: y };
       };
 
-      // 4) Trees / bushes / fence
-      const treeCount = this._rng() < 0.6 ? 1 : 2;
-      for (let i = 0; i < treeCount; i++) {
-        const sideLeft = this._rng() < 0.5;
-        const xTile = sideLeft ? Phaser.Math.Between(0, 2) : Phaser.Math.Between(CHUNK_W_T - 3, CHUNK_W_T - 1);
-        placeBottomAnchored("tree", xTile * TILE, Phaser.Math.Clamp(pathY - 2, 1, CHUNK_H_T - 1));
+      this.minimapG.clear();
+
+      // frame
+      this.minimapG.lineStyle(2, 0x3a4a66, 1);
+      this.minimapG.strokeRect(1, 1, MINI_W - 2, MINI_H - 2);
+
+      // edges
+      for (const e of mapEdges || []) {
+        const a = nodeById(e.from_node_id);
+        const b = nodeById(e.to_node_id);
+        if (!a || !b) continue;
+        const pa = toMini(a);
+        const pb = toMini(b);
+
+        const visited = this._visited.has(e.to_node_id);
+        const color = e.kind === "exit" ? 0xff7c7c : 0x7cf2ff;
+        const alpha = visited ? 0.9 : 0.25;
+        const width = visited ? 3 : 2;
+
+        this.minimapG.lineStyle(width, color, alpha);
+        this.minimapG.beginPath();
+        this.minimapG.moveTo(pa.x, pa.y);
+        this.minimapG.lineTo(pb.x, pb.y);
+        this.minimapG.strokePath();
       }
 
-      const bushCount = Phaser.Math.Between(1, 3);
-      for (let i = 0; i < bushCount; i++) {
-        const sideLeft = this._rng() < 0.5;
-        const xTile = sideLeft ? Phaser.Math.Between(0, 3) : Phaser.Math.Between(CHUNK_W_T - 4, CHUNK_W_T - 1);
-        placeBottomAnchored("bush", xTile * TILE, Phaser.Math.Clamp(pathY + 3, 2, CHUNK_H_T - 1));
+      // nodes
+      for (const n of mapNodes || []) {
+        const p = toMini(n);
+        const isCur = n.node_id === nodeId;
+        const isVisited = this._visited.has(n.node_id);
+
+        let fill = 0x223044;
+        if (n.kind === "camp") fill = 0x1b2a21;
+        if (n.kind === "lake") fill = 0x0e2a3d;
+        if (n.kind === "peak") fill = 0x232b45;
+        if (n.kind === "exit") fill = 0x301820;
+        if (n.kind === "start") fill = 0x1f4b2b;
+        if (n.kind === "end") fill = 0x18311f;
+
+        let stroke = 0x3a4a66;
+        if (isVisited) stroke = 0x7cf2ff;
+        if (isCur) stroke = 0xffd27c;
+
+        this.minimapG.fillStyle(fill, 0.95);
+        this.minimapG.fillRect(p.x - 4, p.y - 4, 8, 8);
+        this.minimapG.lineStyle(2, stroke, 1);
+        this.minimapG.strokeRect(p.x - 4, p.y - 4, 8, 8);
       }
 
-      if (this._rng() < 0.35) {
-        const sideLeft = this._rng() < 0.5;
-        const xTile = sideLeft ? 1 : CHUNK_W_T - 2;
-        placeBottomAnchored("fence", xTile * TILE, Phaser.Math.Clamp(pathY + 1, 2, CHUNK_H_T - 1));
-      }
-
-      // Rare pumpkin
-      if (this._rng() < 0.12) {
-        const xTile = Phaser.Math.Between(2, CHUNK_W_T - 3);
-        placeBottomAnchored("pumpkin", xTile * TILE, Phaser.Math.Clamp(pathY + 2, 2, CHUNK_H_T - 1));
+      // marker
+      const cur = nodeById(nodeId);
+      if (cur) {
+        const mp = toMini(cur);
+        this.minimapMarker.setPosition(mp.x, mp.y);
       }
     }
   }
@@ -517,12 +623,11 @@ function initPhaser() {
     pixelArt: true,
     antialias: false,
     transparent: true,
-    scene: [TrailScene],
+    scene: [HikeScene],
   };
 
   new Phaser.Game(config);
 }
-
 
 async function bootstrap() {
   await apiGetMap();

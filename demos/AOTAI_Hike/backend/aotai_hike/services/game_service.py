@@ -8,12 +8,6 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-
-if TYPE_CHECKING:
-    from aotai_hike.adapters.companion import CompanionBrain
-    from aotai_hike.adapters.memory import MemoryAdapter
-
-
 from aotai_hike.adapters.background import BackgroundProvider, BackgroundRequest
 from aotai_hike.schemas import (
     ActionType,
@@ -27,7 +21,12 @@ from aotai_hike.schemas import (
     SetActiveRoleRequest,
     WorldState,
 )
-from aotai_hike.world.map_data import AO_TAI_NODES
+from aotai_hike.world.map_data import AoTaiGraph
+
+
+if TYPE_CHECKING:
+    from aotai_hike.adapters.companion import CompanionBrain
+    from aotai_hike.adapters.memory import MemoryAdapter
 
 
 @dataclass
@@ -80,14 +79,16 @@ class GameService:
 
         user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
 
-        node_after = AO_TAI_NODES[min(world_state.route_node_index, len(AO_TAI_NODES) - 1)]
+        node_after = AoTaiGraph.get_node(world_state.current_node_id)
         bg = self._safe_get_background(node_after.scene_id)
 
         mem_event = self._format_memory_event(
             world_state, req, node_after, user_action_desc, messages
         )
         self._memory.add_event(
-            user_id=world_state.user_id, session_id=world_state.session_id, content=mem_event
+            user_id=world_state.user_id,
+            session_id=world_state.session_id,
+            content=mem_event,
         )
 
         query = self._build_memory_query(world_state, req, node_after, user_action_desc)
@@ -130,12 +131,14 @@ class GameService:
         messages: list[Message],
         active: Role | None,
     ) -> str:
-        node = AO_TAI_NODES[min(world_state.route_node_index, len(AO_TAI_NODES) - 1)]
+        node = AoTaiGraph.get_node(world_state.current_node_id)
+        world_state.available_next_node_ids = AoTaiGraph.next_node_ids(world_state.current_node_id)
+
         messages.append(
             Message(
                 message_id=f"sys-{uuid.uuid4().hex[:8]}",
                 kind="system",
-                content=f"场景：{node.name} · 天气：{world_state.weather} · 时间：Day{world_state.day}/{world_state.time_of_day}",
+                content=f"位置：{node.name} · 天气：{world_state.weather} · 时间：Day{world_state.day}/{world_state.time_of_day}",
                 timestamp_ms=now_ms,
             )
         )
@@ -156,8 +159,49 @@ class GameService:
             return f"SAY:{text[:80]}"
 
         if req.action == ActionType.MOVE_FORWARD:
-            if world_state.route_node_index < len(AO_TAI_NODES) - 1:
-                world_state.route_node_index += 1
+            outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
+            if not outgoing:
+                messages.append(
+                    Message(
+                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                        kind="system",
+                        content="已到达终点/无可用前进路线。",
+                        timestamp_ms=now_ms,
+                    )
+                )
+                return "MOVE_FORWARD:end"
+
+            next_id: str | None = None
+            if len(outgoing) == 1:
+                next_id = outgoing[0].to_node_id
+            else:
+                # Require explicit selection at junction
+                picked = str(req.payload.get("next_node_id") or "").strip()
+                valid = {e.to_node_id: e for e in outgoing}
+                if picked and picked in valid:
+                    next_id = picked
+                else:
+                    opts = [
+                        f"- {AoTaiGraph.get_node(e.to_node_id).name} ({e.to_node_id})"
+                        for e in outgoing
+                    ]
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content="到达分岔口，请选择下一步：\n" + "\n".join(opts),
+                            timestamp_ms=now_ms,
+                        )
+                    )
+                    world_state.available_next_node_ids = list(valid.keys())
+                    return "MOVE_FORWARD:choose"
+
+            # Move to next
+            world_state.current_node_id = next_id
+            world_state.visited_node_ids.append(next_id)
+            world_state.route_node_index = len(world_state.visited_node_ids) - 1
+            world_state.available_next_node_ids = AoTaiGraph.next_node_ids(next_id)
+
             self._advance_time(world_state)
             self._tweak_party(world_state, stamina_delta=-8, mood_delta=-2, exp_delta=1)
             self._maybe_change_weather(world_state)
@@ -175,11 +219,11 @@ class GameService:
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"你带队前进。{ev}",
+                    content=f"你带队前进至：{AoTaiGraph.get_node(next_id).name}。{ev}",
                     timestamp_ms=now_ms,
                 )
             )
-            return "MOVE_FORWARD"
+            return f"MOVE_FORWARD:{next_id}"
 
         if req.action == ActionType.REST:
             self._advance_time(world_state)
@@ -288,7 +332,7 @@ class GameService:
                 "time_of_day": world_state.time_of_day,
                 "weather": world_state.weather,
             },
-            "action": {"type": req.action, "desc": user_action_desc, "payload": req.payload},
+            "action": {"type": str(req.action), "desc": user_action_desc, "payload": req.payload},
             "recent_events": world_state.recent_events[-5:],
             "messages": [
                 {"kind": m.kind, "role_name": m.role_name, "content": m.content[:200]}
