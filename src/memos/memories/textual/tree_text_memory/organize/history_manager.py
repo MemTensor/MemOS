@@ -179,62 +179,6 @@ class MemoryHistoryManager:
 
         return results
 
-    def wait_and_update_fast_history(self, item: TextualMemoryItem, timeout_sec: int = 30) -> None:
-        """
-        Scan the item's history. If any history item is marked as `is_fast`,
-        wait for it to be resolved (i.e., status becomes 'deleted' in the DB).
-        When resolved, replace the fast item with the nodes referenced in its `evolve_to` field.
-        Finally, deduplicate the history.
-
-        Args:
-            item: The memory item containing the history to check.
-            timeout_sec: Maximum time to wait for resolution in seconds.
-        """
-        start_time = time.time()
-
-        # 1. Identify pending items (fast nodes)
-        pending_indices = [
-            i
-            for i, h in enumerate(item.metadata.history)
-            if getattr(h, "is_fast", False) and h.archived_memory_id
-        ]
-
-        while True:
-            if not pending_indices:
-                # All fast nodes resolved or none existed
-                break
-
-            if time.time() - start_time > timeout_sec:
-                logger.warning(
-                    f"[MemoryHistoryManager] Timeout waiting for fast history resolution for item {item.id}"
-                )
-                # Remove pending fast nodes from history
-                item.metadata.history = [
-                    h
-                    for h in item.metadata.history
-                    if not (getattr(h, "is_fast", False) and h.archived_memory_id)
-                ]
-                break
-
-            # 2. Check status of the fast nodes and fetch replacements for evolved ones
-            replacements = self._check_and_fetch_replacements(item, pending_indices)
-
-            # 3. If we have any resolved items, rebuild the history
-            if replacements:
-                _rebuild_fast_node_history(item, replacements)
-
-            # Check if we are done (no pending items left)
-            pending_indices = [
-                i
-                for i, h in enumerate(item.metadata.history)
-                if getattr(h, "is_fast", False) and h.archived_memory_id
-            ]
-
-            if pending_indices:
-                time.sleep(1)  # This avoids visiting the DB too frequently
-
-        return
-
     def resolve_history_via_nli(
         self, new_item: TextualMemoryItem, related_items: list[TextualMemoryItem]
     ) -> list[TextualMemoryItem]:
@@ -292,6 +236,62 @@ class MemoryHistoryManager:
         _append_related_content(new_item, duplicate_memories, conflict_memories)
 
         return duplicate_memories + conflict_memories
+
+    def wait_and_update_fast_history(self, item: TextualMemoryItem, timeout_sec: int = 30) -> None:
+        """
+        Scan the item's history. If any history item is marked as `is_fast`,
+        wait for it to be resolved (i.e., status becomes 'deleted' in the DB).
+        When resolved, replace the fast item with the nodes referenced in its `evolve_to` field.
+        Finally, deduplicate the history.
+
+        Args:
+            item: The memory item containing the history to check.
+            timeout_sec: Maximum time to wait for resolution in seconds.
+        """
+        start_time = time.time()
+
+        # 1. Identify pending items (fast nodes)
+        pending_indices = [
+            i
+            for i, h in enumerate(item.metadata.history)
+            if getattr(h, "is_fast", False) and h.archived_memory_id
+        ]
+
+        while True:
+            if not pending_indices:
+                # All fast nodes resolved or none existed
+                break
+
+            if time.time() - start_time > timeout_sec:
+                logger.warning(
+                    f"[MemoryHistoryManager] Timeout waiting for fast history resolution for item {item.id}"
+                )
+                # Remove pending fast nodes from history
+                item.metadata.history = [
+                    h
+                    for h in item.metadata.history
+                    if not (getattr(h, "is_fast", False) and h.archived_memory_id)
+                ]
+                break
+
+            # 2. Check status of the fast nodes and fetch replacements for evolved ones
+            replacements = self._check_and_fetch_replacements(item, pending_indices)
+
+            # 3. If we have any resolved items, rebuild the history
+            if replacements:
+                _rebuild_fast_node_history(item, replacements)
+
+            # Check if we are done (no pending items left)
+            pending_indices = [
+                i
+                for i, h in enumerate(item.metadata.history)
+                if getattr(h, "is_fast", False) and h.archived_memory_id
+            ]
+
+            if pending_indices:
+                time.sleep(1)  # This avoids visiting the DB too frequently
+
+        return
 
     def mark_memory_status(
         self,
