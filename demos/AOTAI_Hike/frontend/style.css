@@ -26,23 +26,25 @@ body {
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
 }
 
 
 #game-root {
-  flex: 1 1 auto;
-  min-height: 320px;
+  width: 100%;
+  height: calc(100vh - 24px);
+  min-height: 720px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 8px 2px;
+  align-items: stretch;
+  justify-content: stretch;
   overflow: hidden;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.12);
 }
 
 canvas {
   display: block;
+  width: 100%;
+  height: 100%;
   image-rendering: pixelated;
 }
 
@@ -73,7 +75,7 @@ canvas {
 
 /* NEW: party status strip */
 .party-strip {
-  margin-top: 4px;
+  margin-top: 6px;
   display: flex;
   gap: 8px;
   overflow-x: auto;
@@ -171,13 +173,9 @@ canvas {
 }
 
 #panels {
-  flex: 0 0 auto;
-  pointer-events: auto;
-  margin-top: auto;
-  display: grid;
-  grid-template-columns: 320px 1fr 520px;
-  gap: 6px;
-  padding: 6px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .panel {
@@ -254,7 +252,7 @@ input:focus {
 }
 
 #chat {
-  height: 22vh;
+  height: 34vh
   min-height: 140px;
   max-height: 260px;
   overflow: auto;
@@ -284,9 +282,17 @@ input:focus {
 }
 
 @media (max-width: 1200px) {
-  #panels {
+  #main {
     grid-template-columns: 1fr;
   }
+  #game-root {
+    height: 60vh;
+    min-height: 520px;
+  }
+  #right {
+    max-height: none;
+  }
+}
   #game-root {
     height: 35%;
   }
@@ -315,4 +321,31 @@ input:focus {
 }
 .branch-choices button {
   padding: 6px 8px;
+}
+
+
+/* Layout: top bar + two columns */
+#topbar {
+  flex: 0 0 auto;
+}
+#main {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 520px;
+  gap: 10px;
+  padding: 8px 12px 12px;
+  align-items: start;
+}
+#left {
+  min-width: 520px;
+}
+#right {
+  min-width: 420px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+#right-top {
+  margin-bottom: 10px;
 }

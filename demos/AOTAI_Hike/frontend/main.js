@@ -299,6 +299,10 @@ function initPhaser() {
   const VIEW_W = Math.max(320, Math.floor(rect.width || 960));
   const VIEW_H = Math.max(240, Math.floor(rect.height || 540));
 
+  // Split the canvas: minimap on top, main scene below
+  const MINI_H = Math.max(160, Math.floor(VIEW_H * 0.26));
+  const MAIN_H = Math.max(240, VIEW_H - MINI_H);
+
   const TILE = 48; // matches your pixel assets scale
 
   const hash32 = (s) => {
@@ -374,7 +378,7 @@ function initPhaser() {
       this.minimap = this.add.container(0, 0);
 
       // --- main world render texture ---
-      this.worldRT = this.add.renderTexture(0, 0, VIEW_W, VIEW_H).setOrigin(0, 0);
+      this.worldRT = this.add.renderTexture(0, 0, VIEW_W, MAIN_H).setOrigin(0, 0);
       this.world.add(this.worldRT);
 
       // --- player marker in main view ---
@@ -385,24 +389,23 @@ function initPhaser() {
       if (!this.textures.exists(pKey)) mg.generateTexture(pKey, 10, 18);
       mg.destroy();
 
-      this.player = this.add.image(Math.floor(VIEW_W * 0.50), Math.floor(VIEW_H * 0.72), pKey);
+      this.player = this.add.image(Math.floor(VIEW_W * 0.50), Math.floor(MAIN_H * 0.78), pKey);
       this.player.setOrigin(0.5, 1);
       this.world.add(this.player);
 
       // --- overlay for weather/time mood ---
-      this.worldOverlay = this.add.rectangle(0, 0, VIEW_W, VIEW_H, 0x000000, 0.0).setOrigin(0, 0);
+      this.worldOverlay = this.add.rectangle(0, 0, VIEW_W, MAIN_H, 0x000000, 0.0).setOrigin(0, 0);
       this.worldOverlay.setDepth(10);
       this.world.add(this.worldOverlay);
 
       // --- cameras ---
       this.mainCam = this.cameras.main;
-      this.mainCam.setViewport(0, 0, VIEW_W, VIEW_H);
+      this.mainCam.setViewport(0, MINI_H, VIEW_W, MAIN_H);
       this.mainCam.setBackgroundColor("rgba(0,0,0,0)");
 
       // minimap camera (top-right)
       const MINI_W = 280;
-      const MINI_H = 180;
-      this.miniCam = this.cameras.add(VIEW_W - MINI_W - 10, 10, MINI_W, MINI_H);
+      this.miniCam = this.cameras.add(0, 0, VIEW_W, MINI_H);
       this.miniCam.setBackgroundColor("rgba(10,16,28,0.75)");
 
       // Make cameras see different containers
@@ -489,9 +492,9 @@ function initPhaser() {
       // Fallback: if assets failed to load, render a simple placeholder
       if (!this.textures.exists("grass") || (this._assetErrors && this._assetErrors.length)) {
         this.worldRT.clear();
-        this.worldRT.fill(0x0b1630, 1, 0, 0, VIEW_W, VIEW_H);
+        this.worldRT.fill(0x0b1630, 1, 0, 0, VIEW_W, MAIN_H);
         // simple path
-        const py = Math.floor(VIEW_H * 0.55);
+        const py = Math.floor(MAIN_H * 0.55);
         this.worldRT.fill(0x223044, 1, 0, py, VIEW_W, 80);
         return;
       }
@@ -501,7 +504,7 @@ function initPhaser() {
 
       // Base tiling (grass)
       const tilesX = Math.ceil(VIEW_W / TILE) + 1;
-      const tilesY = Math.ceil(VIEW_H / TILE) + 1;
+      const tilesY = Math.ceil(MAIN_H / TILE) + 1;
       for (let y = 0; y < tilesY; y++) {
         for (let x = 0; x < tilesX; x++) {
           this.worldRT.draw("grass", x * TILE, y * TILE);
@@ -543,7 +546,7 @@ function initPhaser() {
       const leafN = 40 + Math.floor(rng() * 80);
       for (let i = 0; i < leafN; i++) {
         const px = Math.floor(rng() * (VIEW_W - 16));
-        const py = Math.floor(rng() * (VIEW_H - 16));
+        const py = Math.floor(rng() * (MAIN_H - 16));
         this.worldRT.draw("leaves", px, py);
       }
 
