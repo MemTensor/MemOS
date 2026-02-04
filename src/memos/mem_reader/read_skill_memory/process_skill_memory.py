@@ -363,7 +363,6 @@ def _upload_skills(skills_repo_backend:str, skills_oss_dir: dict[str, Any] | Non
         args = sys.argv
         PORT = int(args[args.index('--port') + 1]) if '--port' in args and args.index('--port') + 1 < len(
             args) else "8000"
-        logging.warning(f"PORT:{PORT}")
 
         zip_path = str(local_file_path)
         local_save_path = os.getenv("FILE_LOCAL_PATH")
