@@ -16,7 +16,12 @@ from memos.mem_scheduler.base_mixins import (
 from memos.mem_scheduler.general_modules.init_components_for_scheduler import init_components
 from memos.mem_scheduler.general_modules.misc import AutoDroppingQueue as Queue
 from memos.mem_scheduler.general_modules.scheduler_logger import SchedulerLoggerModule
+from memos.mem_scheduler.memory_manage_modules.activation_memory_manager import (
+    ActivationMemoryManager,
+)
+from memos.mem_scheduler.memory_manage_modules.post_processor import MemoryPostProcessor
 from memos.mem_scheduler.memory_manage_modules.retriever import SchedulerRetriever
+from memos.mem_scheduler.memory_manage_modules.search_service import SchedulerSearchService
 from memos.mem_scheduler.monitors.dispatcher_monitor import SchedulerDispatcherMonitor
 from memos.mem_scheduler.monitors.general_monitor import SchedulerGeneralMonitor
 from memos.mem_scheduler.monitors.task_schedule_monitor import TaskScheduleMonitor
@@ -51,6 +56,7 @@ if TYPE_CHECKING:
     from memos.mem_cube.base import BaseMemCube
     from memos.mem_feedback.simple_feedback import SimpleMemFeedback
     from memos.mem_scheduler.schemas.message_schemas import ScheduleLogForWebItem
+    from memos.memories.textual.item import TextualMemoryItem
     from memos.memories.textual.tree import TreeTextMemory
     from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
     from memos.reranker.http_bge import HTTPBGEReranker
@@ -118,6 +124,9 @@ class BaseScheduler(
         self.orchestrator = SchedulerOrchestrator()
 
         self.searcher: Searcher | None = None
+        self.search_service: SchedulerSearchService | None = None
+        self.post_processor: MemoryPostProcessor | None = None
+        self.activation_memory_manager: ActivationMemoryManager | None = None
         self.retriever: SchedulerRetriever | None = None
         self.db_engine: Engine | None = None
         self.monitor: SchedulerGeneralMonitor | None = None
@@ -187,6 +196,9 @@ class BaseScheduler(
             self.searcher = searcher
         self.feedback_server = feedback_server
 
+        # Initialize search service with the searcher
+        self.search_service = SchedulerSearchService(searcher=self.searcher)
+
     def initialize_modules(
         self,
         chat_llm: BaseLLM,
@@ -216,6 +228,21 @@ class BaseScheduler(
             self.db_engine = self.monitor.db_engine
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
             self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
+
+            # Initialize search service (will be updated with searcher when mem_cube is initialized)
+            self.search_service = SchedulerSearchService(searcher=self.searcher)
+
+            # Initialize post-processor for memory enhancement and filtering
+            self.post_processor = MemoryPostProcessor(
+                process_llm=self.process_llm, config=self.config
+            )
+
+            self.activation_memory_manager = ActivationMemoryManager(
+                act_mem_dump_path=self.act_mem_dump_path,
+                monitor=self.monitor,
+                log_func_callback=self._submit_web_logs,
+                log_activation_memory_update_func=self.log_activation_memory_update,
+            )
 
             if mem_reader:
                 self.mem_reader = mem_reader
@@ -366,3 +393,45 @@ class BaseScheduler(
             )
 
     # Methods moved to mixins in mem_scheduler.base_mixins.
+
+    def update_activation_memory(
+        self,
+        new_memories: list[str | TextualMemoryItem],
+        label: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
+        mem_cube: BaseMemCube,
+    ) -> None:
+        """
+        Update activation memory by extracting KVCacheItems from new_memory (list of str),
+        add them to a KVCacheMemory instance, and dump to disk.
+        """
+        if self.activation_memory_manager:
+            self.activation_memory_manager.update_activation_memory(
+                new_memories=new_memories,
+                label=label,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+            )
+        else:
+            logger.warning("Activation memory manager not initialized")
+
+    def update_activation_memory_periodically(
+        self,
+        interval_seconds: int,
+        label: str,
+        user_id: UserID | str,
+        mem_cube_id: MemCubeID | str,
+        mem_cube: BaseMemCube,
+    ):
+        if self.activation_memory_manager:
+            self.activation_memory_manager.update_activation_memory_periodically(
+                interval_seconds=interval_seconds,
+                label=label,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                mem_cube=mem_cube,
+            )
+        else:
+            logger.warning("Activation memory manager not initialized")
