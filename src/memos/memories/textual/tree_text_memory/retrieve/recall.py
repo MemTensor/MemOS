@@ -397,6 +397,7 @@ class GraphMemoryRetriever:
         for r in all_hits:
             rid = r.get("id")
             if rid:
+                rid = str(rid).strip("\"'")
                 score = r.get("score", 0.0)
                 if rid not in id_to_score or score > id_to_score[rid]:
                     id_to_score[rid] = score
@@ -415,11 +416,20 @@ class GraphMemoryRetriever:
         )
 
         # Restore score-based order and inject scores into metadata
-        id_to_node = {n.get("id"): n for n in node_dicts}
+        id_to_node = {}
+        for n in node_dicts:
+            node_id = n.get("id")
+            if node_id:
+                # Ensure ID is a string and strip any surrounding quotes
+                node_id = str(node_id).strip("\"'")
+                id_to_node[node_id] = n
+
         ordered_nodes = []
         for rid in sorted_ids:
-            if rid in id_to_node:
-                node = id_to_node[rid]
+            # Ensure rid is normalized for matching
+            rid_normalized = str(rid).strip("\"'")
+            if rid_normalized in id_to_node:
+                node = id_to_node[rid_normalized]
                 # Inject similarity score as relativity
                 if "metadata" not in node:
                     node["metadata"] = {}
@@ -513,6 +523,8 @@ class GraphMemoryRetriever:
         for r in all_hits:
             rid = r.get("id")
             if rid:
+                # Ensure ID is a string and strip any surrounding quotes
+                rid = str(rid).strip("\"'")
                 score = r.get("score", 0.0)
                 if rid not in id_to_score or score > id_to_score[rid]:
                     id_to_score[rid] = score
@@ -531,11 +543,20 @@ class GraphMemoryRetriever:
         )
 
         # Restore score-based order and inject scores into metadata
-        id_to_node = {n.get("id"): n for n in node_dicts}
+        id_to_node = {}
+        for n in node_dicts:
+            node_id = n.get("id")
+            if node_id:
+                # Ensure ID is a string and strip any surrounding quotes
+                node_id = str(node_id).strip("\"'")
+                id_to_node[node_id] = n
+
         ordered_nodes = []
         for rid in sorted_ids:
-            if rid in id_to_node:
-                node = id_to_node[rid]
+            # Ensure rid is normalized for matching
+            rid_normalized = str(rid).strip("\"'")
+            if rid_normalized in id_to_node:
+                node = id_to_node[rid_normalized]
                 # Inject similarity score as relativity
                 if "metadata" not in node:
                     node["metadata"] = {}
