@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+
+
+class ActionType(str, Enum):
+    MOVE_FORWARD = "MOVE_FORWARD"
+    REST = "REST"
+    CAMP = "CAMP"
+    OBSERVE = "OBSERVE"
+    SAY = "SAY"
+
+
+class AoTaiNode(BaseModel):
+    node_id: str
+    name: str
+    altitude_m: int | None = None
+    scene_id: str = Field(..., description="Background scene identifier")
+    hint: str | None = None
+
+
+class RoleAttrs(BaseModel):
+    stamina: int = Field(70, ge=0, le=100)
+    mood: int = Field(60, ge=0, le=100)
+    experience: int = Field(10, ge=0, le=100)
+    risk_tolerance: int = Field(50, ge=0, le=100)
+
+
+class Role(BaseModel):
+    role_id: str
+    name: str
+    avatar_key: str = "default"
+    persona: str = "普通徒步爱好者，话不多但靠谱。"
+    attrs: RoleAttrs = Field(default_factory=RoleAttrs)
+
+
+class WorldState(BaseModel):
+    session_id: str
+    user_id: str
+    active_role_id: str | None = None
+    roles: list[Role] = Field(default_factory=list)
+    route_node_index: int = 0
+    day: int = 1
+    time_of_day: Literal["morning", "noon", "afternoon", "evening", "night"] = "morning"
+    weather: Literal["sunny", "cloudy", "windy", "rainy", "snowy", "foggy"] = "cloudy"
+    recent_events: list[str] = Field(default_factory=list)
+
+
+class Message(BaseModel):
+    message_id: str
+    role_id: str | None = None
+    role_name: str | None = None
+    kind: Literal["system", "speech", "action"] = "speech"
+    content: str
+    emote: str | None = None
+    action_tag: str | None = None
+    timestamp_ms: int
+
+
+class BackgroundAsset(BaseModel):
+    scene_id: str
+    asset_url: str | None = None
+    type: Literal["svg", "png", "gif", "spritesheet", "none"] = "none"
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class MapResponse(BaseModel):
+    nodes: list[AoTaiNode]
+
+
+class SessionNewRequest(BaseModel):
+    user_id: str = "demo_user"
+    seed: int | None = None
+
+
+class SessionNewResponse(BaseModel):
+    session_id: str
+    world_state: WorldState
+
+
+class RoleUpsertRequest(BaseModel):
+    session_id: str
+    role: Role
+
+
+class RoleUpsertResponse(BaseModel):
+    roles: list[Role]
+    active_role_id: str | None = None
+
+
+class SetActiveRoleRequest(BaseModel):
+    session_id: str
+    active_role_id: str
+
+
+class ActRequest(BaseModel):
+    session_id: str
+    action: ActionType
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActResponse(BaseModel):
+    world_state: WorldState
+    messages: list[Message]
+    background: BackgroundAsset

@@ -1,0 +1,303 @@
+:root {
+  --bg: #0c1020;
+  --panel: rgba(10, 16, 28, 0.92);
+  --border: #3a4a66;
+  --text: #e8f0ff;
+  --muted: #a7b5d4;
+  --accent: #7cf2ff;
+  --danger: #ff7c7c;
+  --ok: #a1ffb9;
+  --warn: #ffd27c;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Press Start 2P", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 12px;
+}
+
+#stage {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+#backdrop {
+  position: absolute;
+  inset: 0;
+  background: url("./assets/bg_trailhead.svg") center / cover no-repeat;
+  filter: saturate(1.1) contrast(1.05);
+  image-rendering: pixelated;
+}
+
+#game-root {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  height: 45%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+canvas {
+  image-rendering: pixelated;
+}
+
+#ui-root {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+#titlebar {
+  pointer-events: auto;
+  padding: 10px 12px 8px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0));
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.6);
+}
+
+.title {
+  color: var(--accent);
+  font-size: 14px;
+}
+.sub {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+#status {
+  margin-top: 8px;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* NEW: party status strip */
+.party-strip {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+.party-strip::-webkit-scrollbar {
+  height: 10px;
+}
+.party-strip::-webkit-scrollbar-thumb {
+  background: rgba(124, 242, 255, 0.25);
+  border: 2px solid rgba(58, 74, 102, 0.8);
+}
+
+.party-card {
+  flex: 0 0 auto;
+  width: 240px;
+  border: 2px solid var(--border);
+  background: rgba(10, 16, 28, 0.72);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+  padding: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.party-card.active {
+  border-color: var(--accent);
+}
+.party-card:hover {
+  border-color: var(--accent);
+}
+
+.party-head {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.party-ava {
+  width: 44px;
+  height: 44px;
+  image-rendering: pixelated;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+}
+.party-name {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.3;
+}
+.party-sub {
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.stat {
+  margin-top: 8px;
+}
+.stat-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 32px;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+.stat-label {
+  font-size: 9px;
+  color: var(--muted);
+}
+.stat-val {
+  font-size: 9px;
+  color: var(--text);
+  text-align: right;
+}
+.stat-bar {
+  height: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.25);
+  position: relative;
+  overflow: hidden;
+}
+.stat-bar > div {
+  height: 100%;
+  width: 50%;
+  background: rgba(124, 242, 255, 0.65);
+}
+.stat-bar.ok > div {
+  background: rgba(161, 255, 185, 0.75);
+}
+.stat-bar.warn > div {
+  background: rgba(255, 210, 124, 0.75);
+}
+.stat-bar.danger > div {
+  background: rgba(255, 124, 124, 0.75);
+}
+
+#panels {
+  pointer-events: auto;
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 320px 1fr 520px;
+  gap: 10px;
+  padding: 10px 12px 12px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--border);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+  padding: 10px;
+  min-height: 280px;
+}
+
+.panel-title {
+  font-size: 11px;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: rgba(20, 26, 44, 0.95);
+  border: 2px solid var(--border);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+button:hover {
+  border-color: var(--accent);
+}
+
+input {
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--border);
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.hint {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+#roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.role-pill {
+  padding: 6px 8px;
+  border: 2px solid var(--border);
+  background: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  user-select: none;
+}
+.role-pill.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#chat {
+  height: 240px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid rgba(255, 255, 255, 0.08);
+  padding: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.msg {
+  margin-bottom: 8px;
+}
+.msg .meta {
+  color: var(--muted);
+}
+.msg.system .meta {
+  color: var(--warn);
+}
+.msg.action .meta {
+  color: var(--ok);
+}
+.msg .content {
+  margin-top: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 1200px) {
+  #panels {
+    grid-template-columns: 1fr;
+  }
+  #game-root {
+    height: 35%;
+  }
+  .party-card {
+    width: 220px;
+  }
+}
