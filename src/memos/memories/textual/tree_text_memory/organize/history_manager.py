@@ -1,4 +1,5 @@
 import logging
+import time
 
 from typing import Literal
 
@@ -67,6 +68,36 @@ def _detach_related_content(new_item: TextualMemoryItem) -> None:
     return
 
 
+def _rebuild_fast_node_history(
+    item: TextualMemoryItem,
+    replacements: dict[int, list[ArchivedTextualMemory]],
+) -> None:
+    """
+    Reconstruct the history list of a fast node:
+    1. Replace resolved items with their evolved versions.
+    2. Deduplicate by ID while preserving newest versions.
+    """
+    new_history = {}
+
+    def _add(history_item):
+        item_id = history_item.archived_memory_id
+        current = new_history.get(item_id)
+
+        if current is None or history_item.version > current.version:
+            new_history[item_id] = history_item
+
+    # Apply replacements and filter superseded items
+    for i, h in enumerate(item.metadata.history):
+        if i in replacements:
+            # This item is resolved, insert its replacements
+            for replacement_item in replacements[i]:
+                _add(replacement_item)
+        else:
+            _add(h)
+
+    item.metadata.history = list(new_history.values())
+
+
 class MemoryHistoryManager:
     def __init__(self, nli_client: NLIClient, graph_db: BaseGraphDB) -> None:
         """
@@ -78,6 +109,131 @@ class MemoryHistoryManager:
         """
         self.nli_client = nli_client
         self.graph_db = graph_db
+
+    def _check_and_fetch_replacements(
+        self, item: TextualMemoryItem, pending_indices: list[int]
+    ) -> tuple[dict[int, list[ArchivedTextualMemory]], list[str]]:
+        """
+        Check DB status for pending items. If 'deleted', fetch evolved nodes.
+
+        Returns:
+            replacements: Dict mapping original history index to list of new ArchivedTextualMemory items.
+        """
+        pending_ids = [item.metadata.history[i].archived_memory_id for i in pending_indices]
+
+        # Batch fetch pending nodes to check status
+        nodes_data = self.graph_db.get_nodes(ids=pending_ids) or []
+        nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
+
+        replacements = {}
+
+        for i in pending_indices:
+            h_item = item.metadata.history[i]
+            node_data = nodes_map.get(h_item.archived_memory_id)
+
+            if not node_data:
+                continue
+
+            metadata = node_data.get("metadata", {})
+            status = metadata.get("status")
+
+            # Condition: Fast node is processed when it is marked as 'deleted'
+            if status == "deleted":
+                evolve_to_ids = metadata.get("evolve_to", [])
+
+                new_items = self._fetch_evolved_nodes(evolve_to_ids, h_item.update_type)
+                replacements[i] = new_items
+
+                logger.info(
+                    f"[MemoryHistoryManager] Resolved fast history item {h_item.archived_memory_id} -> {evolve_to_ids}"
+                )
+
+        return replacements
+
+    def _fetch_evolved_nodes(
+        self, evolve_to_ids: list[str], update_type: str
+    ) -> list[ArchivedTextualMemory]:
+        """Fetch the actual nodes that the fast node evolved into and convert to archive format."""
+        if not evolve_to_ids:
+            return []
+
+        evolved_nodes = self.graph_db.get_nodes(ids=evolve_to_ids) or []
+        results = []
+
+        for enode in evolved_nodes:
+            if not enode or "id" not in enode:
+                continue
+
+            enode_meta = enode.get("metadata", {})
+
+            # Create new archived memory inheriting the update_type (conflict/duplicate)
+            new_archived = ArchivedTextualMemory(
+                version=enode_meta.get("version", 1),
+                is_fast=enode_meta.get("is_fast", False),
+                memory=enode.get("memory", ""),
+                update_type=update_type,
+                archived_memory_id=enode.get("id"),
+                created_at=enode_meta.get("created_at"),
+            )
+            results.append(new_archived)
+
+        return results
+
+    def wait_and_update_fast_history(self, item: TextualMemoryItem, timeout_sec: int = 30) -> None:
+        """
+        Scan the item's history. If any history item is marked as `is_fast`,
+        wait for it to be resolved (i.e., status becomes 'deleted' in the DB).
+        When resolved, replace the fast item with the nodes referenced in its `evolve_to` field.
+        Finally, deduplicate the history.
+
+        Args:
+            item: The memory item containing the history to check.
+            timeout_sec: Maximum time to wait for resolution in seconds.
+        """
+        start_time = time.time()
+
+        # 1. Identify pending items (fast nodes)
+        pending_indices = [
+            i
+            for i, h in enumerate(item.metadata.history)
+            if getattr(h, "is_fast", False) and h.archived_memory_id
+        ]
+
+        while True:
+            if not pending_indices:
+                # All fast nodes resolved or none existed
+                break
+
+            if time.time() - start_time > timeout_sec:
+                logger.warning(
+                    f"[MemoryHistoryManager] Timeout waiting for fast history resolution for item {item.id}"
+                )
+                # Remove pending fast nodes from history
+                item.metadata.history = [
+                    h
+                    for h in item.metadata.history
+                    if not (getattr(h, "is_fast", False) and h.archived_memory_id)
+                ]
+                break
+
+            # 2. Check status of the fast nodes and fetch replacements for evolved ones
+            replacements = self._check_and_fetch_replacements(item, pending_indices)
+
+            # 3. If we have any resolved items, rebuild the history
+            if replacements:
+                _rebuild_fast_node_history(item, replacements)
+
+            # Check if we are done (no pending items left)
+            pending_indices = [
+                i
+                for i, h in enumerate(item.metadata.history)
+                if getattr(h, "is_fast", False) and h.archived_memory_id
+            ]
+
+            if pending_indices:
+                time.sleep(1)  # This avoids visiting the DB too frequently
+
+        return
 
     def resolve_history_via_nli(
         self, new_item: TextualMemoryItem, related_items: list[TextualMemoryItem]
