@@ -100,7 +100,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     def _serialize_redis_value(value: Any) -> Any:
         if value is None:
             return ""
-        if isinstance(value, (list, dict)):
+        if isinstance(value, list | dict):
             return json.dumps(value, ensure_ascii=False)
         return value
 
@@ -108,7 +108,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
     def from_dict(cls, data: dict) -> "ScheduleMessageItem":
         """Create model from Redis Stream dictionary"""
         def _decode(val: Any) -> Any:
-            if isinstance(val, (bytes, bytearray)):
+            if isinstance(val, bytes | bytearray):
                 return val.decode("utf-8")
             return val
 
