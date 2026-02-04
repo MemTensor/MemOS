@@ -159,7 +159,7 @@ class MemoryManager:
         graph_node_ids: list[str] = []
 
         for memory in memories:
-            working_id = str(uuid.uuid4())
+            working_id = memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
 
             if memory.metadata.memory_type in (
                 "WorkingMemory",
@@ -318,7 +318,7 @@ class MemoryManager:
         ids: list[str] = []
         futures = []
 
-        working_id = str(uuid.uuid4())
+        working_id = memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
             if memory.metadata.memory_type in (
