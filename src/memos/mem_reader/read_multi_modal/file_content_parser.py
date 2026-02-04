@@ -728,6 +728,11 @@ class FileContentParser(BaseMessageParser):
             """Process chunk with LLM, fallback to raw on failure."""
             try:
                 response_json = self._get_doc_llm_response(chunk_text, custom_tags)
+                response_json = {
+                    "value": chunk_text[:23],
+                    "tags": ["test"],
+                    "memory_type": "LongTermMemory",
+                }
                 if response_json:
                     value = response_json.get("value", "").strip()
                     if value:

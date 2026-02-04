@@ -522,9 +522,13 @@ class SingleCubeView(MemCubeView):
 
                     for edge in edges:
                         chunk_target_id = edge.get("to")
+                        edge_type = edge.get("type")
                         item_neighbor = self.graph_store.get_node(chunk_target_id)
                         if item_neighbor:
                             final_items.append(item_neighbor)
+                            self.logger.info(
+                                f"Add neighbor chunk: {item_neighbor.id}, edge_type: {edge_type} for {item.id}"
+                            )
 
                     final_items.append(item)
                 else:
