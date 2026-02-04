@@ -29,6 +29,7 @@ from memos.api.product_models import (
     APIChatCompleteRequest,
     APIFeedbackRequest,
     APISearchRequest,
+    ChatBusinessRequest,
     ChatPlaygroundRequest,
     ChatRequest,
     DeleteMemoryRequest,
@@ -247,6 +248,19 @@ def chat_stream_playground(chat_req: ChatPlaygroundRequest):
             status_code=503, detail="Chat service is not available. Chat handler not initialized."
         )
     return chat_handler.handle_chat_stream_playground(chat_req)
+
+
+@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
+def chat_stream_business_user(chat_req: ChatBusinessRequest):
+    """
+    Chat with MemOS for a specific business user. Returns SSE stream.
+    """
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+
+    return chat_handler.handle_chat_stream_for_business_user(chat_req)
 
 
 # =============================================================================

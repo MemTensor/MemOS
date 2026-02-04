@@ -167,6 +167,13 @@ class ChatPlaygroundRequest(ChatRequest):
     )
 
 
+class ChatBusinessRequest(ChatRequest):
+    """Request model for chat operations for business user."""
+
+    business_key: str = Field(..., description="Business User Key")
+    need_search: bool = Field(False, description="Whether to need search before chat")
+
+
 class ChatCompleteRequest(BaseRequest):
     """Request model for chat operations. will (Deprecated), instead use APIChatCompleteRequest."""
 
