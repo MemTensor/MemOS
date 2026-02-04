@@ -1,3 +1,5 @@
+import json
+
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -79,7 +81,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
 
     def to_dict(self) -> dict:
         """Convert model to dictionary suitable for Redis Stream"""
-        return {
+        raw = {
             "item_id": self.item_id,
             "user_id": self.user_id,
             "cube_id": self.mem_cube_id,
@@ -92,21 +94,53 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "task_id": self.task_id if self.task_id is not None else "",
             "chat_history": self.chat_history if self.chat_history is not None else [],
         }
+        return {key: self._serialize_redis_value(value) for key, value in raw.items()}
+
+    @staticmethod
+    def _serialize_redis_value(value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, (list, dict)):
+            return json.dumps(value, ensure_ascii=False)
+        return value
 
     @classmethod
     def from_dict(cls, data: dict) -> "ScheduleMessageItem":
         """Create model from Redis Stream dictionary"""
+        def _decode(val: Any) -> Any:
+            if isinstance(val, (bytes, bytearray)):
+                return val.decode("utf-8")
+            return val
+
+        raw_chat_history = _decode(data.get("chat_history"))
+        if isinstance(raw_chat_history, str):
+            if raw_chat_history:
+                try:
+                    chat_history = json.loads(raw_chat_history)
+                except Exception:
+                    chat_history = None
+            else:
+                chat_history = None
+        else:
+            chat_history = raw_chat_history
+
+        raw_timestamp = _decode(data.get("timestamp"))
+        timestamp = (
+            datetime.fromisoformat(raw_timestamp)
+            if raw_timestamp
+            else get_utc_now()
+        )
         return cls(
-            item_id=data.get("item_id", str(uuid4())),
-            user_id=data["user_id"],
-            mem_cube_id=data["cube_id"],
-            trace_id=data.get("trace_id", generate_trace_id()),
-            label=data["label"],
-            content=data["content"],
-            timestamp=datetime.fromisoformat(data["timestamp"]),
-            user_name=data.get("user_name"),
-            task_id=data.get("task_id"),
-            chat_history=data.get("chat_history"),
+            item_id=_decode(data.get("item_id", str(uuid4()))),
+            user_id=_decode(data["user_id"]),
+            mem_cube_id=_decode(data["cube_id"]),
+            trace_id=_decode(data.get("trace_id", generate_trace_id())),
+            label=_decode(data["label"]),
+            content=_decode(data["content"]),
+            timestamp=timestamp,
+            user_name=_decode(data.get("user_name")),
+            task_id=_decode(data.get("task_id")),
+            chat_history=chat_history,
         )
 
 
