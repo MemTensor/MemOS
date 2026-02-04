@@ -336,6 +336,7 @@ function initPhaser() {
       this._weather = null;
       this._tod = null;
       this._ws = null;
+      this._walkKey = "";
 
       this.mainCam = null;
       this.miniCam = null;
@@ -384,7 +385,7 @@ function initPhaser() {
       if (!this.textures.exists(pKey)) mg.generateTexture(pKey, 10, 18);
       mg.destroy();
 
-      this.player = this.add.image(Math.floor(VIEW_W * 0.52), Math.floor(VIEW_H * 0.58), pKey);
+      this.player = this.add.image(Math.floor(VIEW_W * 0.50), Math.floor(VIEW_H * 0.72), pKey);
       this.player.setOrigin(0.5, 1);
       this.world.add(this.player);
 
@@ -441,6 +442,10 @@ function initPhaser() {
       const nodeChanged = nodeId !== this._curNodeId;
       const moodChanged = weather !== this._weather || tod !== this._tod;
 
+      const walkKey = `${nodeId}|${ws?.in_transit_from_node_id || ""}|${ws?.in_transit_to_node_id || ""}|${Number(ws?.in_transit_progress_km || 0)}`;
+      const walkChanged = walkKey !== this._walkKey;
+      this._walkKey = walkKey;
+
       this._curNodeId = nodeId;
       this._visited = new Set(visited);
       this._weather = weather;
@@ -456,11 +461,20 @@ function initPhaser() {
       }
 
       // 3) small "step" animation on move
-      if (nodeChanged) {
+      if (nodeChanged || walkChanged) {
+        // Background scroll down a bit => feels like walking up
+        this.tweens.add({
+          targets: this.worldRT,
+          y: 14,
+          duration: 220,
+          yoyo: true,
+          ease: "Sine.easeInOut",
+        });
+        // tiny player bob
         this.tweens.add({
           targets: this.player,
-          x: Math.floor(VIEW_W * 0.52) + 8,
-          duration: 160,
+          y: this.player.y - 6,
+          duration: 220,
           yoyo: true,
           ease: "Sine.easeInOut",
         });
@@ -494,21 +508,36 @@ function initPhaser() {
         }
       }
 
-      // Path depending on node kind
+
+      // Path depending on node kind (VERTICAL: bottom -> top)
       const n = nodeById(nodeId);
       const kind = n?.kind || "main";
-      const centerY = Math.floor(tilesY / 2);
-      const pathW = kind === "camp" ? 4 : kind === "lake" ? 2 : 3;
-      const wobbleAmp = kind === "junction" ? 2 : 1;
 
-      for (let x = 0; x < tilesX; x++) {
-        const wobble = rng() < 0.25 ? (rng() < 0.5 ? -wobbleAmp : wobbleAmp) : 0;
-        const cy = clamp(centerY + wobble, 2, tilesY - 3);
-        for (let dy = -Math.floor(pathW / 2); dy <= Math.floor(pathW / 2); dy++) {
-          const yy = cy + dy;
-          this.worldRT.draw("brick", x * TILE, yy * TILE);
+      // center X, with a gentle drift as Y increases
+      let cx = Math.floor(tilesX / 2);
+      const pathW = kind === "camp" ? 4 : kind === "lake" ? 3 : 3;
+      const driftMax = kind === "junction" ? 2 : 1;
+
+      for (let y = tilesY - 1; y >= 0; y--) {
+        // occasional drift
+        if (rng() < 0.22) {
+          const d = rng() < 0.5 ? -1 : 1;
+          cx = clamp(cx + d, 2, tilesX - 3);
         }
+        // small wobble around drifted center
+        const wobble = rng() < 0.18 ? (rng() < 0.5 ? -driftMax : driftMax) : 0;
+        const xCenter = clamp(cx + wobble, 2, tilesX - 3);
+
+        for (let dx = -Math.floor(pathW / 2); dx <= Math.floor(pathW / 2); dx++) {
+          this.worldRT.draw("brick", (xCenter + dx) * TILE, y * TILE);
+        }
+
+        // slightly rough edges
+        if (rng() < 0.12) this.worldRT.draw("brick", (xCenter - Math.floor(pathW / 2) - 1) * TILE, y * TILE);
+        if (rng() < 0.12) this.worldRT.draw("brick", (xCenter + Math.floor(pathW / 2) + 1) * TILE, y * TILE);
       }
+
+      // (tilesX/tilesY already computed above)
 
       // Sprinkle leaves
       const leafN = 40 + Math.floor(rng() * 80);
@@ -518,26 +547,41 @@ function initPhaser() {
         this.worldRT.draw("leaves", px, py);
       }
 
-      // Trees/bushes/fence depending on kind
-      const bigCount = kind === "lake" ? 2 : 4;
-      for (let i = 0; i < bigCount; i++) {
-        const left = rng() < 0.5;
-        const x = left ? Math.floor(rng() * (VIEW_W * 0.25)) : Math.floor(VIEW_W * 0.75 + rng() * (VIEW_W * 0.25));
-        const y = Math.floor(VIEW_H * 0.38 + rng() * (VIEW_H * 0.32));
-        this.worldRT.draw("tree", x, y - 64);
+
+      // Trees/bushes/fence depending on kind (favor lining the path sides)
+      const sideMargin = Math.floor(tilesX * 0.18);
+      const leftBandMax = Math.max(2, Math.floor(tilesX / 2) - Math.floor(pathW / 2) - 2);
+      const rightBandMin = Math.min(tilesX - 3, Math.floor(tilesX / 2) + Math.floor(pathW / 2) + 2);
+
+      // Trees: place pairs along the path for "forest corridor" feel
+      const treeRows = 5 + Math.floor(rng() * 4);
+      for (let i = 0; i < treeRows; i++) {
+        const yTile = Math.floor((i + 1) * (tilesY / (treeRows + 1)));
+        const yPx = yTile * TILE;
+
+        const lx = Math.floor(rng() * (leftBandMax - 1)) * TILE;
+        const rx = (rightBandMin + Math.floor(rng() * Math.max(1, tilesX - rightBandMin - 1))) * TILE;
+
+        // push trees a bit down so feet sit on ground
+        this.worldRT.draw("tree", lx, yPx - 64);
+        this.worldRT.draw("tree", rx, yPx - 64);
       }
 
-      const bushN = 6 + Math.floor(rng() * 6);
+      // Bushes: sprinkle near bottom and sides
+      const bushN = 10 + Math.floor(rng() * 10);
       for (let i = 0; i < bushN; i++) {
-        const x = Math.floor(rng() * (VIEW_W - 32));
-        const y = Math.floor(VIEW_H * 0.45 + rng() * (VIEW_H * 0.45));
-        this.worldRT.draw("bush", x, y - 24);
+        const sideLeft = rng() < 0.5;
+        const xTile = sideLeft ? Math.floor(rng() * leftBandMax) : rightBandMin + Math.floor(rng() * Math.max(1, tilesX - rightBandMin));
+        const yPx = Math.floor(rng() * (VIEW_H - 32));
+        this.worldRT.draw("bush", xTile * TILE, yPx - 24);
       }
 
-      if (kind === "camp" || rng() < 0.35) {
-        const fx = Math.floor(VIEW_W * 0.12);
-        this.worldRT.draw("fence", fx, Math.floor(VIEW_H * 0.6));
-        this.worldRT.draw("fence", fx + 140, Math.floor(VIEW_H * 0.6));
+      // Fence hints in camp/exits
+      if (kind === "camp" || kind === "exit" || rng() < 0.18) {
+        const fx = Math.floor(VIEW_W * 0.18);
+        const fy = Math.floor(VIEW_H * 0.78);
+        this.worldRT.draw("fence", fx, fy);
+        this.worldRT.draw("fence", VIEW_W - fx - 160, fy);
       }
 
       if (rng() < 0.18) {
