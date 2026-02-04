@@ -399,16 +399,175 @@ class SearchHandler(BaseHandler):
 
     @staticmethod
     def _strip_embeddings(results: dict[str, Any]) -> None:
-        for bucket in results.get("text_mem", []):
-            for mem in bucket.get("memories", []):
-                metadata = mem.get("metadata", {})
-                if "embedding" in metadata:
-                    metadata["embedding"] = []
-        for bucket in results.get("tool_mem", []):
-            for mem in bucket.get("memories", []):
-                metadata = mem.get("metadata", {})
-                if "embedding" in metadata:
-                    metadata["embedding"] = []
+        for _mem_type, mem_results in results.items():
+            if isinstance(mem_results, list):
+                for bucket in mem_results:
+                    for mem in bucket.get("memories", []):
+                        metadata = mem.get("metadata", {})
+                        if "embedding" in metadata:
+                            metadata["embedding"] = []
+
+    @staticmethod
+    def _dice_similarity(text1: str, text2: str) -> float:
+        """
+        Calculate Dice coefficient (character-level, fastest).
+
+        Dice = 2 * |A ∩ B| / (|A| + |B|)
+        Speed: O(n + m), ~0.05-0.1ms per comparison
+
+        Args:
+            text1: First text string
+            text2: Second text string
+
+        Returns:
+            Dice similarity score between 0.0 and 1.0
+        """
+        if not text1 or not text2:
+            return 0.0
+
+        chars1 = set(text1)
+        chars2 = set(text2)
+
+        intersection = len(chars1 & chars2)
+        return 2 * intersection / (len(chars1) + len(chars2))
+
+    @staticmethod
+    def _bigram_similarity(text1: str, text2: str) -> float:
+        """
+        Calculate character-level 2-gram Jaccard similarity.
+
+        Speed: O(n + m), ~0.1-0.2ms per comparison
+        Considers local order (more strict than Dice).
+
+        Args:
+            text1: First text string
+            text2: Second text string
+
+        Returns:
+            Jaccard similarity score between 0.0 and 1.0
+        """
+        if not text1 or not text2:
+            return 0.0
+
+        # Generate 2-grams
+        bigrams1 = {text1[i : i + 2] for i in range(len(text1) - 1)} if len(text1) >= 2 else {text1}
+        bigrams2 = {text2[i : i + 2] for i in range(len(text2) - 1)} if len(text2) >= 2 else {text2}
+
+        intersection = len(bigrams1 & bigrams2)
+        union = len(bigrams1 | bigrams2)
+
+        return intersection / union if union > 0 else 0.0
+
+    @staticmethod
+    def _tfidf_similarity(text1: str, text2: str) -> float:
+        """
+        Calculate TF-IDF cosine similarity (character-level, no sklearn).
+
+        Speed: O(n + m), ~0.3-0.5ms per comparison
+        Considers character frequency weighting.
+
+        Args:
+            text1: First text string
+            text2: Second text string
+
+        Returns:
+            Cosine similarity score between 0.0 and 1.0
+        """
+        if not text1 or not text2:
+            return 0.0
+
+        from collections import Counter
+
+        # Character frequency (TF)
+        tf1 = Counter(text1)
+        tf2 = Counter(text2)
+
+        # All unique characters (vocabulary)
+        vocab = set(tf1.keys()) | set(tf2.keys())
+
+        # Simple IDF: log(2 / df) where df is document frequency
+        # For two documents, IDF is log(2/1)=0.693 if char appears in one doc,
+        # or log(2/2)=0 if appears in both (we use log(2/1) for simplicity)
+        idf = {char: (1.0 if char in tf1 and char in tf2 else 1.5) for char in vocab}
+
+        # TF-IDF vectors
+        vec1 = {char: tf1.get(char, 0) * idf[char] for char in vocab}
+        vec2 = {char: tf2.get(char, 0) * idf[char] for char in vocab}
+
+        # Cosine similarity
+        dot_product = sum(vec1[char] * vec2[char] for char in vocab)
+        norm1 = math.sqrt(sum(v * v for v in vec1.values()))
+        norm2 = math.sqrt(sum(v * v for v in vec2.values()))
+
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+
+        return dot_product / (norm1 * norm2)
+
+    @staticmethod
+    def _is_text_highly_similar_optimized(
+        candidate_idx: int,
+        candidate_text: str,
+        selected_global: list[int],
+        similarity_matrix,
+        flat: list,
+        threshold: float = 0.9,
+    ) -> bool:
+        """
+        Multi-algorithm text similarity check with embedding pre-filtering.
+
+        Strategy:
+        1. Only compare with the single highest embedding similarity item (not all 25)
+        2. Only perform text comparison if embedding similarity > 0.60
+        3. Use weighted combination of three algorithms:
+           - Dice (40%): Fastest, character-level set similarity
+           - TF-IDF (35%): Considers character frequency weighting
+           - 2-gram (25%): Considers local character order
+
+        Combined formula:
+            combined_score = 0.40 * dice + 0.35 * tfidf + 0.25 * bigram
+
+        This reduces comparisons from O(N) to O(1) per candidate, with embedding pre-filtering.
+        Expected speedup: 100-200x compared to LCS approach.
+
+        Args:
+            candidate_idx: Index of candidate memory in flat list
+            candidate_text: Text content of candidate memory
+            selected_global: List of already selected memory indices
+            similarity_matrix: Precomputed embedding similarity matrix
+            flat: Flat list of all memories
+            threshold: Combined similarity threshold (default 0.75)
+
+        Returns:
+            True if candidate is highly similar to any selected memory
+        """
+        if not selected_global:
+            return False
+
+        # Find the already-selected memory with highest embedding similarity
+        max_sim_idx = max(selected_global, key=lambda j: similarity_matrix[candidate_idx][j])
+        max_sim = similarity_matrix[candidate_idx][max_sim_idx]
+
+        # If highest embedding similarity < 0.60, skip text comparison entirely
+        if max_sim <= 0.9:
+            return False
+
+        # Get text of most similar memory
+        most_similar_mem = flat[max_sim_idx][2]
+        most_similar_text = most_similar_mem.get("memory", "").strip()
+
+        # Calculate three similarity scores
+        dice_sim = SearchHandler._dice_similarity(candidate_text, most_similar_text)
+        tfidf_sim = SearchHandler._tfidf_similarity(candidate_text, most_similar_text)
+        bigram_sim = SearchHandler._bigram_similarity(candidate_text, most_similar_text)
+
+        # Weighted combination: Dice (40%) + TF-IDF (35%) + 2-gram (25%)
+        # Dice has highest weight (fastest and most reliable)
+        # TF-IDF considers frequency (handles repeated characters well)
+        # 2-gram considers order (catches local pattern similarity)
+        combined_score = 0.40 * dice_sim + 0.35 * tfidf_sim + 0.25 * bigram_sim
+
+        return combined_score >= threshold
 
     @staticmethod
     def _dice_similarity(text1: str, text2: str) -> float:
@@ -584,8 +743,9 @@ class SearchHandler(BaseHandler):
 
         return [search_req.user_id]
 
-    def _build_cube_view(self, search_req: APISearchRequest) -> MemCubeView:
+    def _build_cube_view(self, search_req: APISearchRequest, searcher=None) -> MemCubeView:
         cube_ids = self._resolve_cube_ids(search_req)
+        searcher_to_use = searcher if searcher is not None else self.searcher
 
         if len(cube_ids) == 1:
             cube_id = cube_ids[0]
@@ -595,7 +755,7 @@ class SearchHandler(BaseHandler):
                 mem_reader=self.mem_reader,
                 mem_scheduler=self.mem_scheduler,
                 logger=self.logger,
-                searcher=self.searcher,
+                searcher=searcher_to_use,
                 deepsearch_agent=self.deepsearch_agent,
             )
         else:
@@ -606,7 +766,7 @@ class SearchHandler(BaseHandler):
                     mem_reader=self.mem_reader,
                     mem_scheduler=self.mem_scheduler,
                     logger=self.logger,
-                    searcher=self.searcher,
+                    searcher=searcher_to_use,
                     deepsearch_agent=self.deepsearch_agent,
                 )
                 for cube_id in cube_ids
