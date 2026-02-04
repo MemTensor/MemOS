@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -64,6 +64,10 @@ class MultiModalStructMemReaderConfig(BaseMemReaderConfig):
     skills_dir_config: dict[str, Any] | None = Field(
         default=None,
         description="Skills directory for the MemReader",
+    )
+    memory_version_switch: Literal["on", "off"] = Field(
+        default="off",
+        description="Turn on memory version or off",
     )
 
 
