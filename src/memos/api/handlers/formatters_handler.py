@@ -113,7 +113,7 @@ def post_process_textual_mem(
         mem
         for mem in text_formatted_mem
         if mem["metadata"]["memory_type"]
-        in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
+        in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory", "RawFileMemory"]
     ]
     tool_mem = [
         mem
@@ -163,7 +163,7 @@ def separate_knowledge_and_conversation_mem(memories: list[dict[str, Any]]):
             and sources[0]["type"] == "file"
             and "content" in sources[0]
             and sources[0]["content"] != ""
-        ):  # TODO change to memory_type
+        ):
             knowledge_mem.append(item)
         else:
             conversation_mem.append(item)

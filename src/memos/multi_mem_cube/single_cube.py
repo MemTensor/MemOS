@@ -24,6 +24,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_READ_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
 )
+from memos.memories.textual.item import TextualMemoryItem
 from memos.multi_mem_cube.views import MemCubeView
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
@@ -44,7 +45,6 @@ if TYPE_CHECKING:
     from memos.mem_cube.navie import NaiveMemCube
     from memos.mem_reader.simple_struct import SimpleStructMemReader
     from memos.mem_scheduler.optimized_scheduler import OptimizedScheduler
-    from memos.memories.textual.item import TextualMemoryItem
 
 
 @dataclass
@@ -504,33 +504,40 @@ class SingleCubeView(MemCubeView):
         """
         Postprocess search results.
         """
+
+        def extract_edge_info(edges_info: list[dict], neighbor_relativity: float):
+            edge_mems = []
+            for edge in edges_info:
+                chunk_target_id = edge.get("to")
+                edge_type = edge.get("type")
+                item_neighbor = self.searcher.graph_store.get_node(chunk_target_id)
+                if item_neighbor:
+                    item_neighbor_mem = TextualMemoryItem(**item_neighbor)
+                    item_neighbor_mem.metadata.relativity = neighbor_relativity
+                    edge_mems.append(item_neighbor_mem)
+                    item_neighbor_id = item_neighbor.get("id", "None")
+                    self.logger.info(
+                        f"Add neighbor chunk: {item_neighbor_id}, edge_type: {edge_type} for {item.id}"
+                    )
+            return edge_mems
+
         final_items = []
         if neighbor_discovery:
             for item in search_results:
-                edges = []
                 if item.metadata.memory_type == "RawFileMemory":
-                    edges.extend(
-                        self.graph_store.get_edges(
-                            item.id, type="PRECEDING", direction="OUTGOING", user_name=user_name
-                        )
+                    neighbor_relativity = item.metadata.relativity * 0.8
+                    preceding_info = self.searcher.graph_store.get_edges(
+                        item.id, type="PRECEDING", direction="OUTGOING", user_name=user_name
                     )
-                    edges.extend(
-                        self.graph_store.get_edges(
-                            item.id, type="FOLLOWING", direction="OUTGOING", user_name=user_name
-                        )
-                    )
-
-                    for edge in edges:
-                        chunk_target_id = edge.get("to")
-                        edge_type = edge.get("type")
-                        item_neighbor = self.graph_store.get_node(chunk_target_id)
-                        if item_neighbor:
-                            final_items.append(item_neighbor)
-                            self.logger.info(
-                                f"Add neighbor chunk: {item_neighbor.id}, edge_type: {edge_type} for {item.id}"
-                            )
+                    final_items.extend(extract_edge_info(preceding_info, neighbor_relativity))
 
                     final_items.append(item)
+
+                    following_info = self.searcher.graph_store.get_edges(
+                        item.id, type="FOLLOWING", direction="OUTGOING", user_name=user_name
+                    )
+                    final_items.extend(extract_edge_info(following_info, neighbor_relativity))
+
                 else:
                     final_items.append(item)
         else:

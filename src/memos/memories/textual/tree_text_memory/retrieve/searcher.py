@@ -891,7 +891,7 @@ class Searcher:
             (item, score)
             for item, score in results
             if item.metadata.memory_type
-            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
+            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory", "RawFileMemory"]
         ]
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
