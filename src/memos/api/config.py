@@ -970,7 +970,9 @@ class APIConfig:
             "postgres": postgres_config,
         }
         # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-        graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")).lower()
+        graph_db_backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
         if graph_db_backend in graph_db_backend_map:
             # Create MemCube config
 
@@ -1052,7 +1054,9 @@ class APIConfig:
             else None
         )
         # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
-        graph_db_backend = os.getenv("GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")).lower()
+        graph_db_backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
         if graph_db_backend in graph_db_backend_map:
             return GeneralMemCubeConfig.model_validate(
                 {
