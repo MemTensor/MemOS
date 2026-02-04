@@ -1,583 +1,24 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "MemOS REST APIs",
-    "description": "A REST API for managing and searching memories using MemOS.",
-    "version": "1.0.0"
+    "title": "MemOS Server REST APIs",
+    "description": "A REST API for managing multiple users with MemOS Server.",
+    "version": "1.0.1"
   },
   "paths": {
-    "/configure": {
+    "/product/search": {
       "post": {
-        "summary": "Configure MemOS",
-        "description": "Set MemOS configuration.",
-        "operationId": "set_config_configure_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MOSConfig"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConfigResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/users": {
-      "get": {
-        "summary": "List all users",
-        "description": "List all active users.",
-        "operationId": "list_users_users_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserListResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "summary": "Create a new user",
-        "description": "Create a new user.",
-        "operationId": "create_user_users_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UserCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/users/me": {
-      "get": {
-        "summary": "Get current user info",
-        "description": "Get current user information including accessible cubes.",
-        "operationId": "get_user_info_users_me_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/mem_cubes": {
-      "post": {
-        "summary": "Register a MemCube",
-        "description": "Register a new MemCube.",
-        "operationId": "register_mem_cube_mem_cubes_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemCubeRegister"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/mem_cubes/{mem_cube_id}": {
-      "delete": {
-        "summary": "Unregister a MemCube",
-        "description": "Unregister a MemCube.",
-        "operationId": "unregister_mem_cube_mem_cubes__mem_cube_id__delete",
-        "parameters": [
-          {
-            "name": "mem_cube_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mem Cube Id"
-            }
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            }
-          }
+        "tags": [
+          "Server API"
         ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/mem_cubes/{cube_id}/share": {
-      "post": {
-        "summary": "Share a cube with another user",
-        "description": "Share a cube with another user.",
-        "operationId": "share_cube_mem_cubes__cube_id__share_post",
-        "parameters": [
-          {
-            "name": "cube_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Cube Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CubeShare"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/memories": {
-      "post": {
-        "summary": "Create memories",
-        "description": "Store new memories in a MemCube.",
-        "operationId": "add_memory_memories_post",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryCreate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "get": {
-        "summary": "Get all memories",
-        "description": "Retrieve all memories from a MemCube.",
-        "operationId": "get_all_memories_memories_get",
-        "parameters": [
-          {
-            "name": "mem_cube_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Mem Cube Id"
-            }
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/memories/{mem_cube_id}/{memory_id}": {
-      "get": {
-        "summary": "Get a memory",
-        "description": "Retrieve a specific memory by ID from a MemCube.",
-        "operationId": "get_memory_memories__mem_cube_id___memory_id__get",
-        "parameters": [
-          {
-            "name": "mem_cube_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mem Cube Id"
-            }
-          },
-          {
-            "name": "memory_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Memory Id"
-            }
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MemoryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Update a memory",
-        "description": "Update an existing memory in a MemCube.",
-        "operationId": "update_memory_memories__mem_cube_id___memory_id__put",
-        "parameters": [
-          {
-            "name": "mem_cube_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mem Cube Id"
-            }
-          },
-          {
-            "name": "memory_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Memory Id"
-            }
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true,
-                "title": "Updated Memory"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "summary": "Delete a memory",
-        "description": "Delete a specific memory from a MemCube.",
-        "operationId": "delete_memory_memories__mem_cube_id___memory_id__delete",
-        "parameters": [
-          {
-            "name": "mem_cube_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mem Cube Id"
-            }
-          },
-          {
-            "name": "memory_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Memory Id"
-            }
-          },
-          {
-            "name": "user_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/search": {
-      "post": {
         "summary": "Search memories",
-        "description": "Search for memories across MemCubes.",
-        "operationId": "search_memories_search_post",
+        "description": "Search memories for a specific user.\n\nThis endpoint uses the class-based SearchHandler for better code organization.",
+        "operationId": "search_memories_product_search_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SearchRequest"
+                "$ref": "#/components/schemas/APISearchRequest"
               }
             }
           },
@@ -607,45 +48,31 @@
         }
       }
     },
-    "/memories/{mem_cube_id}": {
-      "delete": {
-        "summary": "Delete all memories",
-        "description": "Delete all memories from a MemCube.",
-        "operationId": "delete_all_memories_memories__mem_cube_id__delete",
-        "parameters": [
-          {
-            "name": "mem_cube_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Mem Cube Id"
+    "/product/add": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Add memories",
+        "description": "Add memories for a specific user.\n\nThis endpoint uses the class-based AddHandler for better code organization.",
+        "operationId": "add_memories_product_add_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIADDRequest"
+              }
             }
           },
-          {
-            "name": "user_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "User Id"
-            }
-          }
-        ],
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SimpleResponse"
+                  "$ref": "#/components/schemas/MemoryResponse"
                 }
               }
             }
@@ -663,11 +90,306 @@
         }
       }
     },
-    "/chat": {
+    "/product/scheduler/allstatus": {
+      "get": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get detailed scheduler status",
+        "description": "Get detailed scheduler status including running tasks and queue metrics.",
+        "operationId": "scheduler_allstatus_product_scheduler_allstatus_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/scheduler/status": {
+      "get": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get scheduler running status",
+        "description": "Get scheduler running status.",
+        "operationId": "scheduler_status_product_scheduler_status_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "User ID",
+              "title": "User Id"
+            },
+            "description": "User ID"
+          },
+          {
+            "name": "task_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional Task ID to query a specific task",
+              "title": "Task Id"
+            },
+            "description": "Optional Task ID to query a specific task"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/scheduler/task_queue_status": {
+      "get": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get scheduler task queue status",
+        "description": "Get scheduler task queue backlog/pending status for a user.",
+        "operationId": "scheduler_task_queue_status_product_scheduler_task_queue_status_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "User ID whose queue status is requested",
+              "title": "User Id"
+            },
+            "description": "User ID whose queue status is requested"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskQueueResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/scheduler/wait": {
       "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Wait until scheduler is idle for a specific user",
+        "description": "Wait until scheduler is idle for a specific user.",
+        "operationId": "scheduler_wait_product_scheduler_wait_post",
+        "parameters": [
+          {
+            "name": "user_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Name"
+            }
+          },
+          {
+            "name": "timeout_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 120.0,
+              "title": "Timeout Seconds"
+            }
+          },
+          {
+            "name": "poll_interval",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.5,
+              "title": "Poll Interval"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/scheduler/wait/stream": {
+      "get": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Stream scheduler progress for a user",
+        "description": "Stream scheduler progress via Server-Sent Events (SSE).",
+        "operationId": "scheduler_wait_stream_product_scheduler_wait_stream_get",
+        "parameters": [
+          {
+            "name": "user_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Name"
+            }
+          },
+          {
+            "name": "timeout_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 120.0,
+              "title": "Timeout Seconds"
+            }
+          },
+          {
+            "name": "poll_interval",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.5,
+              "title": "Poll Interval"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/chat/complete": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Chat with MemOS (Complete Response)",
+        "description": "Chat with MemOS for a specific user. Returns complete response (non-streaming).\n\nThis endpoint uses the class-based ChatHandler.",
+        "operationId": "chat_complete_product_chat_complete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIChatCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/chat/stream": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
         "summary": "Chat with MemOS",
-        "description": "Chat with the MemOS system.",
-        "operationId": "chat_chat_post",
+        "description": "Chat with MemOS for a specific user. Returns SSE stream.\n\nThis endpoint uses the class-based ChatHandler which internally\ncomposes SearchHandler and AddHandler for a clean architecture.",
+        "operationId": "chat_stream_product_chat_stream_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -683,8 +405,380 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChatResponse"
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/chat/stream/playground": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Chat with MemOS playground",
+        "description": "Chat with MemOS for a specific user. Returns SSE stream.\n\nThis endpoint uses the class-based ChatHandler which internally\ncomposes SearchHandler and AddHandler for a clean architecture.",
+        "operationId": "chat_stream_playground_product_chat_stream_playground_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatPlaygroundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/suggestions": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get suggestion queries",
+        "description": "Get suggestion queries for a specific user with language preference.",
+        "operationId": "get_suggestion_queries_product_suggestions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/get_all": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get all memories for user",
+        "description": "Get all memories or subgraph for a specific user.\n\nIf search_query is provided, returns a subgraph based on the query.\nOtherwise, returns all memories of the specified type.",
+        "operationId": "get_all_memories_product_get_all_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetMemoryPlaygroundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/get_memory": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get memories for user",
+        "operationId": "get_memories_product_get_memory_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetMemoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/get_memory/{memory_id}": {
+      "get": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get memory by id",
+        "operationId": "get_memory_by_id_product_get_memory__memory_id__get",
+        "parameters": [
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetMemoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/delete_memory": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Delete memories for user",
+        "operationId": "delete_memories_product_delete_memory_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteMemoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/feedback": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Feedback memories",
+        "description": "Feedback memories for a specific user.\n\nThis endpoint uses the class-based FeedbackHandler for better code organization.",
+        "operationId": "feedback_memories_product_feedback_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/APIFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/get_user_names_by_memory_ids": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Get user names by memory ids",
+        "description": "Get user names by memory ids.",
+        "operationId": "get_user_names_by_memory_ids_product_get_user_names_by_memory_ids_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GetUserNamesByMemoryIdsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetUserNamesByMemoryIdsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/product/exist_mem_cube_id": {
+      "post": {
+        "tags": [
+          "Server API"
+        ],
+        "summary": "Check if mem cube id exists",
+        "description": "Check if mem cube id exists.",
+        "operationId": "exist_mem_cube_id_product_exist_mem_cube_id_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExistMemCubeIdRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExistMemCubeIdResponse"
                 }
               }
             }
@@ -705,266 +799,26 @@
   },
   "components": {
     "schemas": {
-      "ChatRequest": {
+      "APIADDRequest": {
         "properties": {
-          "user_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Id",
-            "description": "User ID for the request",
-            "example": "user123"
-          },
-          "query": {
-            "type": "string",
-            "title": "Query",
-            "description": "Chat query message.",
-            "example": "What is the latest update?"
-          }
-        },
-        "type": "object",
-        "required": [
-          "query"
-        ],
-        "title": "ChatRequest"
-      },
-      "ChatResponse": {
-        "properties": {
-          "code": {
-            "type": "integer",
-            "title": "Code",
-            "description": "Response status code",
-            "default": 200,
-            "example": 200
-          },
-          "message": {
-            "type": "string",
-            "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
-          },
-          "data": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Data",
-            "description": "Response data"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "ChatResponse",
-        "description": "Response model for chat operations."
-      },
-      "ConfigResponse": {
-        "properties": {
-          "code": {
-            "type": "integer",
-            "title": "Code",
-            "description": "Response status code",
-            "default": 200,
-            "example": 200
-          },
-          "message": {
-            "type": "string",
-            "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
-          },
-          "data": {
-            "type": "null",
-            "title": "Data",
-            "description": "Response data"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "ConfigResponse",
-        "description": "Response model for configuration endpoint."
-      },
-      "CubeShare": {
-        "properties": {
-          "user_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Id",
-            "description": "User ID for the request",
-            "example": "user123"
-          },
-          "target_user_id": {
-            "type": "string",
-            "title": "Target User Id",
-            "description": "Target user ID to share with",
-            "example": "user456"
-          }
-        },
-        "type": "object",
-        "required": [
-          "target_user_id"
-        ],
-        "title": "CubeShare"
-      },
-      "HTTPValidationError": {
-        "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "type": "array",
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "title": "HTTPValidationError"
-      },
-      "LLMConfigFactory": {
-        "properties": {
-          "model_schema": {
-            "type": "string",
-            "title": "Model Schema",
-            "description": "Schema for configuration. This value will be automatically set.",
-            "default": "NOT_SET"
-          },
-          "backend": {
-            "type": "string",
-            "title": "Backend",
-            "description": "Backend for LLM"
-          },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config",
-            "description": "Configuration for the LLM backend"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "backend",
-          "config"
-        ],
-        "title": "LLMConfigFactory",
-        "description": "Factory class for creating LLM configurations."
-      },
-      "MOSConfig": {
-        "properties": {
-          "model_schema": {
-            "type": "string",
-            "title": "Model Schema",
-            "description": "Schema for configuration. This value will be automatically set.",
-            "default": "NOT_SET"
-          },
           "user_id": {
             "type": "string",
             "title": "User Id",
-            "description": "User ID for the MOS. This is used to distinguish between different users' memories.",
-            "default": "root"
+            "description": "User ID"
           },
           "session_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Session Id",
-            "description": "Session ID for the MOS. This is used to distinguish between different dialogue",
-            "default": "8dcdbd62-c231-4678-a3ae-0946b7d9ce14"
+            "description": "Session ID. If not provided, a default session will be used."
           },
-          "chat_model": {
-            "$ref": "#/components/schemas/LLMConfigFactory",
-            "description": "LLM configuration for the chat model in the MOS"
-          },
-          "mem_reader": {
-            "$ref": "#/components/schemas/MemReaderConfigFactory",
-            "description": "MemReader configuration for the MOS"
-          },
-          "mem_scheduler": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SchedulerConfigFactory"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Memory scheduler configuration for managing memory operations"
-          },
-          "user_manager": {
-            "$ref": "#/components/schemas/UserManagerConfigFactory",
-            "description": "User manager configuration for database operations"
-          },
-          "max_turns_window": {
-            "type": "integer",
-            "title": "Max Turns Window",
-            "description": "Maximum number of turns to keep in the conversation history",
-            "default": 15
-          },
-          "top_k": {
-            "type": "integer",
-            "title": "Top K",
-            "description": "Maximum number of memories to retrieve for each query",
-            "default": 5
-          },
-          "enable_textual_memory": {
-            "type": "boolean",
-            "title": "Enable Textual Memory",
-            "description": "Enable textual memory for the MemChat",
-            "default": true
-          },
-          "enable_activation_memory": {
-            "type": "boolean",
-            "title": "Enable Activation Memory",
-            "description": "Enable activation memory for the MemChat",
-            "default": false
-          },
-          "enable_parametric_memory": {
-            "type": "boolean",
-            "title": "Enable Parametric Memory",
-            "description": "Enable parametric memory for the MemChat",
-            "default": false
-          },
-          "enable_preference_memory": {
-            "type": "boolean",
-            "title": "Enable Preference Memory",
-            "description": "Enable preference memory for the MemChat",
-            "default": false
-          },
-          "enable_mem_scheduler": {
-            "type": "boolean",
-            "title": "Enable Mem Scheduler",
-            "description": "Enable memory scheduler for automated memory management",
-            "default": false
-          },
-          "PRO_MODE": {
-            "type": "boolean",
-            "title": "Pro Mode",
-            "description": "Enable PRO mode for complex query decomposition",
-            "default": false
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "MOSConfig"
-      },
-      "MemCubeRegister": {
-        "properties": {
-          "user_id": {
+          "task_id": {
             "anyOf": [
               {
                 "type": "string"
@@ -973,85 +827,112 @@
                 "type": "null"
               }
             ],
-            "title": "User Id",
-            "description": "User ID for the request",
-            "example": "user123"
+            "title": "Task Id",
+            "description": "Task ID for monitering async tasks"
           },
-          "mem_cube_name_or_path": {
-            "type": "string",
-            "title": "Mem Cube Name Or Path",
-            "description": "Name or path of the MemCube to register.",
-            "example": "/path/to/cube"
-          },
-          "mem_cube_id": {
+          "writable_cube_ids": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Mem Cube Id",
-            "description": "ID for the MemCube",
-            "example": "cube123"
-          }
-        },
-        "type": "object",
-        "required": [
-          "mem_cube_name_or_path"
-        ],
-        "title": "MemCubeRegister"
-      },
-      "MemReaderConfigFactory": {
-        "properties": {
-          "model_schema": {
-            "type": "string",
-            "title": "Model Schema",
-            "description": "Schema for configuration. This value will be automatically set.",
-            "default": "NOT_SET"
+            "title": "Writable Cube Ids",
+            "description": "List of cube IDs user can write for multi-cube add"
           },
-          "backend": {
+          "async_mode": {
             "type": "string",
-            "title": "Backend",
-            "description": "Backend for MemReader"
+            "enum": [
+              "async",
+              "sync"
+            ],
+            "title": "Async Mode",
+            "description": "Whether to add memory in async mode. Use 'async' to enqueue background add (non-blocking), or 'sync' to add memories in the current call. Default: 'async'.",
+            "default": "async"
           },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config",
-            "description": "Configuration for the MemReader backend"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "backend",
-          "config"
-        ],
-        "title": "MemReaderConfigFactory",
-        "description": "Factory class for creating MemReader configurations."
-      },
-      "MemoryCreate": {
-        "properties": {
-          "user_id": {
+          "mode": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "fast",
+                  "fine"
+                ]
               },
               {
                 "type": "null"
               }
             ],
-            "title": "User Id",
-            "description": "User ID for the request",
-            "example": "user123"
+            "title": "Mode",
+            "description": "(Internal) Add mode used only when async_mode='sync'. If set to 'fast', the handler will use a fast add pipeline. Ignored when async_mode='async'."
+          },
+          "custom_tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Tags",
+            "description": "Custom tags for this add request, e.g. ['Travel', 'family']. These tags can be used as filters in search."
+          },
+          "info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Info",
+            "description": "Additional metadata for the add request. All keys can be used as filters in search. Example: {'agent_id': 'xxxxxx', 'app_id': 'xxxx', 'source_type': 'web', 'source_url': 'https://www.baidu.com', 'source_content': '西湖是杭州最著名的景点'}."
           },
           "messages": {
             "anyOf": [
               {
+                "type": "string"
+              },
+              {
                 "items": {
-                  "$ref": "#/components/schemas/Message"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/File"
+                    }
+                  ]
                 },
                 "type": "array"
               },
@@ -1060,13 +941,41 @@
               }
             ],
             "title": "Messages",
-            "description": "List of messages to store.",
-            "example": [
+            "description": "List of messages to store. Supports: - system / user / assistant messages with 'content' and 'chat_time'; - tool messages including:   * tool_description (name, description, parameters),   * tool_input (call_id, name, argument),   * raw tool messages where content is str or list[str],   * tool_output with structured output items     (input_text / input_image / input_file, etc.). Also supports pure input items when there is no dialog."
+          },
+          "chat_history": {
+            "anyOf": [
               {
-                "content": "Hello",
-                "role": "user"
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
               }
-            ]
+            ],
+            "title": "Chat History",
+            "description": "Historical chat messages used internally by algorithms. If None, internal stored history will be used; if provided (even an empty list), this value will be used as-is."
+          },
+          "is_feedback": {
+            "type": "boolean",
+            "title": "Is Feedback",
+            "description": "Whether this request represents user feedback. Default: False.",
+            "default": false
           },
           "mem_cube_id": {
             "anyOf": [
@@ -1078,8 +987,7 @@
               }
             ],
             "title": "Mem Cube Id",
-            "description": "ID of the memory cube",
-            "example": "cube123"
+            "description": "(Deprecated) Target cube ID for this add request (optional for developer API)."
           },
           "memory_content": {
             "anyOf": [
@@ -1091,8 +999,7 @@
               }
             ],
             "title": "Memory Content",
-            "description": "Content to store as memory",
-            "example": "This is a memory content"
+            "description": "(Deprecated) Plain memory content to store. Prefer using `messages`."
           },
           "doc_path": {
             "anyOf": [
@@ -1104,27 +1011,1697 @@
               }
             ],
             "title": "Doc Path",
-            "description": "Path to document to store",
-            "example": "/path/to/document.txt"
+            "description": "(Deprecated / internal) Path to document to store."
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "(Deprecated) Simple source tag of the memory. Prefer using `info.source_type` / `info.source_url`."
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PermissionDict"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation",
+            "description": "(Internal) Operation definitions for multi-cube write permissions."
           }
         },
         "type": "object",
-        "title": "MemoryCreate"
+        "title": "APIADDRequest",
+        "description": "Request model for creating memories."
       },
-      "MemoryResponse": {
+      "APIChatCompleteRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "Chat query message"
+          },
+          "readable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readable Cube Ids",
+            "description": "List of cube IDs user can read for multi-cube chat"
+          },
+          "writable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writable Cube Ids",
+            "description": "List of cube IDs user can write for multi-cube chat"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History",
+            "description": "Chat history"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "description": "search mode: fast, fine, or mixture",
+            "default": "fast"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt",
+            "description": "Base system prompt to use for chat"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K",
+            "description": "Number of results to return",
+            "default": 10
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Session ID for soft-filtering memories"
+          },
+          "include_preference": {
+            "type": "boolean",
+            "title": "Include Preference",
+            "description": "Whether to handle preference memory",
+            "default": true
+          },
+          "pref_top_k": {
+            "type": "integer",
+            "title": "Pref Top K",
+            "description": "Number of preference results to return",
+            "default": 6
+          },
+          "model_name_or_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name Or Path",
+            "description": "Model name to use for chat"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "Max tokens to generate"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature",
+            "description": "Temperature for sampling"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top P",
+            "description": "Top-p (nucleus) sampling parameter"
+          },
+          "add_message_on_answer": {
+            "type": "boolean",
+            "title": "Add Message On Answer",
+            "description": "Add dialogs to memory after chat",
+            "default": true
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter",
+            "description": "\n        Filter for the memory, example:\n        {\n            \"`and` or `or`\": [\n                {\"id\": \"uuid-xxx\"},\n                {\"created_at\": {\"gt\": \"2024-01-01\"}},\n            ]\n        }\n        "
+          },
+          "internet_search": {
+            "type": "boolean",
+            "title": "Internet Search",
+            "description": "Whether to use internet search",
+            "default": false
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "description": "Threshold for filtering references",
+            "default": 0.5
+          },
+          "mem_cube_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Cube Id",
+            "description": "Cube ID to use for chat"
+          },
+          "moscube": {
+            "type": "boolean",
+            "title": "Moscube",
+            "description": "(Deprecated) Whether to use legacy MemOSCube pipeline",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "query"
+        ],
+        "title": "APIChatCompleteRequest",
+        "description": "Request model for chat operations."
+      },
+      "APIFeedbackRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Session ID for soft-filtering memories",
+            "default": "default_session"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id",
+            "description": "Task ID for monitering async tasks"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History",
+            "description": "Chat history"
+          },
+          "retrieved_memory_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieved Memory Ids",
+            "description": "Retrieved memory ids at last turn"
+          },
+          "feedback_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Content",
+            "description": "Feedback content to process"
+          },
+          "feedback_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Time",
+            "description": "Feedback time"
+          },
+          "writable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writable Cube Ids",
+            "description": "List of cube IDs user can write for multi-cube add"
+          },
+          "async_mode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "async"
+            ],
+            "title": "Async Mode",
+            "description": "feedback mode: sync or async",
+            "default": "async"
+          },
+          "corrected_answer": {
+            "type": "boolean",
+            "title": "Corrected Answer",
+            "description": "Whether need return corrected answer",
+            "default": false
+          },
+          "info": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Info",
+            "description": "Additional metadata for the add request. All keys can be used as filters in search. Example: {'agent_id': 'xxxxxx', 'app_id': 'xxxx', 'source_type': 'web', 'source_url': 'https://www.baidu.com', 'source_content': 'West Lake is the most famous scenic spot in Hangzhou'}."
+          },
+          "mem_cube_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Cube Id",
+            "description": "(Deprecated) Single cube ID to search in. Prefer `readable_cube_ids` for multi-cube search."
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "history",
+          "feedback_content"
+        ],
+        "title": "APIFeedbackRequest",
+        "description": "Request model for processing feedback info."
+      },
+      "APISearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "User search query"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "readable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readable Cube Ids",
+            "description": "List of cube IDs that are readable for this request. Required for algorithm-facing API; optional for developer-facing API."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "description": "Search mode: fast, fine, or mixture.",
+            "default": "fast"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Session ID used as a soft signal to prioritize more relevant memories. Only used for weighting, not as a hard filter."
+          },
+          "top_k": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Top K",
+            "description": "Number of textual memories to retrieve (top-K). Default: 10.",
+            "default": 10
+          },
+          "dedup": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "no",
+                  "sim"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dedup",
+            "description": "Optional dedup option for textual memories. Use 'no' for no dedup, 'sim' for similarity dedup. If None, default exact-text dedup is applied."
+          },
+          "pref_top_k": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pref Top K",
+            "description": "Number of preference memories to retrieve (top-K). Default: 6.",
+            "default": 6
+          },
+          "include_preference": {
+            "type": "boolean",
+            "title": "Include Preference",
+            "description": "Whether to retrieve preference memories along with general memories. If enabled, the system will automatically recall user preferences relevant to the query. Default: True.",
+            "default": true
+          },
+          "search_tool_memory": {
+            "type": "boolean",
+            "title": "Search Tool Memory",
+            "description": "Whether to retrieve tool memories along with general memories. If enabled, the system will automatically recall tool memories relevant to the query. Default: True.",
+            "default": true
+          },
+          "tool_mem_top_k": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Tool Mem Top K",
+            "description": "Number of tool memories to retrieve (top-K). Default: 6.",
+            "default": 6
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter",
+            "description": "\n        Filter for the memory, example:\n        {\n            \"`and` or `or`\": [\n                {\"id\": \"uuid-xxx\"},\n                {\"created_at\": {\"gt\": \"2024-01-01\"}},\n            ]\n        }\n        "
+          },
+          "internet_search": {
+            "type": "boolean",
+            "title": "Internet Search",
+            "description": "Whether to enable internet search in addition to memory search. Primarily used by internal algorithms. Default: False.",
+            "default": false
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold",
+            "description": "Internal similarity threshold for searching plaintext memories. If None, default thresholds will be applied."
+          },
+          "search_memory_type": {
+            "type": "string",
+            "title": "Search Memory Type",
+            "description": "Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory",
+            "default": "All"
+          },
+          "chat_history": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat History",
+            "description": "Historical chat messages used internally by algorithms. If None, internal stored history may be used; if provided (even an empty list), this value will be used as-is."
+          },
+          "mem_cube_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Cube Id",
+            "description": "(Deprecated) Single cube ID to search in. Prefer `readable_cube_ids` for multi-cube search."
+          },
+          "moscube": {
+            "type": "boolean",
+            "title": "Moscube",
+            "description": "(Deprecated / internal) Whether to use legacy MemOSCube path.",
+            "default": false
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PermissionDict"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation",
+            "description": "(Internal) Operation definitions for multi-cube read permissions."
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "Source of the search query [plugin will router diff search]"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "user_id"
+        ],
+        "title": "APISearchRequest",
+        "description": "Request model for searching memories."
+      },
+      "AllStatusResponse": {
         "properties": {
           "code": {
             "type": "integer",
             "title": "Code",
             "description": "Response status code",
-            "default": 200,
-            "example": 200
+            "default": 200
           },
           "message": {
             "type": "string",
             "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
+            "default": "Scheduler status summary retrieved successfully"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AllStatusResponseData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Response data"
+          }
+        },
+        "type": "object",
+        "title": "AllStatusResponse",
+        "description": "Response model for full scheduler status operations."
+      },
+      "AllStatusResponseData": {
+        "properties": {
+          "scheduler_summary": {
+            "$ref": "#/components/schemas/TaskSummary",
+            "description": "Aggregated status for scheduler-managed tasks"
+          },
+          "all_tasks_summary": {
+            "$ref": "#/components/schemas/TaskSummary",
+            "description": "Aggregated status for all tracked tasks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scheduler_summary",
+          "all_tasks_summary"
+        ],
+        "title": "AllStatusResponseData",
+        "description": "Aggregated scheduler status metrics."
+      },
+      "Audio": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "Audio"
+      },
+      "ChatCompletionAssistantMessageParam": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "const": "assistant",
+            "title": "Role"
+          },
+          "audio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Audio"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartRefusalParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartRefusalParam"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
+          },
+          "tool_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionMessageFunctionToolCallParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionMessageCustomToolCallParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionMessageFunctionToolCallParam"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionMessageCustomToolCallParam"
+              }
+            ],
+            "title": "Tool Calls"
+          },
+          "chat_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Time"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "ChatCompletionAssistantMessageParam"
+      },
+      "ChatCompletionContentPartImageParam": {
+        "properties": {
+          "image_url": {
+            "$ref": "#/components/schemas/ImageURL"
+          },
+          "type": {
+            "type": "string",
+            "const": "image_url",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_url",
+          "type"
+        ],
+        "title": "ChatCompletionContentPartImageParam"
+      },
+      "ChatCompletionContentPartInputAudioParam": {
+        "properties": {
+          "input_audio": {
+            "$ref": "#/components/schemas/InputAudio"
+          },
+          "type": {
+            "type": "string",
+            "const": "input_audio",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_audio",
+          "type"
+        ],
+        "title": "ChatCompletionContentPartInputAudioParam"
+      },
+      "ChatCompletionContentPartRefusalParam": {
+        "properties": {
+          "refusal": {
+            "type": "string",
+            "title": "Refusal"
+          },
+          "type": {
+            "type": "string",
+            "const": "refusal",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "refusal",
+          "type"
+        ],
+        "title": "ChatCompletionContentPartRefusalParam"
+      },
+      "ChatCompletionContentPartTextParam": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "type": {
+            "type": "string",
+            "const": "text",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "type"
+        ],
+        "title": "ChatCompletionContentPartTextParam"
+      },
+      "ChatCompletionMessageCustomToolCallParam": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "custom": {
+            "$ref": "#/components/schemas/Custom"
+          },
+          "type": {
+            "type": "string",
+            "const": "custom",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "custom",
+          "type"
+        ],
+        "title": "ChatCompletionMessageCustomToolCallParam"
+      },
+      "ChatCompletionMessageFunctionToolCallParam": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "function": {
+            "$ref": "#/components/schemas/Function"
+          },
+          "type": {
+            "type": "string",
+            "const": "function",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "function",
+          "type"
+        ],
+        "title": "ChatCompletionMessageFunctionToolCallParam"
+      },
+      "ChatCompletionSystemMessageParam": {
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+              }
+            ],
+            "title": "Content"
+          },
+          "role": {
+            "type": "string",
+            "const": "system",
+            "title": "Role"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "chat_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Time"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "role"
+        ],
+        "title": "ChatCompletionSystemMessageParam"
+      },
+      "ChatCompletionToolMessageParam": {
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartImageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartInputAudioParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/File"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartImageParam"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartInputAudioParam"
+              },
+              {
+                "$ref": "#/components/schemas/File"
+              }
+            ],
+            "title": "Content"
+          },
+          "role": {
+            "type": "string",
+            "const": "tool",
+            "title": "Role"
+          },
+          "tool_call_id": {
+            "type": "string",
+            "title": "Tool Call Id"
+          },
+          "chat_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Time"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "role",
+          "tool_call_id"
+        ],
+        "title": "ChatCompletionToolMessageParam"
+      },
+      "ChatCompletionUserMessageParam": {
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartImageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartInputAudioParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/File"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartImageParam"
+              },
+              {
+                "$ref": "#/components/schemas/ChatCompletionContentPartInputAudioParam"
+              },
+              {
+                "$ref": "#/components/schemas/File"
+              }
+            ],
+            "title": "Content"
+          },
+          "role": {
+            "type": "string",
+            "const": "user",
+            "title": "Role"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "chat_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Time"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "role"
+        ],
+        "title": "ChatCompletionUserMessageParam"
+      },
+      "ChatPlaygroundRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "Chat query message"
+          },
+          "readable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readable Cube Ids",
+            "description": "List of cube IDs user can read for multi-cube chat"
+          },
+          "writable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writable Cube Ids",
+            "description": "List of cube IDs user can write for multi-cube chat"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History",
+            "description": "Chat history"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "description": "search mode: fast, fine, or mixture",
+            "default": "fast"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt",
+            "description": "Base system prompt to use for chat"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K",
+            "description": "Number of results to return",
+            "default": 10
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Session ID for soft-filtering memories"
+          },
+          "include_preference": {
+            "type": "boolean",
+            "title": "Include Preference",
+            "description": "Whether to handle preference memory",
+            "default": true
+          },
+          "pref_top_k": {
+            "type": "integer",
+            "title": "Pref Top K",
+            "description": "Number of preference results to return",
+            "default": 6
+          },
+          "model_name_or_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name Or Path",
+            "description": "Model name to use for chat"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "Max tokens to generate"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature",
+            "description": "Temperature for sampling"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top P",
+            "description": "Top-p (nucleus) sampling parameter"
+          },
+          "add_message_on_answer": {
+            "type": "boolean",
+            "title": "Add Message On Answer",
+            "description": "Add dialogs to memory after chat",
+            "default": true
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter",
+            "description": "\n        Filter for the memory, example:\n        {\n            \"`and` or `or`\": [\n                {\"id\": \"uuid-xxx\"},\n                {\"created_at\": {\"gt\": \"2024-01-01\"}},\n            ]\n        }\n        "
+          },
+          "internet_search": {
+            "type": "boolean",
+            "title": "Internet Search",
+            "description": "Whether to use internet search",
+            "default": false
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "description": "Threshold for filtering references",
+            "default": 0.5
+          },
+          "moscube": {
+            "type": "boolean",
+            "title": "Moscube",
+            "description": "(Deprecated) Whether to use legacy MemOSCube pipeline.",
+            "default": false
+          },
+          "mem_cube_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Cube Id",
+            "description": "(Deprecated) Single cube ID to use for chat. Prefer `readable_cube_ids` / `writable_cube_ids` for multi-cube chat."
+          },
+          "beginner_guide_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beginner Guide Step",
+            "description": "Whether to use beginner guide, option: [first, second]"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "query"
+        ],
+        "title": "ChatPlaygroundRequest",
+        "description": "Request model for chat operations in playground."
+      },
+      "ChatRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "Chat query message"
+          },
+          "readable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readable Cube Ids",
+            "description": "List of cube IDs user can read for multi-cube chat"
+          },
+          "writable_cube_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Writable Cube Ids",
+            "description": "List of cube IDs user can write for multi-cube chat"
+          },
+          "history": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "History",
+            "description": "Chat history"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "description": "search mode: fast, fine, or mixture",
+            "default": "fast"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Prompt",
+            "description": "Base system prompt to use for chat"
+          },
+          "top_k": {
+            "type": "integer",
+            "title": "Top K",
+            "description": "Number of results to return",
+            "default": 10
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "Session ID for soft-filtering memories"
+          },
+          "include_preference": {
+            "type": "boolean",
+            "title": "Include Preference",
+            "description": "Whether to handle preference memory",
+            "default": true
+          },
+          "pref_top_k": {
+            "type": "integer",
+            "title": "Pref Top K",
+            "description": "Number of preference results to return",
+            "default": 6
+          },
+          "model_name_or_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name Or Path",
+            "description": "Model name to use for chat"
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens",
+            "description": "Max tokens to generate"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature",
+            "description": "Temperature for sampling"
+          },
+          "top_p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top P",
+            "description": "Top-p (nucleus) sampling parameter"
+          },
+          "add_message_on_answer": {
+            "type": "boolean",
+            "title": "Add Message On Answer",
+            "description": "Add dialogs to memory after chat",
+            "default": true
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter",
+            "description": "\n        Filter for the memory, example:\n        {\n            \"`and` or `or`\": [\n                {\"id\": \"uuid-xxx\"},\n                {\"created_at\": {\"gt\": \"2024-01-01\"}},\n            ]\n        }\n        "
+          },
+          "internet_search": {
+            "type": "boolean",
+            "title": "Internet Search",
+            "description": "Whether to use internet search",
+            "default": false
+          },
+          "threshold": {
+            "type": "number",
+            "title": "Threshold",
+            "description": "Threshold for filtering references",
+            "default": 0.5
+          },
+          "moscube": {
+            "type": "boolean",
+            "title": "Moscube",
+            "description": "(Deprecated) Whether to use legacy MemOSCube pipeline.",
+            "default": false
+          },
+          "mem_cube_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Cube Id",
+            "description": "(Deprecated) Single cube ID to use for chat. Prefer `readable_cube_ids` / `writable_cube_ids` for multi-cube chat."
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "query"
+        ],
+        "title": "ChatRequest",
+        "description": "Request model for chat operations.\n\nThis model is used as the algorithm-facing chat interface, while also\nremaining backward compatible with older developer-facing APIs."
+      },
+      "Custom": {
+        "properties": {
+          "input": {
+            "type": "string",
+            "title": "Input"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input",
+          "name"
+        ],
+        "title": "Custom"
+      },
+      "DeleteMemoryRequest": {
+        "properties": {
+          "writable_cube_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Writable Cube Ids",
+            "description": "Writable cube IDs"
+          },
+          "memory_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Ids",
+            "description": "Memory IDs"
+          },
+          "file_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Ids",
+            "description": "File IDs"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter",
+            "description": "Filter for the memory"
+          }
+        },
+        "type": "object",
+        "title": "DeleteMemoryRequest",
+        "description": "Request model for deleting memories."
+      },
+      "DeleteMemoryResponse": {
+        "properties": {
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "description": "Response status code",
+            "default": 200
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Response message"
           },
           "data": {
             "anyOf": [
@@ -1144,82 +2721,133 @@
         "required": [
           "message"
         ],
-        "title": "MemoryResponse",
-        "description": "Response model for memory operations."
+        "title": "DeleteMemoryResponse",
+        "description": "Response model for deleting memories."
       },
-      "Message": {
+      "ExistMemCubeIdRequest": {
         "properties": {
-          "role": {
+          "mem_cube_id": {
             "type": "string",
-            "title": "Role",
-            "description": "Role of the message (user or assistant).",
-            "example": "user"
-          },
-          "content": {
-            "type": "string",
-            "title": "Content",
-            "description": "Message content.",
-            "example": "Hello, how can I help you?"
+            "title": "Mem Cube Id",
+            "description": "Mem cube ID"
           }
         },
         "type": "object",
         "required": [
-          "role",
-          "content"
+          "mem_cube_id"
         ],
-        "title": "Message"
+        "title": "ExistMemCubeIdRequest",
+        "description": "Request model for checking if mem cube id exists."
       },
-      "SchedulerConfigFactory": {
+      "ExistMemCubeIdResponse": {
         "properties": {
-          "model_schema": {
-            "type": "string",
-            "title": "Model Schema",
-            "description": "Schema for configuration. This value will be automatically set.",
-            "default": "NOT_SET"
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "description": "Response status code",
+            "default": 200
           },
-          "backend": {
+          "message": {
             "type": "string",
-            "title": "Backend",
-            "description": "Backend for scheduler"
+            "title": "Message",
+            "description": "Response message"
           },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config",
-            "description": "Configuration for the scheduler backend"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "backend",
-          "config"
-        ],
-        "title": "SchedulerConfigFactory",
-        "description": "Factory class for creating scheduler configurations."
-      },
-      "SearchRequest": {
-        "properties": {
-          "user_id": {
+          "data": {
             "anyOf": [
               {
-                "type": "string"
+                "additionalProperties": {
+                  "type": "boolean"
+                },
+                "type": "object"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "User Id",
-            "description": "User ID for the request",
-            "example": "user123"
+            "title": "Data",
+            "description": "Response data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "ExistMemCubeIdResponse",
+        "description": "Response model for checking if mem cube id exists."
+      },
+      "File": {
+        "properties": {
+          "file": {
+            "$ref": "#/components/schemas/FileFile"
           },
-          "query": {
+          "type": {
             "type": "string",
-            "title": "Query",
-            "description": "Search query.",
-            "example": "How to implement a feature?"
+            "const": "file",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "type"
+        ],
+        "title": "File"
+      },
+      "FileFile": {
+        "properties": {
+          "file_data": {
+            "type": "string",
+            "title": "File Data"
           },
-          "install_cube_ids": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          }
+        },
+        "type": "object",
+        "title": "FileFile"
+      },
+      "Function": {
+        "properties": {
+          "arguments": {
+            "type": "string",
+            "title": "Arguments"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "arguments",
+          "name"
+        ],
+        "title": "Function"
+      },
+      "GetMemoryPlaygroundRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "memory_type": {
+            "type": "string",
+            "enum": [
+              "text_mem",
+              "act_mem",
+              "param_mem",
+              "para_mem"
+            ],
+            "title": "Memory Type",
+            "description": "Memory type"
+          },
+          "mem_cube_ids": {
             "anyOf": [
               {
                 "items": {
@@ -1231,19 +2859,306 @@
                 "type": "null"
               }
             ],
-            "title": "Install Cube Ids",
-            "description": "List of cube IDs to search in",
-            "example": [
-              "cube123",
-              "cube456"
-            ]
+            "title": "Mem Cube Ids",
+            "description": "Cube IDs"
+          },
+          "search_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Query",
+            "description": "Search query"
           }
         },
         "type": "object",
         "required": [
-          "query"
+          "user_id",
+          "memory_type"
         ],
-        "title": "SearchRequest"
+        "title": "GetMemoryPlaygroundRequest",
+        "description": "Request model for getting memories."
+      },
+      "GetMemoryRequest": {
+        "properties": {
+          "mem_cube_id": {
+            "type": "string",
+            "title": "Mem Cube Id",
+            "description": "Cube ID"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "include_preference": {
+            "type": "boolean",
+            "title": "Include Preference",
+            "description": "Whether to handle preference memory",
+            "default": true
+          },
+          "page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page",
+            "description": "Page number (starts from 1). If None, exports all data without pagination."
+          },
+          "page_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Size",
+            "description": "Number of items per page. If None, exports all data without pagination."
+          }
+        },
+        "type": "object",
+        "required": [
+          "mem_cube_id"
+        ],
+        "title": "GetMemoryRequest",
+        "description": "Request model for getting memories."
+      },
+      "GetMemoryResponse": {
+        "properties": {
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "description": "Response status code",
+            "default": 200
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Response message"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data",
+            "description": "Response data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "GetMemoryResponse",
+        "description": "Response model for getting memories."
+      },
+      "GetUserNamesByMemoryIdsRequest": {
+        "properties": {
+          "memory_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Memory Ids",
+            "description": "Memory IDs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "memory_ids"
+        ],
+        "title": "GetUserNamesByMemoryIdsRequest",
+        "description": "Request model for getting user names by memory ids."
+      },
+      "GetUserNamesByMemoryIdsResponse": {
+        "properties": {
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "description": "Response status code",
+            "default": 200
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Response message"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data",
+            "description": "Response data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "GetUserNamesByMemoryIdsResponse",
+        "description": "Response model for getting user names by memory ids."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ImageURL": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "low",
+              "high"
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ImageURL"
+      },
+      "InputAudio": {
+        "properties": {
+          "data": {
+            "type": "string",
+            "title": "Data"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "wav",
+              "mp3"
+            ],
+            "title": "Format"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "format"
+        ],
+        "title": "InputAudio"
+      },
+      "MemoryResponse": {
+        "properties": {
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "description": "Response status code",
+            "default": 200
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Response message"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data",
+            "description": "Response data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "MemoryResponse",
+        "description": "Response model for memory operations."
+      },
+      "PermissionDict": {
+        "properties": {
+          "permissions": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "delete",
+                "execute"
+              ]
+            },
+            "type": "array",
+            "title": "Permissions"
+          },
+          "mem_cube_id": {
+            "type": "string",
+            "title": "Mem Cube Id"
+          }
+        },
+        "type": "object",
+        "title": "PermissionDict",
+        "description": "Typed dictionary for chat message dictionaries."
+      },
+      "SearchMode": {
+        "type": "string",
+        "enum": [
+          "fast",
+          "fine",
+          "mixture"
+        ],
+        "title": "SearchMode",
+        "description": "Enumeration for search modes."
       },
       "SearchResponse": {
         "properties": {
@@ -1251,14 +3166,12 @@
             "type": "integer",
             "title": "Code",
             "description": "Response status code",
-            "default": 200,
-            "example": 200
+            "default": 200
           },
           "message": {
             "type": "string",
             "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
+            "description": "Response message"
           },
           "data": {
             "anyOf": [
@@ -1281,88 +3194,25 @@
         "title": "SearchResponse",
         "description": "Response model for search operations."
       },
-      "SimpleResponse": {
+      "StatusResponse": {
         "properties": {
           "code": {
             "type": "integer",
             "title": "Code",
             "description": "Response status code",
-            "default": 200,
-            "example": 200
+            "default": 200
           },
           "message": {
             "type": "string",
             "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
-          },
-          "data": {
-            "type": "null",
-            "title": "Data",
-            "description": "Response data"
-          }
-        },
-        "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "SimpleResponse",
-        "description": "Simple response model for operations without data return."
-      },
-      "UserCreate": {
-        "properties": {
-          "user_id": {
-            "type": "string",
-            "title": "User Id",
-            "description": "User ID",
-            "example": "user123"
-          },
-          "user_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Name",
-            "description": "Name of the user",
-            "example": "john_doe"
-          },
-          "role": {
-            "type": "string",
-            "title": "Role",
-            "description": "Role of the user",
-            "default": "user",
-            "example": "user"
-          }
-        },
-        "type": "object",
-        "required": [
-          "user_id"
-        ],
-        "title": "UserCreate"
-      },
-      "UserListResponse": {
-        "properties": {
-          "code": {
-            "type": "integer",
-            "title": "Code",
-            "description": "Response status code",
-            "default": 200,
-            "example": 200
-          },
-          "message": {
-            "type": "string",
-            "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
+            "default": "Memory get status successfully"
           },
           "data": {
             "anyOf": [
               {
-                "items": {},
+                "items": {
+                  "$ref": "#/components/schemas/StatusResponseItem"
+                },
                 "type": "array"
               },
               {
@@ -1374,50 +3224,134 @@
           }
         },
         "type": "object",
-        "required": [
-          "message"
-        ],
-        "title": "UserListResponse",
-        "description": "Response model for user list operations."
+        "title": "StatusResponse",
+        "description": "Response model for scheduler status operations."
       },
-      "UserManagerConfigFactory": {
+      "StatusResponseItem": {
         "properties": {
-          "backend": {
+          "task_id": {
             "type": "string",
-            "title": "Backend",
-            "description": "Backend for user manager",
-            "default": "sqlite"
+            "title": "Task Id",
+            "description": "The ID of the task"
           },
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config",
-            "description": "Configuration for the user manager backend"
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "waiting",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "description": "The current status of the task"
           }
         },
         "type": "object",
-        "title": "UserManagerConfigFactory",
-        "description": "Factory for user manager configurations."
+        "required": [
+          "task_id",
+          "status"
+        ],
+        "title": "StatusResponseItem",
+        "description": "Individual task status item."
       },
-      "UserResponse": {
+      "SuggestionRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID"
+          },
+          "mem_cube_id": {
+            "type": "string",
+            "title": "Mem Cube Id",
+            "description": "Cube ID"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Language",
+            "description": "Language for suggestions",
+            "default": "zh"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionSystemMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionUserMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionAssistantMessageParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionToolMessageParam"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ChatCompletionContentPartTextParam"
+                    },
+                    {
+                      "$ref": "#/components/schemas/File"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message",
+            "description": "List of messages to store."
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "mem_cube_id"
+        ],
+        "title": "SuggestionRequest",
+        "description": "Request model for getting suggestion queries."
+      },
+      "SuggestionResponse": {
         "properties": {
           "code": {
             "type": "integer",
             "title": "Code",
             "description": "Response status code",
-            "default": 200,
-            "example": 200
+            "default": 200
           },
           "message": {
             "type": "string",
             "title": "Message",
-            "description": "Response message",
-            "example": "Operation successful"
+            "description": "Response message"
           },
           "data": {
             "anyOf": [
               {
-                "additionalProperties": true,
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "type": "object"
               },
               {
@@ -1432,8 +3366,170 @@
         "required": [
           "message"
         ],
-        "title": "UserResponse",
-        "description": "Response model for user operations."
+        "title": "SuggestionResponse",
+        "description": "Response model for suggestion operations."
+      },
+      "TaskQueueData": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "User ID the query is scoped to"
+          },
+          "user_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Name",
+            "description": "User name if available"
+          },
+          "mem_cube_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mem Cube Id",
+            "description": "MemCube ID if a single cube is targeted; otherwise None"
+          },
+          "stream_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stream Keys",
+            "description": "Matched Redis stream keys for this user"
+          },
+          "users_count": {
+            "type": "integer",
+            "title": "Users Count",
+            "description": "Distinct users currently present in queue streams"
+          },
+          "pending_tasks_count": {
+            "type": "integer",
+            "title": "Pending Tasks Count",
+            "description": "Count of pending (delivered, not acked) tasks"
+          },
+          "remaining_tasks_count": {
+            "type": "integer",
+            "title": "Remaining Tasks Count",
+            "description": "Count of enqueued tasks (xlen)"
+          },
+          "pending_tasks_detail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Pending Tasks Detail",
+            "description": "Per-stream pending counts, formatted as '{stream_key}:{count}'"
+          },
+          "remaining_tasks_detail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Remaining Tasks Detail",
+            "description": "Per-stream remaining counts, formatted as '{stream_key}:{count}'"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "stream_keys",
+          "users_count",
+          "pending_tasks_count",
+          "remaining_tasks_count",
+          "pending_tasks_detail",
+          "remaining_tasks_detail"
+        ],
+        "title": "TaskQueueData",
+        "description": "Queue-level metrics for scheduler tasks."
+      },
+      "TaskQueueResponse": {
+        "properties": {
+          "code": {
+            "type": "integer",
+            "title": "Code",
+            "description": "Response status code",
+            "default": 200
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "Scheduler task queue status retrieved successfully"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskQueueData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Response data"
+          }
+        },
+        "type": "object",
+        "title": "TaskQueueResponse",
+        "description": "Response model for scheduler task queue status."
+      },
+      "TaskSummary": {
+        "properties": {
+          "waiting": {
+            "type": "integer",
+            "title": "Waiting",
+            "description": "Number of tasks waiting to run",
+            "default": 0
+          },
+          "in_progress": {
+            "type": "integer",
+            "title": "In Progress",
+            "description": "Number of tasks currently running",
+            "default": 0
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending",
+            "description": "Number of tasks fetched by workers but not yet acknowledged",
+            "default": 0
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed",
+            "description": "Number of tasks completed",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "description": "Number of tasks failed",
+            "default": 0
+          },
+          "cancelled": {
+            "type": "integer",
+            "title": "Cancelled",
+            "description": "Number of tasks cancelled",
+            "default": 0
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total number of tasks counted",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "TaskSummary",
+        "description": "Aggregated counts of tasks by status."
       },
       "ValidationError": {
         "properties": {

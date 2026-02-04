@@ -112,12 +112,16 @@ def post_process_textual_mem(
     fact_mem = [
         mem
         for mem in text_formatted_mem
-        if mem["metadata"]["memory_type"] not in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+        if mem["metadata"]["memory_type"]
+        in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
     ]
     tool_mem = [
         mem
         for mem in text_formatted_mem
         if mem["metadata"]["memory_type"] in ["ToolSchemaMemory", "ToolTrajectoryMemory"]
+    ]
+    skill_mem = [
+        mem for mem in text_formatted_mem if mem["metadata"]["memory_type"] == "SkillMemory"
     ]
 
     memories_result["text_mem"].append(
@@ -134,6 +138,13 @@ def post_process_textual_mem(
             "total_nodes": len(tool_mem),
         }
     )
+    memories_result["skill_mem"].append(
+        {
+            "cube_id": mem_cube_id,
+            "memories": skill_mem,
+            "total_nodes": len(skill_mem),
+        }
+    )
     return memories_result
 
 
@@ -144,7 +155,7 @@ def separate_knowledge_and_conversation_mem(memories: list[dict[str, Any]]):
     knowledge_mem = []
     conversation_mem = []
     for item in memories:
-        sources = item["metadata"]["sources"]
+        sources = item.get("metadata", {}).get("sources", [])
         if (
             item["metadata"]["memory_type"] != "RawFileMemory"
             and len(sources) > 0
@@ -199,7 +210,7 @@ def rerank_knowledge_mem(
         item["metadata"]["sources"] = []
 
     for item in conversation_mem:
-        item["metadata"]["sources"] = []
+        item.setdefault("metadata", {})["sources"] = []
 
     # deduplicate: remove items with duplicate memory content
     original_count = len(reranked_knowledge_mem)

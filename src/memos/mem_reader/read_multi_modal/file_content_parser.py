@@ -412,7 +412,6 @@ class FileContentParser(BaseMessageParser):
         # Extract file parameters (all are optional)
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
-        filename = file_info.get("filename", "")
         file_url_flag = False
         # Build content string based on available information
         content_parts = []
@@ -433,20 +432,11 @@ class FileContentParser(BaseMessageParser):
                 # Check if it looks like a URL
                 elif file_data.startswith(("http://", "https://", "file://")):
                     file_url_flag = True
-                    content_parts.append(f"[File URL: {file_data}]")
                 else:
                     # TODO: split into multiple memory items
                     content_parts.append(file_data)
             else:
                 content_parts.append(f"[File Data: {type(file_data).__name__}]")
-
-        # Priority 2: If file_id is provided, reference it
-        if file_id:
-            content_parts.append(f"[File ID: {file_id}]")
-
-        # Priority 3: If filename is provided, include it
-        if filename:
-            content_parts.append(f"[Filename: {filename}]")
 
         # Combine content parts
         content = " ".join(content_parts)
@@ -688,7 +678,7 @@ class FileContentParser(BaseMessageParser):
             chunk_idx: int, chunk_text: str, reason: str = "raw"
         ) -> TextualMemoryItem:
             """Create fallback memory item with raw chunk text."""
-            return _make_memory_item(
+            raw_chunk_mem = _make_memory_item(
                 value=chunk_text,
                 tags=[
                     "mode:fine",
@@ -699,6 +689,11 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx=chunk_idx,
                 chunk_content=chunk_text,
             )
+            tags_list = self.tokenizer.tokenize_mixed(raw_chunk_mem.metadata.key)
+            tags_list = [tag for tag in tags_list if len(tag) > 1]
+            tags_list = sorted(tags_list, key=len, reverse=True)
+            raw_chunk_mem.metadata.tags.extend(tags_list[:5])
+            return raw_chunk_mem
 
         # Handle empty chunks case
         if not valid_chunks:

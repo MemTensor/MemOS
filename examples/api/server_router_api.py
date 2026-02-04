@@ -7,22 +7,22 @@ This script demonstrates how to call the MemOS Product Add API
 message shapes and key options, including:
 
 1. Minimal string message (backward-compatible)
-2. Standard chat messages (system/user/assistant)
-3. Assistant messages with tool_calls
-4. Raw tool messages: tool_description / tool_input / tool_output
-5. Multimodal messages: text + image, text + file, audio-only
-6. Pure input items without dialog context: text/file
-7. Mixed multimodal message with text + file + image
-8. Deprecated fields: mem_cube_id, memory_content, doc_path, source
-9. Async vs sync + fast/fine add pipeline
-10. Feedback add (is_feedback)
-11. Add with chat_history only
+2. Tool / function-calling related examples
+3. Multimodal messages
+4. Pure input items without dialog context
+5. Deprecated fields: mem_cube_id, memory_content, doc_path, source
+6. Feedback and chat_history examples
 
-Each example sends a real POST request to `/product/add`.
+It also tests the following features:
+7. Search and Chat examples
+
+Each example sends a real POST request.
 
 NOTE:
 - This script assumes your MemOS server is running and router is mounted at `/product`.
 - You may need to adjust BASE_URL, USER_ID, MEM_CUBE_ID to fit your environment.
+- Also, the environment variable `MEM_READER_BACKEND=multimodal_struct` is required.
+- If you want to test simple_struct memreader, you can go to examples/mem_reader/run_simple.py
 """
 
 import json
@@ -34,7 +34,7 @@ import requests
 # Global config
 # ---------------------------------------------------------------------------
 
-BASE_URL = "http://0.0.0.0:8001/product"
+BASE_URL = "http://127.0.0.1:8001/product"
 HEADERS = {"Content-Type": "application/json"}
 
 # You can change these identifiers if your backend requires pre-registered users/cubes.
@@ -77,7 +77,7 @@ def call_add_api(name: str, payload: dict):
 # ===========================================================================
 
 
-def example_01_string_message_minimal():
+def example_01a_string_message_minimal():
     """
     Minimal example using `messages` as a pure string (MessagesType = str).
 
@@ -90,10 +90,10 @@ def example_01_string_message_minimal():
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": "今天心情不错，喝了咖啡。",
     }
-    call_add_api("01_string_message_minimal", payload)
+    call_add_api("example_01a_string_message_minimal", payload)
 
 
-def example_02_standard_chat_triplet():
+def example_01b_standard_chat_triplet():
     """
     Standard chat conversation: system + user + assistant.
 
@@ -108,12 +108,7 @@ def example_02_standard_chat_triplet():
         "messages": [
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a helpful travel assistant.",
-                    }
-                ],
+                "content": "You are a helpful travel assistant.",
                 "chat_time": "2025-11-24T10:00:00Z",
                 "message_id": "sys-1",
             },
@@ -138,7 +133,7 @@ def example_02_standard_chat_triplet():
             "source_url": "https://example.com/dialog/standard",
         },
     }
-    call_add_api("02_standard_chat_triplet", payload)
+    call_add_api("example_01b_standard_chat_triplet", payload)
 
 
 # ===========================================================================
@@ -146,7 +141,7 @@ def example_02_standard_chat_triplet():
 # ===========================================================================
 
 
-def example_03_assistant_with_tool_calls():
+def example_02a_assistant_with_tool_calls():
     """
     Assistant message containing tool_calls (function calls).
 
@@ -176,12 +171,10 @@ def example_03_assistant_with_tool_calls():
             }
         ],
     }
-    call_add_api("03_assistant_with_tool_calls", payload)
+    call_add_api("example_02a_assistant_with_tool_calls", payload)
 
 
-# ===========================================================================
-# 4. MultiModel messages
-def example_03b_tool_message_with_result():
+def example_02b_tool_message_with_result():
     """
     Tool message returning the result of a tool call.
 
@@ -219,10 +212,10 @@ def example_03b_tool_message_with_result():
         ],
         "info": {"source_type": "tool_execution"},
     }
-    call_add_api("03b_tool_message_with_result", payload)
+    call_add_api("example_02b_tool_message_with_result", payload)
 
 
-def example_03c_tool_description_input_output():
+def example_02c_tool_description_input_output():
     """
     Custom tool message format: tool_description, tool_input, tool_output.
 
@@ -237,72 +230,24 @@ def example_03c_tool_description_input_output():
         "writable_cube_ids": [MEM_CUBE_ID],
         "messages": [
             {
-                "type": "tool_description",
-                "name": "get_weather",
-                "description": "获取指定地点的当前天气信息",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string", "description": "城市名称"}},
-                    "required": ["location"],
-                },
-            },
-            {
-                "type": "tool_input",
-                "call_id": "call_123",
-                "name": "get_weather",
-                "argument": {"location": "北京"},
-            },
-            {
-                "type": "tool_output",
-                "call_id": "call_123",
-                "name": "get_weather",
-                "output": {"weather": "晴朗", "temperature": 25, "humidity": 60},
-            },
-        ],
-        "info": {"source_type": "custom_tool_format"},
-    }
-    call_add_api("03c_tool_description_input_output", payload)
-
-
-# ===========================================================================
-# 4. Multimodal messages
-# ===========================================================================
-
-
-def example_04_extreme_multimodal_single_message():
-    """
-    Extreme multimodal message:
-    text + image_url + file in one message, and another message with text + file.
-
-    Note: This demonstrates multiple multimodal messages in a single request.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "请分析下面这些信息："},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
-                    {"type": "file", "file": {"file_id": "f1", "filename": "xx.pdf"}},
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "tool-call-weather-1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "北京"}',
+                        },
+                    }
                 ],
-                "chat_time": "2025-11-24T10:55:00Z",
-                "message_id": "mix-mm-1",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "请再分析一下下面这些信息："},
-                    {"type": "file", "file": {"file_id": "f1", "filename": "xx.pdf"}},
-                ],
-                "chat_time": "2025-11-24T10:55:10Z",
-                "message_id": "mix-mm-2",
-            },
+                "chat_time": "2025-11-24T10:12:00Z",
+                "message_id": "assistant-with-call-1",
+            }
         ],
-        "info": {"source_type": "extreme_multimodal"},
     }
-    call_add_api("04_extreme_multimodal_single_message", payload)
+    call_add_api("example_02c_tool_description_input_output", payload)
 
 
 # ===========================================================================
@@ -310,7 +255,7 @@ def example_04_extreme_multimodal_single_message():
 # ===========================================================================
 
 
-def example_05_multimodal_text_and_image():
+def example_03_multimodal_text_and_image():
     """
     Multimodal user message: text + image_url.
 
@@ -342,76 +287,7 @@ def example_05_multimodal_text_and_image():
         ],
         "info": {"source_type": "image_analysis"},
     }
-    call_add_api("05_multimodal_text_and_image", payload)
-
-
-def example_06_multimodal_text_and_file():
-    """
-    Multimodal user message: text + file (file_id based).
-
-    - Uses `file_id` when the file has already been uploaded.
-    - Note: According to FileFile type definition (TypedDict, total=False),
-      all fields (`file_id`, `file_data`, `filename`) are optional.
-      However, in practice, you typically need at least `file_id` OR `file_data`
-      to specify the file location.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "请阅读这个PDF，总结里面的要点。",
-                    },
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_id": "file_123",
-                            "filename": "report.pdf",  # optional, but recommended
-                        },
-                    },
-                ],
-                "chat_time": "2025-11-24T10:21:00Z",
-                "message_id": "mm-file-1",
-            }
-        ],
-        "info": {"source_type": "file_summary"},
-    }
-    call_add_api("06_multimodal_text_and_file", payload)
-
-
-def example_07_audio_only_message():
-    """
-    Audio-only user message.
-
-    - `content` contains only an input_audio item.
-    - `data` is assumed to be base64 encoded audio content.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": "base64_encoded_audio_here",
-                            "format": "mp3",
-                        },
-                    }
-                ],
-                "chat_time": "2025-11-24T10:22:00Z",
-                "message_id": "audio-1",
-            }
-        ],
-        "info": {"source_type": "voice_note"},
-    }
-    call_add_api("07_audio_only_message", payload)
+    call_add_api("example_03_multimodal_text_and_image", payload)
 
 
 # ===========================================================================
@@ -419,7 +295,7 @@ def example_07_audio_only_message():
 # ===========================================================================
 
 
-def example_08_pure_text_input_items():
+def example_04a_pure_text_input_items():
     """
     Pure text input items without dialog context.
 
@@ -441,10 +317,10 @@ def example_08_pure_text_input_items():
         ],
         "info": {"source_type": "batch_import"},
     }
-    call_add_api("08_pure_text_input_items", payload)
+    call_add_api("example_04a_pure_text_input_items", payload)
 
 
-def example_09_pure_file_input_by_file_id():
+def example_04b_pure_file_input_by_file_id():
     """
     Pure file input item using file_id (standard format).
 
@@ -453,7 +329,7 @@ def example_09_pure_file_input_by_file_id():
       * `file_id`: optional, use when file is already uploaded
       * `file_data`: optional, use for base64-encoded content
       * `filename`: optional, but recommended for clarity
-    - In practice, you need at least `file_id` OR `file_data` to specify the file.
+      - In practice, you need at least `file_id` OR `file_data` to specify the file.
     """
     payload = {
         "user_id": USER_ID,
@@ -469,10 +345,10 @@ def example_09_pure_file_input_by_file_id():
         ],
         "info": {"source_type": "file_ingestion"},
     }
-    call_add_api("09_pure_file_input_by_file_id", payload)
+    call_add_api("example_04b_pure_file_input_by_file_id", payload)
 
 
-def example_09b_pure_file_input_by_file_data():
+def example_04c_pure_file_input_by_file_data():
     """
     Pure file input item using file_data (base64 encoded).
 
@@ -496,10 +372,10 @@ def example_09b_pure_file_input_by_file_data():
         ],
         "info": {"source_type": "file_ingestion_base64"},
     }
-    call_add_api("09b_pure_file_input_by_file_data", payload)
+    call_add_api("example_04c_pure_file_input_by_file_data", payload)
 
 
-def example_09c_pure_file_input_by_oss_url():
+def example_04d_pure_file_input_by_oss_url():
     """
     Pure file input item using file_data with OSS URL.
 
@@ -521,73 +397,7 @@ def example_09c_pure_file_input_by_oss_url():
         ],
         "info": {"source_type": "file_ingestion_oss"},
     }
-    call_add_api("09c_pure_file_input_by_oss_url", payload)
-
-
-def example_09d_pure_image_input():
-    """
-    Pure image input item without dialog context.
-
-    - This demonstrates adding an image as a standalone input item (not part of a conversation).
-    - Uses the same format as pure text/file inputs, but with image_url type.
-    - Useful for batch image ingestion or when images don't have associated dialog.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": [
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": "https://example.com/standalone_image.jpg",
-                    "detail": "high",
-                },
-            }
-        ],
-        "info": {"source_type": "image_ingestion"},
-    }
-    call_add_api("09d_pure_image_input", payload)
-
-
-def example_10_mixed_text_file_image():
-    """
-    Mixed multimodal message: text + file + image in a single user message.
-
-    - This is the most general form of `content` as a list of content parts.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "请同时分析这个报告和图表。",
-                    },
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_id": "file_789",
-                            "filename": "analysis_report.pdf",
-                        },
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": "https://example.com/chart.png",
-                            "detail": "auto",
-                        },
-                    },
-                ],
-                "chat_time": "2025-11-24T10:23:00Z",
-                "message_id": "mixed-1",
-            }
-        ],
-        "info": {"source_type": "report_plus_chart"},
-    }
-    call_add_api("10_mixed_text_file_image", payload)
+    call_add_api("example_04d_pure_file_input_by_oss_url", payload)
 
 
 # ===========================================================================
@@ -595,7 +405,7 @@ def example_10_mixed_text_file_image():
 # ===========================================================================
 
 
-def example_11_deprecated_memory_content_and_doc_path():
+def example_05_deprecated_memory_content_and_doc_path():
     """
     Use only deprecated fields to demonstrate the conversion logic:
 
@@ -616,116 +426,15 @@ def example_11_deprecated_memory_content_and_doc_path():
         "session_id": "session_deprecated_1",
         "async_mode": "async",
     }
-    call_add_api("11_deprecated_memory_content_and_doc_path", payload)
+    call_add_api("example_05_deprecated_memory_content_and_doc_path", payload)
 
 
 # ===========================================================================
-# 6. Async vs Sync, fast/fine modes
+# 6. Feedback and chat_history examples
 # ===========================================================================
 
 
-def example_12_async_default_pipeline():
-    """
-    Default async add pipeline.
-
-    - `async_mode` is omitted, so it defaults to "async".
-    - `mode` is ignored in async mode even if set (we keep it None here).
-    - This is the recommended pattern for most production traffic.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "session_id": "session_async_default",
-        "messages": "今天我在测试异步添加记忆。",
-        "custom_tags": ["async", "default"],
-        "info": {"source_type": "chat"},
-    }
-    call_add_api("12_async_default_pipeline", payload)
-
-
-def example_13_sync_fast_pipeline():
-    """
-    Sync add with fast pipeline.
-
-    - `async_mode = "sync"`, `mode = "fast"`.
-    - This is suitable for high-throughput or latency-sensitive ingestion
-      where you want lighter extraction logic.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "session_id": "session_sync_fast",
-        "async_mode": "sync",
-        "mode": "fast",
-        "messages": [
-            {
-                "role": "user",
-                "content": "这条记忆使用 sync + fast 模式写入。",
-            }
-        ],
-        "custom_tags": ["sync", "fast"],
-        "info": {"source_type": "api_test"},
-    }
-    call_add_api("13_sync_fast_pipeline", payload)
-
-
-def example_14_sync_fine_pipeline():
-    """
-    Sync add with fine pipeline.
-
-    - `async_mode = "sync"`, `mode = "fine"`.
-    - This is suitable for scenarios where quality of extraction is more
-      important than raw throughput.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "session_id": "session_sync_fine",
-        "async_mode": "sync",
-        "mode": "fine",
-        "messages": [
-            {
-                "role": "user",
-                "content": "这条记忆使用 sync + fine 模式写入，需要更精细的抽取。",
-            }
-        ],
-        "custom_tags": ["sync", "fine"],
-        "info": {"source_type": "api_test"},
-    }
-    call_add_api("14_sync_fine_pipeline", payload)
-
-
-def example_15_async_with_task_id():
-    """
-    Async add with explicit task_id.
-
-    - `task_id` can be used to correlate this async add request with
-      downstream scheduler status or monitoring.
-    """
-    payload = {
-        "user_id": USER_ID,
-        "writable_cube_ids": [MEM_CUBE_ID],
-        "session_id": "session_async_task",
-        "async_mode": "async",
-        "task_id": "task_async_001",
-        "messages": [
-            {
-                "role": "user",
-                "content": "这是一条带有 task_id 的异步写入请求。",
-            }
-        ],
-        "custom_tags": ["async", "task_id"],
-        "info": {"source_type": "task_test"},
-    }
-    call_add_api("15_async_with_task_id", payload)
-
-
-# ===========================================================================
-# 7. Feedback and chat_history examples
-# ===========================================================================
-
-
-def example_16_feedback_add():
+def example_06a_feedback_add():
     """
     Feedback add example.
 
@@ -751,10 +460,10 @@ def example_16_feedback_add():
             "feedback_type": "preference_correction",
         },
     }
-    call_add_api("16_feedback_add", payload)
+    call_add_api("example_06a_feedback_add", payload)
 
 
-def example_17_family_travel_conversation():
+def example_06b_family_travel_conversation():
     """
     Multi-turn conversation example: family travel planning.
 
@@ -800,10 +509,10 @@ def example_17_family_travel_conversation():
             "conversation_id": "0610",
         },
     }
-    call_add_api("17_family_travel_conversation", payload)
+    call_add_api("example_06b_family_travel_conversation", payload)
 
 
-def example_18_add_with_chat_history():
+def example_06c_add_with_chat_history():
     """
     Add memory with chat_history field.
 
@@ -841,7 +550,133 @@ def example_18_add_with_chat_history():
         ],
         "info": {"source_type": "chat_with_history"},
     }
-    call_add_api("18_add_with_chat_history", payload)
+    call_add_api("example_06c_add_with_chat_history", payload)
+
+
+# ===========================================================================
+# 7. Search and Chat examples
+# ===========================================================================
+
+
+def example_07a_search_memories():
+    """
+    Search memories using `APISearchRequest`.
+
+    - Searches for memories relevant to a query.
+    - Demonstrates usage of `readable_cube_ids` for scoping.
+    """
+    payload = {
+        "user_id": USER_ID,
+        "query": "What are my hotel preferences?",
+        "readable_cube_ids": [MEM_CUBE_ID],
+        "top_k": 5,
+        "mode": "fast",
+        "include_preference": True,
+    }
+
+    print("=" * 80)
+    print("[*] Example: 07a_search_memories")
+    print("- Payload:")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    try:
+        resp = requests.post(
+            f"{BASE_URL}/search", headers=HEADERS, data=json.dumps(payload), timeout=60
+        )
+        print("- Response:")
+        print(resp.status_code, resp.text)
+    except Exception as e:
+        print(f"- Request failed with exception: {e!r}")
+
+    print("=" * 80)
+    print()
+
+
+def example_07b_chat_complete():
+    """
+    Chat completion using `APIChatCompleteRequest`.
+
+    - Sends a chat query to the system.
+    - System retrieves relevant memories and generates a response.
+    - please make sure ENABLE_CHAT_API=true in .env or environment variables
+    - and set up CHAT_MODEL_LIST in .env or environment variables properly with api keys and stuff.
+    """
+    # 1. First, add some relevant memory so the chat has context
+    print("[*] Setting up context for chat...")
+    setup_payload = {
+        "user_id": USER_ID,
+        "writable_cube_ids": [MEM_CUBE_ID],
+        "messages": [
+            {
+                "role": "user",
+                "content": "I prefer quiet hotels with good wifi.",
+                "chat_time": "2025-01-01 10:00:00",
+            },
+            {
+                "role": "assistant",
+                "content": "Noted. Quiet environment and good wifi are your preferences.",
+                "chat_time": "2025-01-01 10:00:10",
+            },
+        ],
+        # Use sync mode to ensure memory is available immediately for the chat
+        "async_mode": "sync",
+    }
+    call_add_api("setup_memory_for_chat", setup_payload)
+
+    # 2. Interactive chat loop
+    print("=" * 80)
+    print("[*] Starting Interactive Chat (type 'exit' or 'quit' to stop)")
+    print("=" * 80)
+
+    while True:
+        try:
+            # Use input() to get user query from command line, example: "Where can I stay for a week?"
+            query = input("\nUser: ").strip()
+
+            # Check for exit commands
+            if query.lower() in ["exit", "quit"]:
+                print("Exiting chat...")
+                break
+
+            # Skip empty inputs
+            if not query:
+                continue
+
+            payload = {
+                "user_id": USER_ID,
+                "query": query,
+                "readable_cube_ids": [MEM_CUBE_ID],
+                "writable_cube_ids": [MEM_CUBE_ID],
+                "mode": "fast",
+                "top_k": 5,
+                "add_message_on_answer": True,
+                "session_id": SESSION_ID,
+            }
+
+            resp = requests.post(
+                f"{BASE_URL}/chat/complete", headers=HEADERS, data=json.dumps(payload), timeout=60
+            )
+
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    answer = data.get("data", {}).get("response", "")
+                    print(f"Assistant: {answer}")
+                except Exception as e:
+                    print(f"Error parsing response: {e}")
+                    print(resp.text)
+            else:
+                print(f"Error: {resp.status_code}")
+                print(resp.text)
+
+        except KeyboardInterrupt:
+            print("\nExiting chat...")
+            break
+        except Exception as e:
+            print(f"- Request failed with exception: {e!r}")
+
+    print("=" * 80)
+    print()
 
 
 # ===========================================================================
@@ -850,26 +685,19 @@ def example_18_add_with_chat_history():
 
 if __name__ == "__main__":
     # You can comment out some examples if you do not want to run all of them.
-    example_01_string_message_minimal()
-    example_02_standard_chat_triplet()
-    example_03_assistant_with_tool_calls()
-    example_03b_tool_message_with_result()
-    example_03c_tool_description_input_output()
-    example_04_extreme_multimodal_single_message()
-    example_05_multimodal_text_and_image()
-    example_06_multimodal_text_and_file()
-    example_07_audio_only_message()
-    example_08_pure_text_input_items()
-    example_09_pure_file_input_by_file_id()
-    example_09b_pure_file_input_by_file_data()
-    example_09c_pure_file_input_by_oss_url()
-    example_09d_pure_image_input()
-    example_10_mixed_text_file_image()
-    example_11_deprecated_memory_content_and_doc_path()
-    example_12_async_default_pipeline()
-    example_13_sync_fast_pipeline()
-    example_14_sync_fine_pipeline()
-    example_15_async_with_task_id()
-    example_16_feedback_add()
-    example_17_family_travel_conversation()
-    example_18_add_with_chat_history()
+    example_01a_string_message_minimal()
+    example_01b_standard_chat_triplet()
+    example_02a_assistant_with_tool_calls()
+    example_02b_tool_message_with_result()
+    example_02c_tool_description_input_output()
+    example_03_multimodal_text_and_image()
+    example_04a_pure_text_input_items()
+    example_04b_pure_file_input_by_file_id()
+    example_04c_pure_file_input_by_file_data()
+    example_04d_pure_file_input_by_oss_url()
+    example_05_deprecated_memory_content_and_doc_path()
+    example_06a_feedback_add()
+    example_06b_family_travel_conversation()
+    example_06c_add_with_chat_history()
+    example_07a_search_memories()
+    example_07b_chat_complete()

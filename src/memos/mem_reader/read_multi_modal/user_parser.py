@@ -155,6 +155,7 @@ class UserParser(BaseMessageParser):
         info: dict[str, Any],
         **kwargs,
     ) -> list[TextualMemoryItem]:
+        need_emb = kwargs.get("need_emb", True)
         if not isinstance(message, dict):
             logger.warning(f"[UserParser] Expected dict, got {type(message)}")
             return []
@@ -196,7 +197,7 @@ class UserParser(BaseMessageParser):
                 status="activated",
                 tags=["mode:fast"],
                 key=_derive_key(line),
-                embedding=self.embedder.embed([line])[0],
+                embedding=self.embedder.embed([line])[0] if need_emb else None,
                 usage=[],
                 sources=sources,
                 background="",

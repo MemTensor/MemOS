@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +410,8 @@ class APIConfig:
                     "url": os.getenv("MOS_RERANKER_URL", "localhost:8000/v1/rerank"),
                     "model": os.getenv("MOS_FEEDBACK_RERANKER_MODEL", "bge-reranker-v2-m3"),
                     "timeout": 10,
+                    "max_query_tokens": int(os.getenv("MOS_RERANKER_MAX_TOKENS", 8000)),
+                    "concate_len": int(os.getenv("MOS_RERANKER_CONCAT_LEN", 1000)),
                     "headers_extra": json.loads(os.getenv("MOS_RERANKER_HEADERS_EXTRA", "{}")),
                     "rerank_source": os.getenv("MOS_RERANK_SOURCE"),
                     "reranker_strategy": os.getenv("MOS_RERANKER_STRATEGY", "single_turn"),
@@ -438,6 +440,18 @@ class APIConfig:
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
                     "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
+                    "backup_client": os.getenv("MOS_EMBEDDER_BACKUP_CLIENT", "false").lower()
+                    == "true",
+                    "backup_base_url": os.getenv(
+                        "MOS_EMBEDDER_BACKUP_API_BASE", "http://openai.com"
+                    ),
+                    "backup_api_key": os.getenv("MOS_EMBEDDER_BACKUP_API_KEY", "sk-xxxx"),
+                    "backup_headers_extra": json.loads(
+                        os.getenv("MOS_EMBEDDER_BACKUP_HEADERS_EXTRA", "{}")
+                    ),
+                    "backup_model_name_or_path": os.getenv(
+                        "MOS_EMBEDDER_BACKUP_MODEL", "text-embedding-3-large"
+                    ),
                 },
             }
         else:  # ollama
@@ -465,6 +479,35 @@ class APIConfig:
         }
 
     @staticmethod
+    def get_oss_config() -> dict[str, Any] | None:
+        """Get OSS configuration and validate connection."""
+
+        config = {
+            "endpoint": os.getenv("OSS_ENDPOINT", "http://oss-cn-shanghai.aliyuncs.com"),
+            "access_key_id": os.getenv("OSS_ACCESS_KEY_ID", ""),
+            "access_key_secret": os.getenv("OSS_ACCESS_KEY_SECRET", ""),
+            "region": os.getenv("OSS_REGION", ""),
+            "bucket_name": os.getenv("OSS_BUCKET_NAME", ""),
+        }
+
+        # Validate that all required fields have values
+        required_fields = [
+            "endpoint",
+            "access_key_id",
+            "access_key_secret",
+            "region",
+            "bucket_name",
+        ]
+        missing_fields = [field for field in required_fields if not config.get(field)]
+
+        if missing_fields:
+            logger.warning(
+                f"OSS configuration incomplete. Missing fields: {', '.join(missing_fields)}"
+            )
+            return None
+
+        return config
+
     def get_internet_config() -> dict[str, Any]:
         """Get embedder configuration."""
         reader_config = APIConfig.get_reader_config()
@@ -509,6 +552,13 @@ class APIConfig:
                     },
                 },
             },
+        }
+
+    @staticmethod
+    def get_nli_config() -> dict[str, Any]:
+        """Get NLI model configuration."""
+        return {
+            "base_url": os.getenv("NLI_MODEL_BASE_URL", "http://localhost:32532"),
         }
 
     @staticmethod
@@ -628,6 +678,30 @@ class APIConfig:
             "use_multi_db": use_multi_db,
             "auto_create": True,
             "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", 1024)),
+        }
+
+    @staticmethod
+    def get_postgres_config(user_id: str | None = None) -> dict[str, Any]:
+        """Get PostgreSQL + pgvector configuration for MemOS graph storage.
+
+        Uses standard PostgreSQL with pgvector extension.
+        Schema: memos.memories, memos.edges
+        """
+        user_name = os.getenv("MEMOS_USER_NAME", "default")
+        if user_id:
+            user_name = f"memos_{user_id.replace('-', '')}"
+
+        return {
+            "host": os.getenv("POSTGRES_HOST", "postgres"),
+            "port": int(os.getenv("POSTGRES_PORT", "5432")),
+            "user": os.getenv("POSTGRES_USER", "n8n"),
+            "password": os.getenv("POSTGRES_PASSWORD", ""),
+            "db_name": os.getenv("POSTGRES_DB", "n8n"),
+            "schema_name": os.getenv("MEMOS_SCHEMA", "memos"),
+            "user_name": user_name,
+            "use_multi_db": False,
+            "embedding_dimension": int(os.getenv("EMBEDDING_DIMENSION", "384")),
+            "maxconn": int(os.getenv("POSTGRES_MAX_CONN", "20")),
         }
 
     @staticmethod
@@ -752,6 +826,11 @@ class APIConfig:
                         ).split(",")
                         if h.strip()
                     ],
+                    "oss_config": APIConfig.get_oss_config(),
+                    "skills_dir_config": {
+                        "skills_oss_dir": os.getenv("SKILLS_OSS_DIR", "skill_memory/"),
+                        "skills_local_dir": os.getenv("SKILLS_LOCAL_DIR", "/tmp/skill_memory/"),
+                    },
                 },
             },
             "enable_textual_memory": True,
@@ -892,13 +971,18 @@ class APIConfig:
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
             else None
         )
+        postgres_config = APIConfig.get_postgres_config(user_id=user_id)
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
             "polardb": polardb_config,
+            "postgres": postgres_config,
         }
-        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+        graph_db_backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
         if graph_db_backend in graph_db_backend_map:
             # Create MemCube config
 
@@ -966,18 +1050,23 @@ class APIConfig:
         neo4j_config = APIConfig.get_neo4j_config(user_id="default")
         nebular_config = APIConfig.get_nebular_config(user_id="default")
         polardb_config = APIConfig.get_polardb_config(user_id="default")
+        postgres_config = APIConfig.get_postgres_config(user_id="default")
         graph_db_backend_map = {
             "neo4j-community": neo4j_community_config,
             "neo4j": neo4j_config,
             "nebular": nebular_config,
             "polardb": polardb_config,
+            "postgres": postgres_config,
         }
         internet_config = (
             APIConfig.get_internet_config()
             if os.getenv("ENABLE_INTERNET", "false").lower() == "true"
             else None
         )
-        graph_db_backend = os.getenv("NEO4J_BACKEND", "neo4j-community").lower()
+        # Support both GRAPH_DB_BACKEND and legacy NEO4J_BACKEND env vars
+        graph_db_backend = os.getenv(
+            "GRAPH_DB_BACKEND", os.getenv("NEO4J_BACKEND", "neo4j-community")
+        ).lower()
         if graph_db_backend in graph_db_backend_map:
             return GeneralMemCubeConfig.model_validate(
                 {

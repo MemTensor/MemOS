@@ -319,11 +319,11 @@ class APISearchRequest(BaseRequest):
         description="Number of textual memories to retrieve (top-K). Default: 10.",
     )
 
-    dedup: Literal["no", "sim"] | None = Field(
-        None,
+    dedup: Literal["no", "sim", "mmr"] | None = Field(
+        "mmr",
         description=(
             "Optional dedup option for textual memories. "
-            "Use 'no' for no dedup, 'sim' for similarity dedup. "
+            "Use 'no' for no dedup, 'sim' for similarity dedup, 'mmr' for MMR-based dedup. "
             "If None, default exact-text dedup is applied."
         ),
     )
@@ -356,6 +356,18 @@ class APISearchRequest(BaseRequest):
         6,
         ge=0,
         description="Number of tool memories to retrieve (top-K). Default: 6.",
+    )
+
+    include_skill_memory: bool = Field(
+        True,
+        description="Whether to retrieve skill memories along with general memories. "
+        "If enabled, the system will automatically recall skill memories "
+        "relevant to the query. Default: True.",
+    )
+    skill_mem_top_k: int = Field(
+        3,
+        ge=0,
+        description="Number of skill memories to retrieve (top-K). Default: 3.",
     )
 
     # ==== Filter conditions ====
@@ -779,7 +791,8 @@ class GetMemoryRequest(BaseRequest):
     mem_cube_id: str = Field(..., description="Cube ID")
     user_id: str | None = Field(None, description="User ID")
     include_preference: bool = Field(True, description="Whether to return preference memory")
-    include_tool_memory: bool = Field(False, description="Whether to return tool memory")
+    include_tool_memory: bool = Field(True, description="Whether to return tool memory")
+    include_skill_memory: bool = Field(True, description="Whether to return skill memory")
     filter: dict[str, Any] | None = Field(None, description="Filter for the memory")
     page: int | None = Field(
         None,

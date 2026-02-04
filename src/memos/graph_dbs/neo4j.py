@@ -209,6 +209,10 @@ class Neo4jGraphDB(BaseGraphDB):
         # Flatten info fields to top level (for Neo4j flat structure)
         metadata = _flatten_info_fields(metadata)
 
+        # Initialize delete_time and delete_record_id fields
+        metadata.setdefault("delete_time", "")
+        metadata.setdefault("delete_record_id", "")
+
         # Merge node and set metadata
         created_at = metadata.pop("created_at")
         updated_at = metadata.pop("updated_at")
@@ -251,6 +255,7 @@ class Neo4jGraphDB(BaseGraphDB):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+        logger.info("neo4j [add_nodes_batch] staring")
         if not nodes:
             logger.warning("[add_nodes_batch] Empty nodes list, skipping")
             return
@@ -279,6 +284,10 @@ class Neo4jGraphDB(BaseGraphDB):
 
                 # Flatten info fields to top level (for Neo4j flat structure)
                 metadata = _flatten_info_fields(metadata)
+
+                # Initialize delete_time and delete_record_id fields
+                metadata.setdefault("delete_time", "")
+                metadata.setdefault("delete_record_id", "")
 
                 # Merge node and set metadata
                 created_at = metadata.pop("created_at")
@@ -493,7 +502,7 @@ class Neo4jGraphDB(BaseGraphDB):
             return result.single() is not None
 
     # Graph Query & Reasoning
-    def get_node(self, id: str, **kwargs) -> dict[str, Any] | None:
+    def get_node(self, id: str, include_embedding: bool = False, **kwargs) -> dict[str, Any] | None:
         """
         Retrieve the metadata and memory of a node.
         Args:
@@ -501,18 +510,28 @@ class Neo4jGraphDB(BaseGraphDB):
         Returns:
             Dictionary of node fields, or None if not found.
         """
-        user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
+        logger.info(f"[get_node] id: {id}")
+        user_name = kwargs.get("user_name")
         where_user = ""
         params = {"id": id}
-        if not self.config.use_multi_db and (self.config.user_name or user_name):
+        if user_name is not None:
             where_user = " AND n.user_name = $user_name"
             params["user_name"] = user_name
 
         query = f"MATCH (n:Memory) WHERE n.id = $id {where_user} RETURN n"
+        logger.info(f"[get_node] query: {query}")
 
         with self.driver.session(database=self.db_name) as session:
             record = session.run(query, params).single()
-            return self._parse_node(dict(record["n"])) if record else None
+            if not record:
+                return None
+
+            node_dict = dict(record["n"])
+            if include_embedding is False:
+                for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                    node_dict.pop(key, None)
+
+            return self._parse_node(node_dict)
 
     def get_nodes(self, ids: list[str], **kwargs) -> list[dict[str, Any]]:
         """
@@ -1705,7 +1724,7 @@ class Neo4jGraphDB(BaseGraphDB):
         node.pop("user_name", None)
 
         # serialization
-        if node["sources"]:
+        if node.get("sources"):
             for idx in range(len(node["sources"])):
                 if not (
                     isinstance(node["sources"][idx], str)
@@ -1929,5 +1948,176 @@ class Neo4jGraphDB(BaseGraphDB):
         except Exception as e:
             logger.error(
                 f"[exist_user_name] Failed to check user_name existence: {e}", exc_info=True
+            )
+            raise
+
+    def delete_node_by_mem_cube_id(
+        self,
+        mem_kube_id: dict | None = None,
+        delete_record_id: dict | None = None,
+        deleted_type: bool = False,
+    ) -> int:
+        """
+        Delete nodes by mem_kube_id (user_name) and delete_record_id.
+
+        Args:
+            mem_kube_id: The mem_kube_id which corresponds to user_name in the table.
+                Can be dict or str. If dict, will extract the value.
+            delete_record_id: The delete_record_id to match.
+                Can be dict or str. If dict, will extract the value.
+            deleted_type: If True, performs hard delete (directly deletes records).
+                If False, performs soft delete (updates status to 'deleted' and sets delete_record_id and delete_time).
+
+        Returns:
+            int: Number of nodes deleted or updated.
+        """
+        # Handle dict type parameters (extract value if dict)
+        if isinstance(mem_kube_id, dict):
+            # Try to get a value from dict, use first value if multiple
+            mem_kube_id = next(iter(mem_kube_id.values())) if mem_kube_id else None
+
+        if isinstance(delete_record_id, dict):
+            delete_record_id = next(iter(delete_record_id.values())) if delete_record_id else None
+
+        # Validate required parameters
+        if not mem_kube_id:
+            logger.warning("[delete_node_by_mem_cube_id] mem_kube_id is required but not provided")
+            return 0
+
+        if not delete_record_id:
+            logger.warning(
+                "[delete_node_by_mem_cube_id] delete_record_id is required but not provided"
+            )
+            return 0
+
+        # Convert to string if needed
+        mem_kube_id = str(mem_kube_id) if mem_kube_id else None
+        delete_record_id = str(delete_record_id) if delete_record_id else None
+
+        logger.info(
+            f"[delete_node_by_mem_cube_id] mem_kube_id={mem_kube_id}, "
+            f"delete_record_id={delete_record_id}, deleted_type={deleted_type}"
+        )
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                if deleted_type:
+                    # Hard delete: WHERE user_name = mem_kube_id AND delete_record_id = $delete_record_id
+                    query = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_kube_id AND n.delete_record_id = $delete_record_id
+                        DETACH DELETE n
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard delete query: {query}")
+
+                    result = session.run(
+                        query, mem_kube_id=mem_kube_id, delete_record_id=delete_record_id
+                    )
+                    summary = result.consume()
+                    deleted_count = summary.counters.nodes_deleted if summary.counters else 0
+
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
+                    return deleted_count
+                else:
+                    # Soft delete: WHERE user_name = mem_kube_id (only user_name condition)
+                    current_time = datetime.utcnow().isoformat()
+
+                    query = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_kube_id
+                        SET n.status = $status,
+                            n.delete_record_id = $delete_record_id,
+                            n.delete_time = $delete_time
+                        RETURN count(n) AS updated_count
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Soft delete query: {query}")
+
+                    result = session.run(
+                        query,
+                        mem_kube_id=mem_kube_id,
+                        status="deleted",
+                        delete_record_id=delete_record_id,
+                        delete_time=current_time,
+                    )
+                    record = result.single()
+                    updated_count = record["updated_count"] if record else 0
+
+                    logger.info(
+                        f"[delete_node_by_mem_cube_id] Soft deleted (updated) {updated_count} nodes"
+                    )
+                    return updated_count
+
+        except Exception as e:
+            logger.error(
+                f"[delete_node_by_mem_cube_id] Failed to delete/update nodes: {e}", exc_info=True
+            )
+            raise
+
+    def recover_memory_by_mem_kube_id(
+        self,
+        mem_kube_id: str | None = None,
+        delete_record_id: str | None = None,
+    ) -> int:
+        """
+        Recover memory nodes by mem_kube_id (user_name) and delete_record_id.
+
+        This function updates the status to 'activated', and clears delete_record_id and delete_time.
+
+        Args:
+            mem_kube_id: The mem_kube_id which corresponds to user_name in the table.
+            delete_record_id: The delete_record_id to match.
+
+        Returns:
+            int: Number of nodes recovered (updated).
+        """
+        # Validate required parameters
+        if not mem_kube_id:
+            logger.warning(
+                "[recover_memory_by_mem_kube_id] mem_kube_id is required but not provided"
+            )
+            return 0
+
+        if not delete_record_id:
+            logger.warning(
+                "[recover_memory_by_mem_kube_id] delete_record_id is required but not provided"
+            )
+            return 0
+
+        logger.info(
+            f"[recover_memory_by_mem_kube_id] mem_kube_id={mem_kube_id}, "
+            f"delete_record_id={delete_record_id}"
+        )
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $mem_kube_id AND n.delete_record_id = $delete_record_id
+                    SET n.status = $status,
+                        n.delete_record_id = $delete_record_id_empty,
+                        n.delete_time = $delete_time_empty
+                    RETURN count(n) AS updated_count
+                """
+                logger.info(f"[recover_memory_by_mem_kube_id] Update query: {query}")
+
+                result = session.run(
+                    query,
+                    mem_kube_id=mem_kube_id,
+                    delete_record_id=delete_record_id,
+                    status="activated",
+                    delete_record_id_empty="",
+                    delete_time_empty="",
+                )
+                record = result.single()
+                updated_count = record["updated_count"] if record else 0
+
+                logger.info(
+                    f"[recover_memory_by_mem_kube_id] Recovered (updated) {updated_count} nodes"
+                )
+                return updated_count
+
+        except Exception as e:
+            logger.error(
+                f"[recover_memory_by_mem_kube_id] Failed to recover nodes: {e}", exc_info=True
             )
             raise

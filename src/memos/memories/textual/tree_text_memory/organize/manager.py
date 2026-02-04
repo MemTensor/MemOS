@@ -161,10 +161,11 @@ class MemoryManager:
         for memory in memories:
             working_id = str(uuid.uuid4())
 
-            if memory.metadata.memory_type not in (
-                "ToolSchemaMemory",
-                "ToolTrajectoryMemory",
-                "RawFileMemory",
+            if memory.metadata.memory_type in (
+                "WorkingMemory",
+                "LongTermMemory",
+                "UserMemory",
+                "OuterMemory",
             ):
                 working_metadata = memory.metadata.model_copy(
                     update={"memory_type": "WorkingMemory"}
@@ -183,8 +184,11 @@ class MemoryManager:
                 "ToolSchemaMemory",
                 "ToolTrajectoryMemory",
                 "RawFileMemory",
+                "SkillMemory",
             ):
-                graph_node_id = memory.id if hasattr(memory, "id") else str(uuid.uuid4())
+                graph_node_id = (
+                    memory.id if hasattr(memory, "id") else memory.id or str(uuid.uuid4())
+                )
                 metadata_dict = memory.metadata.model_dump(exclude_none=True)
                 metadata_dict["updated_at"] = datetime.now().isoformat()
 
@@ -317,10 +321,11 @@ class MemoryManager:
         working_id = str(uuid.uuid4())
 
         with ContextThreadPoolExecutor(max_workers=2, thread_name_prefix="mem") as ex:
-            if memory.metadata.memory_type not in (
-                "ToolSchemaMemory",
-                "ToolTrajectoryMemory",
-                "RawFileMemory",
+            if memory.metadata.memory_type in (
+                "WorkingMemory",
+                "LongTermMemory",
+                "UserMemory",
+                "OuterMemory",
             ):
                 f_working = ex.submit(
                     self._add_memory_to_db, memory, "WorkingMemory", user_name, working_id
@@ -333,6 +338,7 @@ class MemoryManager:
                 "ToolSchemaMemory",
                 "ToolTrajectoryMemory",
                 "RawFileMemory",
+                "SkillMemory",
             ):
                 f_graph = ex.submit(
                     self._add_to_graph_memory,
