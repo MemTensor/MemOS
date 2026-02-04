@@ -38,9 +38,11 @@ body {
   align-items: center;
   justify-content: center;
   padding: 2px 8px 2px;
+  overflow: hidden;
 }
 
 canvas {
+  display: block;
   image-rendering: pixelated;
 }
 

@@ -118,16 +118,71 @@ NODES: dict[str, AoTaiNode] = {
 
 
 EDGES: list[AoTaiEdge] = [
-    AoTaiEdge(from_node_id="start", to_node_id="slope_forest", kind="main", label="进入山林"),
-    AoTaiEdge(from_node_id="slope_forest", to_node_id="camp_2800", kind="main", label="上到2800"),
-    AoTaiEdge(from_node_id="camp_2800", to_node_id="stone_sea", kind="main", label="继续主线"),
-    AoTaiEdge(from_node_id="stone_sea", to_node_id="ridge_wind", kind="main", label="上山脊"),
-    AoTaiEdge(from_node_id="ridge_wind", to_node_id="da_ye_hai", kind="main", label="去大爷海"),
-    AoTaiEdge(from_node_id="da_ye_hai", to_node_id="ba_xian_tai", kind="main", label="冲顶"),
-    AoTaiEdge(from_node_id="ba_xian_tai", to_node_id="end_exit", kind="main", label="下撤"),
+    # Mainline distances are demo values (km) and can be tuned.
+    AoTaiEdge(
+        from_node_id="start",
+        to_node_id="slope_forest",
+        kind="main",
+        label="进入山林",
+        distance_km=3.0,
+    ),
+    AoTaiEdge(
+        from_node_id="slope_forest",
+        to_node_id="camp_2800",
+        kind="main",
+        label="上到2800",
+        distance_km=5.0,
+    ),
+    AoTaiEdge(
+        from_node_id="camp_2800",
+        to_node_id="stone_sea",
+        kind="main",
+        label="继续主线",
+        distance_km=4.0,
+    ),
+    AoTaiEdge(
+        from_node_id="stone_sea",
+        to_node_id="ridge_wind",
+        kind="main",
+        label="上山脊",
+        distance_km=6.0,
+    ),
+    AoTaiEdge(
+        from_node_id="ridge_wind",
+        to_node_id="da_ye_hai",
+        kind="main",
+        label="去大爷海",
+        distance_km=3.0,
+    ),
+    AoTaiEdge(
+        from_node_id="da_ye_hai",
+        to_node_id="ba_xian_tai",
+        kind="main",
+        label="冲顶",
+        distance_km=8.0,
+    ),
+    AoTaiEdge(
+        from_node_id="ba_xian_tai",
+        to_node_id="end_exit",
+        kind="main",
+        label="下撤",
+        distance_km=10.0,
+    ),
     # Branches / exits
-    AoTaiEdge(from_node_id="camp_2800", to_node_id="bailout_2800", kind="exit", label="下撤"),
-    AoTaiEdge(from_node_id="ridge_wind", to_node_id="bailout_ridge", kind="exit", label="紧急下撤"),
+    AoTaiEdge(
+        from_node_id="camp_2800",
+        to_node_id="bailout_2800",
+        kind="exit",
+        label="下撤",
+        distance_km=7.0,
+    ),
+    AoTaiEdge(
+        from_node_id="ridge_wind",
+        to_node_id="bailout_ridge",
+        kind="exit",
+        label="紧急下撤",
+        distance_km=9.0,
+    ),
 ]
 
 

@@ -63,7 +63,14 @@ function setStatus() {
   if (!worldState) return;
   const node = nodeById(worldState.current_node_id) || mapNodes[Math.min(worldState.route_node_index, mapNodes.length - 1)];
   const active = (worldState.roles || []).find((r) => r.role_id === worldState.active_role_id);
-  statusEl.textContent = `Session: ${worldState.session_id} | 位置: ${node?.name || "?"} | Day ${
+  let locStr = node?.name || "?";
+  if (worldState.in_transit_to_node_id) {
+    const toN = nodeById(worldState.in_transit_to_node_id);
+    const prog = Math.floor(worldState.in_transit_progress_km || 0);
+    const tot = Math.floor(worldState.in_transit_total_km || 0);
+    locStr = `路上→${toN?.name || worldState.in_transit_to_node_id} (${prog}/${tot}km)`;
+  }
+  statusEl.textContent = `Session: ${worldState.session_id} | 位置: ${locStr} | Day ${
     worldState.day
   }/${worldState.time_of_day} | 天气: ${worldState.weather} | 当前角色: ${active?.name || "-"}`;
 }
@@ -288,8 +295,9 @@ function makeRole(name) {
 //   Later you can swap `renderChunkToTexture()` to draw real tiles from your tileset.
 function initPhaser() {
   const root = document.getElementById("game-root");
-  const VIEW_W = Math.max(860, Math.floor(root?.clientWidth || 960));
-  const VIEW_H = Math.max(420, Math.floor(root?.clientHeight || 540));
+  const rect = root ? root.getBoundingClientRect() : { width: 960, height: 540 };
+  const VIEW_W = Math.max(320, Math.floor(rect.width || 960));
+  const VIEW_H = Math.max(240, Math.floor(rect.height || 540));
 
   const TILE = 48; // matches your pixel assets scale
 
@@ -327,20 +335,36 @@ function initPhaser() {
       this._visited = new Set();
       this._weather = null;
       this._tod = null;
+      this._ws = null;
 
       this.mainCam = null;
       this.miniCam = null;
     }
 
     preload() {
-      // Your pixel assets (already in frontend/assets)
-      this.load.image("grass", "./assets/Dark grass 1.png");
-      this.load.image("brick", "./assets/Dark Brick 1.png");
-      this.load.image("bush", "./assets/Dark Bush 1.png");
-      this.load.image("tree", "./assets/Dark Tree 1.png");
-      this.load.image("fence", "./assets/Dark fence 1.png");
-      this.load.image("leaves", "./assets/Fallen Leaves 1.png");
-      this.load.image("pumpkin", "./assets/Pumpkin 1.png");
+      this._assetErrors = [];
+      this.load.setPath("./assets/");
+
+      const loadImg = (key, file) => {
+        // encode spaces etc
+        this.load.image(key, encodeURI(file));
+      };
+
+      loadImg("grass", "Dark grass 1.png");
+      loadImg("brick", "Dark Brick 1.png");
+      loadImg("bush", "Dark Bush 1.png");
+      loadImg("tree", "Dark Tree 1.png");
+      loadImg("fence", "Dark fence 1.png");
+      loadImg("leaves", "Fallen Leaves 1.png");
+      loadImg("pumpkin", "Pumpkin 1.png");
+
+      this.load.on("loaderror", (file) => {
+        try {
+          this._assetErrors.push(file && (file.key || file.src || file.url) ? (file.key || file.src || file.url) : "unknown");
+        } catch {
+          this._assetErrors.push("unknown");
+        }
+      });
     }
 
     create() {
@@ -421,6 +445,7 @@ function initPhaser() {
       this._visited = new Set(visited);
       this._weather = weather;
       this._tod = tod;
+      this._ws = ws || {};
 
       // 1) update minimap always
       this._drawMinimap(nodeId);
@@ -444,8 +469,18 @@ function initPhaser() {
 
     _renderWorld(nodeId, weather, tod) {
       // Deterministic seed from session + node + mood
-      const seedStr = String((window.worldState && window.worldState.session_id) || "seed") + "|" + String(nodeId) + "|" + String(weather) + "|" + String(tod);
+      const seedStr = String((worldState && worldState.session_id) || "seed") + "|" + String(nodeId) + "|" + String(weather) + "|" + String(tod);
       const rng = mulberry32(hash32(seedStr));
+
+      // Fallback: if assets failed to load, render a simple placeholder
+      if (!this.textures.exists("grass") || (this._assetErrors && this._assetErrors.length)) {
+        this.worldRT.clear();
+        this.worldRT.fill(0x0b1630, 1, 0, 0, VIEW_W, VIEW_H);
+        // simple path
+        const py = Math.floor(VIEW_H * 0.55);
+        this.worldRT.fill(0x223044, 1, 0, py, VIEW_W, 80);
+        return;
+      }
 
       // Clear
       this.worldRT.clear();
@@ -542,6 +577,7 @@ function initPhaser() {
     }
 
     _drawMinimap(nodeId) {
+      const ws = this._ws || {};
       const MINI_W = this.miniCam.width;
       const MINI_H = this.miniCam.height;
 
@@ -607,6 +643,23 @@ function initPhaser() {
 
       // marker
       const cur = nodeById(nodeId);
+      const toId = ws && ws.in_transit_to_node_id;
+      const fromId = ws && ws.in_transit_from_node_id;
+      const prog = (ws && ws.in_transit_progress_km) || 0;
+      const tot = (ws && ws.in_transit_total_km) || 0;
+
+      if (fromId && toId && tot > 0) {
+        const a = nodeById(fromId);
+        const b = nodeById(toId);
+        if (a && b) {
+          const pa = toMini(a);
+          const pb = toMini(b);
+          const t = clamp(prog / tot, 0, 1);
+          this.minimapMarker.setPosition(pa.x + (pb.x - pa.x) * t, pa.y + (pb.y - pa.y) * t);
+          return;
+        }
+      }
+
       if (cur) {
         const mp = toMini(cur);
         this.minimapMarker.setPosition(mp.x, mp.y);

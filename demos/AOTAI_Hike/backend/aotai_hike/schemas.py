@@ -32,6 +32,7 @@ class AoTaiEdge(BaseModel):
     to_node_id: str
     kind: Literal["main", "branch", "exit"] = "main"
     label: str | None = None
+    distance_km: float = Field(1.0, gt=0, description="Distance along this segment (km)")
 
 
 class RoleAttrs(BaseModel):
@@ -60,6 +61,12 @@ class WorldState(BaseModel):
     current_node_id: str = "start"
     visited_node_ids: list[str] = Field(default_factory=lambda: ["start"])
     available_next_node_ids: list[str] = Field(default_factory=list)
+
+    # Transit state (step-by-step walking)
+    in_transit_from_node_id: str | None = None
+    in_transit_to_node_id: str | None = None
+    in_transit_progress_km: float = 0.0
+    in_transit_total_km: float = 0.0
 
     # Backward compatibility: interpreted as progress count
     route_node_index: int = 0

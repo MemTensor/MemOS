@@ -159,6 +159,64 @@ class GameService:
             return f"SAY:{text[:80]}"
 
         if req.action == ActionType.MOVE_FORWARD:
+            step_km = float(req.payload.get("step_km") or 1.0)
+            if step_km <= 0:
+                step_km = 1.0
+
+            # If already in transit, keep advancing along the same segment.
+            if world_state.in_transit_to_node_id:
+                world_state.in_transit_progress_km += step_km
+                self._advance_time(world_state)
+                self._tweak_party(world_state, stamina_delta=-2, mood_delta=-1, exp_delta=0)
+
+                if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
+                    # Arrive
+                    next_id = world_state.in_transit_to_node_id
+                    world_state.current_node_id = next_id
+                    if next_id not in world_state.visited_node_ids:
+                        world_state.visited_node_ids.append(next_id)
+                    world_state.route_node_index = len(world_state.visited_node_ids) - 1
+
+                    # Clear transit
+                    world_state.in_transit_from_node_id = None
+                    world_state.in_transit_to_node_id = None
+                    world_state.in_transit_progress_km = 0.0
+                    world_state.in_transit_total_km = 0.0
+
+                    world_state.available_next_node_ids = AoTaiGraph.next_node_ids(next_id)
+
+                    ev = self._rng.choice(
+                        ["你终于看见前方地标。", "脚步放轻，稳稳抵达。", "风声渐远，你到达了节点。"]
+                    )
+                    self._push_event(world_state, ev)
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content=f"前进 {step_km:.0f}km，已抵达：{AoTaiGraph.get_node(next_id).name}。{ev}",
+                            timestamp_ms=now_ms,
+                        )
+                    )
+                    return f"MOVE_FORWARD:arrive:{next_id}"
+                else:
+                    left = max(
+                        0.0, world_state.in_transit_total_km - world_state.in_transit_progress_km
+                    )
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content=(
+                                f"前进 {step_km:.0f}km，路上…（{world_state.in_transit_progress_km:.0f}/"
+                                f"{world_state.in_transit_total_km:.0f}km，剩余 {left:.0f}km）"
+                            ),
+                            timestamp_ms=now_ms,
+                        )
+                    )
+                    world_state.available_next_node_ids = []
+                    return "MOVE_FORWARD:step"
+
+            # Not in transit: choose next edge from current node.
             outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
             if not outgoing:
                 messages.append(
@@ -171,15 +229,14 @@ class GameService:
                 )
                 return "MOVE_FORWARD:end"
 
-            next_id: str | None = None
+            next_edge = None
             if len(outgoing) == 1:
-                next_id = outgoing[0].to_node_id
+                next_edge = outgoing[0]
             else:
-                # Require explicit selection at junction
                 picked = str(req.payload.get("next_node_id") or "").strip()
                 valid = {e.to_node_id: e for e in outgoing}
                 if picked and picked in valid:
-                    next_id = picked
+                    next_edge = valid[picked]
                 else:
                     opts = [
                         f"- {AoTaiGraph.get_node(e.to_node_id).name} ({e.to_node_id})"
@@ -189,41 +246,64 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content="到达分岔口，请选择下一步：\n" + "\n".join(opts),
+                            content=("到达分岔口，请选择下一步：\n" + "\n".join(opts)),
                             timestamp_ms=now_ms,
                         )
                     )
                     world_state.available_next_node_ids = list(valid.keys())
                     return "MOVE_FORWARD:choose"
 
-            # Move to next
-            world_state.current_node_id = next_id
-            world_state.visited_node_ids.append(next_id)
-            world_state.route_node_index = len(world_state.visited_node_ids) - 1
-            world_state.available_next_node_ids = AoTaiGraph.next_node_ids(next_id)
+            # Start transit along chosen edge
+            world_state.in_transit_from_node_id = world_state.current_node_id
+            world_state.in_transit_to_node_id = next_edge.to_node_id
+            world_state.in_transit_total_km = float(getattr(next_edge, "distance_km", 1.0) or 1.0)
+            world_state.in_transit_progress_km = 0.0
+            world_state.available_next_node_ids = []
 
+            # Immediately take first step
+            world_state.in_transit_progress_km += step_km
             self._advance_time(world_state)
-            self._tweak_party(world_state, stamina_delta=-8, mood_delta=-2, exp_delta=1)
-            self._maybe_change_weather(world_state)
-            ev = self._rng.choice(
-                [
-                    "碎石路更难走。",
-                    "风变大了。",
-                    "队伍节奏稳定。",
-                    "能见度略差。",
-                    "前方地形更开阔。",
-                ]
-            )
-            self._push_event(world_state, ev)
+            self._tweak_party(world_state, stamina_delta=-2, mood_delta=-1, exp_delta=0)
+
+            if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
+                # Arrive in the same action
+                next_id = world_state.in_transit_to_node_id
+                world_state.current_node_id = next_id
+                world_state.visited_node_ids.append(next_id)
+                world_state.route_node_index = len(world_state.visited_node_ids) - 1
+
+                world_state.in_transit_from_node_id = None
+                world_state.in_transit_to_node_id = None
+                world_state.in_transit_progress_km = 0.0
+                world_state.in_transit_total_km = 0.0
+
+                world_state.available_next_node_ids = AoTaiGraph.next_node_ids(next_id)
+
+                ev = self._rng.choice(["你来到新的地标。", "脚下坡度变化明显。", "视野忽然开阔。"])
+                self._push_event(world_state, ev)
+                messages.append(
+                    Message(
+                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                        kind="system",
+                        content=f"前进 {step_km:.0f}km，已抵达：{AoTaiGraph.get_node(next_id).name}。{ev}",
+                        timestamp_ms=now_ms,
+                    )
+                )
+                return f"MOVE_FORWARD:arrive:{next_id}"
+
+            left = max(0.0, world_state.in_transit_total_km - world_state.in_transit_progress_km)
             messages.append(
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"你带队前进至：{AoTaiGraph.get_node(next_id).name}。{ev}",
+                    content=(
+                        f"出发去 {AoTaiGraph.get_node(next_edge.to_node_id).name}，前进 {step_km:.0f}km…（"
+                        f"{world_state.in_transit_progress_km:.0f}/{world_state.in_transit_total_km:.0f}km，剩余 {left:.0f}km）"
+                    ),
                     timestamp_ms=now_ms,
                 )
             )
-            return f"MOVE_FORWARD:{next_id}"
+            return "MOVE_FORWARD:start"
 
         if req.action == ActionType.REST:
             self._advance_time(world_state)
