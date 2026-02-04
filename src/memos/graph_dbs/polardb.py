@@ -5539,7 +5539,9 @@ class PolarDBGraphDB(BaseGraphDB):
                         "delete_time": current_time,
                         "delete_record_id": delete_record_id,
                     }
-                    logger.info(f"delete_node_by_mem_cube_id Soft delete update_query:{update_query},update_properties:{update_properties},deletetime:{current_time}")
+                    logger.info(
+                        f"delete_node_by_mem_cube_id Soft delete update_query:{update_query},update_properties:{update_properties},deletetime:{current_time}"
+                    )
                     update_params = [json.dumps(update_properties), current_time, user_name_param]
                     cursor.execute(update_query, update_params)
                     updated_count = cursor.rowcount
@@ -5580,14 +5582,12 @@ class PolarDBGraphDB(BaseGraphDB):
         )
         # Validate required parameters
         if not mem_cube_id:
-            logger.warning(
-                f"recover_memory_by_mem_cube_id mem_cube_id is required but not provided"
-            )
+            logger.warning("recover_memory_by_mem_cube_id mem_cube_id is required but not provided")
             return 0
 
         if not delete_record_id:
             logger.warning(
-                f"recover_memory_by_mem_cube_id delete_record_id is required but not provided"
+                "recover_memory_by_mem_cube_id delete_record_id is required but not provided"
             )
             return 0
 
