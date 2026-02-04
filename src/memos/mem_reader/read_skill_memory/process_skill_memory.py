@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -27,7 +28,9 @@ from memos.templates.skill_mem_prompt import (
     TASK_QUERY_REWRITE_PROMPT_ZH,
 )
 from memos.types import MessageList
-
+import warnings
+from dotenv import load_dotenv
+load_dotenv()
 
 logger = get_logger(__name__)
 
@@ -329,43 +332,74 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
 )
-def _upload_skills_to_oss(local_file_path: str, oss_file_path: str, client: Any) -> str:
-    import alibabacloud_oss_v2 as oss
+def _upload_skills(skills_repo_backend:str, skills_oss_dir: dict[str, Any] | None, local_file_path: str, client: Any, user_id:str) -> str:
+    if skills_repo_backend == "OSS":
+        zip_filename = Path(local_file_path).name
+        oss_path = (
+                Path(skills_oss_dir) / user_id / zip_filename
+        ).as_posix()
 
-    result = client.put_object_from_file(
-        request=oss.PutObjectRequest(
-            bucket=os.getenv("OSS_BUCKET_NAME"),
-            key=oss_file_path,
-        ),
-        filepath=local_file_path,
-    )
+        import alibabacloud_oss_v2 as oss
 
-    if result.status_code != 200:
-        logger.warning("[PROCESS_SKILLS] Failed to upload skill to OSS")
-        return ""
+        result = client.put_object_from_file(
+            request=oss.PutObjectRequest(
+                bucket=os.getenv("OSS_BUCKET_NAME"),
+                key=oss_path,
+            ),
+            filepath=local_file_path,
+        )
 
-    # Construct and return the URL
-    bucket_name = os.getenv("OSS_BUCKET_NAME")
-    endpoint = os.getenv("OSS_ENDPOINT").replace("https://", "").replace("http://", "")
-    url = f"https://{bucket_name}.{endpoint}/{oss_file_path}"
-    return url
+        if result.status_code != 200:
+            logger.warning("[PROCESS_SKILLS] Failed to upload skill to OSS")
+            return ""
 
+        # Construct and return the URL
+        bucket_name = os.getenv("OSS_BUCKET_NAME")
+        endpoint = os.getenv("OSS_ENDPOINT").replace("https://", "").replace("http://", "")
+        url = f"https://{bucket_name}.{endpoint}/{oss_path}"
+        return url
+    else:
+        import sys
+        args = sys.argv
+        PORT = int(args[args.index('--port') + 1]) if '--port' in args and args.index('--port') + 1 < len(
+            args) else "8000"
+        logging.warning(f"PORT:{PORT}")
+
+        zip_path = str(local_file_path)
+        local_save_path = os.getenv("FILE_LOCAL_PATH")
+        os.makedirs(local_save_path, exist_ok=True)
+        file_name = os.path.basename(zip_path)
+        target_full_path = os.path.join(local_save_path, file_name)
+        shutil.copy2(zip_path, target_full_path)
+        return f"http://localhost:{PORT}/download/{file_name}"
 
 @require_python_package(
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
 )
-def _delete_skills_from_oss(oss_file_path: str, client: Any) -> Any:
-    import alibabacloud_oss_v2 as oss
-
-    result = client.delete_object(
-        oss.DeleteObjectRequest(
-            bucket=os.getenv("OSS_BUCKET_NAME"),
-            key=oss_file_path,
+def _delete_skills(skills_repo_backend:str, zip_filename:str, client: Any, skills_oss_dir: dict[str, Any] | None, user_id:str) -> Any:
+    if skills_repo_backend == "OSS":
+        old_path = (
+                Path(skills_oss_dir) / user_id / zip_filename
+        ).as_posix()
+        import alibabacloud_oss_v2 as oss
+        return client.delete_object(
+            oss.DeleteObjectRequest(
+                bucket=os.getenv("OSS_BUCKET_NAME"),
+                key=old_path,
+            )
         )
-    )
-    return result
-
+    else:
+        target_full_path = os.path.join(os.getenv("FILE_LOCAL_PATH"), zip_filename)
+        target_path = Path(target_full_path)
+        try:
+            if target_path.is_file():
+                target_path.unlink()
+                logger.info(f"本地文件 {target_path} 已成功删除")
+            else:
+                print(f"本地文件 {target_path} 不存在，无需删除")
+        except Exception as e:
+            print(f"删除本地文件时出错：{e}")
 
 def _write_skills_to_file(
     skill_memory: dict[str, Any], info: dict[str, Any], skills_dir_config: dict[str, Any]
@@ -543,6 +577,47 @@ def create_skill_memory_item(
 
     return TextualMemoryItem(id=item_id, memory=memory_content, metadata=metadata)
 
+def _skill_init(skills_repo_backend, oss_config, skills_dir_config):
+    if skills_repo_backend == "OSS":
+        # Validate required configurations
+        if not oss_config:
+            logger.warning("[PROCESS_SKILLS] OSS configuration is required for skill memory processing")
+            return None, None, False
+
+        if not skills_dir_config:
+            logger.warning(
+                "[PROCESS_SKILLS] Skills directory configuration is required for skill memory processing"
+            )
+            return None, None, False
+
+        # Validate skills_dir has required keys
+        required_keys = ["skills_local_dir", "skills_oss_dir"]
+        missing_keys = [key for key in required_keys if key not in skills_dir_config]
+        if missing_keys:
+            logger.warning(
+                f"[PROCESS_SKILLS] Skills directory configuration missing required keys: {', '.join(missing_keys)}"
+            )
+            return None, None, False
+
+        oss_client = create_oss_client(oss_config)
+        if not oss_client:
+            logger.warning("[PROCESS_SKILLS] Failed to create OSS client")
+            return None, None, False
+        return oss_client, missing_keys, True
+    else:
+        return None, None, True
+
+
+def _get_skill_file_storage_location() -> str:
+    # SKILLS_REPO_BACKEND: Skill 文件保存地址 OSS/LOCAL
+    ALLOWED_BACKENDS = {"OSS", "LOCAL"}
+    raw_backend = os.getenv("SKILLS_REPO_BACKEND")
+    if raw_backend in ALLOWED_BACKENDS:
+        return raw_backend
+    else:
+        warnings.warn("环境变量【SKILLS_REPO_BACKEND】赋值错误，本次使用 LOCAL 存储 skill", UserWarning)
+        return "LOCAL"
+
 
 def process_skill_memory_fine(
     fast_memory_items: list[TextualMemoryItem],
@@ -556,35 +631,15 @@ def process_skill_memory_fine(
     skills_dir_config: dict[str, Any] | None = None,
     **kwargs,
 ) -> list[TextualMemoryItem]:
-    # Validate required configurations
-    if not oss_config:
-        logger.warning("[PROCESS_SKILLS] OSS configuration is required for skill memory processing")
-        return []
-
-    if not skills_dir_config:
-        logger.warning(
-            "[PROCESS_SKILLS] Skills directory configuration is required for skill memory processing"
-        )
+    skills_repo_backend = _get_skill_file_storage_location()
+    oss_client, missing_keys, flag = _skill_init(skills_repo_backend, oss_config, skills_dir_config)
+    if not flag:
         return []
 
     chat_history = kwargs.get("chat_history")
     if not chat_history or not isinstance(chat_history, list):
         chat_history = []
         logger.warning("[PROCESS_SKILLS] History is None in Skills")
-
-    # Validate skills_dir has required keys
-    required_keys = ["skills_local_dir", "skills_oss_dir"]
-    missing_keys = [key for key in required_keys if key not in skills_dir_config]
-    if missing_keys:
-        logger.warning(
-            f"[PROCESS_SKILLS] Skills directory configuration missing required keys: {', '.join(missing_keys)}"
-        )
-        return []
-
-    oss_client = create_oss_client(oss_config)
-    if not oss_client:
-        logger.warning("[PROCESS_SKILLS] Failed to create OSS client")
-        return []
 
     messages = _reconstruct_messages_from_memory_items(fast_memory_items)
 
@@ -684,23 +739,26 @@ def process_skill_memory_fine(
                 old_memory = old_memories_map.get(old_memory_id)
 
                 if old_memory:
-                    # Get old OSS path from the old memory's metadata
-                    old_oss_path = getattr(old_memory.metadata, "url", None)
+                    # Get old path from the old memory's metadata
+                    old_path = getattr(old_memory.metadata, "url", None)
 
-                    if old_oss_path:
+                    if old_path:
                         try:
                             # delete old skill from OSS
-                            zip_filename = Path(old_oss_path).name
-                            old_oss_path = (
-                                Path(skills_dir_config["skills_oss_dir"]) / user_id / zip_filename
-                            ).as_posix()
-                            _delete_skills_from_oss(old_oss_path, oss_client)
+                            zip_filename = Path(old_path).name
+                            _delete_skills(
+                                skills_repo_backend=skills_repo_backend,
+                                zip_filename=zip_filename,
+                                client=oss_client,
+                                skills_oss_dir=skills_dir_config["skills_oss_dir"],
+                                user_id=user_id
+                            )
                             logger.info(
-                                f"[PROCESS_SKILLS] Deleted old skill from OSS: {old_oss_path}"
+                                f"[PROCESS_SKILLS] Deleted old skill from {skills_repo_backend}: {old_path}"
                             )
                         except Exception as e:
                             logger.warning(
-                                f"[PROCESS_SKILLS] Failed to delete old skill from OSS: {e}"
+                                f"[PROCESS_SKILLS] Failed to delete old skill from {skills_repo_backend}: {e}"
                             )
 
                     # delete old skill from graph db
@@ -710,24 +768,22 @@ def process_skill_memory_fine(
                             f"[PROCESS_SKILLS] Deleted old skill from graph db: {old_memory_id}"
                         )
 
-            # Upload new skill to OSS
+            # Upload new skill
             # Use the same filename as the local zip file
-            zip_filename = Path(zip_path).name
-            oss_path = (
-                Path(skills_dir_config["skills_oss_dir"]) / user_id / zip_filename
-            ).as_posix()
-
-            # _upload_skills_to_oss returns the URL
-            url = _upload_skills_to_oss(
-                local_file_path=str(zip_path), oss_file_path=oss_path, client=oss_client
+            url = _upload_skills(
+                skills_repo_backend=skills_repo_backend,
+                skills_oss_dir=skills_dir_config["skills_oss_dir"],
+                local_file_path=zip_path,
+                client=oss_client,
+                user_id=user_id
             )
 
             # Set URL directly to skill_memory
             skill_memory["url"] = url
 
-            logger.info(f"[PROCESS_SKILLS] Uploaded skill to OSS: {url}")
+            logger.info(f"[PROCESS_SKILLS] Uploaded skill to {skills_repo_backend}: {url}")
         except Exception as e:
-            logger.warning(f"[PROCESS_SKILLS] Error uploading skill to OSS: {e}")
+            logger.warning(f"[PROCESS_SKILLS] Error uploading skill to {skills_repo_backend}: {e}")
             skill_memory["url"] = ""  # Set to empty string if upload fails
         finally:
             # Clean up local files after upload
