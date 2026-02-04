@@ -1,14 +1,15 @@
 import logging
 import os
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
+from starlette.staticfiles import StaticFiles
 
 from memos.api.exceptions import APIExceptionHandler
 from memos.api.middleware.request_context import RequestContextMiddleware
 from memos.api.routers.server_router import router as server_router
-from starlette.staticfiles import StaticFiles
-from dotenv import load_dotenv
+
 
 load_dotenv()
 

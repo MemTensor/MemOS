@@ -1,14 +1,16 @@
 import json
-import logging
 import os
 import shutil
 import uuid
+import warnings
 import zipfile
 
 from concurrent.futures import as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from dotenv import load_dotenv
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.dependency import require_python_package
@@ -28,8 +30,8 @@ from memos.templates.skill_mem_prompt import (
     TASK_QUERY_REWRITE_PROMPT_ZH,
 )
 from memos.types import MessageList
-import warnings
-from dotenv import load_dotenv
+
+
 load_dotenv()
 
 logger = get_logger(__name__)
@@ -332,12 +334,16 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
 )
-def _upload_skills(skills_repo_backend:str, skills_oss_dir: dict[str, Any] | None, local_file_path: str, client: Any, user_id:str) -> str:
+def _upload_skills(
+    skills_repo_backend: str,
+    skills_oss_dir: dict[str, Any] | None,
+    local_file_path: str,
+    client: Any,
+    user_id: str,
+) -> str:
     if skills_repo_backend == "OSS":
         zip_filename = Path(local_file_path).name
-        oss_path = (
-                Path(skills_oss_dir) / user_id / zip_filename
-        ).as_posix()
+        oss_path = (Path(skills_oss_dir) / user_id / zip_filename).as_posix()
 
         import alibabacloud_oss_v2 as oss
 
@@ -360,9 +366,13 @@ def _upload_skills(skills_repo_backend:str, skills_oss_dir: dict[str, Any] | Non
         return url
     else:
         import sys
+
         args = sys.argv
-        PORT = int(args[args.index('--port') + 1]) if '--port' in args and args.index('--port') + 1 < len(
-            args) else "8000"
+        port = (
+            int(args[args.index("--port") + 1])
+            if "--port" in args and args.index("--port") + 1 < len(args)
+            else "8000"
+        )
 
         zip_path = str(local_file_path)
         local_save_path = os.getenv("FILE_LOCAL_PATH")
@@ -370,18 +380,24 @@ def _upload_skills(skills_repo_backend:str, skills_oss_dir: dict[str, Any] | Non
         file_name = os.path.basename(zip_path)
         target_full_path = os.path.join(local_save_path, file_name)
         shutil.copy2(zip_path, target_full_path)
-        return f"http://localhost:{PORT}/download/{file_name}"
+        return f"http://localhost:{port}/download/{file_name}"
+
 
 @require_python_package(
     import_name="alibabacloud_oss_v2",
     install_command="pip install alibabacloud-oss-v2",
 )
-def _delete_skills(skills_repo_backend:str, zip_filename:str, client: Any, skills_oss_dir: dict[str, Any] | None, user_id:str) -> Any:
+def _delete_skills(
+    skills_repo_backend: str,
+    zip_filename: str,
+    client: Any,
+    skills_oss_dir: dict[str, Any] | None,
+    user_id: str,
+) -> Any:
     if skills_repo_backend == "OSS":
-        old_path = (
-                Path(skills_oss_dir) / user_id / zip_filename
-        ).as_posix()
+        old_path = (Path(skills_oss_dir) / user_id / zip_filename).as_posix()
         import alibabacloud_oss_v2 as oss
+
         return client.delete_object(
             oss.DeleteObjectRequest(
                 bucket=os.getenv("OSS_BUCKET_NAME"),
@@ -399,6 +415,7 @@ def _delete_skills(skills_repo_backend:str, zip_filename:str, client: Any, skill
                 print(f"本地文件 {target_path} 不存在，无需删除")
         except Exception as e:
             print(f"删除本地文件时出错：{e}")
+
 
 def _write_skills_to_file(
     skill_memory: dict[str, Any], info: dict[str, Any], skills_dir_config: dict[str, Any]
@@ -576,11 +593,14 @@ def create_skill_memory_item(
 
     return TextualMemoryItem(id=item_id, memory=memory_content, metadata=metadata)
 
+
 def _skill_init(skills_repo_backend, oss_config, skills_dir_config):
     if skills_repo_backend == "OSS":
         # Validate required configurations
         if not oss_config:
-            logger.warning("[PROCESS_SKILLS] OSS configuration is required for skill memory processing")
+            logger.warning(
+                "[PROCESS_SKILLS] OSS configuration is required for skill memory processing"
+            )
             return None, None, False
 
         if not skills_dir_config:
@@ -609,12 +629,16 @@ def _skill_init(skills_repo_backend, oss_config, skills_dir_config):
 
 def _get_skill_file_storage_location() -> str:
     # SKILLS_REPO_BACKEND: Skill 文件保存地址 OSS/LOCAL
-    ALLOWED_BACKENDS = {"OSS", "LOCAL"}
+    allowed_backends = {"OSS", "LOCAL"}
     raw_backend = os.getenv("SKILLS_REPO_BACKEND")
-    if raw_backend in ALLOWED_BACKENDS:
+    if raw_backend in allowed_backends:
         return raw_backend
     else:
-        warnings.warn("环境变量【SKILLS_REPO_BACKEND】赋值错误，本次使用 LOCAL 存储 skill", UserWarning)
+        warnings.warn(
+            "环境变量【SKILLS_REPO_BACKEND】赋值错误，本次使用 LOCAL 存储 skill",
+            UserWarning,
+            stacklevel=1,
+        )
         return "LOCAL"
 
 
@@ -750,7 +774,7 @@ def process_skill_memory_fine(
                                 zip_filename=zip_filename,
                                 client=oss_client,
                                 skills_oss_dir=skills_dir_config["skills_oss_dir"],
-                                user_id=user_id
+                                user_id=user_id,
                             )
                             logger.info(
                                 f"[PROCESS_SKILLS] Deleted old skill from {skills_repo_backend}: {old_path}"
@@ -774,7 +798,7 @@ def process_skill_memory_fine(
                 skills_oss_dir=skills_dir_config["skills_oss_dir"],
                 local_file_path=zip_path,
                 client=oss_client,
-                user_id=user_id
+                user_id=user_id,
             )
 
             # Set URL directly to skill_memory
