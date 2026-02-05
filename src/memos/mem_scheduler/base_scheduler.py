@@ -229,8 +229,6 @@ class BaseScheduler(
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
             self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
 
-
-
             # Initialize post-processor for memory enhancement and filtering
             self.post_processor = MemoryPostProcessor(
                 process_llm=self.process_llm, config=self.config

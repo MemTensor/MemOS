@@ -179,7 +179,7 @@ def factory_initialization() -> tuple[DeepSearchMemAgent, dict[str, Any]]:
 
 
 def main():
-    agent_factory, components_factory = factory_initialization()
+    agent_factory, _components_factory = factory_initialization()
     results = agent_factory.run(
         "Caroline met up with friends, family, and mentors in early July 2023.",
         user_id="locomo_exp_user_0_speaker_b_ct-1118",
