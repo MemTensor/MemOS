@@ -723,6 +723,8 @@ class GameService:
                             timestamp_ms=now_ms,
                         )
                     )
+                    if world_state.time_of_day == "night":
+                        world_state.time_of_day = "evening"
                     return f"MOVE_FORWARD:arrive:{next_id}"
                 else:
                     left = max(
@@ -764,7 +766,23 @@ class GameService:
                 if picked and picked in valid:
                     next_edge = valid[picked]
                 else:
-                    # Auto junction pick by leader (mock strategy).
+                    # If player is the leader, require manual selection.
+                    if (
+                        world_state.leader_role_id and world_state.active_role_id
+                    ) and world_state.leader_role_id == world_state.active_role_id:
+                        world_state.available_next_node_ids = [e.to_node_id for e in outgoing]
+                        world_state.phase = Phase.JUNCTION_DECISION
+                        messages.append(
+                            Message(
+                                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                                kind="system",
+                                content="到达岔路：请团长选择路线。",
+                                timestamp_ms=now_ms,
+                            )
+                        )
+                        return "MOVE_FORWARD:await_choice"
+
+                    # Auto junction pick by leader (NPC).
                     leader_name = next(
                         (
                             r.name
@@ -773,22 +791,7 @@ class GameService:
                         ),
                         "团长",
                     )
-                    non_exit = [e for e in outgoing if getattr(e, "kind", None) != "exit"]
-                    exit_edges = [e for e in outgoing if getattr(e, "kind", None) == "exit"]
-
-                    # Prefer mainline (non-exit). If only exits exist, pick among exits.
-                    pool = non_exit if non_exit else outgoing
-                    next_edge = self._rng.choice(pool)
-
-                    # If stamina is very low, allow exits with some probability.
-                    try:
-                        avg_stam = sum(r.attrs.stamina for r in world_state.roles) / max(
-                            1, len(world_state.roles)
-                        )
-                    except Exception:
-                        avg_stam = 50.0
-                    if exit_edges and avg_stam < 25 and self._rng.random() < 0.65:
-                        next_edge = self._rng.choice(exit_edges)
+                    next_edge = self._rng.choice(outgoing)
 
                     messages.append(
                         Message(
@@ -836,6 +839,8 @@ class GameService:
                         timestamp_ms=now_ms,
                     )
                 )
+                if world_state.time_of_day == "night":
+                    world_state.time_of_day = "evening"
                 return f"MOVE_FORWARD:arrive:{next_id}"
 
             left = max(0.0, world_state.in_transit_total_km - world_state.in_transit_progress_km)
