@@ -41,6 +41,7 @@ from memos.types import (
     MemCubeID,
     UserID,
 )
+from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -765,6 +766,7 @@ class GeneralScheduler(BaseScheduler):
                 user_name = message.user_name
                 info = message.info or {}
                 chat_history = message.chat_history
+                user_context = message.user_context
 
                 # Parse the memory IDs from content
                 mem_ids = json.loads(content) if isinstance(content, str) else content
@@ -792,6 +794,7 @@ class GeneralScheduler(BaseScheduler):
                     task_id=message.task_id,
                     info=info,
                     chat_history=chat_history,
+                    user_context=user_context,
                 )
 
                 logger.info(
@@ -820,6 +823,7 @@ class GeneralScheduler(BaseScheduler):
         task_id: str | None = None,
         info: dict | None = None,
         chat_history: list | None = None,
+        user_context: UserContext | None = None,
     ) -> None:
         logger.info(
             f"[DIAGNOSTIC] general_scheduler._process_memories_with_reader called. mem_ids: {mem_ids}, user_id: {user_id}, mem_cube_id: {mem_cube_id}, task_id: {task_id}"
@@ -882,6 +886,7 @@ class GeneralScheduler(BaseScheduler):
                     custom_tags=custom_tags,
                     user_name=user_name,
                     chat_history=chat_history,
+                    user_context=user_context,
                 )
             except Exception as e:
                 logger.warning(f"{e}: Fail to transfer mem: {memory_items}")
