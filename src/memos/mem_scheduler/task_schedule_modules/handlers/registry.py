@@ -30,15 +30,15 @@ from .query_handler import QueryMessageHandler
 
 
 class SchedulerHandlerRegistry:
-    def __init__(self, ctx: SchedulerHandlerContext) -> None:
-        self.query = QueryMessageHandler(ctx)
-        self.answer = AnswerMessageHandler(ctx)
-        self.add = AddMessageHandler(ctx)
-        self.memory_update = MemoryUpdateHandler(ctx)
-        self.mem_feedback = FeedbackMessageHandler(ctx)
-        self.mem_read = MemReadMessageHandler(ctx)
-        self.mem_reorganize = MemReorganizeMessageHandler(ctx)
-        self.pref_add = PrefAddMessageHandler(ctx)
+    def __init__(self, scheduler_context: SchedulerHandlerContext) -> None:
+        self.query = QueryMessageHandler(scheduler_context)
+        self.answer = AnswerMessageHandler(scheduler_context)
+        self.add = AddMessageHandler(scheduler_context)
+        self.memory_update = MemoryUpdateHandler(scheduler_context)
+        self.mem_feedback = FeedbackMessageHandler(scheduler_context)
+        self.mem_read = MemReadMessageHandler(scheduler_context)
+        self.mem_reorganize = MemReorganizeMessageHandler(scheduler_context)
+        self.pref_add = PrefAddMessageHandler(scheduler_context)
 
     def build_dispatch_map(self) -> dict[str, Callable]:
         return {

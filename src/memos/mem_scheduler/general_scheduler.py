@@ -31,7 +31,7 @@ class GeneralScheduler(BaseScheduler):
             transform_working_memories_to_monitors=self.transform_working_memories_to_monitors,
             log_working_memory_replacement=self.log_working_memory_replacement,
         )
-        ctx = SchedulerHandlerContext(
+        scheduler_context = SchedulerHandlerContext(
             get_mem_cube=lambda: self.mem_cube,
             get_monitor=lambda: self.monitor,
             get_retriever=lambda: self.retriever,
@@ -44,5 +44,5 @@ class GeneralScheduler(BaseScheduler):
             services=services,
         )
 
-        self._handler_registry = SchedulerHandlerRegistry(ctx)
+        self._handler_registry = SchedulerHandlerRegistry(scheduler_context)
         self.register_handlers(self._handler_registry.build_dispatch_map())
