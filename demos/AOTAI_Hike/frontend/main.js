@@ -264,6 +264,8 @@ async function apiUpsertRole(role) {
   renderBranchChoices();
   setStatus();
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
+  // ensure Phaser shows the party immediately after creation/update
+  if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
 }
 
 async function apiSetActiveRole(roleId) {
@@ -278,6 +280,8 @@ async function apiSetActiveRole(roleId) {
   renderBranchChoices();
   setStatus();
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
+  // ensure Phaser updates the active-role animation/pose immediately
+  if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   const active = (worldState.roles || []).find((r) => r.role_id === roleId);
   logMsg({
     kind: "system",
@@ -361,6 +365,16 @@ function initPhaser() {
 
   const TILE = 48; // matches your pixel assets scale
 
+  // Sprite pool for roles (pixel-art PNG sequences)
+  // - Quickstart(default) roles map by name to fixed keys
+  // - Manually created roles auto-match from this pool by stable hash of role_id
+  const SPRITE_POOL = ["ao", "taibai", "xiaoshan"];
+  const SPRITE_META = {
+    ao: { idle: { frames: 6, fps: 8 }, walk: { frames: 8, fps: 10 } },
+    taibai: { idle: { frames: 7, fps: 8 }, walk: { frames: 8, fps: 10 } },
+    xiaoshan: { idle: { frames: 3, fps: 6 }, walk: { frames: 3, fps: 8 } },
+  };
+
   const hash32 = (s) => {
     let h = 2166136261 >>> 0;
     for (let i = 0; i < s.length; i++) {
@@ -398,6 +412,11 @@ function initPhaser() {
       this._sceneKey = "";
 
       this.mainCam = null;
+
+      // roles rendered on big map
+      this.roleSprites = new Map(); // role_id -> Phaser.GameObjects.Sprite
+      this._spriteBounds = {}; // spriteKey -> { texW, texH, x, y, w, h }
+      this._targetContentH = 38; // non-transparent content height ≈ 38px
     }
 
     preload() {
@@ -417,6 +436,20 @@ function initPhaser() {
       loadImg("leaves", "Fallen Leaves 1.png");
       loadImg("pumpkin", "Pumpkin 1.png");
 
+      // preload role sprite frames (png sequences)
+      const loadFrame = (spriteKey, action, idx) => {
+        const k = `spr:${spriteKey}:${action}:${String(idx).padStart(3, "0")}`;
+        const file = `sprites/${spriteKey}/${action}/frame_${String(idx).padStart(3, "0")}.png`;
+        this.load.image(k, file);
+      };
+      for (const sk of SPRITE_POOL) {
+        const meta = SPRITE_META[sk];
+        for (const action of ["idle", "walk"]) {
+          const n = Number(meta?.[action]?.frames || 0);
+          for (let i = 0; i < n; i++) loadFrame(sk, action, i);
+        }
+      }
+
       this.load.on("loaderror", (file) => {
         try {
           this._assetErrors.push(file && (file.key || file.src || file.url) ? (file.key || file.src || file.url) : "unknown");
@@ -434,17 +467,8 @@ function initPhaser() {
       this.worldRT = this.add.renderTexture(0, 0, VIEW_W, MAIN_H).setOrigin(0, 0);
       this.world.add(this.worldRT);
 
-      // --- player marker in main view ---
-      const mg = this.add.graphics();
-      mg.fillStyle(0xffd27c, 1);
-      mg.fillRect(0, 0, 10, 18);
-      const pKey = "player_marker";
-      if (!this.textures.exists(pKey)) mg.generateTexture(pKey, 10, 18);
-      mg.destroy();
-
-      this.player = this.add.image(Math.floor(VIEW_W * 0.50), Math.floor(MAIN_H * 0.78), pKey);
-      this.player.setOrigin(0.5, 1);
-      this.world.add(this.player);
+      // init animations + nearest filter for pixel art sprites
+      this._initRoleAnims();
 
       // --- overlay for weather/time mood ---
       this.worldOverlay = this.add.rectangle(0, 0, VIEW_W, MAIN_H, 0x000000, 0.0).setOrigin(0, 0);
@@ -468,6 +492,180 @@ function initPhaser() {
       this.setState({ current_node_id: mapStartNodeId || "start", visited_node_ids: [mapStartNodeId || "start"], weather: "cloudy", time_of_day: "morning" });
     }
 
+    _pickSpriteKey(role) {
+      const explicit = role && (role.sprite_key || role.spriteKey || role.sprite);
+      if (explicit && SPRITE_META[String(explicit)]) return String(explicit);
+
+      const name = String(role?.name || "").trim();
+      if (name === "阿鳌") return "ao";
+      if (name === "太白") return "taibai";
+      if (name === "小山") return "xiaoshan";
+
+      const rid = String(role?.role_id || name || "role");
+      const h = hash32(rid);
+      return SPRITE_POOL[h % SPRITE_POOL.length];
+    }
+
+    _frameKey(spriteKey, action, idx) {
+      return `spr:${spriteKey}:${action}:${String(idx).padStart(3, "0")}`;
+    }
+
+    _initRoleAnims() {
+      // set NEAREST filter
+      try {
+        for (const sk of SPRITE_POOL) {
+          const meta = SPRITE_META[sk];
+          for (const action of ["idle", "walk"]) {
+            const n = Number(meta?.[action]?.frames || 0);
+            for (let i = 0; i < n; i++) {
+              const k = this._frameKey(sk, action, i);
+              try {
+                this.textures.get(k).setFilter(Phaser.Textures.FilterMode.NEAREST);
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+
+      // create animations
+      for (const sk of SPRITE_POOL) {
+        const meta = SPRITE_META[sk];
+        for (const action of ["idle", "walk"]) {
+          const animKey = `anim:${sk}:${action}`;
+          if (this.anims.exists(animKey)) continue;
+          const n = Number(meta?.[action]?.frames || 0);
+          const fps = Number(meta?.[action]?.fps || 8);
+          const frames = [];
+          for (let i = 0; i < n; i++) frames.push({ key: this._frameKey(sk, action, i) });
+          this.anims.create({ key: animKey, frames, frameRate: Math.max(1, fps), repeat: -1 });
+        }
+      }
+    }
+
+    _calcOpaqueBoundsForTexture(texKey) {
+      try {
+        const tex = this.textures.get(texKey);
+        const img = tex && tex.getSourceImage ? tex.getSourceImage() : null;
+        if (!img || !img.width || !img.height) return null;
+        const w = img.width;
+        const h = img.height;
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return null;
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0);
+        const data = ctx.getImageData(0, 0, w, h).data;
+        let minX = w, minY = h, maxX = -1, maxY = -1;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const a = data[(y * w + x) * 4 + 3];
+            if (a > 0) {
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < 0) return null;
+        return { texW: w, texH: h, x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+      } catch {
+        return null;
+      }
+    }
+
+    _ensureSpriteBounds(spriteKey) {
+      if (this._spriteBounds[spriteKey]) return this._spriteBounds[spriteKey];
+      const k = this._frameKey(spriteKey, "idle", 0);
+      if (!this.textures.exists(k)) return null;
+      const b = this._calcOpaqueBoundsForTexture(k);
+      if (!b) return null;
+      this._spriteBounds[spriteKey] = b;
+      return b;
+    }
+
+    _applySpriteScaleOrigin(spr, spriteKey) {
+      const b = this._ensureSpriteBounds(spriteKey);
+      if (b && b.h > 0) {
+        const s = this._targetContentH / b.h;
+        spr.setScale(s);
+        const ox = (b.x + b.w * 0.5) / b.texW;
+        const oy = (b.y + b.h) / b.texH;
+        spr.setOrigin(ox, oy);
+      } else {
+        spr.setOrigin(0.5, 1);
+        if (spr.height > 0) spr.setScale(this._targetContentH / spr.height);
+      }
+    }
+
+    _syncRolesOnMap(ws) {
+      const roles = ws?.roles || [];
+      const activeId = ws?.active_role_id || null;
+      const inTransit = Boolean(ws?.in_transit_to_node_id);
+
+      const keep = new Set();
+      const n = Math.max(1, roles.length);
+      const centerX = Math.floor(VIEW_W * 0.5);
+      const baseY = Math.floor(MAIN_H * 0.78);
+      // not a straight line: spread + slight arc + deterministic jitter per role
+      const maxSpread = Math.min(Math.floor(VIEW_W * 0.62), 340);
+      const spread = roles.length <= 1 ? 0 : Math.min(maxSpread, 56 * (roles.length - 1));
+      const step = roles.length <= 1 ? 0 : spread / (roles.length - 1);
+      const startX = Math.floor(centerX - spread / 2);
+
+      for (let i = 0; i < roles.length; i++) {
+        const r = roles[i];
+        const rid = String(r.role_id);
+        keep.add(rid);
+        let spr = this.roleSprites.get(rid);
+        const spriteKey = this._pickSpriteKey(r);
+        const action = inTransit && rid === String(activeId) ? "walk" : "idle";
+        const animKey = `anim:${spriteKey}:${action}`;
+
+        if (!spr) {
+          spr = this.add.sprite(0, 0, this._frameKey(spriteKey, "idle", 0));
+          spr.__spriteKey = spriteKey;
+          spr.__action = null;
+          this.world.add(spr);
+          this.roleSprites.set(rid, spr);
+          this._applySpriteScaleOrigin(spr, spriteKey);
+        }
+
+        // deterministic jitter from role_id
+        const h = hash32(rid);
+        const jx = ((h & 0xff) / 255 - 0.5) * 10; // [-5,5]
+        const jy = (((h >>> 8) & 0xff) / 255 - 0.5) * 8; // [-4,4]
+        const t = roles.length <= 1 ? 0.5 : i / (roles.length - 1);
+        const arc = Math.sin(t * Math.PI) * -10; // lift middle a bit
+        const x = Math.round(startX + i * step + jx);
+        const y = Math.round(baseY + arc + jy);
+        spr.setPosition(x, y);
+        spr.setDepth(20 + i);
+        spr.setAlpha(rid === String(activeId) ? 1.0 : 0.9);
+
+        if (spr.__spriteKey !== spriteKey) {
+          spr.setTexture(this._frameKey(spriteKey, "idle", 0));
+          spr.__spriteKey = spriteKey;
+          this._applySpriteScaleOrigin(spr, spriteKey);
+          spr.__action = null;
+        }
+
+        if (spr.__action !== action && this.anims.exists(animKey)) {
+          spr.play(animKey, true);
+          spr.__action = action;
+        }
+      }
+
+      for (const [rid, spr] of this.roleSprites.entries()) {
+        if (!keep.has(rid)) {
+          try { spr.destroy(); } catch {}
+          this.roleSprites.delete(rid);
+        }
+      }
+    }
+
     setState(ws) {
       const nodeId = ws?.current_node_id || mapStartNodeId || "start";
       const visited = ws?.visited_node_ids || [nodeId];
@@ -486,6 +684,11 @@ function initPhaser() {
       this._weather = weather;
       this._tod = tod;
       this._ws = ws || {};
+
+      // render roles on big map
+      try {
+        this._syncRolesOnMap(ws);
+      } catch {}
 
       // 2) update main world: re-render ONLY when location/segment changes (not every km/time tick)
       const segFrom = ws?.in_transit_from_node_id || nodeId;
@@ -511,14 +714,18 @@ function initPhaser() {
           yoyo: true,
           ease: "Sine.easeInOut",
         });
-        // tiny player bob
-        this.tweens.add({
-          targets: this.player,
-          y: this.player.y - 6,
-          duration: 220,
-          yoyo: true,
-          ease: "Sine.easeInOut",
-        });
+        // tiny bob on active role (if present)
+        const activeId = ws?.active_role_id ? String(ws.active_role_id) : null;
+        const activeSpr = activeId ? this.roleSprites.get(activeId) : null;
+        if (activeSpr) {
+          this.tweens.add({
+            targets: activeSpr,
+            y: activeSpr.y - 6,
+            duration: 220,
+            yoyo: true,
+            ease: "Sine.easeInOut",
+          });
+        }
       }
     }
 
