@@ -236,6 +236,106 @@ input:focus {
   border-color: var(--accent);
 }
 
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--border);
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Initial role setup modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(6px);
+}
+.modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: rgba(10, 16, 28, 0.96);
+  border: 2px solid rgba(124, 242, 255, 0.35);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  padding: 14px 14px 16px;
+}
+.modal-title {
+  color: var(--accent);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.modal-sub {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.modal-form .field {
+  margin-bottom: 10px;
+}
+.field-label {
+  color: var(--muted);
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.setup-list-title {
+  color: var(--accent);
+  font-size: 11px;
+  margin-top: 10px;
+  margin-bottom: 8px;
+}
+.setup-list {
+  display: grid;
+  gap: 8px;
+}
+.setup-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 10px;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.22);
+}
+.setup-item .name {
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.setup-item .persona {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.setup-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+button.primary {
+  border-color: rgba(124, 242, 255, 0.75);
+}
+.setup-error {
+  margin-top: 10px;
+  border: 2px solid rgba(255, 124, 124, 0.55);
+  background: rgba(255, 124, 124, 0.08);
+  color: rgba(255, 220, 220, 0.95);
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .hint {
   margin-top: 5px;
   color: var(--muted);
@@ -261,7 +361,7 @@ input:focus {
 }
 
 #chat {
-  height: 34vh
+  height: 34vh;
   min-height: 140px;
   max-height: 260px;
   overflow: auto;
@@ -270,6 +370,32 @@ input:focus {
   padding: 8px;
   font-size: 10px;
   line-height: 1.6;
+}
+
+/* actions + chat merged */
+.chat-wrap {
+  margin-bottom: 10px;
+}
+
+/* Make the merged interact panel allocate remaining height to chat and keep scrolling inside #chat */
+#interact-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: none; /* allow chat to use available space; right column already scrolls */
+}
+#actions-panel {
+  flex: 0 0 auto;
+}
+.chat-wrap {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: hidden; /* keep scroll inside #chat */
+}
+#chat {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
 }
 
 .msg {
@@ -350,11 +476,21 @@ input:focus {
 }
 #right {
   min-width: 420px;
-  max-height: calc(100vh - 24px);
-  overflow-y: auto;
+  height: calc(100vh - 24px);
+  overflow: hidden;
   padding-right: 2px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 #right-top {
   margin-bottom: 10px;
+  flex: 0 0 auto;
+}
+
+#panels {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }

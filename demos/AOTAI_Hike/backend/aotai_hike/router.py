@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, HTTPException
 
 from aotai_hike.adapters.background import BackgroundRequest, StaticBackgroundProvider
@@ -10,6 +12,9 @@ from aotai_hike.schemas import (
     ActResponse,
     BackgroundAsset,
     MapResponse,
+    Role,
+    RoleAttrs,
+    RolesQuickstartRequest,
     RoleUpsertRequest,
     RoleUpsertResponse,
     SessionNewRequest,
@@ -31,6 +36,28 @@ _game = GameService(
     companion=MockCompanionBrain(),
     background=_background,
 )
+
+# Default 3 roles (server-owned config; frontend should not hardcode)
+_DEFAULT_ROLES: list[dict] = [
+    {
+        "name": "阿鳌",
+        "avatar_key": "green",
+        "persona": "阿鳌：队伍领队，路线熟悉，偏谨慎。",
+        "attrs": {"stamina": 75, "mood": 58, "experience": 35, "risk_tolerance": 35},
+    },
+    {
+        "name": "太白",
+        "avatar_key": "blue",
+        "persona": "太白：装备党，喜欢记录数据与天气变化。",
+        "attrs": {"stamina": 68, "mood": 62, "experience": 42, "risk_tolerance": 45},
+    },
+    {
+        "name": "小山",
+        "avatar_key": "red",
+        "persona": "小山：乐观的新人徒步者，敢想敢冲但听劝。",
+        "attrs": {"stamina": 70, "mood": 72, "experience": 12, "risk_tolerance": 65},
+    },
+]
 
 
 def _get_ws(session_id: str) -> WorldState:
@@ -70,6 +97,37 @@ def roles_upsert(req: RoleUpsertRequest):
     resp = _game.upsert_role(ws, req)
     _sessions.save(ws)
     return resp
+
+
+@router.post("/roles/quickstart", response_model=RoleUpsertResponse)
+def roles_quickstart(req: RolesQuickstartRequest):
+    """
+    Create the default 3 roles for a session.
+    This keeps the default role configuration on the backend.
+    """
+    ws = _get_ws(req.session_id)
+
+    if req.overwrite:
+        ws.roles = []
+        ws.active_role_id = None
+
+    # If not overwriting, only add defaults that don't already exist by name.
+    existing_names = {r.name for r in ws.roles}
+
+    for tmpl in _DEFAULT_ROLES:
+        if not req.overwrite and tmpl["name"] in existing_names:
+            continue
+        role = Role(
+            role_id=f"r_{uuid.uuid4().hex[:8]}",
+            name=tmpl["name"],
+            avatar_key=tmpl.get("avatar_key") or "default",
+            persona=tmpl.get("persona") or "",
+            attrs=RoleAttrs(**(tmpl.get("attrs") or {})),
+        )
+        _game.upsert_role(ws, RoleUpsertRequest(session_id=req.session_id, role=role))
+
+    _sessions.save(ws)
+    return RoleUpsertResponse(roles=ws.roles, active_role_id=ws.active_role_id)
 
 
 @router.put("/session/active_role", response_model=WorldState)

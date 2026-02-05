@@ -44,6 +44,11 @@ function edgeByToId(fromId, toId) {
 }
 
 function logMsg(msg) {
+  if (!chatEl) return;
+  const isNearBottom = (el, thresholdPx = 32) =>
+    el.scrollTop + el.clientHeight >= el.scrollHeight - thresholdPx;
+  const stickToBottom = isNearBottom(chatEl);
+
   const div = document.createElement("div");
   div.className = `msg ${msg.kind}`;
   const meta = document.createElement("div");
@@ -56,7 +61,22 @@ function logMsg(msg) {
   div.appendChild(meta);
   div.appendChild(content);
   chatEl.appendChild(div);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  // Auto-scroll to bottom only if user is already near bottom.
+  // Use rAF to wait for layout so it works with flex panels / dynamic heights.
+  if (stickToBottom) {
+    const scrollToBottom = () => {
+      try {
+        chatEl.scrollTop = chatEl.scrollHeight;
+      } catch {}
+    };
+    try {
+      requestAnimationFrame(scrollToBottom);
+      // extra microtask for cases where multiple messages append in the same tick
+      setTimeout(scrollToBottom, 0);
+    } catch {
+      scrollToBottom();
+    }
+  }
 }
 
 function setStatus() {
@@ -76,6 +96,7 @@ function setStatus() {
 }
 
 function renderRoles() {
+  if (!rolesEl || !worldState) return;
   rolesEl.innerHTML = "";
   for (const r of worldState.roles || []) {
     const pill = document.createElement("div");
@@ -137,7 +158,7 @@ function renderPartyStatus() {
     const empty = document.createElement("div");
     empty.className = "party-card";
     empty.style.width = "520px";
-    empty.innerHTML = `<div class="party-name">队伍状态</div><div class="party-sub">还没有队员。点击“快速创建 3 角色”。</div>`;
+    empty.innerHTML = `<div class="party-name">队伍状态</div><div class="party-sub">还没有队员。请先在启动弹窗里创建角色。</div>`;
     partyEl.appendChild(empty);
     return;
   }
@@ -276,14 +297,14 @@ async function apiAct(action, payload = {}) {
 }
 
 
-function makeRole(name) {
+function makeRole(name, persona) {
   const id = `r_${Math.random().toString(16).slice(2, 10)}`;
   const avatar_key = AVATAR_KEYS[Math.floor(Math.random() * AVATAR_KEYS.length)];
   return {
     role_id: id,
     name,
     avatar_key,
-    persona: `${name}：像素风徒步者。谨慎但乐观。`,
+    persona: (persona && String(persona).trim()) ? String(persona).trim() : `${name}：像素风徒步者。谨慎但乐观。`,
     attrs: { stamina: 70, mood: 60, experience: 10, risk_tolerance: 50 },
   };
 }
@@ -1218,6 +1239,104 @@ async function bootstrap() {
   await apiNewSession();
   initPhaser();
 
+  // Initial role setup modal (must create at least one role; modal is removed after creation)
+  const setupEl = $("#role-setup");
+  const setupNameEl = $("#setup-role-name");
+  const setupPersonaEl = $("#setup-role-persona");
+  const setupListEl = $("#setup-role-list");
+  const setupErrEl = $("#setup-error");
+  const pending = [];
+
+  const showSetupErr = (msg) => {
+    if (!setupErrEl) return;
+    setupErrEl.style.display = msg ? "block" : "none";
+    setupErrEl.textContent = msg || "";
+  };
+
+  const renderPending = () => {
+    if (!setupListEl) return;
+    setupListEl.innerHTML = "";
+    if (pending.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "hint";
+      empty.textContent = "还没有待创建的角色。可以先填写名字/介绍加入列表，或点击“快速创建 3 角色”。";
+      setupListEl.appendChild(empty);
+      return;
+    }
+    pending.forEach((r, idx) => {
+      const item = document.createElement("div");
+      item.className = "setup-item";
+      const left = document.createElement("div");
+      left.innerHTML = `<div class="name">${r.name}</div><div class="persona">${(r.persona || "").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</div>`;
+      const btn = document.createElement("button");
+      btn.textContent = "移除";
+      btn.onclick = () => {
+        pending.splice(idx, 1);
+        renderPending();
+      };
+      item.appendChild(left);
+      item.appendChild(btn);
+      setupListEl.appendChild(item);
+    });
+  };
+
+  const hideAndRemoveSetup = () => {
+    if (!setupEl) return;
+    setupEl.style.display = "none";
+    try { setupEl.remove(); } catch {}
+  };
+
+  const openSetupIfNeeded = () => {
+    if (!setupEl) return;
+    const roles = (worldState && worldState.roles) ? worldState.roles : [];
+    if (roles.length > 0) return; // already has roles, don't block
+    setupEl.style.display = "flex";
+    showSetupErr("");
+    renderPending();
+    try { setupNameEl && setupNameEl.focus(); } catch {}
+  };
+
+  $("#setup-add-role")?.addEventListener("click", () => {
+    const name = (setupNameEl?.value || "").trim();
+    const persona = (setupPersonaEl?.value || "").trim();
+    if (!name) {
+      showSetupErr("请先填写名字。");
+      return;
+    }
+    showSetupErr("");
+    pending.push({ name, persona });
+    if (setupNameEl) setupNameEl.value = "";
+    if (setupPersonaEl) setupPersonaEl.value = "";
+    renderPending();
+    try { setupNameEl && setupNameEl.focus(); } catch {}
+  });
+
+  $("#setup-create")?.addEventListener("click", async () => {
+    if (pending.length === 0) {
+      showSetupErr("请至少加入 1 个角色，或点击“快速创建 3 角色”。");
+      return;
+    }
+    showSetupErr("");
+    for (const r of pending) {
+      await apiUpsertRole(makeRole(r.name, r.persona));
+      logMsg({ kind: "system", content: `新增角色：${r.name}`, timestamp_ms: Date.now() });
+    }
+    hideAndRemoveSetup();
+  });
+
+  $("#setup-quickstart")?.addEventListener("click", async () => {
+    showSetupErr("");
+    const data = await api("/roles/quickstart", { session_id: sessionId });
+    worldState.roles = data.roles;
+    worldState.active_role_id = data.active_role_id;
+    renderRoles();
+    renderPartyStatus();
+    renderBranchChoices();
+    setStatus();
+    logMsg({ kind: "system", content: "已创建 3 个默认角色。", timestamp_ms: Date.now() });
+    hideAndRemoveSetup();
+  });
+
   // Wire action buttons
   $("#actions-panel").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
@@ -1231,24 +1350,13 @@ async function bootstrap() {
     await apiAct("SAY", { text });
   };
 
-  $("#btn-add-role").onclick = async () => {
-    const name = ($("#new-role-name").value || "").trim();
-    if (!name) return;
-    $("#new-role-name").value = "";
-    await apiUpsertRole(makeRole(name));
-    logMsg({ kind: "system", content: `新增角色：${name}`, timestamp_ms: Date.now() });
-  };
-
-  $("#btn-quickstart").onclick = async () => {
-    const defaults = ["阿鳌", "太白", "小山"];
-    for (const n of defaults) await apiUpsertRole(makeRole(n));
-    logMsg({ kind: "system", content: "已创建 3 个默认角色。", timestamp_ms: Date.now() });
-  };
+  // Show role setup modal on first open
+  openSetupIfNeeded();
 
   // First hint
   logMsg({
     kind: "system",
-    content: "点击“快速创建 3 角色”，然后用动作按钮开始徒步。",
+    content: "先创建角色（弹窗里可快速创建），然后用动作按钮开始徒步。",
     timestamp_ms: Date.now(),
   });
 }

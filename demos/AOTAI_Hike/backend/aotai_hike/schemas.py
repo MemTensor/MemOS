@@ -121,6 +121,14 @@ class RoleUpsertResponse(BaseModel):
     active_role_id: str | None = None
 
 
+class RolesQuickstartRequest(BaseModel):
+    session_id: str
+    overwrite: bool = Field(
+        default=False,
+        description="If true, replace existing roles with the default 3 roles.",
+    )
+
+
 class SetActiveRoleRequest(BaseModel):
     session_id: str
     active_role_id: str
