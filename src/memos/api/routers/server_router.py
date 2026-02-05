@@ -254,19 +254,6 @@ def chat_stream_playground(chat_req: ChatPlaygroundRequest):
     return chat_handler.handle_chat_stream_playground(chat_req)
 
 
-@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
-def chat_stream_business_user(chat_req: ChatBusinessRequest):
-    """
-    Chat with MemOS for a specific business user. Returns SSE stream.
-    """
-    if chat_handler is None:
-        raise HTTPException(
-            status_code=503, detail="Chat service is not available. Chat handler not initialized."
-        )
-
-    return chat_handler.handle_chat_stream_for_business_user(chat_req)
-
-
 # =============================================================================
 # Suggestion API Endpoints
 # =============================================================================
@@ -413,12 +400,23 @@ def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     response_model=ExistMemCubeIdResponse,
 )
 def exist_mem_cube_id(request: ExistMemCubeIdRequest):
-    """Check if mem cube id exists."""
+    """(inner) Check if mem cube id exists."""
     return ExistMemCubeIdResponse(
         code=200,
         message="Successfully",
         data=graph_db.exist_user_name(user_name=request.mem_cube_id),
     )
+
+
+@router.post("/chat/stream/business_user", summary="Chat with MemOS for business user")
+def chat_stream_business_user(chat_req: ChatBusinessRequest):
+    """(inner) Chat with MemOS for a specific business user. Returns SSE stream."""
+    if chat_handler is None:
+        raise HTTPException(
+            status_code=503, detail="Chat service is not available. Chat handler not initialized."
+        )
+
+    return chat_handler.handle_chat_stream_for_business_user(chat_req)
 
 
 @router.post(
@@ -427,6 +425,7 @@ def exist_mem_cube_id(request: ExistMemCubeIdRequest):
     response_model=DeleteMemoryByRecordIdResponse,
 )
 def delete_memory_by_record_id(memory_req: DeleteMemoryByRecordIdRequest):
+    """(inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
     graph_db.delete_node_by_mem_cube_id(
         mem_cube_id=memory_req.mem_cube_id,
         delete_record_id=memory_req.record_id,
@@ -446,6 +445,7 @@ def delete_memory_by_record_id(memory_req: DeleteMemoryByRecordIdRequest):
     response_model=RecoverMemoryByRecordIdResponse,
 )
 def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
+    """(inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set."""
     graph_db.recover_memory_by_mem_cube_id(
         mem_cube_id=memory_req.mem_cube_id,
         delete_record_id=memory_req.delete_record_id,

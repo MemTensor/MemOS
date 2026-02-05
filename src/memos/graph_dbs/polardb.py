@@ -5474,6 +5474,14 @@ class PolarDBGraphDB(BaseGraphDB):
         delete_record_id: dict | None = None,
         hard_delete: bool = False,
     ) -> int:
+        """
+        (inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set.
+
+        Args:
+            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
+            delete_record_id: The delete_record_id to match.
+            hard_delete: Whether to hard delete the nodes.
+        """
         # Handle dict type parameters (extract value if dict)
         if isinstance(mem_cube_id, dict):
             # Try to get a value from dict, use first value if multiple
@@ -5585,7 +5593,7 @@ class PolarDBGraphDB(BaseGraphDB):
         delete_record_id: str | None = None,
     ) -> int:
         """
-        Recover memory nodes by mem_cube_id (user_name) and delete_record_id.
+        (inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set.
 
         This function updates the status to 'activated', and clears delete_record_id and delete_time.
 
