@@ -340,6 +340,56 @@ textarea:focus {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Night vote modal */
+.vote-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.vote-card {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 10px;
+  align-items: center;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.22);
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.vote-card:hover {
+  border-color: rgba(124, 242, 255, 0.65);
+  transform: translateY(-1px);
+}
+.vote-card.disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+.vote-ava {
+  width: 48px;
+  height: 48px;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.35);
+}
+.vote-name {
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.vote-sub {
+  color: var(--muted);
+  font-size: 10px;
+}
+.vote-log {
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+  line-height: 1.6;
+}
 .setup-actions {
   justify-content: flex-end;
   margin-top: 12px;

@@ -96,6 +96,32 @@ class GameService:
             )
 
         # Phase gates: some phases only accept specific actions.
+        if world_state.phase == Phase.NIGHT_WAIT_PLAYER and req.action != ActionType.SAY:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="夜幕降临：请你先发言（发送一句话）后，才能开始票选团长。",
+                    timestamp_ms=now_ms,
+                )
+            )
+            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            bg = self._safe_get_background(node_after.scene_id)
+            return ActResponse(world_state=world_state, messages=messages, background=bg)
+
+        if world_state.phase == Phase.NIGHT_VOTE_READY and req.action != ActionType.DECIDE:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="夜晚票选准备就绪：请选择一位队长继续。",
+                    timestamp_ms=now_ms,
+                )
+            )
+            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            bg = self._safe_get_background(node_after.scene_id)
+            return ActResponse(world_state=world_state, messages=messages, background=bg)
+
         if world_state.phase == Phase.AWAIT_PLAYER_SAY and req.action != ActionType.SAY:
             messages.append(
                 Message(
@@ -157,9 +183,17 @@ class GameService:
                     )
                 )
 
-        # Night -> camp meeting (auto): proposals + chance to change leader + overnight settlement -> next morning.
+        # Night arrival: pause, darken, and require player speech before voting.
         if world_state.time_of_day == "night" and world_state.phase == Phase.FREE:
-            self._auto_camp_meeting(world_state, now_ms, messages)
+            world_state.phase = Phase.NIGHT_WAIT_PLAYER
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="夜幕降临，队伍停下扎营。请你先发言，然后进行票选团长。",
+                    timestamp_ms=now_ms,
+                )
+            )
 
         return ActResponse(world_state=world_state, messages=messages, background=bg)
 
@@ -167,6 +201,16 @@ class GameService:
         self, world_state: WorldState, req: ActRequest, now_ms: int, messages: list[Message]
     ) -> str:
         kind = str(req.payload.get("kind") or "").strip()
+        if kind == "night_vote":
+            forced_leader_id = str(req.payload.get("leader_role_id") or "").strip() or None
+            self._run_leader_vote(world_state, now_ms, messages, forced_leader_id=forced_leader_id)
+            # Night finishes: light recovery, new day, weather update.
+            self._tweak_party(world_state, stamina_delta=6, mood_delta=2, exp_delta=0)
+            world_state.day += 1
+            world_state.time_of_day = "morning"
+            self._maybe_change_weather(world_state)
+            world_state.phase = Phase.FREE
+            return "DECIDE:night_vote"
         if kind == "camp_meeting":
             next_id = str(req.payload.get("consensus_next_node_id") or "").strip() or None
             leader_id = str(req.payload.get("leader_role_id") or "").strip() or None
@@ -233,6 +277,122 @@ class GameService:
             )
         )
         return f"DECIDE:{kind or 'unknown'}"
+
+    def _run_leader_vote(
+        self,
+        world_state: WorldState,
+        now_ms: int,
+        messages: list[Message],
+        *,
+        forced_leader_id: str | None = None,
+    ) -> None:
+        """
+        Mock voting process with optional forced leader choice:
+        - each role casts one vote (action message + reason)
+        - system announces result and updates leader_role_id
+        """
+        if not world_state.roles:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="票选失败：队伍为空。",
+                    timestamp_ms=now_ms,
+                )
+            )
+            return
+
+        old = world_state.leader_role_id
+        old_name = next((r.name for r in world_state.roles if r.role_id == old), "（无）")
+
+        candidates = [r.role_id for r in world_state.roles]
+        vote_order = candidates[:]
+        self._rng.shuffle(vote_order)
+        tally: dict[str, int] = dict.fromkeys(candidates, 0)
+
+        def _pick_vote(voter_id: str) -> str:
+            # Player selection can force the final leader; use it as the player's vote too.
+            if forced_leader_id and voter_id == world_state.active_role_id:
+                return forced_leader_id
+            # Small incumbency bias (keep the current leader).
+            if old and self._rng.random() < 0.28:
+                return old
+            return self._rng.choice(candidates)
+
+        def _pick_reason(voter_id: str, choice_id: str) -> str:
+            pool = [
+                "路况判断更稳。",
+                "更能照顾大家节奏。",
+                "今天状态最好。",
+                "路线经验更足。",
+                "愿意承担风险。",
+                "团队更信服。",
+            ]
+            if forced_leader_id and voter_id == world_state.active_role_id:
+                return "玩家选择。"
+            if choice_id == old:
+                return "延续昨日安排。"
+            return self._rng.choice(pool)
+
+        messages.append(
+            Message(
+                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                kind="system",
+                content="开始票选团长：每人投一票。",
+                timestamp_ms=now_ms,
+            )
+        )
+
+        for voter_id in vote_order:
+            voter = next((r for r in world_state.roles if r.role_id == voter_id), None)
+            if not voter:
+                continue
+            choice = _pick_vote(voter_id)
+            tally[choice] = int(tally.get(choice, 0)) + 1
+            choice_name = next((r.name for r in world_state.roles if r.role_id == choice), choice)
+            reason = _pick_reason(voter_id, choice)
+            messages.append(
+                Message(
+                    message_id=f"v-{world_state.session_id}-{now_ms}-{voter_id}",
+                    role_id=voter_id,
+                    role_name=voter.name,
+                    kind="action",
+                    content=f"{voter.name} 投票：{choice_name}（理由：{reason}）",
+                    timestamp_ms=now_ms,
+                )
+            )
+
+        max_votes = max(tally.values()) if tally else 0
+        winners = [rid for rid, n in tally.items() if n == max_votes] if tally else []
+        if forced_leader_id and forced_leader_id in candidates:
+            world_state.leader_role_id = forced_leader_id
+        elif winners:
+            world_state.leader_role_id = self._rng.choice(winners)
+
+        new_name = next(
+            (r.name for r in world_state.roles if r.role_id == world_state.leader_role_id),
+            world_state.leader_role_id,
+        )
+
+        if world_state.leader_role_id != old:
+            self._push_event(world_state, f"票选团长：{old_name} → {new_name}")
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content=f"票选结果：更换团长 {old_name} → {new_name}",
+                    timestamp_ms=now_ms,
+                )
+            )
+        else:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content=f"票选结果：团长继续由 {new_name} 担任。",
+                    timestamp_ms=now_ms,
+                )
+            )
 
     def _enter_camp_meeting(
         self, world_state: WorldState, now_ms: int, messages: list[Message]
@@ -499,6 +659,18 @@ class GameService:
                         timestamp_ms=now_ms,
                     )
                 )
+            # Night flow: player speech unlocks the vote button (do NOT resume auto-run yet).
+            if world_state.phase == Phase.NIGHT_WAIT_PLAYER:
+                world_state.phase = Phase.NIGHT_VOTE_READY
+                messages.append(
+                    Message(
+                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                        kind="system",
+                        content="收到你的发言：现在请选择一位队长开始票选。",
+                        timestamp_ms=now_ms,
+                    )
+                )
+                return f"SAY:{text[:80]}"
             # If we were waiting for the player to respond, a SAY clears the gate.
             if world_state.phase == Phase.AWAIT_PLAYER_SAY:
                 world_state.phase = Phase.FREE

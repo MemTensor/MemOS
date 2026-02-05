@@ -125,7 +125,7 @@ export function initPhaser() {
       this.layerImgs = null; // { [layerName]: [imgA, imgB] }
       this._sceneLayers = SCENE_LAYERS.slice();
       this._scrollY = 0;
-      this._scrollSpeed = 28; // px/s
+      this._scrollSpeed = 18; // px/s (slower)
       this._loopH = 0;
       this._sceneId = "base";
 
@@ -319,7 +319,9 @@ export function initPhaser() {
     update(time, delta) {
       const ws = this._ws || {};
       const walking = Boolean(ws && ws.in_transit_to_node_id);
-      const speed = walking ? this._scrollSpeed : 0;
+      const phase = ws && ws.phase ? String(ws.phase) : "free";
+      const modalBlocking = Boolean(window.__aoTaiNightVoteOpen);
+      const speed = walking && phase === "free" && !modalBlocking ? this._scrollSpeed : 0;
       if (speed <= 0 || !this.layerImgs || !this._loopH) return;
 
       const dy = (Number(delta || 0) / 1000) * speed;
@@ -569,7 +571,8 @@ export function initPhaser() {
         }
 
         // --- name label (always visible) ---
-        this._upsertNameLabel(rid, r.name, spr, rid === String(activeId));
+        const leaderId = ws?.leader_role_id ? String(ws.leader_role_id) : null;
+        this._upsertNameLabel(rid, r.name, spr, rid === String(activeId), rid === leaderId);
 
         // keep bubble anchored (respect per-bubble lift)
         const bub = this.roleBubbles.get(rid);
@@ -759,10 +762,12 @@ export function initPhaser() {
       return img;
     }
 
-    _upsertNameLabel(roleId, name, spr, isActive) {
+    _upsertNameLabel(roleId, name, spr, isActive, isLeader) {
       const rid = String(roleId);
       const labelText = String(name || "").trim() || "角色";
-      const color = isActive ? "#e8f0ff" : "#cfe8ff";
+      const color = isActive
+        ? (isLeader ? "#ffe6a8" : "#e8f0ff")
+        : (isLeader ? "#ffd27c" : "#cfe8ff");
       const needsRecreate = (obj, nextText, nextColor) => {
         if (!obj) return true;
         if (obj.__pixText !== nextText) return true;
@@ -877,6 +882,7 @@ export function initPhaser() {
       const visited = ws?.visited_node_ids || [nodeId];
       const weather = ws?.weather || "cloudy";
       const tod = ws?.time_of_day || "morning";
+      const prevTod = this._tod;
 
       const nodeChanged = nodeId !== this._curNodeId;
       const moodChanged = weather !== this._weather || tod !== this._tod;
@@ -905,12 +911,28 @@ export function initPhaser() {
       const sceneChanged = sceneKey !== this._sceneKey;
       this._sceneKey = sceneKey;
       if (nodeChanged || sceneChanged) {
-        // Current rollout: use a single global scene template.
-        this._swapScene("base");
+        // Only swap/re-layout when scene id changes (avoid refresh when scene stays the same).
+        const nextSceneId = "base";
+        if (nextSceneId !== this._sceneId) this._swapScene(nextSceneId);
       }
       // mood overlay can change frequently without re-rendering tiles
       if (moodChanged) {
-        this._applyMoodOverlay(weather, tod);
+        // Night arrival: fade to dark gradually
+        if (this.worldOverlay && tod === "night" && prevTod !== "night") {
+          try {
+            this.worldOverlay.fillColor = 0x000000;
+            this.tweens.add({
+              targets: this.worldOverlay,
+              alpha: 0.35,
+              duration: 1200,
+              ease: "Sine.easeInOut",
+            });
+          } catch {
+            this._applyMoodOverlay(weather, tod);
+          }
+        } else {
+          this._applyMoodOverlay(weather, tod);
+        }
       }
 
       // 3) small "step" animation on move

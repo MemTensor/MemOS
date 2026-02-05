@@ -1,6 +1,6 @@
 import { sessionId, setMapData, setSessionId, setWorldState, worldState } from "./state.js";
 import { logMsg, renderBranchChoices, renderPartyStatus, renderRoles, setStatus } from "./render.js";
-import { applyPhaseUI } from "./phase_ui.js";
+import { applyPhaseUI, isNightVoteModalBlocking } from "./phase_ui.js";
 
 export const API_BASE = "/api/demo/ao-tai";
 
@@ -11,6 +11,7 @@ function _shouldAutoContinue(ws) {
   if (!ws) return false;
   const phase = ws.phase || "free";
   if (phase !== "free") return false;
+  if (isNightVoteModalBlocking?.()) return false;
   // Stop when reaching a terminal node (no outgoing edges in this demo).
   const terminal = new Set(["end_exit", "bailout_2800", "bailout_ridge"]);
   if (terminal.has(String(ws.current_node_id || ""))) return false;
@@ -31,6 +32,10 @@ function _scheduleAutoContinue() {
       _autoInFlight = false;
     }
   }, 900);
+}
+
+export function scheduleAutoContinue() {
+  _scheduleAutoContinue();
 }
 
 async function api(path, body, method = "POST") {
@@ -113,8 +118,16 @@ export async function apiAct(action, payload = {}) {
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   applyPhaseUI(worldState);
   _scheduleAutoContinue();
+  return data;
 }
 
 export function installActionsToWindow() {
-  window.__aoTaiActions = { apiGetMap, apiNewSession, apiUpsertRole, apiSetActiveRole, apiAct };
+  window.__aoTaiActions = {
+    apiGetMap,
+    apiNewSession,
+    apiUpsertRole,
+    apiSetActiveRole,
+    apiAct,
+    scheduleAutoContinue,
+  };
 }
