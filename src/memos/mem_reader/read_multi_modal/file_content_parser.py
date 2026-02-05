@@ -513,6 +513,38 @@ class FileContentParser(BaseMessageParser):
             )
             memory_items.append(memory_item)
 
+        # If no chunks were created, create a placeholder
+        if not memory_items:
+            # Create source for placeholder (no chunk index since there are no chunks)
+            placeholder_source = self.create_source(
+                message,
+                info,
+                chunk_index=None,
+                chunk_total=0,
+                chunk_content=content,
+                file_url_flag=file_url_flag,
+            )
+            memory_item = TextualMemoryItem(
+                memory=content,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    user_id=user_id,
+                    session_id=session_id,
+                    memory_type=memory_type,
+                    status="activated",
+                    tags=["mode:fast", "multimodal:file"],
+                    key=_derive_key(content),
+                    embedding=self.embedder.embed([content])[0],
+                    usage=[],
+                    sources=[placeholder_source],
+                    background="",
+                    confidence=0.99,
+                    type="fact",
+                    info=info_,
+                    file_ids=file_ids,
+                ),
+            )
+            memory_items.append(memory_item)
+
         return memory_items
 
     def parse_fine(
