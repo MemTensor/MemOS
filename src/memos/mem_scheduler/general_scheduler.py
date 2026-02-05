@@ -920,6 +920,7 @@ class GeneralScheduler(BaseScheduler):
                             user_id=user_id,
                             user_name=user_name,
                         )
+                        logger.info(f"Added {len(raw_file_mem_group)} Rawfile memories.")
 
                     # Mark merged_from memories as archived when provided in memory metadata
                     summary_memories = [

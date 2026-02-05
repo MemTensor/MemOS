@@ -539,6 +539,7 @@ class Searcher:
             for task in tasks:
                 results.extend(task.result())
             results = self._deduplicate_rawfile_results(results, user_name=user_name)
+            results = self._filter_intermediate_content(results)
 
         return self.reranker.rerank(
             query=query,
@@ -956,6 +957,18 @@ class Searcher:
                 continue
             filtered_results.append(item)
 
+        return filtered_results
+
+    def _filter_intermediate_content(self, results):
+        """Filter intermediate content"""
+        filtered_results = []
+        for item in results:
+            if (
+                "File URL:" not in item.memory
+                and "File ID:" not in item.memory
+                and "Filename:" not in item.memory
+            ):
+                filtered_results.append(item)
         return filtered_results
 
     @timed

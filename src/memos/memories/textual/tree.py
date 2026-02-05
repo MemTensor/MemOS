@@ -533,9 +533,9 @@ class TreeTextMemory(BaseTextMemory):
             user_name=user_name,
         )
         end_time = time.time()
-        logger.info(f"[RawFile]Added {len(rawfile_ids_local)} chunks for user {user_id}")
+        logger.info(f"[RawFile] Added {len(rawfile_ids_local)} chunks for user {user_id}")
         logger.info(
-            f"[RawFile]Time taken to add edges: {end_time - start_time} seconds for {len(from_ids)} edges"
+            f"[RawFile] Time taken to add edges: {end_time - start_time} seconds for {len(from_ids)} edges"
         )
 
     def add_graph_edges(

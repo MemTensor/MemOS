@@ -783,6 +783,7 @@ class FileContentParser(BaseMessageParser):
         memory_items = []
         chunk_map = dict(valid_chunks)
         total_chunks = len(valid_chunks)
+        fallback_count = 0
 
         logger.info(f"[FileContentParser] Processing {total_chunks} chunks with LLM...")
 
@@ -801,6 +802,12 @@ class FileContentParser(BaseMessageParser):
                 try:
                     node = future.result()
                     memory_items.append(node)
+
+                    # Check if this node is a fallback by checking tags
+                    is_fallback = any(tag.startswith("fallback:") for tag in node.metadata.tags)
+                    if is_fallback:
+                        fallback_count += 1
+
                     # save raw file
                     node_id = node.id
                     if node.memory != node.metadata.sources[0].content:
@@ -823,12 +830,15 @@ class FileContentParser(BaseMessageParser):
                     logger.error(f"[FileContentParser] Future failed for chunk {chunk_idx}: {e}")
                     # Create fallback for failed future
                     if chunk_idx in chunk_map:
+                        fallback_count += 1
                         memory_items.append(
                             _make_fallback(chunk_idx, chunk_map[chunk_idx], "error")
                         )
 
+        fallback_percentage = (fallback_count / total_chunks * 100) if total_chunks > 0 else 0.0
         logger.info(
-            f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks"
+            f"[FileContentParser] Completed processing {len(memory_items)}/{total_chunks} chunks, "
+            f"fallback count: {fallback_count}/{total_chunks} ({fallback_percentage:.1f}%)"
         )
         rawfile_items = [
             memory for memory in memory_items if memory.metadata.memory_type == "RawFileMemory"
