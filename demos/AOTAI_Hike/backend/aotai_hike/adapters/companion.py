@@ -12,6 +12,7 @@ from aotai_hike.schemas import Message, Role, WorldState
 @dataclass
 class CompanionOutput:
     messages: list[Message]
+    requires_player_say: bool = False
 
 
 class CompanionBrain:
@@ -54,7 +55,14 @@ class MockCompanionBrain(CompanionBrain):
         if not others:
             return CompanionOutput(messages=[])
 
-        speakers = self._rng.sample(others, k=min(len(others), 2))
+        # --- "step chat" cadence ---
+        # - Always at least 1 NPC speaks (if there is any NPC).
+        # - After the first speaker, other NPCs may speak in a random order with a probability.
+        first = self._rng.choice(others)
+        rest = [r for r in others if r.role_id != first.role_id]
+        self._rng.shuffle(rest)
+        follow_p = 0.45
+        speakers = [first] + [r for r in rest if self._rng.random() < follow_p]
         mem_hint = ""
         if memory_snippets:
             hint = memory_snippets[-1]
@@ -102,4 +110,7 @@ class MockCompanionBrain(CompanionBrain):
                     timestamp_ms=now_ms,
                 )
             )
-        return CompanionOutput(messages=out)
+        # Some turns require the player to respond before the world can proceed.
+        require_p = 0.22
+        requires_player_say = bool(active_role) and (self._rng.random() < require_p)
+        return CompanionOutput(messages=out, requires_player_say=requires_player_say)

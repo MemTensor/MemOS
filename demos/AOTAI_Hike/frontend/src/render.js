@@ -113,6 +113,11 @@ export function renderBranchChoices() {
   for (const it of items) {
     const btn = document.createElement("button");
     btn.textContent = it.text;
+    const leader = worldState.leader_role_id;
+    if (leader && worldState.active_role_id && worldState.active_role_id !== leader) {
+      btn.disabled = true;
+      btn.title = "需要切换到团长角色才能选择路线";
+    }
     btn.onclick = () => window.__aoTaiActions.apiAct("MOVE_FORWARD", { next_node_id: it.id });
     box.appendChild(btn);
   }

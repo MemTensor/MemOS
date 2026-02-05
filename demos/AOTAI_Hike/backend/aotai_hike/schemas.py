@@ -12,6 +12,27 @@ class ActionType(str, Enum):
     CAMP = "CAMP"
     OBSERVE = "OBSERVE"
     SAY = "SAY"
+    DECIDE = "DECIDE"
+
+
+class Phase(str, Enum):
+    FREE = "free"
+    AWAIT_PLAYER_SAY = "await_player_say"
+    CAMP_MEETING_DECIDE = "camp_meeting_decide"
+    JUNCTION_DECISION = "junction_decision"
+
+
+class LockStrength(str, Enum):
+    SOFT = "soft"
+    HARD = "hard"
+    IRON = "iron"
+
+
+class CampMeetingState(BaseModel):
+    active: bool = False
+    options_next_node_ids: list[str] = Field(default_factory=list)
+    proposals_order_role_ids: list[str] = Field(default_factory=list)
+    proposed_at_ms: int | None = None
 
 
 class AoTaiNode(BaseModel):
@@ -56,6 +77,13 @@ class WorldState(BaseModel):
 
     active_role_id: str | None = None
     roles: list[Role] = Field(default_factory=list)
+
+    # Party governance / phase machine
+    phase: Phase = Phase.FREE
+    leader_role_id: str | None = None
+    lock_strength: LockStrength = LockStrength.SOFT
+    consensus_next_node_id: str | None = None
+    camp_meeting: CampMeetingState = Field(default_factory=CampMeetingState)
 
     # Map state (graph-based)
     current_node_id: str = "start"

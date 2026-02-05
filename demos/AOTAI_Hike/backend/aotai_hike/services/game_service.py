@@ -14,7 +14,9 @@ from aotai_hike.schemas import (
     ActRequest,
     ActResponse,
     BackgroundAsset,
+    CampMeetingState,
     Message,
+    Phase,
     Role,
     RoleUpsertRequest,
     RoleUpsertResponse,
@@ -62,6 +64,8 @@ class GameService:
             world_state.roles.append(role)
         if world_state.active_role_id is None:
             world_state.active_role_id = role.role_id
+        if world_state.leader_role_id is None:
+            world_state.leader_role_id = world_state.active_role_id
         return RoleUpsertResponse(
             roles=world_state.roles, active_role_id=world_state.active_role_id
         )
@@ -77,6 +81,37 @@ class GameService:
         active = self._get_active_role(world_state)
         messages: list[Message] = []
 
+        # Phase gates: some phases only accept specific actions.
+        if world_state.phase == Phase.AWAIT_PLAYER_SAY and req.action != ActionType.SAY:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="需要你先用“发言”回应队伍（发送一句话）后才能继续。",
+                    timestamp_ms=now_ms,
+                )
+            )
+            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            bg = self._safe_get_background(node_after.scene_id)
+            return ActResponse(world_state=world_state, messages=messages, background=bg)
+
+        if world_state.phase == Phase.CAMP_MEETING_DECIDE and req.action != ActionType.DECIDE:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="营地会议进行中：请先完成“共识路线/锁强度/团长”选择。",
+                    timestamp_ms=now_ms,
+                )
+            )
+            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            bg = self._safe_get_background(node_after.scene_id)
+            return ActResponse(world_state=world_state, messages=messages, background=bg)
+
+        if req.action == ActionType.DECIDE:
+            user_action_desc = self._apply_decision(world_state, req, now_ms, messages)
+        else:
+            user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
         user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
 
         node_after = AoTaiGraph.get_node(world_state.current_node_id)
@@ -99,15 +134,194 @@ class GameService:
             top_k=self._config.memory_top_k,
         )
 
-        comp = self._companion.generate(
-            world_state=world_state,
-            active_role=active,
-            memory_snippets=mem_res.snippets,
-            user_action=user_action_desc,
-        )
-        messages.extend(comp.messages)
+        # Per-step NPC cadence:
+        # - Only trigger NPC chatter after a MOVE_FORWARD step.
+        # - It may gate further progress until the player replies.
+        if req.action == ActionType.MOVE_FORWARD and user_action_desc.startswith("MOVE_FORWARD"):
+            comp = self._companion.generate(
+                world_state=world_state,
+                active_role=active,
+                memory_snippets=mem_res.snippets,
+                user_action=user_action_desc,
+            )
+            messages.extend(comp.messages)
+            self._apply_message_effects(world_state, comp.messages)
+            if getattr(comp, "requires_player_say", False):
+                world_state.phase = Phase.AWAIT_PLAYER_SAY
+                messages.append(
+                    Message(
+                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                        kind="system",
+                        content="队友看向你：轮到你发言了（发一句话后才能继续）。",
+                        timestamp_ms=now_ms,
+                    )
+                )
+
+        # Night -> camp meeting
+        if world_state.time_of_day == "night" and world_state.phase == Phase.FREE:
+            self._enter_camp_meeting(world_state, now_ms, messages)
 
         return ActResponse(world_state=world_state, messages=messages, background=bg)
+
+    def _apply_decision(
+        self, world_state: WorldState, req: ActRequest, now_ms: int, messages: list[Message]
+    ) -> str:
+        kind = str(req.payload.get("kind") or "").strip()
+        if kind == "camp_meeting":
+            next_id = str(req.payload.get("consensus_next_node_id") or "").strip() or None
+            leader_id = str(req.payload.get("leader_role_id") or "").strip() or None
+            lock_strength = str(req.payload.get("lock_strength") or "").strip() or "soft"
+
+            if next_id and next_id not in (world_state.camp_meeting.options_next_node_ids or []):
+                raise ValueError(f"Invalid consensus_next_node_id: {next_id}")
+            if leader_id and not any(r.role_id == leader_id for r in world_state.roles):
+                raise ValueError(f"Invalid leader_role_id: {leader_id}")
+
+            world_state.consensus_next_node_id = next_id
+            world_state.leader_role_id = leader_id or world_state.leader_role_id
+            world_state.lock_strength = lock_strength  # pydantic will validate enum
+
+            # Write a "consensus memory" into recent events (memory adapter will store the act payload anyway).
+            who = next(
+                (r.name for r in world_state.roles if r.role_id == world_state.leader_role_id),
+                "未知",
+            )
+            node_name = AoTaiGraph.get_node(world_state.current_node_id).name
+            plan_name = AoTaiGraph.get_node(next_id).name if next_id else "（未选择）"
+            ev = f"营地共识：在 {node_name}，共识路线=去 {plan_name}，锁强度={world_state.lock_strength}，次日团长={who}"
+            self._push_event(world_state, ev)
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content=ev,
+                    timestamp_ms=now_ms,
+                )
+            )
+
+            # Overnight settlement (light recovery; lock_strength can add small stress)
+            base_stamina = 8
+            base_mood = 3
+            mood_penalty = 0
+            if str(world_state.lock_strength) == "hard":
+                mood_penalty = 1
+            if str(world_state.lock_strength) == "iron":
+                mood_penalty = 2
+            self._tweak_party(
+                world_state,
+                stamina_delta=base_stamina,
+                mood_delta=base_mood - mood_penalty,
+                exp_delta=0,
+            )
+
+            # Advance to next morning
+            world_state.day += 1
+            world_state.time_of_day = "morning"
+            self._maybe_change_weather(world_state)
+
+            # Exit meeting
+            world_state.camp_meeting = CampMeetingState()
+            world_state.phase = Phase.FREE
+            return "DECIDE:camp_meeting"
+
+        messages.append(
+            Message(
+                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                kind="system",
+                content=f"未知决策类型：{kind}",
+                timestamp_ms=now_ms,
+            )
+        )
+        return f"DECIDE:{kind or 'unknown'}"
+
+    def _enter_camp_meeting(
+        self, world_state: WorldState, now_ms: int, messages: list[Message]
+    ) -> None:
+        # Prepare meeting options: from current node, use outgoing edges as "tomorrow proposals".
+        outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
+        opts = [e.to_node_id for e in outgoing]
+        order = [r.role_id for r in world_state.roles]
+        self._rng.shuffle(order)
+
+        world_state.camp_meeting = CampMeetingState(
+            active=True,
+            options_next_node_ids=opts,
+            proposals_order_role_ids=order,
+            proposed_at_ms=now_ms,
+        )
+        world_state.phase = Phase.CAMP_MEETING_DECIDE
+
+        # Step 1: proposals (one per role, random order)
+        for rid in order:
+            role = next((r for r in world_state.roles if r.role_id == rid), None)
+            if not role:
+                continue
+            # Very light mock proposal: pick one option (or "原地" if none)
+            if opts:
+                pick = self._rng.choice(opts)
+                dest = AoTaiGraph.get_node(pick).name
+                text = f"明天我建议：去 {dest}。"
+            else:
+                text = "明天我建议：先原地休整再决定。"
+            messages.append(
+                Message(
+                    message_id=f"m-{world_state.session_id}-{now_ms}-{rid}",
+                    role_id=rid,
+                    role_name=role.name,
+                    kind="speech",
+                    content=text,
+                    timestamp_ms=now_ms,
+                )
+            )
+        messages.append(
+            Message(
+                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                kind="system",
+                content="营地会议：请选择“共识路线/锁强度/明日团长”，提交后进入第二天早晨。",
+                timestamp_ms=now_ms,
+            )
+        )
+
+    def _apply_message_effects(self, world_state: WorldState, messages: list[Message]) -> None:
+        # Minimal, deterministic mapping from emote/action_tag -> attr deltas.
+        # (This is a placeholder for LLM-driven state updates.)
+        by_role: dict[str, dict[str, int]] = {}
+        for m in messages:
+            if not m.role_id:
+                continue
+            if m.kind not in ("speech", "action"):
+                continue
+            rid = str(m.role_id)
+            d = by_role.setdefault(rid, {"stamina": 0, "mood": 0, "experience": 0})
+            em = (m.emote or "").strip()
+            if em == "tired":
+                d["stamina"] -= 1
+                d["mood"] -= 1
+            elif em == "happy":
+                d["mood"] += 2
+            elif em == "panic":
+                d["mood"] -= 2
+                d["stamina"] -= 1
+            elif em == "focused":
+                d["experience"] += 1
+            elif em == "grumpy":
+                d["mood"] -= 1
+            elif em == "calm":
+                d["mood"] += 1
+
+            tag = (m.action_tag or "").strip()
+            if tag in ("check_map", "lookaround"):
+                d["experience"] += 1
+            if tag in ("drink",):
+                d["mood"] += 1
+
+        for r in world_state.roles:
+            delta = by_role.get(r.role_id)
+            if not delta:
+                continue
+            r.attrs.stamina = max(0, min(100, r.attrs.stamina + int(delta["stamina"])))
+            r.attrs.mood = max(0, min(100, r.attrs.mood + int(delta["mood"])))
+            r.attrs.experience = max(0, min(100, r.attrs.experience + int(delta["experience"])))
 
     def _safe_get_background(self, scene_id: str) -> BackgroundAsset:
         try:
@@ -153,6 +367,17 @@ class GameService:
                         role_name=active.name,
                         kind="speech",
                         content=text,
+                        timestamp_ms=now_ms,
+                    )
+                )
+            # If we were waiting for the player to respond, a SAY clears the gate.
+            if world_state.phase == Phase.AWAIT_PLAYER_SAY:
+                world_state.phase = Phase.FREE
+                messages.append(
+                    Message(
+                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                        kind="system",
+                        content="收到你的回应，队伍继续前进。",
                         timestamp_ms=now_ms,
                     )
                 )
@@ -233,6 +458,22 @@ class GameService:
             if len(outgoing) == 1:
                 next_edge = outgoing[0]
             else:
+                # Junction decision: only the leader can pick a branch.
+                if world_state.leader_role_id and (
+                    world_state.active_role_id != world_state.leader_role_id
+                ):
+                    world_state.phase = Phase.JUNCTION_DECISION
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content="到达岔路：需要团长做出选择（请切换到团长角色再选择路线）。",
+                            timestamp_ms=now_ms,
+                        )
+                    )
+                    world_state.available_next_node_ids = [e.to_node_id for e in outgoing]
+                    return "MOVE_FORWARD:leader_required"
+
                 picked = str(req.payload.get("next_node_id") or "").strip()
                 valid = {e.to_node_id: e for e in outgoing}
                 if picked and picked in valid:
@@ -251,9 +492,11 @@ class GameService:
                         )
                     )
                     world_state.available_next_node_ids = list(valid.keys())
+                    world_state.phase = Phase.JUNCTION_DECISION
                     return "MOVE_FORWARD:choose"
 
             # Start transit along chosen edge
+            world_state.phase = Phase.FREE
             world_state.in_transit_from_node_id = world_state.current_node_id
             world_state.in_transit_to_node_id = next_edge.to_node_id
             world_state.in_transit_total_km = float(getattr(next_edge, "distance_km", 1.0) or 1.0)

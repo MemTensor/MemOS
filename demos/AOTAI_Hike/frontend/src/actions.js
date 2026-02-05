@@ -1,5 +1,6 @@
 import { sessionId, setMapData, setSessionId, setWorldState, worldState } from "./state.js";
 import { logMsg, renderBranchChoices, renderPartyStatus, renderRoles, setStatus } from "./render.js";
+import { applyPhaseUI } from "./phase_ui.js";
 
 export const API_BASE = "/api/demo/ao-tai";
 
@@ -32,6 +33,7 @@ export async function apiNewSession() {
   renderBranchChoices();
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
+  applyPhaseUI(worldState);
 }
 
 export async function apiUpsertRole(role) {
@@ -45,6 +47,7 @@ export async function apiUpsertRole(role) {
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   // ensure Phaser shows the party immediately after creation/update
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
+  applyPhaseUI(worldState);
 }
 
 export async function apiSetActiveRole(roleId) {
@@ -63,6 +66,7 @@ export async function apiSetActiveRole(roleId) {
     content: `切换当前角色为：${active?.name || roleId}`,
     timestamp_ms: Date.now(),
   });
+  applyPhaseUI(worldState);
 }
 
 export async function apiAct(action, payload = {}) {
@@ -75,6 +79,7 @@ export async function apiAct(action, payload = {}) {
   renderBranchChoices();
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
+  applyPhaseUI(worldState);
 }
 
 export function installActionsToWindow() {
