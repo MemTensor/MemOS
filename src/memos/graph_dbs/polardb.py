@@ -5149,6 +5149,9 @@ class PolarDBGraphDB(BaseGraphDB):
             "info",
             "source",
             "file_ids",
+            "project_id",
+            "manager_user_id",
+            "delete_time",
         }
 
         def process_condition(condition):
