@@ -75,6 +75,15 @@ export function initPhaser() {
 
   const TILE = 48; // matches your pixel assets scale
 
+  // Scene layering config (two-copy loop)
+  // - Add/remove layers by editing this list (order = render order, bottom -> top).
+  // - For each sceneId, assets should exist at:
+  //   `./assets/scenes/scene_${sceneId}/scene_0_${layer}.png`
+  const SCENE_IDS = ["base"];
+  const SCENE_LAYERS = ["base", "props"];
+  const sceneKey = (sceneId, layer) => `scene:${sceneId}:${layer}`;
+  const sceneFile = (sceneId, layer) => `scenes/scene_${sceneId}/scene_0_${layer}.png`;
+
   // Sprite pool for roles (pixel-art PNG sequences)
   // - Quickstart(default) roles map by name to fixed keys
   // - Manually created roles auto-match from this pool by stable hash of role_id
@@ -110,6 +119,15 @@ export function initPhaser() {
       this.world = null;
       this.worldRT = null;
       this.worldOverlay = null;
+
+      // New: N-layer scrolling scene (two-copy loop)
+      this.worldLayers = null;
+      this.layerImgs = null; // { [layerName]: [imgA, imgB] }
+      this._sceneLayers = SCENE_LAYERS.slice();
+      this._scrollY = 0;
+      this._scrollSpeed = 28; // px/s
+      this._loopH = 0;
+      this._sceneId = "base";
 
       // minimap removed from Phaser (now DOM canvas)
 
@@ -157,6 +175,13 @@ export function initPhaser() {
       loadImg("leaves", "Fallen Leaves 1.png");
       loadImg("pumpkin", "Pumpkin 1.png");
 
+      // Scene templates
+      for (const sid of SCENE_IDS) {
+        for (const layer of SCENE_LAYERS) {
+          loadImg(sceneKey(sid, layer), sceneFile(sid, layer));
+        }
+      }
+
       // preload role sprite frames (png sequences)
       const loadFrame = (spriteKey, action, idx) => {
         const k = `spr:${spriteKey}:${action}:${String(idx).padStart(3, "0")}`;
@@ -188,9 +213,20 @@ export function initPhaser() {
       // --- containers ---
       this.world = this.add.container(0, 0);
 
-      // --- main world render texture ---
-      this.worldRT = this.add.renderTexture(0, 0, VIEW_W, MAIN_H).setOrigin(0, 0);
-      this.world.add(this.worldRT);
+      // --- main world layers (three layers, two-copy loop) ---
+      this.worldLayers = this.add.container(0, 0);
+      this.world.add(this.worldLayers);
+
+      this.layerImgs = {};
+      for (const layer of this._sceneLayers) {
+        const key = sceneKey(this._sceneId, layer);
+        const a = this.add.image(0, 0, key).setOrigin(0, 0);
+        const b = this.add.image(0, 0, key).setOrigin(0, 0);
+        this.layerImgs[layer] = [a, b];
+        this.worldLayers.add(a);
+        this.worldLayers.add(b);
+      }
+      this._swapScene(this._sceneId);
 
       // init animations + nearest filter for pixel art sprites
       this._initRoleAnims();
@@ -225,6 +261,77 @@ export function initPhaser() {
         weather: "cloudy",
         time_of_day: "morning",
       });
+    }
+
+    _swapScene(id) {
+      this._sceneId = String(id || "base");
+      if (!this.layerImgs) return;
+
+      // Set NEAREST for the scene textures.
+      try {
+        for (const layer of this._sceneLayers) {
+          const key = sceneKey(this._sceneId, layer);
+          if (this.textures.exists(key)) {
+            this.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+          }
+        }
+      } catch {}
+
+      for (const layer of this._sceneLayers) {
+        const key = sceneKey(this._sceneId, layer);
+        const [a, b] = this.layerImgs[layer];
+        a.setTexture(key);
+        b.setTexture(key);
+      }
+      this._layoutLoopImages();
+    }
+
+    _layoutLoopImages() {
+      if (!this.layerImgs) return;
+      const refLayer = (this._sceneLayers && this._sceneLayers[0]) || "base";
+      const tex = this.layerImgs[refLayer]?.[0]?.texture || this.layerImgs.base?.[0]?.texture;
+      const img = tex && tex.getSourceImage ? tex.getSourceImage() : null;
+      const nativeW = img && img.width ? img.width : VIEW_W;
+      const nativeH = img && img.height ? img.height : MAIN_H;
+
+      // Keep aspect ratio: fit by width, but ensure height covers the viewport.
+      let scale = VIEW_W / Math.max(1, nativeW);
+      if (nativeH * scale < MAIN_H) scale = MAIN_H / Math.max(1, nativeH);
+      const dispW = Math.round(nativeW * scale);
+      const dispH = Math.round(nativeH * scale);
+      const x0 = Math.round((VIEW_W - dispW) / 2);
+
+      // Force width alignment (best: art exports at VIEW_W px so no scaling occurs)
+      for (const k of this._sceneLayers) {
+        const [a, b] = this.layerImgs[k];
+        a.setDisplaySize(dispW, dispH);
+        b.setDisplaySize(dispW, dispH);
+        a.x = x0;
+        a.y = 0;
+        b.x = x0;
+        b.y = -dispH;
+      }
+
+      this._loopH = Math.max(1, Math.round(dispH));
+      this._scrollY = 0;
+    }
+
+    update(time, delta) {
+      const ws = this._ws || {};
+      const walking = Boolean(ws && ws.in_transit_to_node_id);
+      const speed = walking ? this._scrollSpeed : 0;
+      if (speed <= 0 || !this.layerImgs || !this._loopH) return;
+
+      const dy = (Number(delta || 0) / 1000) * speed;
+      this._scrollY = (this._scrollY + dy) % this._loopH;
+
+      // Scroll DOWN: background moves down (player feels moving forward/up).
+      const ay = Math.round(this._scrollY);
+      for (const k of this._sceneLayers) {
+        const [a, b] = this.layerImgs[k];
+        a.y = ay;
+        b.y = ay - this._loopH;
+      }
     }
 
     _pickSpriteKey(role) {
@@ -798,7 +905,8 @@ export function initPhaser() {
       const sceneChanged = sceneKey !== this._sceneKey;
       this._sceneKey = sceneKey;
       if (nodeChanged || sceneChanged) {
-        this._renderWorld(nodeId, segFrom, segTo);
+        // Current rollout: use a single global scene template.
+        this._swapScene("base");
       }
       // mood overlay can change frequently without re-rendering tiles
       if (moodChanged) {
@@ -807,14 +915,7 @@ export function initPhaser() {
 
       // 3) small "step" animation on move
       if (nodeChanged || walkChanged) {
-        // Background scroll down a bit => feels like walking up
-        this.tweens.add({
-          targets: this.worldRT,
-          y: 14,
-          duration: 220,
-          yoyo: true,
-          ease: "Sine.easeInOut",
-        });
+        // Background is continuously scrolling now (two-copy loop), so no extra world bob here.
         // tiny bob on active role (if present)
         const activeId = ws?.active_role_id ? String(ws.active_role_id) : null;
         const activeSpr = activeId ? this.roleSprites.get(activeId) : null;
