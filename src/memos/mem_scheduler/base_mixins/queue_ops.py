@@ -336,7 +336,14 @@ class BaseSchedulerQueueMixin:
         return self.dispatcher.handlers
 
     def register_handlers(
-        self, handlers: dict[str, Callable[[list[ScheduleMessageItem]], None]]
+        self,
+        handlers: dict[
+            str,
+            Callable[[list[ScheduleMessageItem]], None]
+            | tuple[
+                Callable[[list[ScheduleMessageItem]], None], TaskPriorityLevel | None, int | None
+            ],
+        ],
     ) -> None:
         if not self.dispatcher:
             logger.warning("Dispatcher is not initialized, cannot register handlers")

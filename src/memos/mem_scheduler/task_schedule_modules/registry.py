@@ -17,16 +17,17 @@ from memos.mem_scheduler.schemas.task_schemas import (
     MEM_UPDATE_TASK_LABEL,
     PREF_ADD_TASK_LABEL,
     QUERY_TASK_LABEL,
+    TaskPriorityLevel,
 )
 
-from .add_handler import AddMessageHandler
-from .answer_handler import AnswerMessageHandler
-from .feedback_handler import FeedbackMessageHandler
-from .mem_read_handler import MemReadMessageHandler
-from .mem_reorganize_handler import MemReorganizeMessageHandler
-from .memory_update_handler import MemoryUpdateHandler
-from .pref_add_handler import PrefAddMessageHandler
-from .query_handler import QueryMessageHandler
+from .handlers.add_handler import AddMessageHandler
+from .handlers.answer_handler import AnswerMessageHandler
+from .handlers.feedback_handler import FeedbackMessageHandler
+from .handlers.mem_read_handler import MemReadMessageHandler
+from .handlers.mem_reorganize_handler import MemReorganizeMessageHandler
+from .handlers.memory_update_handler import MemoryUpdateHandler
+from .handlers.pref_add_handler import PrefAddMessageHandler
+from .handlers.query_handler import QueryMessageHandler
 
 
 class SchedulerHandlerRegistry:
@@ -41,13 +42,14 @@ class SchedulerHandlerRegistry:
         self.pref_add = PrefAddMessageHandler(scheduler_context)
 
     def build_dispatch_map(self) -> dict[str, Callable]:
-        return {
-            QUERY_TASK_LABEL: self.query,
-            ANSWER_TASK_LABEL: self.answer,
+        predefined_handlers = {
+            QUERY_TASK_LABEL: (self.query, TaskPriorityLevel.LEVEL_1, None),
+            ANSWER_TASK_LABEL: (self.answer, TaskPriorityLevel.LEVEL_1, None),
             MEM_UPDATE_TASK_LABEL: self.memory_update,
-            ADD_TASK_LABEL: self.add,
+            ADD_TASK_LABEL: (self.add, TaskPriorityLevel.LEVEL_1, None),
             MEM_READ_TASK_LABEL: self.mem_read,
             MEM_ORGANIZE_TASK_LABEL: self.mem_reorganize,
-            PREF_ADD_TASK_LABEL: self.pref_add,
+            PREF_ADD_TASK_LABEL: (self.pref_add, None, 600_000),
             MEM_FEEDBACK_TASK_LABEL: self.mem_feedback,
         }
+        return predefined_handlers
