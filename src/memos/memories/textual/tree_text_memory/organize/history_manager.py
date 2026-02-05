@@ -1,13 +1,24 @@
 import logging
 import time
+import uuid
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.extras.nli_model.client import NLIClient
 from memos.extras.nli_model.types import NLIResult
 from memos.graph_dbs.base import BaseGraphDB
-from memos.memories.textual.item import ArchivedTextualMemory, TextualMemoryItem
+from memos.llms.base import BaseLLM
+from memos.memories.textual.item import (
+    ArchivedTextualMemory,
+    TextualMemoryItem,
+    TreeNodeTextualMemoryMetadata,
+)
+from memos.templates.mem_reader_mem_version_prompts import (
+    ASYNC_MEMORY_UPDATE_PROMPT_ZH,
+    MEMORY_MERGE_PROMPT_ZH,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -69,13 +80,12 @@ def _detach_related_content(new_item: TextualMemoryItem) -> None:
 
 
 def _rebuild_fast_node_history(
-    item: TextualMemoryItem,
-    replacements: dict[int, list[ArchivedTextualMemory]],
+    item: TextualMemoryItem, replacements: dict[int, list[ArchivedTextualMemory]]
 ) -> None:
     """
     Reconstruct the history list of a fast node:
     1. Replace resolved items with their evolved versions.
-    2. Deduplicate by ID while preserving newest versions.
+    2. Deduplicate by ID while preserving the newest versions.
     """
     new_history = {}
 
@@ -99,89 +109,109 @@ def _rebuild_fast_node_history(
 
 
 class MemoryHistoryManager:
-    def __init__(self, nli_client: NLIClient, graph_db: BaseGraphDB) -> None:
+    def __init__(
+        self, nli_client: NLIClient, graph_db: BaseGraphDB, llm: BaseLLM | None = None
+    ) -> None:
         """
         Initialize the MemoryHistoryManager.
 
         Args:
             nli_client: NLIClient for conflict/duplicate detection.
             graph_db: GraphDB instance for marking operations during history management.
+            llm: Optional LLM instance for memory merging during conflicts.
         """
         self.nli_client = nli_client
         self.graph_db = graph_db
+        self.llm = llm
 
-    def _check_and_fetch_replacements(
-        self, item: TextualMemoryItem, pending_indices: list[int]
-    ) -> tuple[dict[int, list[ArchivedTextualMemory]], list[str]]:
+    @staticmethod
+    def update_node_with_history(
+        item: TextualMemoryItem,
+        new_memory: str,
+        update_type: str,
+        tags: list[str] | None = None,
+        key: str | None = None,
+    ) -> tuple[TextualMemoryItem, TextualMemoryItem]:
+        old_id = item.id
+        archived_id = str(uuid.uuid4())
+        # archived memory(need to store this node to the db later)
+        archived_item = item.model_copy(deep=True)
+        archived_item.id = archived_id
+        archived_item.metadata.evolve_to = [old_id]
+        archived_item.metadata.status = "archived"
+
+        # original memory with updated contents and history
+        archived_history = ArchivedTextualMemory(
+            version=item.metadata.version or 1,
+            is_fast=item.metadata.is_fast or False,
+            memory=item.memory,
+            update_type=update_type,
+            archived_memory_id=archived_id,
+            created_at=getattr(item.metadata, "created_at", None) or datetime.now().isoformat(),
+        )
+        item.memory = new_memory
+        item.metadata.version = (item.metadata.version or 1) + 1
+        item.metadata.status = "activated"
+        if tags is not None:
+            item.metadata.tags = tags
+        if key is not None:
+            item.metadata.key = key
+        if item.metadata.history is None:
+            item.metadata.history = []
+        item.metadata.history.append(archived_history)
+
+        return item, archived_item
+
+    @staticmethod
+    def format_async_update_prompt(
+        item: TextualMemoryItem, conversation: str | None = None, custom_tags_prompt: str = ""
+    ) -> str:
         """
-        Check DB status for pending items. If 'deleted', fetch evolved nodes.
+        Format the prompt for asynchronous memory update.
+
+        Args:
+            item: The TextualMemoryItem containing history candidates.
+            conversation: The current conversation content. If None, uses item.memory.
+            custom_tags_prompt: Optional custom prompt for tags.
 
         Returns:
-            replacements: Dict mapping original history index to list of new ArchivedTextualMemory items.
+            Formatted prompt string.
         """
-        pending_ids = [item.metadata.history[i].archived_memory_id for i in pending_indices]
+        # First, detach duplicate and conflict memory contents from the new item's memory text
+        _detach_related_content(item)
 
-        # Batch fetch pending nodes to check status
-        nodes_data = self.graph_db.get_nodes(ids=pending_ids) or []
-        nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
+        duplicate_candidates = []
+        conflict_candidates = []
+        unrelated_candidates = []
 
-        replacements = {}
+        for h in item.metadata.history or []:
+            candidate_str = f"[ID:{h.archived_memory_id}] {h.memory}"
 
-        for i in pending_indices:
-            h_item = item.metadata.history[i]
-            node_data = nodes_map.get(h_item.archived_memory_id)
+            if h.update_type == "duplicate":
+                duplicate_candidates.append(candidate_str)
+            elif h.update_type == "conflict":
+                conflict_candidates.append(candidate_str)
+            else:
+                # Includes "unrelated" and any other types
+                unrelated_candidates.append(candidate_str)
 
-            if not node_data:
-                continue
+        # Helper to format list as string
+        def format_list(candidates):
+            return "\n".join(candidates) if candidates else "无"
 
-            metadata = node_data.get("metadata", {})
-            status = metadata.get("status")
-
-            # Condition: Fast node is processed when it is marked as 'deleted'
-            if status == "deleted":
-                evolve_to_ids = metadata.get("evolve_to", [])
-
-                new_items = self._fetch_evolved_nodes(evolve_to_ids, h_item.update_type)
-                replacements[i] = new_items
-
-                logger.info(
-                    f"[MemoryHistoryManager] Resolved fast history item {h_item.archived_memory_id} -> {evolve_to_ids}"
-                )
-
-        return replacements
-
-    def _fetch_evolved_nodes(
-        self, evolve_to_ids: list[str], update_type: str
-    ) -> list[ArchivedTextualMemory]:
-        """Fetch the actual nodes that the fast node evolved into and convert to archive format."""
-        if not evolve_to_ids:
-            return []
-
-        evolved_nodes = self.graph_db.get_nodes(ids=evolve_to_ids) or []
-        results = []
-
-        for enode in evolved_nodes:
-            if not enode or "id" not in enode:
-                continue
-
-            enode_meta = enode.get("metadata", {})
-
-            # Create new archived memory inheriting the update_type (conflict/duplicate)
-            new_archived = ArchivedTextualMemory(
-                version=enode_meta.get("version", 1),
-                is_fast=enode_meta.get("is_fast", False),
-                memory=enode.get("memory", ""),
-                update_type=update_type,
-                archived_memory_id=enode.get("id"),
-                created_at=enode_meta.get("created_at"),
+        return (
+            ASYNC_MEMORY_UPDATE_PROMPT_ZH.replace(
+                "${duplicate_candidates}", format_list(duplicate_candidates)
             )
-            results.append(new_archived)
-
-        return results
+            .replace("${conflict_candidates}", format_list(conflict_candidates))
+            .replace("${unrelated_candidates}", format_list(unrelated_candidates))
+            .replace("${custom_tags_prompt}", custom_tags_prompt)
+            .replace("${conversation}", conversation or item.memory)
+        )
 
     def resolve_history_via_nli(
         self, new_item: TextualMemoryItem, related_items: list[TextualMemoryItem]
-    ) -> list[TextualMemoryItem]:
+    ) -> list[str]:
         """
         Detect relationships (Duplicate/Conflict) between the new item and related items using NLI,
         and attach them as history to the new fast item.
@@ -191,7 +221,7 @@ class MemoryHistoryManager:
             related_items: Existing memory items that might be related.
 
         Returns:
-            List of duplicate or conflicting memory items judged by the NLI service.
+            List of duplicate or conflicting memory ids judged by the NLI service.
         """
         if not related_items:
             return []
@@ -208,10 +238,10 @@ class MemoryHistoryManager:
         for r_item, nli_res in zip(related_items, nli_results, strict=False):
             if nli_res == NLIResult.DUPLICATE:
                 update_type = "duplicate"
-                duplicate_memories.append(r_item.memory)
+                duplicate_memories.append(r_item.id)
             elif nli_res == NLIResult.CONTRADICTION:
                 update_type = "conflict"
-                conflict_memories.append(r_item.memory)
+                conflict_memories.append(r_item.id)
             else:
                 update_type = "unrelated"
 
@@ -227,9 +257,6 @@ class MemoryHistoryManager:
                 created_at=created_at,
             )
             new_item.metadata.history.append(archived)
-            logger.info(
-                f"[MemoryHistoryManager] Archived related memory {r_item.id} as {update_type} for new item {new_item.id}"
-            )
 
         # 3. Concat duplicate/conflict memories to new_item.memory
         # We will mark those old memories as invisible during fine processing, this op helps to avoid information loss.
@@ -293,26 +320,88 @@ class MemoryHistoryManager:
 
         return
 
+    def apply_llm_memory_updates(
+        self, llm_response: dict[str, Any], source_item: TextualMemoryItem, user_name: str
+    ) -> tuple[list[TextualMemoryItem], list[TextualMemoryItem]]:
+        """
+        Apply the updates from the LLM response to the memory graph.
+
+        Args:
+            llm_response: The parsed JSON response from the LLM.
+            source_item: The original fast item A whose history contains ArchivedTextualMemory entries.
+                         We derive expected versions and candidate IDs from A.history.
+            user_name: user_name
+
+        Returns:
+            List of new or updated memory items.
+        """
+        memory_list = llm_response.get("memory list", [])
+        restored_memories = llm_response.get("restored_memories", [])
+        used_source_ids = set()
+        used_conflict_ids = set()
+        # Collect IDs referenced by the LLM response
+        for mem_data in memory_list:
+            used_source_ids.update(mem_data.get("source_candidate_ids", []))
+            used_conflict_ids.update(mem_data.get("conflicted_candidate_ids", []))
+        # Collect IDs referenced by restored memories
+        restored_source_ids = {
+            mem.get("source_candidate_id")
+            for mem in restored_memories
+            if mem.get("source_candidate_id")
+        }
+        # All IDs used by the LLM response
+        used_ids = used_source_ids | used_conflict_ids | restored_source_ids
+        expected_versions = {}  # For concurrency control, need to get the recorded versions of the old memories
+        candidate_id_set: set[str] = set()
+        # Recover candidate IDs and their expected versions from the source item's history
+        if source_item.metadata and source_item.metadata.history:
+            for h in source_item.metadata.history:
+                if h.archived_memory_id:
+                    candidate_id_set.add(h.archived_memory_id)
+                    expected_versions[h.archived_memory_id] = h.version
+
+        # IDs not used by the LLM response will be treated as unrelated
+        unrelated_ids = sorted(candidate_id_set - used_ids)
+        updated_items: list[TextualMemoryItem] = []
+        new_items: list[TextualMemoryItem] = []
+
+        # 1. Handle Unrelated Candidates - Restore status to activated
+        self._handle_unrelated_candidates(unrelated_ids, user_name=user_name)
+
+        # 2. Handle Memory List (Update or New)
+        processed_updates, created_items = self._process_memory_updates(
+            memory_list, expected_versions
+        )
+        updated_items.extend(processed_updates)
+        new_items.extend(created_items)
+
+        # 3. Handle Restored Memories (Extract from conflict)
+        new_items.extend(self._handle_restored_memories(restored_memories))
+
+        return updated_items, new_items
+
     def mark_memory_status(
         self,
-        memory_items: list[TextualMemoryItem],
+        memory_ids: list[str],
         status: Literal["activated", "resolving", "archived", "deleted"],
+        user_name: str,
     ) -> None:
         """
         Support status marking operations during history management. Common usages are:
         1. Mark conflict/duplicate old memories' status as "resolving",
            to make them invisible to /search api, but still visible for PreUpdateRetriever.
-        2. Mark resolved memories' status as "activated", to restore their visibility.
+        2. Mark resolved memories' status as "activated", to recover their visibility.
         """
         # Execute the actual marking operation - in db.
         with ContextThreadPoolExecutor() as executor:
             futures = []
-            for mem in memory_items:
+            for mid in memory_ids:
                 futures.append(
                     executor.submit(
                         self.graph_db.update_node,
-                        id=mem.id,
+                        id=mid,
                         fields={"status": status},
+                        user_name=user_name,
                     )
                 )
 
@@ -320,3 +409,345 @@ class MemoryHistoryManager:
             for future in futures:
                 future.result()
         return
+
+    def _check_and_fetch_replacements(
+        self, item: TextualMemoryItem, pending_indices: list[int]
+    ) -> tuple[dict[int, list[ArchivedTextualMemory]], list[str]]:
+        """
+        Check DB status for pending items. If 'deleted', fetch evolved nodes.
+
+        Returns:
+            replacements: Dict mapping original history index to list of new ArchivedTextualMemory items.
+        """
+        pending_ids = [item.metadata.history[i].archived_memory_id for i in pending_indices]
+
+        # Batch fetch pending nodes to check status
+        nodes_data = self.graph_db.get_nodes(ids=pending_ids) or []
+        nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
+
+        replacements = {}
+
+        for i in pending_indices:
+            h_item = item.metadata.history[i]
+            node_data = nodes_map.get(h_item.archived_memory_id)
+
+            if not node_data:
+                continue
+
+            metadata = node_data.get("metadata", {})
+            status = metadata.get("status")
+
+            # Condition: Fast node is processed when it is marked as 'deleted'
+            if status == "deleted":
+                evolve_to_ids = metadata.get("evolve_to", [])
+
+                new_items = self._fetch_evolved_nodes(evolve_to_ids, h_item.update_type)
+                replacements[i] = new_items
+
+        return replacements
+
+    def _fetch_evolved_nodes(
+        self, evolve_to_ids: list[str], update_type: str
+    ) -> list[ArchivedTextualMemory]:
+        """Fetch the actual nodes that the fast node evolved into and convert to archive format."""
+        if not evolve_to_ids:
+            return []
+
+        evolved_nodes = self.graph_db.get_nodes(ids=evolve_to_ids) or []
+        results = []
+
+        for enode in evolved_nodes:
+            if not enode or "id" not in enode:
+                continue
+
+            enode_meta = enode.get("metadata", {})
+
+            # Create new archived memory inheriting the update_type (conflict/duplicate)
+            new_archived = ArchivedTextualMemory(
+                version=enode_meta.get("version", 1),
+                is_fast=enode_meta.get("is_fast", False),
+                memory=enode.get("memory", ""),
+                update_type=update_type,
+                archived_memory_id=enode.get("id"),
+                created_at=enode_meta.get("created_at"),
+            )
+            results.append(new_archived)
+
+        return results
+
+    def _handle_unrelated_candidates(self, unrelated_ids: list[str], user_name: str) -> None:
+        """Handle Unrelated Candidates - Restore status to `activated`."""
+        if unrelated_ids:
+            self.mark_memory_status(unrelated_ids, "activated", user_name)
+
+    def _process_memory_updates(
+        self, memory_list: list[dict[str, Any]], expected_versions: dict[str, int]
+    ) -> tuple[list[TextualMemoryItem], list[TextualMemoryItem]]:
+        """Process Memory List (Update or New)."""
+        updated_items: list[TextualMemoryItem] = []
+        new_items: list[TextualMemoryItem] = []
+        for mem_data in memory_list:
+            source_ids = mem_data.get("source_candidate_ids", [])
+            conflict_ids = mem_data.get("conflicted_candidate_ids", [])
+
+            # Determine if this is an update or a new node
+            target_ids = source_ids + conflict_ids
+
+            if target_ids:
+                item = self._update_existing_memory(
+                    mem_data,
+                    target_ids,
+                    source_ids,
+                    expected_versions,
+                )
+                if item:
+                    updated_items.append(item)
+            else:
+                item = self._create_new_memory(mem_data)
+                new_items.append(item)
+        return updated_items, new_items
+
+    def _update_existing_memory(
+        self,
+        mem_data: dict[str, Any],
+        target_ids: list[str],
+        source_ids: list[str],
+        expected_versions: dict[str, int],
+    ) -> TextualMemoryItem | None:
+        """
+        Update existing memory nodes using the LLM result.
+
+        The first ID in target_ids is treated as the primary node. If additional target IDs
+        are provided, they are treated as secondary candidates and will be merged into the
+        primary. Merging means:
+        1) Mark secondary nodes as archived and append the primary ID to evolve_to
+        2) Merge their history entries into the primary history and re-order by created_at
+
+        The method also applies CAS validation via expected_versions, archives the previous
+        version of the primary node, and persists the updated node back to the graph DB.
+
+        Returns the updated primary TextualMemoryItem, or None when the primary node
+        cannot be found.
+        """
+        original_primary_id, primary_id, secondary_ids = (
+            target_ids[0],
+            target_ids[0],
+            target_ids[1:],
+        )
+        new_value, tags, key = (
+            mem_data.get("value", ""),
+            mem_data.get("tags", []),
+            mem_data.get("key", ""),
+        )
+
+        # Fetch candidate nodes in batch and then select the primary
+        nodes_data = self.graph_db.get_nodes(target_ids) or []
+        nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
+        node_data = nodes_map.get(primary_id)
+        if not node_data:
+            node_data = self.graph_db.get_node(primary_id)
+            if not node_data:
+                logger.warning(
+                    f"[MemoryHistoryManager] Target node {primary_id} not found for update. Skipping."
+                )
+                return None
+
+        current_item = TextualMemoryItem(**node_data)
+        new_value = self._apply_cas_merge(primary_id, current_item, expected_versions, new_value)
+
+        update_type = "duplicate" if original_primary_id in source_ids else "conflict"
+        current_item, archived_item = self.update_node_with_history(
+            current_item,
+            new_value,
+            update_type,
+            tags=tags,
+            key=key,
+        )
+        now = datetime.now().isoformat()
+        if hasattr(archived_item.metadata, "created_at") and not getattr(
+            archived_item.metadata, "created_at", None
+        ):
+            archived_item.metadata.created_at = now
+        if hasattr(archived_item.metadata, "updated_at"):
+            archived_item.metadata.updated_at = now
+        if hasattr(current_item.metadata, "updated_at"):
+            current_item.metadata.updated_at = now
+        self.graph_db.add_node(
+            id=archived_item.id,
+            memory=archived_item.memory,
+            metadata=archived_item.metadata.model_dump(exclude_none=True),
+        )
+        fields = current_item.metadata.model_dump(exclude_none=True)
+        fields.pop("created_at", None)
+        fields["updated_at"] = now
+        self.graph_db.update_node(
+            id=primary_id,
+            fields={"memory": current_item.memory, **fields},
+        )
+        self._merge_secondary_nodes(secondary_ids, primary_id)
+
+        return current_item
+
+    def _apply_cas_merge(
+        self,
+        primary_id: str,
+        current_item: TextualMemoryItem,
+        expected_versions: dict[str, int],
+        new_value: str,
+    ) -> str:
+        expected_version = expected_versions.get(primary_id)
+        current_version = current_item.metadata.version or 1
+        if expected_version is not None and current_version != expected_version:
+            logger.warning(
+                f"[MemoryHistoryManager] Version conflict for node {primary_id}: "
+                f"Expected v{expected_version}, but found v{current_version} in DB. "
+                "Triggering merge logic."
+            )
+            merged_content = self._merge_conflicting_memory(
+                latest_memory=current_item.memory,
+                proposed_update=new_value,
+            )
+            return merged_content
+
+        return new_value
+
+    def _merge_secondary_nodes(self, secondary_ids: list[str], primary_id: str) -> None:
+        if not secondary_ids:
+            return
+
+        node_ids = [primary_id, *secondary_ids]
+        nodes_data = self.graph_db.get_nodes(ids=node_ids) or []
+        nodes_map = {n["id"]: n for n in nodes_data if n and "id" in n}
+        primary_data = nodes_map.get(primary_id) or self.graph_db.get_node(primary_id)
+        if not primary_data:
+            return
+
+        primary_item = TextualMemoryItem(**primary_data)
+        merged_history = list(primary_item.metadata.history or [])
+
+        for memory_id in secondary_ids:
+            node_data = nodes_map.get(memory_id) or self.graph_db.get_node(memory_id)
+            if not node_data:
+                continue
+            metadata = node_data.get("metadata", {})
+            evolve_to = list(metadata.get("evolve_to", []) or [])
+            if primary_id not in evolve_to:
+                evolve_to.append(primary_id)
+            self.graph_db.update_node(
+                id=memory_id,
+                fields={"status": "archived", "evolve_to": evolve_to},
+            )
+            secondary_item = TextualMemoryItem(**node_data)
+            if secondary_item.metadata.history:
+                merged_history.extend(secondary_item.metadata.history)
+
+        def _history_sort_key(history_item: ArchivedTextualMemory) -> datetime:
+            created_at = history_item.created_at
+            if isinstance(created_at, datetime):
+                return created_at
+            if created_at:
+                try:
+                    return datetime.fromisoformat(created_at)
+                except ValueError:
+                    return datetime.min
+            return datetime.min
+
+        merged_history.sort(key=_history_sort_key)
+        for idx, history_item in enumerate(merged_history, start=1):
+            history_item.version = idx
+        primary_item.metadata.history = merged_history
+        self.graph_db.update_node(
+            id=primary_id,
+            fields={"history": [h.model_dump(exclude_none=True) for h in merged_history]},
+        )
+
+    def _merge_conflicting_memory(self, latest_memory: str, proposed_update: str) -> str:
+        """
+        Call LLM to merge proposed update with latest memory content.
+        """
+        if not self.llm:
+            return proposed_update
+
+        prompt = MEMORY_MERGE_PROMPT_ZH.replace("${latest_memory}", latest_memory).replace(
+            "${proposed_update}", proposed_update
+        )
+
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response = self.llm.generate(messages)
+            return response.strip()
+        except Exception as e:
+            logger.error(f"[MemoryHistoryManager] Failed to merge memory via LLM: {e}")
+            # Fallback: append proposed update? or just return proposed?
+            # Returning proposed might overwrite latest changes.
+            # Returning latest might lose proposed changes.
+            # Let's concatenate as a safe fallback.
+            return f"{latest_memory}\n\n[System Merge Fallback] New Info: {proposed_update}"
+
+    def _create_new_memory(self, mem_data: dict[str, Any]) -> TextualMemoryItem:
+        """Create New Node."""
+        new_value = mem_data.get("value", "")
+        tags = mem_data.get("tags", [])
+        key = mem_data.get("key", "")
+        memory_type = mem_data.get("memory_type", "LongTermMemory")
+
+        new_item = TextualMemoryItem(
+            id=str(uuid.uuid4()),
+            memory=new_value,
+            metadata=TreeNodeTextualMemoryMetadata(
+                is_fast=False,
+                version=1,
+                memory_type=memory_type,
+                status="activated",
+                tags=tags,
+                key=key,
+                created_at=datetime.now().isoformat(),
+                history=[],
+            ),
+        )
+        return new_item
+
+    def _handle_restored_memories(
+        self, restored_memories: list[dict[str, Any]]
+    ) -> list[TextualMemoryItem]:
+        """Handle Restored Memories (Extract from conflict)."""
+        source_ids = [r.get("source_candidate_id") for r in restored_memories]
+        source_items = self.graph_db.get_nodes(source_ids)
+        source_items = [TextualMemoryItem(**i) for i in source_items]
+
+        created_items = []
+        for i, data in enumerate(restored_memories):
+            source_item = source_items[i]
+            source_history = source_item.history.copy()
+            value = data.get("value", "")
+            tags = data.get("tags", [])
+            keys = data.get("keys", [])
+            memory_type = data.get("memory_type", "LongTermMemory")
+            version = source_item.verion
+            new_history_item = ArchivedTextualMemory(
+                version=version,
+                is_fast=False,
+                memory=source_item.memory,
+                update_type="extract",
+                archived_memory_id=source_item.id,
+                created_at=source_item.metadata.created_at,
+            )
+            source_history.append(new_history_item)  # Re-use the history of the old node
+            # Create new node
+            new_item = TextualMemoryItem(
+                id=str(uuid.uuid4()),
+                memory=value,
+                metadata=TreeNodeTextualMemoryMetadata(
+                    memory_type=memory_type,
+                    status="activated",
+                    is_fast=False,
+                    version=version + 1,
+                    key=keys,
+                    tags=tags,
+                    created_at=datetime.now().isoformat(),
+                    history=source_history,
+                ),
+            )
+            created_items.append(new_item)
+
+        return created_items

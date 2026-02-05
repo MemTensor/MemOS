@@ -965,8 +965,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 conflicting_or_duplicate_items = self.history_manager.resolve_history_via_nli(
                     item, related
                 )
-                # mark delete
-                self.history_manager.mark_memory_status(conflicting_or_duplicate_items, "resolving")
+                # mark delete(temporarily)
+                self.history_manager.mark_memory_status(
+                    [m.id for m in conflicting_or_duplicate_items], "resolving"
+                )
 
             except Exception as e:
                 logger.warning(f"[MultiModalStruct] Fast recall failed: {e}")
