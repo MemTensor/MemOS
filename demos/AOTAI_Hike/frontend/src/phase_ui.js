@@ -39,9 +39,19 @@ export function applyPhaseUI(ws) {
 
   const phase = ws.phase || "free";
 
+  // SAY input is only enabled when the game explicitly asks the player to respond.
+  const sayInput = $("#say-input");
+  const sayBtn = $("#btn-say");
+  const enableSay = phase === "await_player_say";
+  if (sayInput) {
+    sayInput.disabled = !enableSay;
+    sayInput.placeholder = enableSay ? "当前角色说点什么…" : "队伍行动中…（需要你发言时会提示）";
+  }
+  if (sayBtn) sayBtn.disabled = !enableSay;
+
   // Default: free play
   if (phase === "free") {
-    setActionButtonsEnabled(true);
+    setActionButtonsEnabled(false);
     if (phasePanel) phasePanel.style.display = "none";
     return;
   }
@@ -59,95 +69,8 @@ export function applyPhaseUI(ws) {
     return;
   }
 
-  if (phase === "camp_meeting_decide") {
-    setActionButtonsEnabled(false);
-    if (!phasePanel || !hintEl) return;
-    phasePanel.style.display = "block";
-    hintEl.textContent = "营地会议：选择共识路线、锁强度与明日团长，然后提交。";
-
-    // Clear previous controls (keep hintEl)
-    [...phasePanel.children].forEach((c) => {
-      if (c !== hintEl) c.remove();
-    });
-
-    const row = document.createElement("div");
-    row.className = "row";
-    row.style.display = "flex";
-    row.style.gap = "8px";
-    row.style.flexWrap = "wrap";
-
-    const mkSelect = (label, options, value) => {
-      const box = document.createElement("div");
-      box.style.display = "flex";
-      box.style.flexDirection = "column";
-      box.style.gap = "4px";
-      const lab = document.createElement("div");
-      lab.style.fontSize = "12px";
-      lab.style.opacity = "0.9";
-      lab.textContent = label;
-      const sel = document.createElement("select");
-      (options || []).forEach((opt) => {
-        const o = document.createElement("option");
-        o.value = String(opt.value);
-        o.textContent = String(opt.text);
-        if (String(opt.value) === String(value)) o.selected = true;
-        sel.appendChild(o);
-      });
-      box.appendChild(lab);
-      box.appendChild(sel);
-      return { box, sel };
-    };
-
-    const routeOpts = (ws.camp_meeting?.options_next_node_ids || []).map((id) => ({
-      value: id,
-      text: id,
-    }));
-    if (routeOpts.length === 0) routeOpts.push({ value: "", text: "（无可选路线）" });
-
-    const { box: routeBox, sel: routeSel } = mkSelect(
-      "共识路线（下一节点）",
-      routeOpts,
-      ws.consensus_next_node_id || (routeOpts[0] && routeOpts[0].value),
-    );
-
-    const { box: lockBox, sel: lockSel } = mkSelect(
-      "锁强度",
-      [
-        { value: "soft", text: "软" },
-        { value: "hard", text: "硬" },
-        { value: "iron", text: "铁" },
-      ],
-      ws.lock_strength || "soft",
-    );
-
-    const leaderOpts = (ws.roles || []).map((r) => ({ value: r.role_id, text: r.name }));
-    if (leaderOpts.length === 0) leaderOpts.push({ value: "", text: "（无角色）" });
-    const { box: leaderBox, sel: leaderSel } = mkSelect(
-      "明日团长",
-      leaderOpts,
-      ws.leader_role_id || (leaderOpts[0] && leaderOpts[0].value),
-    );
-
-    row.appendChild(routeBox);
-    row.appendChild(lockBox);
-    row.appendChild(leaderBox);
-    phasePanel.appendChild(row);
-
-    submitBtn = document.createElement("button");
-    submitBtn.textContent = "提交共识";
-    submitBtn.style.marginTop = "8px";
-    submitBtn.onclick = async () => {
-      const payload = {
-        kind: "camp_meeting",
-        consensus_next_node_id: String(routeSel.value || ""),
-        lock_strength: String(lockSel.value || "soft"),
-        leader_role_id: String(leaderSel.value || ""),
-      };
-      await window.__aoTaiActions.apiAct("DECIDE", payload);
-    };
-    phasePanel.appendChild(submitBtn);
-    return;
-  }
+  // camp_meeting_decide / junction_decision were for the old manual-decision flow.
+  // In the new flow, camp meeting and leader junction picks are automatic.
 
   // Unknown phase: be safe and block actions.
   setActionButtonsEnabled(false);

@@ -64,8 +64,7 @@ class GameService:
             world_state.roles.append(role)
         if world_state.active_role_id is None:
             world_state.active_role_id = role.role_id
-        if world_state.leader_role_id is None:
-            world_state.leader_role_id = world_state.active_role_id
+        # Leader is assigned at runtime (random default on first act), not during role creation.
         return RoleUpsertResponse(
             roles=world_state.roles, active_role_id=world_state.active_role_id
         )
@@ -81,6 +80,21 @@ class GameService:
         active = self._get_active_role(world_state)
         messages: list[Message] = []
 
+        # Random default leader (assigned on first act after roles exist).
+        if world_state.roles and world_state.leader_role_id is None:
+            world_state.leader_role_id = self._rng.choice(world_state.roles).role_id
+            leader = next(
+                (r for r in world_state.roles if r.role_id == world_state.leader_role_id), None
+            )
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content=f"今日团长：{leader.name if leader else world_state.leader_role_id}",
+                    timestamp_ms=now_ms,
+                )
+            )
+
         # Phase gates: some phases only accept specific actions.
         if world_state.phase == Phase.AWAIT_PLAYER_SAY and req.action != ActionType.SAY:
             messages.append(
@@ -95,24 +109,10 @@ class GameService:
             bg = self._safe_get_background(node_after.scene_id)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
 
-        if world_state.phase == Phase.CAMP_MEETING_DECIDE and req.action != ActionType.DECIDE:
-            messages.append(
-                Message(
-                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                    kind="system",
-                    content="营地会议进行中：请先完成“共识路线/锁强度/团长”选择。",
-                    timestamp_ms=now_ms,
-                )
-            )
-            node_after = AoTaiGraph.get_node(world_state.current_node_id)
-            bg = self._safe_get_background(node_after.scene_id)
-            return ActResponse(world_state=world_state, messages=messages, background=bg)
-
         if req.action == ActionType.DECIDE:
             user_action_desc = self._apply_decision(world_state, req, now_ms, messages)
         else:
             user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
-        user_action_desc = self._apply_action(world_state, req, now_ms, messages, active)
 
         node_after = AoTaiGraph.get_node(world_state.current_node_id)
         bg = self._safe_get_background(node_after.scene_id)
@@ -157,9 +157,9 @@ class GameService:
                     )
                 )
 
-        # Night -> camp meeting
+        # Night -> camp meeting (auto): proposals + chance to change leader + overnight settlement -> next morning.
         if world_state.time_of_day == "night" and world_state.phase == Phase.FREE:
-            self._enter_camp_meeting(world_state, now_ms, messages)
+            self._auto_camp_meeting(world_state, now_ms, messages)
 
         return ActResponse(world_state=world_state, messages=messages, background=bg)
 
@@ -282,6 +282,129 @@ class GameService:
             )
         )
 
+    def _auto_camp_meeting(
+        self, world_state: WorldState, now_ms: int, messages: list[Message]
+    ) -> None:
+        """
+        Auto camp meeting:
+        - random proposal order
+        - optional leader change (mock)
+        - overnight settlement
+        - advance to next morning
+        """
+        if not world_state.roles:
+            # Nothing to do; still advance to next morning
+            world_state.day += 1
+            world_state.time_of_day = "morning"
+            self._maybe_change_weather(world_state)
+            return
+
+        messages.append(
+            Message(
+                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                kind="system",
+                content="夜晚到来：营地会议开始（自动）。",
+                timestamp_ms=now_ms,
+            )
+        )
+
+        outgoing = AoTaiGraph.outgoing(world_state.current_node_id)
+        opts = [e.to_node_id for e in outgoing]
+
+        order = [r.role_id for r in world_state.roles]
+        self._rng.shuffle(order)
+        for rid in order:
+            role = next((r for r in world_state.roles if r.role_id == rid), None)
+            if not role:
+                continue
+            if opts:
+                pick = self._rng.choice(opts)
+                dest = AoTaiGraph.get_node(pick).name
+                text = f"明天我建议：去 {dest}。"
+            else:
+                text = "明天我建议：先原地休整再决定。"
+            messages.append(
+                Message(
+                    message_id=f"m-{world_state.session_id}-{now_ms}-{rid}",
+                    role_id=rid,
+                    role_name=role.name,
+                    kind="speech",
+                    content=text,
+                    timestamp_ms=now_ms,
+                )
+            )
+
+        # Vote for leader (mock): each role casts one vote in random order.
+        old = world_state.leader_role_id
+        old_name = next((r.name for r in world_state.roles if r.role_id == old), "（无）")
+
+        candidates = [r.role_id for r in world_state.roles]
+        vote_order = candidates[:]
+        self._rng.shuffle(vote_order)
+        tally: dict[str, int] = dict.fromkeys(candidates, 0)
+
+        def _pick_vote(voter_id: str) -> str:
+            # Small incumbency bias (keep the current leader).
+            if old and self._rng.random() < 0.28:
+                return old
+            # Otherwise, random vote among candidates.
+            return self._rng.choice(candidates)
+
+        for voter_id in vote_order:
+            voter = next((r for r in world_state.roles if r.role_id == voter_id), None)
+            if not voter:
+                continue
+            choice = _pick_vote(voter_id)
+            tally[choice] = tally.get(choice, 0) + 1
+            choice_name = next((r.name for r in world_state.roles if r.role_id == choice), choice)
+            messages.append(
+                Message(
+                    message_id=f"v-{world_state.session_id}-{now_ms}-{voter_id}",
+                    role_id=voter_id,
+                    role_name=voter.name,
+                    kind="action",
+                    content=f"{voter.name} 投票：{choice_name}",
+                    timestamp_ms=now_ms,
+                )
+            )
+
+        # Winner: max votes; tie-break randomly among tied.
+        max_votes = max(tally.values()) if tally else 0
+        winners = [rid for rid, n in tally.items() if n == max_votes] if tally else []
+        if winners:
+            world_state.leader_role_id = self._rng.choice(winners)
+
+        new_name = next(
+            (r.name for r in world_state.roles if r.role_id == world_state.leader_role_id),
+            world_state.leader_role_id,
+        )
+
+        if world_state.leader_role_id != old:
+            self._push_event(world_state, f"营地会议：更换团长 {old_name} → {new_name}（票选）")
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content=f"营地会议结果（票选）：更换团长 {old_name} → {new_name}",
+                    timestamp_ms=now_ms,
+                )
+            )
+        else:
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content=f"营地会议结果（票选）：团长继续由 {new_name} 担任。",
+                    timestamp_ms=now_ms,
+                )
+            )
+
+        # Overnight settlement then advance to next morning.
+        self._tweak_party(world_state, stamina_delta=8, mood_delta=3, exp_delta=0)
+        world_state.day += 1
+        world_state.time_of_day = "morning"
+        self._maybe_change_weather(world_state)
+
     def _apply_message_effects(self, world_state: WorldState, messages: list[Message]) -> None:
         # Minimal, deterministic mapping from emote/action_tag -> attr deltas.
         # (This is a placeholder for LLM-driven state updates.)
@@ -345,8 +468,14 @@ class GameService:
         messages: list[Message],
         active: Role | None,
     ) -> str:
+        time.sleep(2)
+        # Alias: CONTINUE means "advance one step" (same as MOVE_FORWARD with default payload).
+        if req.action == ActionType.CONTINUE:
+            req.action = ActionType.MOVE_FORWARD
+
         node = AoTaiGraph.get_node(world_state.current_node_id)
-        world_state.available_next_node_ids = AoTaiGraph.next_node_ids(world_state.current_node_id)
+        # UI-only; we keep it empty in the auto-run flow unless we explicitly need a user choice.
+        world_state.available_next_node_ids = []
 
         messages.append(
             Message(
@@ -458,42 +587,45 @@ class GameService:
             if len(outgoing) == 1:
                 next_edge = outgoing[0]
             else:
-                # Junction decision: only the leader can pick a branch.
-                if world_state.leader_role_id and (
-                    world_state.active_role_id != world_state.leader_role_id
-                ):
-                    world_state.phase = Phase.JUNCTION_DECISION
-                    messages.append(
-                        Message(
-                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                            kind="system",
-                            content="到达岔路：需要团长做出选择（请切换到团长角色再选择路线）。",
-                            timestamp_ms=now_ms,
-                        )
-                    )
-                    world_state.available_next_node_ids = [e.to_node_id for e in outgoing]
-                    return "MOVE_FORWARD:leader_required"
-
                 picked = str(req.payload.get("next_node_id") or "").strip()
                 valid = {e.to_node_id: e for e in outgoing}
                 if picked and picked in valid:
                     next_edge = valid[picked]
                 else:
-                    opts = [
-                        f"- {AoTaiGraph.get_node(e.to_node_id).name} ({e.to_node_id})"
-                        for e in outgoing
-                    ]
+                    # Auto junction pick by leader (mock strategy).
+                    leader_name = next(
+                        (
+                            r.name
+                            for r in world_state.roles
+                            if r.role_id == world_state.leader_role_id
+                        ),
+                        "团长",
+                    )
+                    non_exit = [e for e in outgoing if getattr(e, "kind", None) != "exit"]
+                    exit_edges = [e for e in outgoing if getattr(e, "kind", None) == "exit"]
+
+                    # Prefer mainline (non-exit). If only exits exist, pick among exits.
+                    pool = non_exit if non_exit else outgoing
+                    next_edge = self._rng.choice(pool)
+
+                    # If stamina is very low, allow exits with some probability.
+                    try:
+                        avg_stam = sum(r.attrs.stamina for r in world_state.roles) / max(
+                            1, len(world_state.roles)
+                        )
+                    except Exception:
+                        avg_stam = 50.0
+                    if exit_edges and avg_stam < 25 and self._rng.random() < 0.65:
+                        next_edge = self._rng.choice(exit_edges)
+
                     messages.append(
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content=("到达分岔口，请选择下一步：\n" + "\n".join(opts)),
+                            content=f"到达岔路：{leader_name}做出选择 → {AoTaiGraph.get_node(next_edge.to_node_id).name}。",
                             timestamp_ms=now_ms,
                         )
                     )
-                    world_state.available_next_node_ids = list(valid.keys())
-                    world_state.phase = Phase.JUNCTION_DECISION
-                    return "MOVE_FORWARD:choose"
 
             # Start transit along chosen edge
             world_state.phase = Phase.FREE

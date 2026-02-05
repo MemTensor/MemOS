@@ -126,6 +126,13 @@ export async function bootstrap() {
     apiAct(btn.getAttribute("data-act"));
   });
 
+  // New flow: movement/rest/camp/observe are now automatic. Keep buttons for debugging, but hide by default.
+  try {
+    document.querySelectorAll("#actions-panel button[data-act]").forEach((b) => {
+      b.style.display = "none";
+    });
+  } catch {}
+
   $("#btn-say").onclick = async () => {
     const text = ($("#say-input").value || "").trim();
     $("#say-input").value = "";

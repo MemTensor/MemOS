@@ -4,6 +4,35 @@ import { applyPhaseUI } from "./phase_ui.js";
 
 export const API_BASE = "/api/demo/ao-tai";
 
+let _autoTimer = null;
+let _autoInFlight = false;
+
+function _shouldAutoContinue(ws) {
+  if (!ws) return false;
+  const phase = ws.phase || "free";
+  if (phase !== "free") return false;
+  // Stop when reaching a terminal node (no outgoing edges in this demo).
+  const terminal = new Set(["end_exit", "bailout_2800", "bailout_ridge"]);
+  if (terminal.has(String(ws.current_node_id || ""))) return false;
+  return true;
+}
+
+function _scheduleAutoContinue() {
+  if (_autoTimer) return;
+  if (!_shouldAutoContinue(worldState)) return;
+  _autoTimer = setTimeout(async () => {
+    _autoTimer = null;
+    if (_autoInFlight) return;
+    if (!_shouldAutoContinue(worldState)) return;
+    _autoInFlight = true;
+    try {
+      await apiAct("CONTINUE");
+    } finally {
+      _autoInFlight = false;
+    }
+  }, 900);
+}
+
 async function api(path, body, method = "POST") {
   const resp = await fetch(`${API_BASE}${path}`, {
     method,
@@ -34,6 +63,7 @@ export async function apiNewSession() {
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   applyPhaseUI(worldState);
+  _scheduleAutoContinue();
 }
 
 export async function apiUpsertRole(role) {
@@ -48,6 +78,7 @@ export async function apiUpsertRole(role) {
   // ensure Phaser shows the party immediately after creation/update
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   applyPhaseUI(worldState);
+  _scheduleAutoContinue();
 }
 
 export async function apiSetActiveRole(roleId) {
@@ -67,6 +98,7 @@ export async function apiSetActiveRole(roleId) {
     timestamp_ms: Date.now(),
   });
   applyPhaseUI(worldState);
+  _scheduleAutoContinue();
 }
 
 export async function apiAct(action, payload = {}) {
@@ -80,6 +112,7 @@ export async function apiAct(action, payload = {}) {
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
   if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   applyPhaseUI(worldState);
+  _scheduleAutoContinue();
 }
 
 export function installActionsToWindow() {

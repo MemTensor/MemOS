@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class ActionType(str, Enum):
+    CONTINUE = "CONTINUE"
     MOVE_FORWARD = "MOVE_FORWARD"
     REST = "REST"
     CAMP = "CAMP"
