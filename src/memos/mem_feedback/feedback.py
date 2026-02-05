@@ -622,10 +622,39 @@ class MemFeedback(BaseMemFeedback):
 
     def _retrieve(self, query: str, info=None, top_k=20, user_name=None):
         """Retrieve memory items"""
-        retrieved_mems = self.searcher.search(
-            query, info=info, user_name=user_name, top_k=top_k, full_recall=True
+
+        def check_has_edges(mem_item: TextualMemoryItem) -> tuple[TextualMemoryItem, bool]:
+            """Check if a memory item has edges."""
+            edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
+            return (mem_item, len(edges) == 0)
+
+        text_mems = self.searcher.search(
+            query,
+            info=info,
+            memory_type="AllSummaryMemory",
+            user_name=user_name,
+            top_k=top_k,
+            full_recall=True,
         )
-        retrieved_mems = [item[0] for item in retrieved_mems if float(item[1]) > 0.01]
+        text_mems = [item[0] for item in text_mems if float(item[1]) > 0.01]
+
+        # Memory with edges is not modified by feedback
+        retrieved_mems = []
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(check_has_edges, item): item for item in text_mems}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    mem_item, has_no_edges = future.result()
+                    if has_no_edges:
+                        retrieved_mems.append(mem_item)
+                except Exception as e:
+                    logger.error(f"[0107 Feedback Core: _retrieve] Error checking edges: {e}")
+
+        if len(retrieved_mems) < len(text_mems):
+            logger.info(
+                f"[0107 Feedback Core: _retrieve] {len(text_mems) - len(retrieved_mems)} "
+                f"text memories are not modified by feedback due to edges."
+            )
 
         if self.pref_feedback:
             pref_info = {}
