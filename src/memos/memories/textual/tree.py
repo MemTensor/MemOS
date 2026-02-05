@@ -364,19 +364,13 @@ class TreeTextMemory(BaseTextMemory):
         page: int | None = None,
         page_size: int | None = None,
         filter: dict | None = None,
-        memory_type: list[str] | None = None,
     ) -> dict:
         """Get all memories.
         Returns:
             list[TextualMemoryItem]: List of all memories.
         """
         graph_output = self.graph_store.export_graph(
-            user_name=user_name,
-            user_id=user_id,
-            page=page,
-            page_size=page_size,
-            filter=filter,
-            memory_type=memory_type,
+            user_name=user_name, user_id=user_id, page=page, page_size=page_size, filter=filter
         )
         return graph_output
 
