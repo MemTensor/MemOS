@@ -7,6 +7,7 @@ consolidating all chat-related logic without depending on mos_server.
 
 import asyncio
 import json
+import os
 import re
 import time
 import traceback
@@ -23,6 +24,7 @@ from memos.api.product_models import (
     APIADDRequest,
     APIChatCompleteRequest,
     APISearchRequest,
+    ChatBusinessRequest,
     ChatPlaygroundRequest,
     ChatRequest,
 )
@@ -756,6 +758,195 @@ class ChatHandler(BaseHandler):
         except Exception as err:
             self.logger.error(
                 f"[PLAYGROUND CHAT] Failed to start playground chat stream: {traceback.format_exc()}"
+            )
+            raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
+
+    def handle_chat_stream_for_business_user(
+        self, chat_req: ChatBusinessRequest
+    ) -> StreamingResponse:
+        """Chat API for business user."""
+        self.logger.info(f"[ChatBusinessHandler] Chat Req is: {chat_req}")
+
+        # Validate business_key permission
+        business_chat_keys = os.environ.get("BUSINESS_CHAT_KEYS", "[]")
+        allowed_keys = json.loads(business_chat_keys)
+
+        if not allowed_keys or chat_req.business_key not in allowed_keys:
+            self.logger.warning(
+                f"[ChatBusinessHandler] Unauthorized access attempt with business_key: {chat_req.business_key}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: Invalid business_key. You do not have permission to use this service.",
+            )
+
+        try:
+
+            def generate_chat_response() -> Generator[str, None, None]:
+                """Generate chat stream response as SSE stream."""
+                try:
+                    if chat_req.need_search:
+                        # Resolve readable cube IDs (for search)
+                        readable_cube_ids = chat_req.readable_cube_ids or (
+                            [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                        )
+
+                        search_req = APISearchRequest(
+                            query=chat_req.query,
+                            user_id=chat_req.user_id,
+                            readable_cube_ids=readable_cube_ids,
+                            mode=chat_req.mode,
+                            internet_search=chat_req.internet_search,
+                            top_k=chat_req.top_k,
+                            chat_history=chat_req.history,
+                            session_id=chat_req.session_id,
+                            include_preference=chat_req.include_preference,
+                            pref_top_k=chat_req.pref_top_k,
+                            filter=chat_req.filter,
+                        )
+
+                        search_response = self.search_handler.handle_search_memories(search_req)
+
+                        # Extract memories from search results
+                        memories_list = []
+                        if search_response.data and search_response.data.get("text_mem"):
+                            text_mem_results = search_response.data["text_mem"]
+                            if text_mem_results and text_mem_results[0].get("memories"):
+                                memories_list = text_mem_results[0]["memories"]
+
+                        # Drop internet memories forced
+                        memories_list = [
+                            mem
+                            for mem in memories_list
+                            if mem.get("metadata", {}).get("memory_type") != "OuterMemory"
+                        ]
+
+                        # Filter memories by threshold
+                        filtered_memories = self._filter_memories_by_threshold(memories_list)
+
+                        # Step 2: Build system prompt with memories
+                        system_prompt = self._build_system_prompt(
+                            query=chat_req.query,
+                            memories=filtered_memories,
+                            pref_string=search_response.data.get("pref_string", ""),
+                            base_prompt=chat_req.system_prompt,
+                        )
+
+                        self.logger.info(
+                            f"[ChatBusinessHandler] chat stream user_id: {chat_req.user_id}, readable_cube_ids: {readable_cube_ids}, "
+                            f"current_system_prompt: {system_prompt}"
+                        )
+                    else:
+                        system_prompt = self._build_system_prompt(
+                            query=chat_req.query,
+                            memories=None,
+                            pref_string=None,
+                            base_prompt=chat_req.system_prompt,
+                        )
+
+                    # Prepare messages
+                    history_info = chat_req.history[-20:] if chat_req.history else []
+                    current_messages = [
+                        {"role": "system", "content": system_prompt},
+                        *history_info,
+                        {"role": "user", "content": chat_req.query},
+                    ]
+
+                    # Step 3: Generate streaming response from LLM
+                    if (
+                        chat_req.model_name_or_path
+                        and chat_req.model_name_or_path not in self.chat_llms
+                    ):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Model {chat_req.model_name_or_path} not suport, choose from {list(self.chat_llms.keys())}",
+                        )
+
+                    model = chat_req.model_name_or_path or next(iter(self.chat_llms.keys()))
+                    self.logger.info(f"[ChatBusinessHandler] Chat Stream Model: {model}")
+
+                    start = time.time()
+                    response_stream = self.chat_llms[model].generate_stream(
+                        current_messages, model_name_or_path=model
+                    )
+
+                    # Stream the response
+                    buffer = ""
+                    full_response = ""
+                    in_think = False
+
+                    for chunk in response_stream:
+                        if chunk == "<think>":
+                            in_think = True
+                            continue
+                        if chunk == "</think>":
+                            in_think = False
+                            continue
+
+                        if in_think:
+                            chunk_data = f"data: {json.dumps({'type': 'reasoning', 'data': chunk}, ensure_ascii=False)}\n\n"
+                            yield chunk_data
+                            continue
+
+                        buffer += chunk
+                        full_response += chunk
+
+                        chunk_data = f"data: {json.dumps({'type': 'text', 'data': chunk}, ensure_ascii=False)}\n\n"
+                        yield chunk_data
+
+                    end = time.time()
+                    self.logger.info(
+                        f"[ChatBusinessHandler] Chat Stream Time: {end - start} seconds"
+                    )
+
+                    self.logger.info(
+                        f"[ChatBusinessHandler] Chat Stream LLM Input: {json.dumps(current_messages, ensure_ascii=False)} Chat Stream LLM Response: {full_response}"
+                    )
+
+                    current_messages.append({"role": "assistant", "content": full_response})
+                    if chat_req.add_message_on_answer:
+                        # Resolve writable cube IDs (for add)
+                        writable_cube_ids = chat_req.writable_cube_ids or (
+                            [chat_req.mem_cube_id] if chat_req.mem_cube_id else [chat_req.user_id]
+                        )
+                        start = time.time()
+                        self._start_add_to_memory(
+                            user_id=chat_req.user_id,
+                            writable_cube_ids=writable_cube_ids,
+                            session_id=chat_req.session_id or "default_session",
+                            query=chat_req.query,
+                            full_response=full_response,
+                            async_mode="async",
+                        )
+                        end = time.time()
+                        self.logger.info(
+                            f"[ChatBusinessHandler] Chat Stream Add Time: {end - start} seconds"
+                        )
+                except Exception as e:
+                    self.logger.error(
+                        f"[ChatBusinessHandler] Error in chat stream: {e}", exc_info=True
+                    )
+                    error_data = f"data: {json.dumps({'type': 'error', 'content': str(traceback.format_exc())})}\n\n"
+                    yield error_data
+
+            return StreamingResponse(
+                generate_chat_response(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "Content-Type": "text/event-stream",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Methods": "*",
+                },
+            )
+
+        except ValueError as err:
+            raise HTTPException(status_code=404, detail=str(traceback.format_exc())) from err
+        except Exception as err:
+            self.logger.error(
+                f"[ChatBusinessHandler] Failed to start chat stream: {traceback.format_exc()}"
             )
             raise HTTPException(status_code=500, detail=str(traceback.format_exc())) from err
 

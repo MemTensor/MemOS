@@ -8,12 +8,14 @@ Keys are validated against SHA-256 hashes stored in PostgreSQL.
 import hashlib
 import os
 import time
+
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
 
 import memos.log
+
 
 logger = memos.log.get_logger(__name__)
 
@@ -149,10 +151,7 @@ def is_internal_request(request: Request) -> bool:
 
     # Check internal header (for container-to-container)
     internal_header = request.headers.get("X-Internal-Service")
-    if internal_header == os.getenv("INTERNAL_SERVICE_SECRET"):
-        return True
-
-    return False
+    return internal_header == os.getenv("INTERNAL_SERVICE_SECRET")
 
 
 async def verify_api_key(
@@ -245,8 +244,9 @@ def require_scope(required_scope: str):
     Usage:
         @router.post("/admin/keys", dependencies=[Depends(require_scope("admin"))])
     """
+
     async def scope_checker(
-        auth: dict[str, Any] = Depends(verify_api_key),
+        auth: dict[str, Any] = Depends(verify_api_key),  # noqa: B008
     ) -> dict[str, Any]:
         scopes = auth.get("scopes", [])
 

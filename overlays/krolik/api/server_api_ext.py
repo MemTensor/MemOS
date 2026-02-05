@@ -10,7 +10,7 @@ This module extends the base MemOS server_api with:
 Usage in Dockerfile:
     # Copy overlays after base installation
     COPY overlays/krolik/ /app/src/memos/
-    
+
     # Use this as entrypoint instead of server_api
     CMD ["gunicorn", "memos.api.server_api_ext:app", ...]
 """
@@ -25,16 +25,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-# Import base routers from MemOS
-from memos.api.routers.server_router import router as server_router
-
 # Import Krolik extensions
 from memos.api.middleware.rate_limit import RateLimitMiddleware
 from memos.api.routers.admin_router import router as admin_router
 
+# Import base routers from MemOS
+from memos.api.routers.server_router import router as server_router
+
+
 # Try to import exception handlers (may vary between MemOS versions)
 try:
     from memos.api.exceptions import APIExceptionHandler
+
     HAS_EXCEPTION_HANDLER = True
 except ImportError:
     HAS_EXCEPTION_HANDLER = False
@@ -98,6 +100,7 @@ app.include_router(admin_router)
 # Exception handlers
 if HAS_EXCEPTION_HANDLER:
     from fastapi import HTTPException
+
     app.exception_handler(RequestValidationError)(APIExceptionHandler.validation_error_handler)
     app.exception_handler(ValueError)(APIExceptionHandler.value_error_handler)
     app.exception_handler(HTTPException)(APIExceptionHandler.http_error_handler)
@@ -117,4 +120,5 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("memos.api.server_api_ext:app", host="0.0.0.0", port=8000, workers=1)

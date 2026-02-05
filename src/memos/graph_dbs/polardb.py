@@ -5470,21 +5470,29 @@ class PolarDBGraphDB(BaseGraphDB):
     @timed
     def delete_node_by_mem_cube_id(
         self,
-        mem_kube_id: dict | None = None,
+        mem_cube_id: dict | None = None,
         delete_record_id: dict | None = None,
-        deleted_type: bool = False,
+        hard_delete: bool = False,
     ) -> int:
+        """
+        (inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set.
+
+        Args:
+            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
+            delete_record_id: The delete_record_id to match.
+            hard_delete: Whether to hard delete the nodes.
+        """
         # Handle dict type parameters (extract value if dict)
-        if isinstance(mem_kube_id, dict):
+        if isinstance(mem_cube_id, dict):
             # Try to get a value from dict, use first value if multiple
-            mem_kube_id = next(iter(mem_kube_id.values())) if mem_kube_id else None
+            mem_cube_id = next(iter(mem_cube_id.values())) if mem_cube_id else None
 
         if isinstance(delete_record_id, dict):
             delete_record_id = next(iter(delete_record_id.values())) if delete_record_id else None
 
         # Validate required parameters
-        if not mem_kube_id:
-            logger.warning("[delete_node_by_mem_cube_id] mem_kube_id is required but not provided")
+        if not mem_cube_id:
+            logger.warning("[delete_node_by_mem_cube_id] mem_cube_id is required but not provided")
             return 0
 
         if not delete_record_id:
@@ -5494,12 +5502,12 @@ class PolarDBGraphDB(BaseGraphDB):
             return 0
 
         # Convert to string if needed
-        mem_kube_id = str(mem_kube_id) if mem_kube_id else None
+        mem_cube_id = str(mem_cube_id) if mem_cube_id else None
         delete_record_id = str(delete_record_id) if delete_record_id else None
 
         logger.info(
-            f"[delete_node_by_mem_cube_id] mem_kube_id={mem_kube_id}, "
-            f"delete_record_id={delete_record_id}, deleted_type={deleted_type}"
+            f"[delete_node_by_mem_cube_id] mem_cube_id={mem_cube_id}, "
+            f"delete_record_id={delete_record_id}, hard_delete={hard_delete}"
         )
 
         conn = None
@@ -5507,14 +5515,14 @@ class PolarDBGraphDB(BaseGraphDB):
             conn = self._get_connection()
             with conn.cursor() as cursor:
                 # Build WHERE clause for user_name using parameter binding
-                # user_name must match mem_kube_id
+                # user_name must match mem_cube_id
                 user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
 
                 # Prepare parameter for user_name
-                user_name_param = self.format_param_value(mem_kube_id)
+                user_name_param = self.format_param_value(mem_cube_id)
 
-                if deleted_type:
-                    # Hard delete: WHERE user_name = mem_kube_id AND delete_record_id = $delete_record_id
+                if hard_delete:
+                    # Hard delete: WHERE user_name = mem_cube_id AND delete_record_id = $delete_record_id
                     delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
                     where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
 
@@ -5533,7 +5541,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
                     return deleted_count
                 else:
-                    # Soft delete: WHERE user_name = mem_kube_id (only user_name condition)
+                    # Soft delete: WHERE user_name = mem_cube_id (only user_name condition)
                     where_clause = user_name_condition
 
                     current_time = datetime.utcnow().isoformat()
@@ -5579,41 +5587,41 @@ class PolarDBGraphDB(BaseGraphDB):
             self._return_connection(conn)
 
     @timed
-    def recover_memory_by_mem_kube_id(
+    def recover_memory_by_mem_cube_id(
         self,
-        mem_kube_id: str | None = None,
+        mem_cube_id: str | None = None,
         delete_record_id: str | None = None,
     ) -> int:
         """
-        Recover memory nodes by mem_kube_id (user_name) and delete_record_id.
+        (inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set.
 
         This function updates the status to 'activated', and clears delete_record_id and delete_time.
 
         Args:
-            mem_kube_id: The mem_kube_id which corresponds to user_name in the table.
+            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
             delete_record_id: The delete_record_id to match.
 
         Returns:
             int: Number of nodes recovered (updated).
         """
         logger.info(
-            f"recover_memory_by_mem_kube_id mem_kube_id:{mem_kube_id},delete_record_id:{delete_record_id}"
+            f"recover_memory_by_mem_cube_id mem_cube_id:{mem_cube_id},delete_record_id:{delete_record_id}"
         )
         # Validate required parameters
-        if not mem_kube_id:
+        if not mem_cube_id:
             logger.warning(
-                "[recover_memory_by_mem_kube_id] mem_kube_id is required but not provided"
+                "[recover_memory_by_mem_cube_id] mem_cube_id is required but not provided"
             )
             return 0
 
         if not delete_record_id:
             logger.warning(
-                "[recover_memory_by_mem_kube_id] delete_record_id is required but not provided"
+                "[recover_memory_by_mem_cube_id] delete_record_id is required but not provided"
             )
             return 0
 
         logger.info(
-            f"[recover_memory_by_mem_kube_id] mem_kube_id={mem_kube_id}, "
+            f"[recover_memory_by_mem_cube_id] mem_cube_id={mem_cube_id}, "
             f"delete_record_id={delete_record_id}"
         )
 
@@ -5628,7 +5636,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
                 # Prepare parameters for WHERE clause
                 where_params = [
-                    self.format_param_value(mem_kube_id),
+                    self.format_param_value(mem_cube_id),
                     self.format_param_value(delete_record_id),
                 ]
 
@@ -5648,9 +5656,9 @@ class PolarDBGraphDB(BaseGraphDB):
                     WHERE {where_clause}
                 """
 
-                logger.info(f"[recover_memory_by_mem_kube_id] Update query: {update_query}")
+                logger.info(f"[recover_memory_by_mem_cube_id] Update query: {update_query}")
                 logger.info(
-                    f"[recover_memory_by_mem_kube_id] update_properties: {update_properties}"
+                    f"[recover_memory_by_mem_cube_id] update_properties: {update_properties}"
                 )
 
                 # Combine update_properties JSON with where_params
@@ -5659,13 +5667,13 @@ class PolarDBGraphDB(BaseGraphDB):
                 updated_count = cursor.rowcount
 
                 logger.info(
-                    f"[recover_memory_by_mem_kube_id] Recovered (updated) {updated_count} nodes"
+                    f"[recover_memory_by_mem_cube_id] Recovered (updated) {updated_count} nodes"
                 )
                 return updated_count
 
         except Exception as e:
             logger.error(
-                f"[recover_memory_by_mem_kube_id] Failed to recover nodes: {e}", exc_info=True
+                f"[recover_memory_by_mem_cube_id] Failed to recover nodes: {e}", exc_info=True
             )
             raise
         finally:
