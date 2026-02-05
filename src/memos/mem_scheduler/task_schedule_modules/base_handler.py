@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
-    from memos.mem_scheduler.task_schedule_modules.handlers.context import SchedulerHandlerContext
+    from memos.mem_scheduler.task_schedule_modules.context import SchedulerHandlerContext
 
 
 logger = get_logger(__name__)

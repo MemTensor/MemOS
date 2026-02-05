@@ -22,7 +22,7 @@ from memos.mem_scheduler.utils.filter_utils import (
     transform_name_to_key,
 )
 from memos.memories.textual.item import TextualMemoryItem
-from memos.utils import extract_json_obj
+from memos.mem_scheduler.utils.misc_utils import extract_json_obj
 
 from .memory_filter import MemoryFilter
 

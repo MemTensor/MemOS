@@ -229,8 +229,7 @@ class BaseScheduler(
             self.dispatcher_monitor = SchedulerDispatcherMonitor(config=self.config)
             self.retriever = SchedulerRetriever(process_llm=self.process_llm, config=self.config)
 
-            # Initialize search service (will be updated with searcher when mem_cube is initialized)
-            self.search_service = SchedulerSearchService(searcher=self.searcher)
+
 
             # Initialize post-processor for memory enhancement and filtering
             self.post_processor = MemoryPostProcessor(

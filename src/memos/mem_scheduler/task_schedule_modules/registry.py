@@ -41,7 +41,7 @@ class SchedulerHandlerRegistry:
         self.mem_reorganize = MemReorganizeMessageHandler(scheduler_context)
         self.pref_add = PrefAddMessageHandler(scheduler_context)
 
-    def build_dispatch_map(self) -> dict[str, Callable]:
+    def build_dispatch_map(self) -> dict[str, Callable | tuple]:
         predefined_handlers = {
             QUERY_TASK_LABEL: (self.query, TaskPriorityLevel.LEVEL_1, None),
             ANSWER_TASK_LABEL: (self.answer, TaskPriorityLevel.LEVEL_1, None),
