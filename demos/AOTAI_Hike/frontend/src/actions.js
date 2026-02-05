@@ -7,8 +7,18 @@ export const API_BASE = "/api/demo/ao-tai";
 let _autoTimer = null;
 let _autoInFlight = false;
 
+function _isGameOver(ws) {
+  if (!ws) return false;
+  const roles = ws.roles || [];
+  if (roles.length > 0 && roles.every((r) => Number(r?.attrs?.stamina || 0) <= 0)) return true;
+  const terminalIds = new Set(["end_exit", "bailout_2800", "bailout_ridge"]);
+  const curId = String(ws.current_node_id || "");
+  return terminalIds.has(curId);
+}
+
 function _shouldAutoContinue(ws) {
   if (!ws) return false;
+  if (_isGameOver(ws)) return false;
   const phase = ws.phase || "free";
   if (phase !== "free") return false;
   if (isNightVoteModalBlocking?.()) return false;
@@ -107,6 +117,7 @@ export async function apiSetActiveRole(roleId) {
 }
 
 export async function apiAct(action, payload = {}) {
+  if (_isGameOver(worldState)) return null;
   const data = await api("/act", { session_id: sessionId, action, payload });
   setWorldState(data.world_state);
   for (const m of data.messages || []) logMsg(m);

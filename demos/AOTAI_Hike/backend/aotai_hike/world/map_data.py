@@ -124,14 +124,14 @@ EDGES: list[AoTaiEdge] = [
         to_node_id="slope_forest",
         kind="main",
         label="进入山林",
-        distance_km=3.0,
+        distance_km=4.0,
     ),
     AoTaiEdge(
         from_node_id="slope_forest",
         to_node_id="camp_2800",
         kind="main",
         label="上到2800",
-        distance_km=5.0,
+        distance_km=6.0,
     ),
     AoTaiEdge(
         from_node_id="camp_2800",

@@ -140,14 +140,22 @@ export function applyPhaseUI(ws) {
   if (!ws) return;
 
   const phase = String(ws.phase || "free").toLowerCase();
+  const roles = ws.roles || [];
+  const exhausted = roles.length > 0 && roles.every((r) => Number(r?.attrs?.stamina || 0) <= 0);
+  const terminalIds = new Set(["end_exit", "bailout_2800", "bailout_ridge"]);
+  const isGameOver = exhausted || terminalIds.has(String(ws.current_node_id || ""));
 
   // SAY input is only enabled when the game explicitly asks the player to respond.
   const sayInput = $("#say-input");
   const sayBtn = $("#btn-say");
-  const enableSay = phase === "await_player_say" || phase === "night_wait_player";
+  const enableSay = (phase === "await_player_say" || phase === "night_wait_player") && !isGameOver;
   if (sayInput) {
     sayInput.disabled = !enableSay;
-    sayInput.placeholder = enableSay ? "当前角色说点什么…" : "队伍行动中…（需要你发言时会提示）";
+    sayInput.placeholder = isGameOver
+      ? "游戏已结束"
+      : enableSay
+        ? "当前角色说点什么…"
+        : "队伍行动中…（需要你发言时会提示）";
   }
   if (sayBtn) sayBtn.disabled = !enableSay;
 
@@ -162,6 +170,13 @@ export function applyPhaseUI(ws) {
     setActionButtonsEnabled(false);
     phasePanel.style.display = "none";
     if (nightVoteMode !== "result") hideNightVoteModal();
+    return;
+  }
+
+  if (isGameOver) {
+    setActionButtonsEnabled(false);
+    phasePanel.style.display = "none";
+    hideNightVoteModal();
     return;
   }
 

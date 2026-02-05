@@ -161,29 +161,6 @@ class GameService:
             top_k=self._config.memory_top_k,
         )
 
-        # Per-step NPC cadence:
-        # - Only trigger NPC chatter after a MOVE_FORWARD step.
-        # - It may gate further progress until the player replies.
-        if req.action == ActionType.MOVE_FORWARD and user_action_desc.startswith("MOVE_FORWARD"):
-            comp = self._companion.generate(
-                world_state=world_state,
-                active_role=active,
-                memory_snippets=mem_res.snippets,
-                user_action=user_action_desc,
-            )
-            messages.extend(comp.messages)
-            self._apply_message_effects(world_state, comp.messages)
-            if getattr(comp, "requires_player_say", False):
-                world_state.phase = Phase.AWAIT_PLAYER_SAY
-                messages.append(
-                    Message(
-                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                        kind="system",
-                        content="队友看向你：轮到你发言了（发一句话后才能继续）。",
-                        timestamp_ms=now_ms,
-                    )
-                )
-
         # Night arrival: pause, darken, and require player speech before voting.
         if world_state.time_of_day == "night" and world_state.phase == Phase.FREE:
             world_state.phase = Phase.NIGHT_WAIT_PLAYER
@@ -195,6 +172,31 @@ class GameService:
                     timestamp_ms=now_ms,
                 )
             )
+        else:
+            # Per-step NPC cadence:
+            # - Only trigger NPC chatter after a MOVE_FORWARD step.
+            # - It may gate further progress until the player replies.
+            if req.action == ActionType.MOVE_FORWARD and user_action_desc.startswith(
+                "MOVE_FORWARD"
+            ):
+                comp = self._companion.generate(
+                    world_state=world_state,
+                    active_role=active,
+                    memory_snippets=mem_res.snippets,
+                    user_action=user_action_desc,
+                )
+                messages.extend(comp.messages)
+                self._apply_message_effects(world_state, comp.messages)
+                if getattr(comp, "requires_player_say", False):
+                    world_state.phase = Phase.AWAIT_PLAYER_SAY
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content="队友看向你：轮到你发言了（发一句话后才能继续）。",
+                            timestamp_ms=now_ms,
+                        )
+                    )
 
         return ActResponse(world_state=world_state, messages=messages, background=bg)
 
@@ -696,7 +698,7 @@ class GameService:
             if world_state.in_transit_to_node_id:
                 world_state.in_transit_progress_km += step_km
                 self._advance_time(world_state)
-                self._tweak_party(world_state, stamina_delta=-2, mood_delta=-1, exp_delta=0)
+                self._tweak_party(world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0)
 
                 if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
                     # Arrive
@@ -839,7 +841,7 @@ class GameService:
             # Immediately take first step
             world_state.in_transit_progress_km += step_km
             self._advance_time(world_state)
-            self._tweak_party(world_state, stamina_delta=-2, mood_delta=-1, exp_delta=0)
+            self._tweak_party(world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0)
 
             if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
                 # Arrive in the same action
@@ -919,7 +921,7 @@ class GameService:
 
         if req.action == ActionType.OBSERVE:
             self._advance_time(world_state)
-            self._tweak_party(world_state, stamina_delta=-2, mood_delta=2, exp_delta=1)
+            self._tweak_party(world_state, stamina_delta=-3, mood_delta=2, exp_delta=1)
             obs = self._rng.choice(
                 [
                     "你观察到远处云层翻涌。",

@@ -768,7 +768,7 @@ export function initPhaser() {
 
     _resolveOutcome(ws) {
       const roles = ws?.roles || [];
-      const exhausted = roles.some((r) => Number(r?.attrs?.stamina || 0) <= 0);
+      const exhausted = roles.length > 0 && roles.every((r) => Number(r?.attrs?.stamina || 0) <= 0);
       if (exhausted) return "fail";
       const terminalIds = new Set(["end_exit", "bailout_2800", "bailout_ridge"]);
       const curId = String(ws?.current_node_id || "");
