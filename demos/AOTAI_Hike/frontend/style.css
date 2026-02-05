@@ -29,10 +29,36 @@ body {
 }
 
 
+#left {
+  min-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: calc(100vh - 24px);
+}
+
+#minimap-root {
+  width: 100%;
+  height: 170px;
+  min-height: 140px;
+  max-height: 220px;
+  border: 2px solid rgba(58, 74, 102, 0.8);
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  position: relative;
+}
+
+#minimap-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: auto;
+}
+
 #game-root {
   width: 100%;
-  height: calc(100vh - 24px);
-  min-height: 720px;
+  flex: 1 1 auto;
+  min-height: 520px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -47,14 +73,9 @@ canvas {
   image-rendering: pixelated;
 }
 
-/* Minimap overlay should NOT be pixelated; we want smooth, readable text */
+/* legacy: minimap overlay canvas (no longer used by default) */
 #minimap-overlay {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 10;
-  pointer-events: none;
-  image-rendering: auto;
+  display: none;
 }
 
 
@@ -471,9 +492,7 @@ button.primary {
   padding: 8px 12px 12px;
   align-items: start;
 }
-#left {
-  min-width: 520px;
-}
+/* #left is defined earlier (flex column) */
 #right {
   min-width: 420px;
   height: calc(100vh - 24px);

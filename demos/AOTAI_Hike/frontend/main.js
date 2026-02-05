@@ -61,8 +61,7 @@ function logMsg(msg) {
   div.appendChild(meta);
   div.appendChild(content);
   chatEl.appendChild(div);
-  // Auto-scroll to bottom only if user is already near bottom.
-  // Use rAF to wait for layout so it works with flex panels / dynamic heights.
+  // Auto-scroll only if user is already near bottom.
   if (stickToBottom) {
     const scrollToBottom = () => {
       try {
@@ -71,7 +70,6 @@ function logMsg(msg) {
     };
     try {
       requestAnimationFrame(scrollToBottom);
-      // extra microtask for cases where multiple messages append in the same tick
       setTimeout(scrollToBottom, 0);
     } catch {
       scrollToBottom();
@@ -254,6 +252,7 @@ async function apiNewSession() {
   renderPartyStatus();
   renderBranchChoices();
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
+  if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
 }
 
 async function apiUpsertRole(role) {
@@ -264,6 +263,7 @@ async function apiUpsertRole(role) {
   renderPartyStatus();
   renderBranchChoices();
   setStatus();
+  if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
 }
 
 async function apiSetActiveRole(roleId) {
@@ -277,6 +277,7 @@ async function apiSetActiveRole(roleId) {
   renderPartyStatus();
   renderBranchChoices();
   setStatus();
+  if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   const active = (worldState.roles || []).find((r) => r.role_id === roleId);
   logMsg({
     kind: "system",
@@ -294,6 +295,7 @@ async function apiAct(action, payload = {}) {
   renderPartyStatus();
   renderBranchChoices();
   if (window.__aoTaiMapView) window.__aoTaiMapView.setState(worldState);
+  if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
 }
 
 
@@ -338,16 +340,9 @@ function initPhaser() {
     1,
     Math.min(3, Number(qs.get("dpr")) || (window.devicePixelRatio || 1)),
   );
-  const USE_MINIMAP_OVERLAY = (qs.get("miniOverlay") ?? "1") !== "0";
-  const SKIP_PHASER_MINIMAP = USE_MINIMAP_OVERLAY && (qs.get("miniHidePhaser") ?? "1") !== "0";
-  const MINI_OVERLAY_DPR = Math.max(
-    1,
-    Math.min(
-      8,
-      Number(qs.get("miniDpr")) ||
-        Math.min(8, Math.max(3, Math.round((window.devicePixelRatio || 1) * 2))),
-    ),
-  );
+  // Minimap is now an independent DOM canvas (#minimap-canvas), not Phaser/overlay.
+  const USE_MINIMAP_OVERLAY = false;
+  const SKIP_PHASER_MINIMAP = true;
   const MINI_LABEL_FONT_PX = Math.max(
     6,
     Math.floor(Number(qs.get("miniFontPx") || qs.get("mmFontPx")) || 14),
@@ -360,13 +355,9 @@ function initPhaser() {
   const MINI_LABEL_OFF_Y = Math.max(6, Math.round(MINI_LABEL_FONT_PX * 0.95));
   const MINI_LABEL_STROKE_W = Math.max(1, Math.round(MINI_LABEL_FONT_PX / 9));
 
-  // Overlay draw hooks (assigned later if overlay is enabled)
-  let __drawMinimapOverlay = null;
-  let __minimapOverlayDrew = false;
-
-  // Split the canvas: minimap on top, main scene below
-  const MINI_H = Math.max(90, Math.floor(VIEW_H * 0.26));
-  const MAIN_H = Math.max(160, VIEW_H - MINI_H);
+  // Main scene only
+  const MINI_H = 0;
+  const MAIN_H = VIEW_H;
 
   const TILE = 48; // matches your pixel assets scale
 
@@ -396,10 +387,7 @@ function initPhaser() {
       this.worldRT = null;
       this.worldOverlay = null;
 
-      this.minimap = null;
-      this.minimapG = null;
-      this.minimapMarker = null;
-      this.minimapLabels = [];
+      // minimap removed from Phaser (now DOM canvas)
 
       this._curNodeId = null;
       this._visited = new Set();
@@ -410,7 +398,6 @@ function initPhaser() {
       this._sceneKey = "";
 
       this.mainCam = null;
-      this.miniCam = null;
     }
 
     preload() {
@@ -442,7 +429,6 @@ function initPhaser() {
     create() {
       // --- containers ---
       this.world = this.add.container(0, 0);
-      this.minimap = this.add.container(0, 0);
 
       // --- main world render texture ---
       this.worldRT = this.add.renderTexture(0, 0, VIEW_W, MAIN_H).setOrigin(0, 0);
@@ -467,32 +453,9 @@ function initPhaser() {
 
       // --- cameras ---
       this.mainCam = this.cameras.main;
-      this.mainCam.setViewport(0, MINI_H, VIEW_W, MAIN_H);
+      this.mainCam.setViewport(0, 0, VIEW_W, MAIN_H);
       this.mainCam.setBackgroundColor("rgba(0,0,0,0)");
-
-      // minimap camera (top-right)
-      const MINI_W = 280;
-      this.miniCam = this.cameras.add(0, 0, VIEW_W, MINI_H);
-      this.miniCam.setBackgroundColor("rgba(10,16,28,0.75)");
-      this.miniCam.roundPixels = true;
       this.mainCam.roundPixels = true;
-
-      // Make cameras see different containers
-      this.mainCam.ignore(this.minimap);
-      this.miniCam.ignore(this.world);
-
-      // minimap graphics + marker
-      this.minimapG = this.add.graphics();
-      this.minimap.add(this.minimapG);
-
-      const mm = this.add.graphics();
-      mm.fillStyle(0xffd27c, 1);
-      mm.fillRect(0, 0, 8, 12);
-      const mKey = "minimap_marker";
-      if (!this.textures.exists(mKey)) mm.generateTexture(mKey, 8, 12);
-      mm.destroy();
-      this.minimapMarker = this.add.image(0, 0, mKey).setOrigin(0.5, 1);
-      this.minimap.add(this.minimapMarker);
 
       // Expose API
       window.__aoTaiMapView = {
@@ -524,19 +487,6 @@ function initPhaser() {
       this._tod = tod;
       this._ws = ws || {};
 
-      // If minimap overlay is enabled, draw it here so the initial `this.setState(...)`
-      // call during scene `create()` also renders the minimap (otherwise it can stay blank
-      // until external callers invoke `window.__aoTaiMapView.setState(...)`).
-      if (typeof __drawMinimapOverlay === "function") {
-        try {
-          __drawMinimapOverlay(this._ws, this._visited, nodeId);
-        } catch {}
-      }
-
-      // 1) update minimap (skip Phaser minimap if overlay canvas is enabled)
-      // only hide Phaser minimap after overlay has successfully drawn at least once,
-      // otherwise the minimap area can appear blank.
-      if (!(SKIP_PHASER_MINIMAP && __minimapOverlayDrew)) this._drawMinimap(nodeId);
       // 2) update main world: re-render ONLY when location/segment changes (not every km/time tick)
       const segFrom = ws?.in_transit_from_node_id || nodeId;
       const segTo = ws?.in_transit_to_node_id || nodeId;
@@ -861,7 +811,6 @@ function initPhaser() {
           t.setAlpha(isCur ? 1.0 : 0.86);
           t.setPadding(2, 1, 2, 1);
           t.setBackgroundColor("#061022");
-          t.setShadow(1, 1, "#000000", 2, false, true);
           t.setDepth(5);
           // snap label to whole pixels
           t.x = Math.round(t.x);
@@ -915,23 +864,56 @@ function initPhaser() {
     scene: [HikeScene],
   };
 
-  const game = new Phaser.Game(config);
+  new Phaser.Game(config);
 
-  // Optional: render minimap on its own overlay canvas (independent resolution from Phaser canvas)
-  if (USE_MINIMAP_OVERLAY) {
-    // IMPORTANT: create overlay *after* Phaser has created/attached its own canvas.
-    // If we pre-create a canvas inside the parent, Phaser may reuse it as the main render canvas.
-    let overlay = document.getElementById("minimap-overlay");
-    if (!overlay && root) {
-      overlay = document.createElement("canvas");
-      overlay.id = "minimap-overlay";
-      overlay.setAttribute("aria-hidden", "true");
-      root.appendChild(overlay);
-    }
-    const ctx = overlay && overlay.getContext ? overlay.getContext("2d") : null;
-    let lastDrawKey = "";
+}
 
-    const nodeById = (id) => (mapNodes || []).find((n) => String(n.node_id) === String(id));
+function initMinimapCanvas() {
+  const root = document.getElementById("minimap-root");
+  const canvas = document.getElementById("minimap-canvas");
+  const ctx = canvas && canvas.getContext ? canvas.getContext("2d") : null;
+  if (!root || !canvas || !ctx) return null;
+
+  const fontStack = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif';
+  const state = { ws: null, dpr: 1 };
+
+  const nodeByIdLocal = (id) => (mapNodes || []).find((n) => String(n.node_id) === String(id));
+
+  const resize = () => {
+    const r = root.getBoundingClientRect();
+    const dpr = Math.max(1, Math.min(4, window.devicePixelRatio || 1));
+    state.dpr = dpr;
+    canvas.width = Math.max(1, Math.round(r.width * dpr));
+    canvas.height = Math.max(1, Math.round(r.height * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+  };
+
+  const draw = () => {
+    const ws = state.ws;
+    if (!ws) return;
+    const r = root.getBoundingClientRect();
+    const W = Math.max(1, Math.round(r.width));
+    const H = Math.max(1, Math.round(r.height));
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(10,16,28,0.92)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "rgba(124,242,255,0.38)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, W - 2, H - 2);
+
+    const pad = 14;
+    const mapW = Math.max(10, W - pad * 2);
+    const mapH = Math.max(10, H - pad * 2);
+    const toMini = (n) => {
+      const x = pad + (clamp(n.x, 0, 100) / 100) * mapW;
+      const y = pad + (clamp(n.y, 0, 100) / 100) * mapH;
+      return { x, y };
+    };
+
+    const nodeId = ws.current_node_id || mapStartNodeId || "start";
+    const visitedSet = new Set((ws.visited_node_ids || [nodeId]).map(String));
 
     const curveSign = (s) => {
       let h = 0;
@@ -939,304 +921,159 @@ function initPhaser() {
       return (h & 1) ? 1 : -1;
     };
 
-    const syncOverlayLayout = () => {
-      if (!overlay || !root || !game || !game.canvas) return null;
-      const rootRect = root.getBoundingClientRect();
-      const canvasRect = game.canvas.getBoundingClientRect();
-      const miniCssH = (MINI_H / VIEW_H) * canvasRect.height;
-      if (canvasRect.width < 2 || canvasRect.height < 2 || miniCssH < 2) return null;
+    // edges
+    for (const e of mapEdges || []) {
+      const a = nodeByIdLocal(e.from_node_id);
+      const b = nodeByIdLocal(e.to_node_id);
+      if (!a || !b) continue;
+      const pa = toMini(a);
+      const pb = toMini(b);
 
-      overlay.style.left = `${canvasRect.left - rootRect.left}px`;
-      overlay.style.top = `${canvasRect.top - rootRect.top}px`;
-      overlay.style.width = `${canvasRect.width}px`;
-      overlay.style.height = `${miniCssH}px`;
+      const visited = visitedSet.has(String(e.to_node_id));
+      const isExit = e.kind === "exit";
+      const alpha = visited ? 0.85 : 0.28;
+      const width = visited ? 3 : 2;
 
-      const pxW = Math.max(1, Math.round(canvasRect.width * MINI_OVERLAY_DPR));
-      const pxH = Math.max(1, Math.round(miniCssH * MINI_OVERLAY_DPR));
-      if (overlay.width !== pxW) overlay.width = pxW;
-      if (overlay.height !== pxH) overlay.height = pxH;
+      const dx = pb.x - pa.x;
+      const dy = pb.y - pa.y;
+      const len = Math.max(1, Math.hypot(dx, dy));
+      const px = -dy / len;
+      const py = dx / len;
+      const midx = (pa.x + pb.x) * 0.5;
+      const midy = (pa.y + pb.y) * 0.5;
+      const bend =
+        (8 + (isExit ? 6 : 0) + (visited ? 3 : 0)) *
+        curveSign(String(e.from_node_id) + "->" + String(e.to_node_id));
+      const cx = midx + px * bend;
+      const cy = midy + py * bend;
 
-      return { cssW: canvasRect.width, cssH: miniCssH };
-    };
+      ctx.strokeStyle = `rgba(11,22,48,${Math.min(0.65, alpha)})`;
+      ctx.lineWidth = width + 3;
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.quadraticCurveTo(cx, cy, pb.x, pb.y);
+      ctx.stroke();
 
-    const drawOverlay = (ws, visitedSet, nodeId) => {
-      if (!overlay || !ctx) return false;
-      const layout = syncOverlayLayout();
-      if (!layout) return false;
+      ctx.strokeStyle = isExit ? `rgba(255,124,124,${alpha})` : `rgba(124,242,255,${alpha})`;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.quadraticCurveTo(cx, cy, pb.x, pb.y);
+      ctx.stroke();
+    }
 
-      const cssW = layout.cssW;
-      const cssH = layout.cssH;
+    // nodes + labels
+    const fontPx = 12;
+    ctx.textBaseline = "middle";
+    ctx.font = `${fontPx}px ${fontStack}`;
 
-      // draw in CSS pixel coordinates (ctx scaled by DPR)
-      ctx.setTransform(MINI_OVERLAY_DPR, 0, 0, MINI_OVERLAY_DPR, 0, 0);
-      ctx.clearRect(0, 0, cssW, cssH);
+    for (const n of mapNodes || []) {
+      const p = toMini(n);
+      const isCur = String(n.node_id) === String(nodeId);
+      const isVisited = visitedSet.has(String(n.node_id)) || isCur;
+      const kind = n.kind || "main";
+      const kColor =
+        kind === "exit"
+          ? "#ff7c7c"
+          : kind === "camp"
+            ? "#7cffc6"
+            : kind === "lake"
+              ? "#7ca8ff"
+              : kind === "peak"
+                ? "#ffd27c"
+                : kind === "start"
+                  ? "#9dff7c"
+                  : kind === "end"
+                    ? "#b0b6c6"
+                    : "#7cf2ff";
 
-      // background panel (opaque enough to mask Phaser minimap behind it)
-      ctx.fillStyle = "rgba(10,16,28,0.92)";
-      ctx.fillRect(0, 0, cssW, cssH);
-      ctx.strokeStyle = "rgba(124,242,255,0.38)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(1, 1, cssW - 2, cssH - 2);
+      ctx.fillStyle = "rgba(11,22,48,0.85)";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, isCur ? 7 : 6, 0, Math.PI * 2);
+      ctx.fill();
 
-      const pad = 14;
-      const mapW = Math.max(10, cssW - pad * 2);
-      const mapH = Math.max(10, cssH - pad * 2);
-      const toMini = (n) => {
-        const x = pad + (clamp(n.x, 0, 100) / 100) * mapW;
-        const y = pad + (clamp(n.y, 0, 100) / 100) * mapH;
-        return { x, y };
-      };
+      ctx.fillStyle = isVisited ? kColor : "rgba(124,242,255,0.55)";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, isCur ? 5 : 4, 0, Math.PI * 2);
+      ctx.fill();
 
-      // edges (quadratic curves)
-      for (const e of mapEdges || []) {
-        const a = nodeById(e.from_node_id);
-        const b = nodeById(e.to_node_id);
-        if (!a || !b) continue;
+      const isKey = isCur || ["start", "camp", "junction", "lake", "peak", "exit", "end"].includes(kind);
+      const label = (n.name || n.node_id || "").trim();
+      if (isKey && label) {
+        const x = Math.round(p.x + 8);
+        const y = Math.round(p.y - 12);
+        const textW = ctx.measureText(label).width;
+
+        ctx.fillStyle = "rgba(6,16,34,0.92)";
+        ctx.fillRect(x - 2, y - fontPx / 2 - 4, textW + 10, fontPx + 8);
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(6,16,34,1)";
+        ctx.fillStyle = isVisited ? "#d6faff" : "#7aa0b3";
+        ctx.strokeText(label, x + 3, y);
+        ctx.fillText(label, x + 3, y);
+      }
+    }
+
+    // marker (transit aware)
+    const toId = ws.in_transit_to_node_id;
+    const fromId = ws.in_transit_from_node_id;
+    const prog = Number(ws.in_transit_progress_km || 0);
+    const tot = Number(ws.in_transit_total_km || 0);
+
+    let mp = null;
+    if (fromId && toId && tot > 0) {
+      const a = nodeByIdLocal(fromId);
+      const b = nodeByIdLocal(toId);
+      if (a && b) {
         const pa = toMini(a);
         const pb = toMini(b);
-
-        const visited = visitedSet && visitedSet.has(String(e.to_node_id));
-        const isExit = e.kind === "exit";
-        const baseColor = isExit ? "rgba(255,124,124,1)" : "rgba(124,242,255,1)";
-        const alpha = visited ? 0.85 : 0.28;
-        const width = visited ? 3 : 2;
-
-        const dx = pb.x - pa.x;
-        const dy = pb.y - pa.y;
-        const len = Math.max(1, Math.hypot(dx, dy));
-        const px = -dy / len;
-        const py = dx / len;
-        const midx = (pa.x + pb.x) * 0.5;
-        const midy = (pa.y + pb.y) * 0.5;
-        const bend =
-          (8 + (isExit ? 6 : 0) + (visited ? 3 : 0)) *
-          curveSign(String(e.from_node_id) + "->" + String(e.to_node_id));
-        const cx = midx + px * bend;
-        const cy = midy + py * bend;
-
-        // glow
-        ctx.strokeStyle = `rgba(11,22,48,${Math.min(0.65, alpha)})`;
-        ctx.lineWidth = width + 3;
-        ctx.beginPath();
-        ctx.moveTo(pa.x, pa.y);
-        ctx.quadraticCurveTo(cx, cy, pb.x, pb.y);
-        ctx.stroke();
-
-        // main stroke
-        ctx.strokeStyle = baseColor.replace("1)", `${alpha})`);
-        ctx.lineWidth = width;
-        ctx.beginPath();
-        ctx.moveTo(pa.x, pa.y);
-        ctx.quadraticCurveTo(cx, cy, pb.x, pb.y);
-        ctx.stroke();
+        const t = clamp(prog / tot, 0, 1);
+        mp = { x: pa.x + (pb.x - pa.x) * t, y: pa.y + (pb.y - pa.y) * t };
       }
-
-      // nodes + labels
-      const font = `"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif`;
-      ctx.textBaseline = "middle";
-      ctx.font = `${MINI_LABEL_FONT_PX}px ${font}`;
-
-      for (const n of mapNodes || []) {
-        const p = toMini(n);
-        const isCur = String(n.node_id) === String(nodeId);
-        const isVisited = (visitedSet && visitedSet.has(String(n.node_id))) || isCur;
-
-        const kind = n.kind || "main";
-        const kColor =
-          kind === "exit"
-            ? "#ff7c7c"
-            : kind === "camp"
-              ? "#7cffc6"
-              : kind === "lake"
-                ? "#7ca8ff"
-                : kind === "peak"
-                  ? "#ffd27c"
-                  : kind === "start"
-                    ? "#9dff7c"
-                    : kind === "end"
-                      ? "#b0b6c6"
-                      : "#7cf2ff";
-
-        // glow + dot
-        ctx.fillStyle = "rgba(11,22,48,0.85)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, isCur ? 7 : 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = isVisited ? kColor : "rgba(124,242,255,0.55)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, isCur ? 5 : 4, 0, Math.PI * 2);
-        ctx.fill();
-
-        // label (only key nodes + current)
-        const isKey =
-          isCur || ["start", "camp", "junction", "lake", "peak", "exit", "end"].includes(kind);
-        const label = (n.name || n.node_id || "").trim();
-        if (isKey && label) {
-          const x = Math.round(p.x + MINI_LABEL_OFF_X);
-          const y = Math.round(p.y - MINI_LABEL_OFF_Y);
-
-          const metrics = ctx.measureText(label);
-          const textW = metrics.width;
-          const bgPadX = 6;
-          const bgPadY = 4;
-
-          ctx.fillStyle = "rgba(6,16,34,0.92)";
-          ctx.fillRect(x - 2, y - MINI_LABEL_FONT_PX / 2 - bgPadY, textW + bgPadX, MINI_LABEL_FONT_PX + bgPadY * 2);
-
-          ctx.lineWidth = MINI_LABEL_STROKE_W;
-          ctx.strokeStyle = "rgba(6,16,34,1)";
-          ctx.fillStyle = isVisited ? "#d6faff" : "#7aa0b3";
-          ctx.strokeText(label, x + 1, y);
-          ctx.fillText(label, x + 1, y);
-        }
-      }
-
-      // marker (transit aware)
-      const toId = ws && ws.in_transit_to_node_id;
-      const fromId = ws && ws.in_transit_from_node_id;
-      const prog = (ws && ws.in_transit_progress_km) || 0;
-      const tot = (ws && ws.in_transit_total_km) || 0;
-
-      let mp = null;
-      if (fromId && toId && tot > 0) {
-        const a = nodeById(fromId);
-        const b = nodeById(toId);
-        if (a && b) {
-          const pa = toMini(a);
-          const pb = toMini(b);
-          const t = clamp(prog / tot, 0, 1);
-          mp = { x: pa.x + (pb.x - pa.x) * t, y: pa.y + (pb.y - pa.y) * t };
-        }
-      }
-      if (!mp) {
-        const cur = nodeById(nodeId);
-        if (cur) mp = toMini(cur);
-      }
-      if (mp) {
-        ctx.fillStyle = "#ffd27c";
-        ctx.fillRect(Math.round(mp.x - 4), Math.round(mp.y - 12), 8, 12);
-        ctx.strokeStyle = "rgba(0,0,0,0.35)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(Math.round(mp.x - 4) + 0.5, Math.round(mp.y - 12) + 0.5, 8, 12);
-      }
-      return true;
-    };
-
-    // expose to the scene setState via closure hook
-    __drawMinimapOverlay = (ws, visitedSet, nodeId) => {
-      // visitedSet may be a Set of ids; normalize if needed
-      const vs =
-        visitedSet && typeof visitedSet.has === "function"
-          ? visitedSet
-          : new Set((ws?.visited_node_ids || [nodeId]).map(String));
-      const ok = drawOverlay(ws, vs, nodeId);
-      if (ok) {
-        __minimapOverlayDrew = true;
-      } else {
-        // layout may not be ready on the first tick; retry next frame
-        try {
-          requestAnimationFrame(() => {
-            const ok2 = drawOverlay(ws, vs, nodeId);
-            if (ok2) __minimapOverlayDrew = true;
-          });
-        } catch {}
-      }
-    };
-
-    // keep overlay aligned on resize
-    try {
-      new ResizeObserver(() => {
-        // redraw will re-sync layout
-        if (window.__aoTaiMapView && window.__aoTaiMapView.__last_ws) {
-          const ws = window.__aoTaiMapView.__last_ws;
-          const nodeId = ws?.current_node_id || mapStartNodeId || "start";
-          const visited = new Set((ws?.visited_node_ids || [nodeId]).map(String));
-          drawOverlay(ws, visited, nodeId);
-        } else {
-          syncOverlayLayout();
-        }
-      }).observe(root);
-    } catch {}
-
-    const attachToMapView = (mv) => {
-      if (!mv || typeof mv.setState !== "function") return;
-      if (mv.__minimap_overlay_attached) return;
-      mv.__minimap_overlay_attached = true;
-
-      const orig = mv.setState;
-      mv.setState = (ws) => {
-        mv.__last_ws = ws;
-        try {
-          const nodeId = ws?.current_node_id || mapStartNodeId || "start";
-          const visited = new Set((ws?.visited_node_ids || [nodeId]).map(String));
-          const key = `${nodeId}|${(ws?.visited_node_ids || []).length}|${ws?.in_transit_from_node_id || ""}|${ws?.in_transit_to_node_id || ""}|${Number(ws?.in_transit_progress_km || 0)}|${Number(ws?.in_transit_total_km || 0)}|${MINI_OVERLAY_DPR}`;
-          if (key !== lastDrawKey) {
-            lastDrawKey = key;
-            drawOverlay(ws, visited, nodeId);
-          }
-        } catch {}
-        return orig(ws);
-      };
-
-      // compat path used elsewhere
-      if (typeof mv.setNode === "function") {
-        const origNode = mv.setNode;
-        mv.setNode = (nodeId, visitedIds) => {
-          const ws = { current_node_id: nodeId, visited_node_ids: visitedIds || [nodeId] };
-          try {
-            mv.__last_ws = ws;
-            const visited = new Set((ws.visited_node_ids || [nodeId]).map(String));
-            drawOverlay(ws, visited, nodeId);
-          } catch {}
-          return origNode(nodeId, visitedIds);
-        };
-      }
-
-      // draw at least once if we already have state
-      try {
-        const ws = mv.__last_ws;
-        if (ws) {
-          const nodeId = ws?.current_node_id || mapStartNodeId || "start";
-          const visited = new Set((ws?.visited_node_ids || [nodeId]).map(String));
-          drawOverlay(ws, visited, nodeId);
-        } else {
-          syncOverlayLayout();
-        }
-      } catch {}
-    };
-
-    // Ensure we attach even if __aoTaiMapView is assigned later by the Phaser scene.
-    // This is the key fix: previously we could miss the assignment and never draw overlay.
-    try {
-      const hasDesc = Object.getOwnPropertyDescriptor(window, "__aoTaiMapView");
-      if (!hasDesc || hasDesc.configurable) {
-        let _mv = window.__aoTaiMapView;
-        Object.defineProperty(window, "__aoTaiMapView", {
-          configurable: true,
-          enumerable: true,
-          get() {
-            return _mv;
-          },
-          set(v) {
-            _mv = v;
-            try { attachToMapView(_mv); } catch {}
-          },
-        });
-        // attach immediately if it's already present
-        if (_mv) attachToMapView(_mv);
-      } else {
-        // fallback: if non-configurable, do a best-effort immediate attach
-        attachToMapView(window.__aoTaiMapView);
-      }
-    } catch {
-      attachToMapView(window.__aoTaiMapView);
     }
+    if (!mp) {
+      const cur = nodeByIdLocal(nodeId);
+      if (cur) mp = toMini(cur);
+    }
+    if (mp) {
+      ctx.fillStyle = "#ffd27c";
+      ctx.fillRect(Math.round(mp.x - 4), Math.round(mp.y - 12), 8, 12);
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(mp.x - 4) + 0.5, Math.round(mp.y - 12) + 0.5, 8, 12);
+    }
+  };
+
+  const api = {
+    setState(ws) {
+      state.ws = ws;
+      resize();
+      draw();
+    },
+  };
+
+  try {
+    new ResizeObserver(() => {
+      resize();
+      draw();
+    }).observe(root);
+  } catch {
+    window.addEventListener("resize", () => {
+      resize();
+      draw();
+    });
   }
+
+  resize();
+  return api;
 }
 
 async function bootstrap() {
   await apiGetMap();
   await apiNewSession();
+  window.__aoTaiMinimap = initMinimapCanvas();
+  if (window.__aoTaiMinimap) window.__aoTaiMinimap.setState(worldState);
   initPhaser();
 
   // Initial role setup modal (must create at least one role; modal is removed after creation)
@@ -1326,13 +1163,12 @@ async function bootstrap() {
 
   $("#setup-quickstart")?.addEventListener("click", async () => {
     showSetupErr("");
-    const data = await api("/roles/quickstart", { session_id: sessionId });
-    worldState.roles = data.roles;
-    worldState.active_role_id = data.active_role_id;
-    renderRoles();
-    renderPartyStatus();
-    renderBranchChoices();
-    setStatus();
+    const defaults = [
+      { name: "阿鳌", persona: "阿鳌：队伍领队，路线熟悉，偏谨慎。" },
+      { name: "太白", persona: "太白：装备党，喜欢记录数据与天气变化。" },
+      { name: "小山", persona: "小山：乐观的新人徒步者，敢想敢冲但听劝。" },
+    ];
+    for (const r of defaults) await apiUpsertRole(makeRole(r.name, r.persona));
     logMsg({ kind: "system", content: "已创建 3 个默认角色。", timestamp_ms: Date.now() });
     hideAndRemoveSetup();
   });
