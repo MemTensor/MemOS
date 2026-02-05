@@ -192,7 +192,7 @@ def init_server() -> dict[str, Any]:
     )
     embedder = EmbedderFactory.from_config(embedder_config)
     nli_client = NLIClient(base_url=nli_client_config["base_url"])
-    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db)
+    memory_history_manager = MemoryHistoryManager(nli_client=nli_client, graph_db=graph_db, llm=llm)
     pre_update_retriever = PreUpdateRetriever(graph_db=graph_db, embedder=embedder)
     # Pass graph_db to mem_reader for recall operations (deduplication, conflict detection)
     mem_reader = MemReaderFactory.from_config(
