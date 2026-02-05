@@ -13,6 +13,7 @@ from aotai_hike.schemas import (
     ActionType,
     ActRequest,
     ActResponse,
+    AoTaiEdge,
     BackgroundAsset,
     CampMeetingState,
     Message,
@@ -202,12 +203,13 @@ class GameService:
     ) -> str:
         kind = str(req.payload.get("kind") or "").strip()
         if kind == "night_vote":
-            forced_leader_id = str(req.payload.get("leader_role_id") or "").strip() or None
-            self._run_leader_vote(world_state, now_ms, messages, forced_leader_id=forced_leader_id)
+            player_vote_id = str(req.payload.get("leader_role_id") or "").strip() or None
+            self._run_leader_vote(world_state, now_ms, messages, player_vote_id=player_vote_id)
             # Night finishes: light recovery, new day, weather update.
             self._tweak_party(world_state, stamina_delta=6, mood_delta=2, exp_delta=0)
             world_state.day += 1
             world_state.time_of_day = "morning"
+            world_state.time_step_counter = 0
             self._maybe_change_weather(world_state)
             world_state.phase = Phase.FREE
             return "DECIDE:night_vote"
@@ -261,6 +263,7 @@ class GameService:
             # Advance to next morning
             world_state.day += 1
             world_state.time_of_day = "morning"
+            world_state.time_step_counter = 0
             self._maybe_change_weather(world_state)
 
             # Exit meeting
@@ -284,7 +287,7 @@ class GameService:
         now_ms: int,
         messages: list[Message],
         *,
-        forced_leader_id: str | None = None,
+        player_vote_id: str | None = None,
     ) -> None:
         """
         Mock voting process with optional forced leader choice:
@@ -311,9 +314,9 @@ class GameService:
         tally: dict[str, int] = dict.fromkeys(candidates, 0)
 
         def _pick_vote(voter_id: str) -> str:
-            # Player selection can force the final leader; use it as the player's vote too.
-            if forced_leader_id and voter_id == world_state.active_role_id:
-                return forced_leader_id
+            # Player selection is only the player's vote, not a forced result.
+            if player_vote_id and voter_id == world_state.active_role_id:
+                return player_vote_id
             # Small incumbency bias (keep the current leader).
             if old and self._rng.random() < 0.28:
                 return old
@@ -328,7 +331,7 @@ class GameService:
                 "愿意承担风险。",
                 "团队更信服。",
             ]
-            if forced_leader_id and voter_id == world_state.active_role_id:
+            if player_vote_id and voter_id == world_state.active_role_id:
                 return "玩家选择。"
             if choice_id == old:
                 return "延续昨日安排。"
@@ -364,9 +367,7 @@ class GameService:
 
         max_votes = max(tally.values()) if tally else 0
         winners = [rid for rid, n in tally.items() if n == max_votes] if tally else []
-        if forced_leader_id and forced_leader_id in candidates:
-            world_state.leader_role_id = forced_leader_id
-        elif winners:
+        if winners:
             world_state.leader_role_id = self._rng.choice(winners)
 
         new_name = next(
@@ -456,6 +457,7 @@ class GameService:
             # Nothing to do; still advance to next morning
             world_state.day += 1
             world_state.time_of_day = "morning"
+            world_state.time_step_counter = 0
             self._maybe_change_weather(world_state)
             return
 
@@ -563,6 +565,7 @@ class GameService:
         self._tweak_party(world_state, stamina_delta=8, mood_delta=3, exp_delta=0)
         world_state.day += 1
         world_state.time_of_day = "morning"
+        world_state.time_step_counter = 0
         self._maybe_change_weather(world_state)
 
     def _apply_message_effects(self, world_state: WorldState, messages: list[Message]) -> None:
@@ -802,6 +805,29 @@ class GameService:
                         )
                     )
 
+            # If choosing a bailout route, it can fail and force a retreat.
+            if getattr(next_edge, "kind", None) == "exit":
+                prev_id = None
+                if world_state.visited_node_ids and len(world_state.visited_node_ids) >= 2:
+                    prev_id = world_state.visited_node_ids[-2]
+                fail_prob = 0.35
+                if prev_id and self._rng.random() < fail_prob:
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content="下撤途中遭遇阻断，撤退失败，只能回撤上一步。",
+                            timestamp_ms=now_ms,
+                        )
+                    )
+                    next_edge = AoTaiEdge(
+                        from_node_id=world_state.current_node_id,
+                        to_node_id=prev_id,
+                        kind="main",
+                        label="回撤",
+                        distance_km=float(getattr(next_edge, "distance_km", 1.0) or 1.0),
+                    )
+
             # Start transit along chosen edge
             world_state.phase = Phase.FREE
             world_state.in_transit_from_node_id = world_state.current_node_id
@@ -887,6 +913,7 @@ class GameService:
             )
             world_state.day += 1
             world_state.time_of_day = "morning"
+            world_state.time_step_counter = 0
             self._maybe_change_weather(world_state)
             return "CAMP"
 
@@ -927,6 +954,10 @@ class GameService:
         world_state.recent_events = world_state.recent_events[-10:]
 
     def _advance_time(self, world_state: WorldState) -> None:
+        # Slow down time: advance only every 2 steps.
+        world_state.time_step_counter = int(world_state.time_step_counter or 0) + 1
+        if world_state.time_step_counter % 2 != 0:
+            return
         order = ["morning", "noon", "afternoon", "evening", "night"]
         idx = order.index(world_state.time_of_day)
         if idx < len(order) - 1:
@@ -934,6 +965,7 @@ class GameService:
         else:
             world_state.day += 1
             world_state.time_of_day = "morning"
+            world_state.time_step_counter = 0
 
     def _tweak_party(
         self, world_state: WorldState, *, stamina_delta: int, mood_delta: int, exp_delta: int

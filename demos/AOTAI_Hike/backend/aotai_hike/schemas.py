@@ -104,6 +104,7 @@ class WorldState(BaseModel):
 
     day: int = 1
     time_of_day: Literal["morning", "noon", "afternoon", "evening", "night"] = "morning"
+    time_step_counter: int = 0
     weather: Literal["sunny", "cloudy", "windy", "rainy", "snowy", "foggy"] = "cloudy"
     recent_events: list[str] = Field(default_factory=list)
 

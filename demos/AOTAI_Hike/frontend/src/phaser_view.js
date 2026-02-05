@@ -156,6 +156,10 @@ export function initPhaser() {
       this._bubbleTextRes = BUBBLE_TEXT_RES;
       this._nameFontPx = NAME_FONT_PX;
       this._bubbleFontPx = BUBBLE_FONT_PX;
+
+      // outcome banner (success / fail)
+      this._outcomeBanner = null;
+      this._outcomeState = null; // "success" | "fail" | null
     }
 
     preload() {
@@ -762,6 +766,48 @@ export function initPhaser() {
       return img;
     }
 
+    _resolveOutcome(ws) {
+      const roles = ws?.roles || [];
+      const exhausted = roles.some((r) => Number(r?.attrs?.stamina || 0) <= 0);
+      if (exhausted) return "fail";
+      const terminalIds = new Set(["end_exit", "bailout_2800", "bailout_ridge"]);
+      const curId = String(ws?.current_node_id || "");
+      if (terminalIds.has(curId)) return "success";
+      const node = nodeById(curId);
+      const kind = String(node?.kind || "").toLowerCase();
+      if (kind === "end" || kind === "exit") return "success";
+      return null;
+    }
+
+    _updateOutcomeBanner(ws) {
+      const outcome = this._resolveOutcome(ws);
+      if (outcome === this._outcomeState) return;
+      this._outcomeState = outcome;
+      if (this._outcomeBanner) {
+        try {
+          this._outcomeBanner.destroy();
+        } catch {}
+        this._outcomeBanner = null;
+      }
+      if (!outcome) return;
+      const label = outcome === "success" ? "success" : "fail";
+      const color = outcome === "success" ? "#a1ffb9" : "#ff7c7c";
+      const textImg = this._makePixelText(label, 18, color, 4);
+      textImg.setOrigin(0.5, 0.5);
+      const padX = 12;
+      const padY = 8;
+      const w = Math.ceil(textImg.displayWidth + padX * 2);
+      const h = Math.ceil(textImg.displayHeight + padY * 2);
+      const bg = this.add.rectangle(0, 0, w, h, 0x061022, 0.82);
+      bg.setStrokeStyle(2, 0x3a4a66, 0.95);
+      const c = this.add.container(Math.round(VIEW_W / 2), Math.round(MAIN_H * 0.22));
+      c.add(bg);
+      c.add(textImg);
+      c.setDepth(90);
+      c.setScrollFactor(0);
+      this._outcomeBanner = c;
+    }
+
     _upsertNameLabel(roleId, name, spr, isActive, isLeader) {
       const rid = String(roleId);
       const labelText = String(name || "").trim() || "角色";
@@ -915,6 +961,9 @@ export function initPhaser() {
         const nextSceneId = "base";
         if (nextSceneId !== this._sceneId) this._swapScene(nextSceneId);
       }
+
+      this._updateOutcomeBanner(ws);
+
       // mood overlay can change frequently without re-rendering tiles
       if (moodChanged) {
         // Night arrival: fade to dark gradually
