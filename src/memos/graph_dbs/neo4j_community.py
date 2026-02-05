@@ -10,7 +10,6 @@ from memos.log import get_logger
 from memos.vec_dbs.factory import VecDBFactory
 from memos.vec_dbs.item import VecDBItem
 
-
 logger = get_logger(__name__)
 
 
@@ -34,11 +33,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         super().__init__(config)
 
     def create_index(
-        self,
-        label: str = "Memory",
-        vector_property: str = "embedding",
-        dimensions: int = 1536,
-        index_name: str = "memory_vector_index",
+            self,
+            label: str = "Memory",
+            vector_property: str = "embedding",
+            dimensions: int = 1536,
+            index_name: str = "memory_vector_index",
     ) -> None:
         """
         Create the vector index for embedding and datetime indexes for created_at and updated_at fields.
@@ -47,7 +46,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         self._create_basic_property_indexes()
 
     def add_node(
-        self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
+            self, id: str, memory: str, metadata: dict[str, Any], user_name: str | None = None
     ) -> None:
         user_name = user_name if user_name else self.config.user_name
         if not self.config.use_multi_db and (self.config.user_name or user_name):
@@ -216,7 +215,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             raise
 
     def get_children_with_embeddings(
-        self, id: str, user_name: str | None = None
+            self, id: str, user_name: str | None = None
     ) -> list[dict[str, Any]]:
         user_name = user_name if user_name else self.config.user_name
         where_user = ""
@@ -248,17 +247,17 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
     # Search / recall operations
     def search_by_embedding(
-        self,
-        vector: list[float],
-        top_k: int = 5,
-        scope: str | None = None,
-        status: str | None = None,
-        threshold: float | None = None,
-        search_filter: dict | None = None,
-        user_name: str | None = None,
-        filter: dict | None = None,
-        knowledgebase_ids: list[str] | None = None,
-        **kwargs,
+            self,
+            vector: list[float],
+            top_k: int = 5,
+            scope: str | None = None,
+            status: str | None = None,
+            threshold: float | None = None,
+            search_filter: dict | None = None,
+            user_name: str | None = None,
+            filter: dict | None = None,
+            knowledgebase_ids: list[str] | None = None,
+            **kwargs,
     ) -> list[dict]:
         """
         Retrieve node IDs based on vector similarity using external vector DB.
@@ -420,10 +419,10 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             return date_str
 
     def _build_filter_conditions_cypher(
-        self,
-        filter: dict | None,
-        param_counter_start: int = 0,
-        node_alias: str = "node",
+            self,
+            filter: dict | None,
+            param_counter_start: int = 0,
+            node_alias: str = "node",
     ) -> tuple[list[str], dict[str, Any]]:
         """
         Build filter conditions for Cypher queries with date normalization.
@@ -546,11 +545,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         return normalized
 
     def get_all_memory_items(
-        self,
-        scope: str,
-        filter: dict | None = None,
-        knowledgebase_ids: list[str] | None = None,
-        **kwargs,
+            self,
+            scope: str,
+            filter: dict | None = None,
+            knowledgebase_ids: list[str] | None = None,
+            **kwargs,
     ) -> list[dict]:
         """
         Retrieve all memory items of a specific memory_type.
@@ -620,14 +619,16 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [self._parse_node(dict(record["n"])) for record in results]
+            nodes_data = [dict(record["n"]) for record in results]
+            # Use batch parsing to fetch all embeddings at once
+            return self._parse_nodes(nodes_data)
 
     def get_by_metadata(
-        self,
-        filters: list[dict[str, Any]],
-        user_name: str | None = None,
-        filter: dict | None = None,
-        knowledgebase_ids: list[str] | None = None,
+            self,
+            filters: list[dict[str, Any]],
+            user_name: str | None = None,
+            filter: dict | None = None,
+            knowledgebase_ids: list[str] | None = None,
     ) -> list[str]:
         """
         Retrieve node IDs that match given metadata filters.
@@ -713,7 +714,7 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if filter:
             # Helper function to build a single filter condition
             def build_filter_condition(
-                condition_dict: dict, param_counter: list
+                    condition_dict: dict, param_counter: list
             ) -> tuple[str, dict]:
                 """Build a WHERE condition for a single filter item.
 
@@ -818,11 +819,11 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             return [record["id"] for record in result]
 
     def delete_node_by_prams(
-        self,
-        writable_cube_ids: list[str],
-        memory_ids: list[str] | None = None,
-        file_ids: list[str] | None = None,
-        filter: dict | None = None,
+            self,
+            writable_cube_ids: list[str],
+            memory_ids: list[str] | None = None,
+            file_ids: list[str] | None = None,
+            filter: dict | None = None,
     ) -> int:
         """
         Delete nodes by memory_ids, file_ids, or filter.
@@ -1041,9 +1042,9 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         if node["sources"]:
             for idx in range(len(node["sources"])):
                 if not (
-                    isinstance(node["sources"][idx], str)
-                    and node["sources"][idx][0] == "{"
-                    and node["sources"][idx][0] == "}"
+                        isinstance(node["sources"][idx], str)
+                        and node["sources"][idx][0] == "{"
+                        and node["sources"][idx][0] == "}"
                 ):
                     break
                 node["sources"][idx] = json.loads(node["sources"][idx])
@@ -1056,6 +1057,60 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
             logger.warning(f"Failed to fetch vector for node {new_node['id']}: {e}")
             new_node["metadata"]["embedding"] = None
         return new_node
+
+    def _parse_nodes(self, nodes_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Parse multiple Neo4j nodes and batch fetch embeddings from vector DB."""
+        if not nodes_data:
+            return []
+
+        # First, parse all nodes without embeddings
+        parsed_nodes = []
+        node_ids = []
+        for node_data in nodes_data:
+            node = node_data.copy()
+
+            # Convert Neo4j datetime to string
+            for time_field in ("created_at", "updated_at"):
+                if time_field in node and hasattr(node[time_field], "isoformat"):
+                    node[time_field] = node[time_field].isoformat()
+            node.pop("user_name", None)
+            # serialization
+            if node.get("sources"):
+                for idx in range(len(node["sources"])):
+                    if not (
+                            isinstance(node["sources"][idx], str)
+                            and node["sources"][idx][0] == "{"
+                            and node["sources"][idx][0] == "}"
+                    ):
+                        break
+                    node["sources"][idx] = json.loads(node["sources"][idx])
+
+            node_id = node.pop("id")
+            node_ids.append(node_id)
+            parsed_nodes.append({
+                "id": node_id,
+                "memory": node.pop("memory", ""),
+                "metadata": node
+            })
+
+        # Batch fetch all embeddings at once
+        vec_items_map = {}
+        if node_ids:
+            try:
+                vec_items = self.vec_db.get_by_ids(node_ids)
+                vec_items_map = {v.id: v.vector for v in vec_items if v and v.vector}
+            except Exception as e:
+                logger.warning(f"Failed to batch fetch vectors for {len(node_ids)} nodes: {e}")
+
+        # Merge embeddings into parsed nodes
+        for parsed_node in parsed_nodes:
+            node_id = parsed_node["id"]
+            if node_id in vec_items_map:
+                parsed_node["metadata"]["embedding"] = vec_items_map[node_id]
+            else:
+                parsed_node["metadata"]["embedding"] = None
+
+        return parsed_nodes
 
     def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> dict[str, str | None]:
         """Get user names by memory ids.
@@ -1109,5 +1164,162 @@ class Neo4jCommunityGraphDB(Neo4jGraphDB):
         except Exception as e:
             logger.error(
                 f"[get_user_names_by_memory_ids] Failed to get user names: {e}", exc_info=True
+            )
+            raise
+
+    def delete_node_by_mem_cube_id(
+            self,
+            mem_cube_id: str | None = None,
+            delete_record_id: str | None = None,
+            hard_delete: bool = False,
+    ) -> int:
+        logger.info(
+            f"delete_node_by_mem_cube_id mem_cube_id:{mem_cube_id}, "
+            f"delete_record_id:{delete_record_id}, hard_delete:{hard_delete}"
+        )
+
+        if not mem_cube_id:
+            logger.warning("[delete_node_by_mem_cube_id] mem_cube_id is required but not provided")
+            return 0
+
+        if not delete_record_id:
+            logger.warning(
+                "[delete_node_by_mem_cube_id] delete_record_id is required but not provided"
+            )
+            return 0
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                if hard_delete:
+                    query_get_ids = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_cube_id AND n.delete_record_id = $delete_record_id
+                        RETURN n.id AS id
+                    """
+                    result = session.run(
+                        query_get_ids, mem_cube_id=mem_cube_id, delete_record_id=delete_record_id
+                    )
+                    node_ids = [record["id"] for record in result]
+
+                    # Delete from Neo4j
+                    query = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_cube_id AND n.delete_record_id = $delete_record_id
+                        DETACH DELETE n
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard delete query: {query}")
+
+                    result = session.run(
+                        query, mem_cube_id=mem_cube_id, delete_record_id=delete_record_id
+                    )
+                    summary = result.consume()
+                    deleted_count = summary.counters.nodes_deleted if summary.counters else 0
+
+                    # Delete from vector DB
+                    if node_ids and self.vec_db:
+                        try:
+                            self.vec_db.delete(node_ids)
+                            logger.info(
+                                f"[delete_node_by_mem_cube_id] Deleted {len(node_ids)} vectors from VecDB"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[delete_node_by_mem_cube_id] Failed to delete vectors from VecDB: {e}"
+                            )
+
+                    logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
+                    return deleted_count
+                else:
+                    current_time = datetime.utcnow().isoformat()
+
+                    query = """
+                        MATCH (n:Memory)
+                        WHERE n.user_name = $mem_cube_id
+                            AND (n.delete_time IS NULL OR n.delete_time = "")
+                            AND (n.delete_record_id IS NULL OR n.delete_record_id = "")
+                        SET n.status = $status,
+                            n.delete_record_id = $delete_record_id,
+                            n.delete_time = $delete_time
+                        RETURN count(n) AS updated_count
+                    """
+                    logger.info(f"[delete_node_by_mem_cube_id] Soft delete query: {query}")
+
+                    result = session.run(
+                        query,
+                        mem_cube_id=mem_cube_id,
+                        status="deleted",
+                        delete_record_id=delete_record_id,
+                        delete_time=current_time,
+                    )
+                    record = result.single()
+                    updated_count = record["updated_count"] if record else 0
+
+                    logger.info(
+                        f"delete_node_by_mem_cube_id Soft deleted (updated) {updated_count} nodes"
+                    )
+                    return updated_count
+
+        except Exception as e:
+            logger.error(
+                f"[delete_node_by_mem_cube_id] Failed to delete/update nodes: {e}", exc_info=True
+            )
+            raise
+
+    def recover_memory_by_mem_cube_id(
+            self,
+            mem_cube_id: str | None = None,
+            delete_record_id: str | None = None,
+    ) -> int:
+
+        logger.info(
+            f"recover_memory_by_mem_cube_id mem_cube_id:{mem_cube_id},delete_record_id:{delete_record_id}"
+        )
+        # Validate required parameters
+        if not mem_cube_id:
+            logger.warning("recover_memory_by_mem_cube_id mem_cube_id is required but not provided")
+            return 0
+
+        if not delete_record_id:
+            logger.warning(
+                "recover_memory_by_mem_cube_id delete_record_id is required but not provided"
+            )
+            return 0
+
+        logger.info(
+            f"recover_memory_by_mem_cube_id mem_cube_id={mem_cube_id}, "
+            f"delete_record_id={delete_record_id}"
+        )
+
+        try:
+            with self.driver.session(database=self.db_name) as session:
+                query = """
+                    MATCH (n:Memory)
+                    WHERE n.user_name = $mem_cube_id AND n.delete_record_id = $delete_record_id
+                    SET n.status = $status,
+                        n.delete_record_id = $delete_record_id_empty,
+                        n.delete_time = $delete_time_empty
+                    RETURN count(n) AS updated_count
+                """
+                logger.info(f"[recover_memory_by_mem_cube_id] Update query: {query}")
+
+                result = session.run(
+                    query,
+                    mem_cube_id=mem_cube_id,
+                    delete_record_id=delete_record_id,
+                    status="activated",
+                    delete_record_id_empty="",
+                    delete_time_empty="",
+                )
+                record = result.single()
+                updated_count = record["updated_count"] if record else 0
+
+                logger.info(
+                    f"[recover_memory_by_mem_cube_id] Recovered (updated) {updated_count} nodes"
+                )
+                return updated_count
+
+        except Exception as e:
+            logger.error(
+                f"[recover_memory_by_mem_cube_id] Failed to recover nodes: {e}", exc_info=True
             )
             raise

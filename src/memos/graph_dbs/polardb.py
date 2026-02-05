@@ -5565,18 +5565,6 @@ class PolarDBGraphDB(BaseGraphDB):
         mem_cube_id: str | None = None,
         delete_record_id: str | None = None,
     ) -> int:
-        """
-        Recover memory nodes by mem_cube_id (user_name) and delete_record_id.
-
-        This function updates the status to 'activated', and clears delete_record_id and delete_time.
-
-        Args:
-            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
-            delete_record_id: The delete_record_id to match.
-
-        Returns:
-            int: Number of nodes recovered (updated).
-        """
         logger.info(
             f"recover_memory_by_mem_cube_id mem_cube_id:{mem_cube_id},delete_record_id:{delete_record_id}"
         )
