@@ -337,7 +337,8 @@ function initPhaser() {
   const root = document.getElementById("game-root");
   const rect = root ? root.getBoundingClientRect() : { width: 960, height: 540 };
   const qs = new URLSearchParams(window.location.search);
-  // Integer zoom for crisp pixels/text (avoid CSS non-integer stretching blur)
+  // Default to scale=2 for a chunkier pixel look. For sharper text without making the world too "fine",
+  // bump DPR via ?dpr=2 or ?dpr=3. You can still force more detail with ?scale=1.
   const ZOOM = Math.max(1, Math.floor(Number(qs.get("scale")) || 2));
   const VIEW_W = Math.max(160, Math.floor((rect.width || 960) / ZOOM));
   const VIEW_H = Math.max(120, Math.floor((rect.height || 540) / ZOOM));
@@ -355,21 +356,31 @@ function initPhaser() {
   // - miniHidePhaser: 1/0 (default 1) when using overlay, skip drawing the Phaser minimap layer
   const GAME_RESOLUTION = Math.max(
     1,
-    Math.min(3, Number(qs.get("dpr")) || (window.devicePixelRatio || 1)),
+    // Allow a slightly higher cap; helps keep UI readable while world stays chunky at scale=2.
+    Math.min(4, Number(qs.get("dpr")) || (window.devicePixelRatio || 1)),
   );
 
-  // Text internal resolution controls sharpness of Phaser Text (rendered to texture).
-  // URL params:
-  // - uiTextRes: 1..4 (default ~= devicePixelRatio)
-  // - nameTextRes: 1..4 (default uiTextRes)
-  // - bubbleTextRes: 1..4 (default uiTextRes)
+  try {
+    console.info(`[ao-tai] scale=${ZOOM} dpr=${GAME_RESOLUTION} view=${VIEW_W}x${VIEW_H} root=${Math.round(rect.width)}x${Math.round(rect.height)}`);
+  } catch {}
+
+  // Default to a slightly higher internal text resolution for crisp pixel text.
+  // (You can still override via ?uiTextRes= / ?bubbleTextRes= / ?nameTextRes=)
   const UI_TEXT_RES = clamp(
-    Math.round(Number(qs.get("uiTextRes")) || (window.devicePixelRatio || 1)),
+    Math.round(Number(qs.get("uiTextRes")) || Math.max(2, window.devicePixelRatio || 1)),
     1,
     4,
   );
   const NAME_TEXT_RES = clamp(Math.round(Number(qs.get("nameTextRes")) || UI_TEXT_RES), 1, 4);
-  const BUBBLE_TEXT_RES = clamp(Math.round(Number(qs.get("bubbleTextRes")) || UI_TEXT_RES), 1, 4);
+  const BUBBLE_TEXT_RES = clamp(
+    Math.round(Number(qs.get("bubbleTextRes")) || 4),
+    1,
+    4,
+  );
+
+  // UI font size tunables (final on-screen px). Override via URL: ?nameFontPx=11&bubbleFontPx=14
+  const NAME_FONT_PX = clamp(Math.round(Number(qs.get("nameFontPx")) || 11), 6, 28);
+  const BUBBLE_FONT_PX = clamp(Math.round(Number(qs.get("bubbleFontPx")) || 14), 8, 40);
   // Minimap is now an independent DOM canvas (#minimap-canvas), not Phaser/overlay.
   const USE_MINIMAP_OVERLAY = false;
   const SKIP_PHASER_MINIMAP = true;
@@ -452,6 +463,8 @@ function initPhaser() {
       // text resolution (sharpness) for UI
       this._nameTextRes = NAME_TEXT_RES;
       this._bubbleTextRes = BUBBLE_TEXT_RES;
+      this._nameFontPx = NAME_FONT_PX;
+      this._bubbleFontPx = BUBBLE_FONT_PX;
     }
 
     preload() {
@@ -758,8 +771,8 @@ function initPhaser() {
         // keep bubble anchored
         const bub = this.roleBubbles.get(rid);
         if (bub) {
-          bub.x = spr.x;
-          bub.y = spr.y - 54;
+          bub.x = Math.round(spr.x);
+          bub.y = Math.round(spr.y - 54);
         }
       }
 
@@ -786,42 +799,141 @@ function initPhaser() {
       }
     }
 
-    _makePixelText(text, fontPx = 10, color = "#e8f0ff", resolution = 2) {
-      const t = this.add.text(0, 0, text, {
-        fontFamily:
-          '"Press Start 2P","PingFang SC","Hiragino Sans GB","Microsoft YaHei",ui-monospace,Menlo,Monaco,Consolas,monospace',
-        fontSize: `${fontPx}px`,
-        color,
-        align: "center",
-        wordWrap: { width: 220 },
-      });
-      // crisper on HiDPI without blur
+    _makePixelText(text, fontPx = 10, color = "#e8f0ff", pixelScale = 4) {
+      // Hard-edge pixel text (baked): render large on a canvas, then downsample with NEAREST into a new canvas,
+      // upload as a texture, and display as an Image (no fractional scaling at runtime).
+      const scale = clamp(Math.round(Number(pixelScale) || 4), 1, 4);
+      const wrapW = 200;
+      // Prefer CJK-friendly fonts first; fall back to pixel latin font where available.
+      const fontFamily =
+        '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Press Start 2P",ui-monospace,Menlo,Monaco,Consolas,monospace';
+
+      const srcFontPx = Math.round(fontPx * scale);
+      const srcWrapW = Math.round(wrapW * scale);
+
+      // Simple wrap (works well for CJK and short phrases)
+      const measureCtx = document.createElement("canvas").getContext("2d");
+      measureCtx.font = `${srcFontPx}px ${fontFamily}`;
+      const raw = String(text ?? "");
+      const tokens = raw.split("");
+      const lines = [];
+      let line = "";
+      for (const ch of tokens) {
+        if (ch === "\n") {
+          lines.push(line);
+          line = "";
+          continue;
+        }
+        const test = line + ch;
+        const w = measureCtx.measureText(test).width;
+        if (w > srcWrapW && line.length > 0) {
+          lines.push(line);
+          line = ch;
+        } else {
+          line = test;
+        }
+      }
+      if (line) lines.push(line);
+
+      const lineH = Math.round(srcFontPx * 1.25);
+      const padX = Math.round(4 * scale);
+      const padY = Math.round(3 * scale);
+      let maxLineW = 0;
+      for (const l of lines) maxLineW = Math.max(maxLineW, Math.ceil(measureCtx.measureText(l).width));
+      const srcW = Math.max(1, maxLineW + padX * 2);
+      const srcH = Math.max(1, lines.length * lineH + padY * 2);
+
+      const src = document.createElement("canvas");
+      src.width = srcW;
+      src.height = srcH;
+      const sctx = src.getContext("2d", { willReadFrequently: true });
+      sctx.imageSmoothingEnabled = false;
+      sctx.clearRect(0, 0, srcW, srcH);
+      sctx.font = `${srcFontPx}px ${fontFamily}`;
+      sctx.textBaseline = "top";
+      sctx.fillStyle = color;
+
+      // Thick dark stroke improves readability for small CJK glyphs after downsampling.
+      const strokeW = Math.max(1, Math.round(2.0 * scale));
+      sctx.lineJoin = "round";
+      sctx.miterLimit = 2;
+      sctx.lineWidth = strokeW;
+      sctx.strokeStyle = "#061022";
+
+      // Draw text at integer coords
+      let y = padY;
+      for (const l of lines) {
+        sctx.strokeText(l, padX, y);
+        sctx.fillText(l, padX, y);
+        y += lineH;
+      }
+
+      // Harden edges: binarize alpha so glyphs don't look "foggy".
       try {
-        t.setResolution(resolution);
-        this.textures.get(t.texture.key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+        const imgData = sctx.getImageData(0, 0, srcW, srcH);
+        const d = imgData.data;
+        const thresh = 96;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i + 3] = d[i + 3] < thresh ? 0 : 255;
+        }
+        sctx.putImageData(imgData, 0, 0);
       } catch {}
-      return t;
+
+      // Downsample baked output
+      const out = document.createElement("canvas");
+      const outW = Math.max(1, Math.round(srcW / scale));
+      const outH = Math.max(1, Math.round(srcH / scale));
+      out.width = outW;
+      out.height = outH;
+      const octx = out.getContext("2d", { willReadFrequently: true });
+      octx.imageSmoothingEnabled = false;
+      octx.clearRect(0, 0, outW, outH);
+      octx.drawImage(src, 0, 0, outW, outH);
+
+      const key = `pixtext:${hash32(`${raw}|${fontPx}|${color}|${scale}|${Date.now()}|${Math.random()}`)}`;
+      try {
+        if (this.textures.exists(key)) this.textures.remove(key);
+      } catch {}
+      this.textures.addCanvas(key, out);
+      try {
+        this.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+      } catch {}
+
+      const img = this.add.image(0, 0, key);
+      img.setOrigin(0.5, 0.5);
+      img.setDepth(55);
+      // Avoid subpixel blur
+      img.x = Math.round(img.x);
+      img.y = Math.round(img.y);
+      return img;
     }
 
     _upsertNameLabel(roleId, name, spr, isActive) {
       const rid = String(roleId);
       const labelText = String(name || "").trim() || "角色";
       const color = isActive ? "#e8f0ff" : "#cfe8ff";
-
+      const needsRecreate = (obj, nextText, nextColor) => {
+        if (!obj) return true;
+        if (obj.__pixText !== nextText) return true;
+        if (obj.__pixColor !== nextColor) return true;
+        return false;
+      };
       let t = this.roleNameLabels.get(rid);
-      if (!t) {
-        // Smaller pixel label, no box, placed at feet.
-        t = this._makePixelText(labelText, 8, color, this._nameTextRes);
-        t.setOrigin(0.5, 0); // top-center so it sits below feet
+      if (needsRecreate(t, labelText, color)) {
+        if (t) {
+          try { t.destroy(); } catch {}
+          this.roleNameLabels.delete(rid);
+        }
+        // Names: baked hard-edge pixel text
+        t = this._makePixelText(labelText, this._nameFontPx, color, 4);
+        t.__pixText = labelText;
+        t.__pixColor = color;
         t.setDepth(55);
         this.world.add(t);
         this.roleNameLabels.set(rid, t);
-      } else {
-        if (t.text !== labelText) t.setText(labelText);
-        t.setColor(color);
       }
-
       // Place under feet
+      t.setOrigin(0.5, 0);
       t.x = spr.x;
       t.y = spr.y + 4;
       t.setAlpha(isActive ? 1.0 : 0.9);
@@ -844,12 +956,13 @@ function initPhaser() {
       }
 
       const g = this.add.graphics();
-      const t = this._makePixelText(msg, 10, "#e8f0ff", this._bubbleTextRes);
+      // Speech bubble text: always use the highest supersample for crisp hard edges.
+      const t = this._makePixelText(msg, this._bubbleFontPx, "#e8f0ff", 4);
       t.setOrigin(0.5, 1);
 
       const maxW = 220;
-      const w = Math.min(maxW, Math.ceil(t.width));
-      const h = Math.ceil(t.height);
+      const w = Math.min(maxW, Math.ceil(t.displayWidth));
+      const h = Math.ceil(t.displayHeight);
       const padX = 10;
       const padY = 8;
 
@@ -869,6 +982,7 @@ function initPhaser() {
       g.fillPath();
 
       const c = this.add.container(spr.x, spr.y - 54);
+      c.setPosition(Math.round(c.x), Math.round(c.y));
       c.setDepth(60);
       c.add(g);
       t.setPosition(0, -10);
