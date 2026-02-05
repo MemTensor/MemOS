@@ -34,18 +34,27 @@ body {
   height: calc(100vh - 24px);
   min-height: 720px;
   display: flex;
-  align-items: stretch;
-  justify-content: stretch;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
+  position: relative;
   border: 2px solid rgba(58, 74, 102, 0.8);
   background: rgba(0, 0, 0, 0.12);
 }
 
 canvas {
   display: block;
-  width: 100%;
-  height: 100%;
   image-rendering: pixelated;
+}
+
+/* Minimap overlay should NOT be pixelated; we want smooth, readable text */
+#minimap-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  pointer-events: none;
+  image-rendering: auto;
 }
 
 
