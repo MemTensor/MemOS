@@ -61,6 +61,19 @@ function logMsg(msg) {
   div.appendChild(meta);
   div.appendChild(content);
   chatEl.appendChild(div);
+
+  // Notify Phaser: show bubble for role speech
+  try {
+    if (
+      msg.kind === "speech" &&
+      msg.role_id &&
+      window.__aoTaiMapView &&
+      typeof window.__aoTaiMapView.say === "function"
+    ) {
+      window.__aoTaiMapView.say(msg.role_id, msg.content);
+    }
+  } catch {}
+
   // Auto-scroll only if user is already near bottom.
   if (stickToBottom) {
     const scrollToBottom = () => {
@@ -344,6 +357,19 @@ function initPhaser() {
     1,
     Math.min(3, Number(qs.get("dpr")) || (window.devicePixelRatio || 1)),
   );
+
+  // Text internal resolution controls sharpness of Phaser Text (rendered to texture).
+  // URL params:
+  // - uiTextRes: 1..4 (default ~= devicePixelRatio)
+  // - nameTextRes: 1..4 (default uiTextRes)
+  // - bubbleTextRes: 1..4 (default uiTextRes)
+  const UI_TEXT_RES = clamp(
+    Math.round(Number(qs.get("uiTextRes")) || (window.devicePixelRatio || 1)),
+    1,
+    4,
+  );
+  const NAME_TEXT_RES = clamp(Math.round(Number(qs.get("nameTextRes")) || UI_TEXT_RES), 1, 4);
+  const BUBBLE_TEXT_RES = clamp(Math.round(Number(qs.get("bubbleTextRes")) || UI_TEXT_RES), 1, 4);
   // Minimap is now an independent DOM canvas (#minimap-canvas), not Phaser/overlay.
   const USE_MINIMAP_OVERLAY = false;
   const SKIP_PHASER_MINIMAP = true;
@@ -417,6 +443,15 @@ function initPhaser() {
       this.roleSprites = new Map(); // role_id -> Phaser.GameObjects.Sprite
       this._spriteBounds = {}; // spriteKey -> { texW, texH, x, y, w, h }
       this._targetContentH = 38; // non-transparent content height ≈ 38px
+
+      // head UI: name labels + speech bubbles
+      this.roleNameLabels = new Map(); // role_id -> Phaser.GameObjects.Text
+      this.roleBubbles = new Map(); // role_id -> Phaser.GameObjects.Container
+      this._bubbleTimers = new Map(); // role_id -> Phaser.Time.TimerEvent
+
+      // text resolution (sharpness) for UI
+      this._nameTextRes = NAME_TEXT_RES;
+      this._bubbleTextRes = BUBBLE_TEXT_RES;
     }
 
     preload() {
@@ -486,6 +521,8 @@ function initPhaser() {
         setState: (ws) => this.setState(ws),
         // compat
         setNode: (nodeId, visitedIds) => this.setState({ current_node_id: nodeId, visited_node_ids: visitedIds }),
+        // show/update speech bubble for a role
+        say: (roleId, text) => this._say(roleId, text),
       };
 
       // initial paint
@@ -605,6 +642,64 @@ function initPhaser() {
       const activeId = ws?.active_role_id || null;
       const inTransit = Boolean(ws?.in_transit_to_node_id);
 
+      // Assign sprite keys with minimal repetition:
+      // 1) explicit sprite_key from backend
+      // 2) default trio by name
+      // 3) keep existing rendered assignment (spr.__spriteKey) if valid
+      // 4) pick an unused key from the pool
+      // 5) fallback to stable hash
+      const assignedKeyByRoleId = new Map();
+      const usedKeys = new Set();
+      const namePresetKey = (r) => {
+        const n = String(r?.name || "").trim();
+        if (n === "阿鳌") return "ao";
+        if (n === "太白") return "taibai";
+        if (n === "小山") return "xiaoshan";
+        return null;
+      };
+
+      for (const r of roles) {
+        const rid = String(r.role_id);
+        const explicit = r && (r.sprite_key || r.spriteKey || r.sprite);
+        const k = explicit && SPRITE_META[String(explicit)] ? String(explicit) : null;
+        if (k) {
+          assignedKeyByRoleId.set(rid, k);
+          usedKeys.add(k);
+        }
+      }
+      for (const r of roles) {
+        const rid = String(r.role_id);
+        if (assignedKeyByRoleId.has(rid)) continue;
+        const k = namePresetKey(r);
+        if (k && SPRITE_META[k]) {
+          assignedKeyByRoleId.set(rid, k);
+          usedKeys.add(k);
+        }
+      }
+      for (const r of roles) {
+        const rid = String(r.role_id);
+        if (assignedKeyByRoleId.has(rid)) continue;
+        const spr = this.roleSprites.get(rid);
+        const k = spr && spr.__spriteKey && SPRITE_META[String(spr.__spriteKey)] ? String(spr.__spriteKey) : null;
+        if (k) {
+          assignedKeyByRoleId.set(rid, k);
+          usedKeys.add(k);
+        }
+      }
+      for (const r of roles) {
+        const rid = String(r.role_id);
+        if (assignedKeyByRoleId.has(rid)) continue;
+        const k = SPRITE_POOL.find((x) => !usedKeys.has(x));
+        if (k) {
+          assignedKeyByRoleId.set(rid, k);
+          usedKeys.add(k);
+        } else {
+          // pool exhausted: fallback to stable hash (will reuse)
+          const h = hash32(rid);
+          assignedKeyByRoleId.set(rid, SPRITE_POOL[h % SPRITE_POOL.length]);
+        }
+      }
+
       const keep = new Set();
       const n = Math.max(1, roles.length);
       const centerX = Math.floor(VIEW_W * 0.5);
@@ -620,7 +715,7 @@ function initPhaser() {
         const rid = String(r.role_id);
         keep.add(rid);
         let spr = this.roleSprites.get(rid);
-        const spriteKey = this._pickSpriteKey(r);
+        const spriteKey = assignedKeyByRoleId.get(rid) || this._pickSpriteKey(r);
         const action = inTransit && rid === String(activeId) ? "walk" : "idle";
         const animKey = `anim:${spriteKey}:${action}`;
 
@@ -656,14 +751,150 @@ function initPhaser() {
           spr.play(animKey, true);
           spr.__action = action;
         }
+
+        // --- name label (always visible) ---
+        this._upsertNameLabel(rid, r.name, spr, rid === String(activeId));
+
+        // keep bubble anchored
+        const bub = this.roleBubbles.get(rid);
+        if (bub) {
+          bub.x = spr.x;
+          bub.y = spr.y - 54;
+        }
       }
 
       for (const [rid, spr] of this.roleSprites.entries()) {
         if (!keep.has(rid)) {
           try { spr.destroy(); } catch {}
           this.roleSprites.delete(rid);
+          const lbl = this.roleNameLabels.get(rid);
+          if (lbl) {
+            try { lbl.destroy(); } catch {}
+            this.roleNameLabels.delete(rid);
+          }
+          const bub = this.roleBubbles.get(rid);
+          if (bub) {
+            try { bub.destroy(); } catch {}
+            this.roleBubbles.delete(rid);
+          }
+          const t = this._bubbleTimers.get(rid);
+          if (t) {
+            try { t.remove(false); } catch {}
+            this._bubbleTimers.delete(rid);
+          }
         }
       }
+    }
+
+    _makePixelText(text, fontPx = 10, color = "#e8f0ff", resolution = 2) {
+      const t = this.add.text(0, 0, text, {
+        fontFamily:
+          '"Press Start 2P","PingFang SC","Hiragino Sans GB","Microsoft YaHei",ui-monospace,Menlo,Monaco,Consolas,monospace',
+        fontSize: `${fontPx}px`,
+        color,
+        align: "center",
+        wordWrap: { width: 220 },
+      });
+      // crisper on HiDPI without blur
+      try {
+        t.setResolution(resolution);
+        this.textures.get(t.texture.key).setFilter(Phaser.Textures.FilterMode.NEAREST);
+      } catch {}
+      return t;
+    }
+
+    _upsertNameLabel(roleId, name, spr, isActive) {
+      const rid = String(roleId);
+      const labelText = String(name || "").trim() || "角色";
+      const color = isActive ? "#e8f0ff" : "#cfe8ff";
+
+      let t = this.roleNameLabels.get(rid);
+      if (!t) {
+        // Smaller pixel label, no box, placed at feet.
+        t = this._makePixelText(labelText, 8, color, this._nameTextRes);
+        t.setOrigin(0.5, 0); // top-center so it sits below feet
+        t.setDepth(55);
+        this.world.add(t);
+        this.roleNameLabels.set(rid, t);
+      } else {
+        if (t.text !== labelText) t.setText(labelText);
+        t.setColor(color);
+      }
+
+      // Place under feet
+      t.x = spr.x;
+      t.y = spr.y + 4;
+      t.setAlpha(isActive ? 1.0 : 0.9);
+    }
+
+    _say(roleId, text) {
+      const rid = String(roleId || "");
+      if (!rid) return;
+      const spr = this.roleSprites.get(rid);
+      if (!spr) return;
+
+      const msg = String(text || "").trim();
+      if (!msg) return;
+
+      // replace existing bubble
+      const prev = this.roleBubbles.get(rid);
+      if (prev) {
+        try { prev.destroy(); } catch {}
+        this.roleBubbles.delete(rid);
+      }
+
+      const g = this.add.graphics();
+      const t = this._makePixelText(msg, 10, "#e8f0ff", this._bubbleTextRes);
+      t.setOrigin(0.5, 1);
+
+      const maxW = 220;
+      const w = Math.min(maxW, Math.ceil(t.width));
+      const h = Math.ceil(t.height);
+      const padX = 10;
+      const padY = 8;
+
+      // transparent bubble feel
+      g.fillStyle(0x0b1630, 0.35);
+      g.fillRect(-w / 2 - padX, -h - padY * 1.2, w + padX * 2, h + padY * 1.6);
+      g.lineStyle(2, 0x7cf2ff, 0.35);
+      g.strokeRect(-w / 2 - padX, -h - padY * 1.2, w + padX * 2, h + padY * 1.6);
+
+      // small tail
+      g.fillStyle(0x0b1630, 0.35);
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.lineTo(-6, -10);
+      g.lineTo(6, -10);
+      g.closePath();
+      g.fillPath();
+
+      const c = this.add.container(spr.x, spr.y - 54);
+      c.setDepth(60);
+      c.add(g);
+      t.setPosition(0, -10);
+      c.add(t);
+      this.world.add(c);
+      this.roleBubbles.set(rid, c);
+
+      // reset timer: fade out then destroy
+      const prevTimer = this._bubbleTimers.get(rid);
+      if (prevTimer) {
+        try { prevTimer.remove(false); } catch {}
+      }
+      const timer = this.time.delayedCall(3600, () => {
+        const b = this.roleBubbles.get(rid);
+        if (!b) return;
+        this.tweens.add({
+          targets: b,
+          alpha: 0,
+          duration: 220,
+          onComplete: () => {
+            try { b.destroy(); } catch {}
+            this.roleBubbles.delete(rid);
+          },
+        });
+      });
+      this._bubbleTimers.set(rid, timer);
     }
 
     setState(ws) {
