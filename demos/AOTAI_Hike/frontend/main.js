@@ -768,13 +768,17 @@ function initPhaser() {
         // --- name label (always visible) ---
         this._upsertNameLabel(rid, r.name, spr, rid === String(activeId));
 
-        // keep bubble anchored
+        // keep bubble anchored (respect per-bubble lift)
         const bub = this.roleBubbles.get(rid);
         if (bub) {
+          const lift = Math.round(Number(bub.__lift || 0));
           bub.x = Math.round(spr.x);
-          bub.y = Math.round(spr.y - 54);
+          bub.y = Math.round(spr.y - 54 - lift);
         }
       }
+
+      // After positioning all labels, resolve overlaps.
+      try { this._resolveNameLabelOverlaps(); } catch {}
 
       for (const [rid, spr] of this.roleSprites.entries()) {
         if (!keep.has(rid)) {
@@ -799,11 +803,44 @@ function initPhaser() {
       }
     }
 
+    _resolveNameLabelOverlaps() {
+      // Simple vertical push-down to avoid name labels overlapping when party members stand close.
+      const items = [];
+      for (const [rid, lbl] of this.roleNameLabels.entries()) {
+        if (!lbl || !lbl.active) continue;
+        items.push({ rid, lbl });
+      }
+      // Sort by y (top to bottom)
+      items.sort((a, b) => (a.lbl.y || 0) - (b.lbl.y || 0));
+
+      const pad = 2;
+      for (let i = 0; i < items.length; i++) {
+        const a = items[i].lbl;
+        const ab = a.getBounds();
+        for (let j = i + 1; j < items.length; j++) {
+          const b = items[j].lbl;
+          const bb = b.getBounds();
+          const overlapX = Math.min(ab.right, bb.right) - Math.max(ab.left, bb.left);
+          const overlapY = Math.min(ab.bottom, bb.bottom) - Math.max(ab.top, bb.top);
+          if (overlapX > 0 && overlapY > 0) {
+            // push the lower one down
+            const dy = overlapY + pad;
+            b.y = Math.round(b.y + dy);
+            // update bb for subsequent checks
+            bb.y += dy;
+            bb.top += dy;
+            bb.bottom += dy;
+          }
+        }
+      }
+    }
+
     _makePixelText(text, fontPx = 10, color = "#e8f0ff", pixelScale = 4) {
       // Hard-edge pixel text (baked): render large on a canvas, then downsample with NEAREST into a new canvas,
       // upload as a texture, and display as an Image (no fractional scaling at runtime).
       const scale = clamp(Math.round(Number(pixelScale) || 4), 1, 4);
-      const wrapW = 200;
+      // Wrap width in *final* pixels. Keep bubbles readable on narrow viewports.
+      const wrapW = clamp(Math.round(VIEW_W * 0.55), 140, 260);
       // Prefer CJK-friendly fonts first; fall back to pixel latin font where available.
       const fontFamily =
         '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Press Start 2P",ui-monospace,Menlo,Monaco,Consolas,monospace';
@@ -835,9 +872,10 @@ function initPhaser() {
       }
       if (line) lines.push(line);
 
-      const lineH = Math.round(srcFontPx * 1.25);
-      const padX = Math.round(4 * scale);
-      const padY = Math.round(3 * scale);
+      // More line height so bold stroke text doesn't collide between lines.
+      const lineH = Math.round(srcFontPx * 1.45);
+      const padX = Math.round(5 * scale);
+      const padY = Math.round(4 * scale);
       let maxLineW = 0;
       for (const l of lines) maxLineW = Math.max(maxLineW, Math.ceil(measureCtx.measureText(l).width));
       const srcW = Math.max(1, maxLineW + padX * 2);
@@ -981,7 +1019,9 @@ function initPhaser() {
       g.closePath();
       g.fillPath();
 
-      const c = this.add.container(spr.x, spr.y - 54);
+      const lift = Math.round(Math.min(70, Math.max(0, h * 0.6)));
+      const c = this.add.container(spr.x, spr.y - 54 - lift);
+      c.__lift = lift;
       c.setPosition(Math.round(c.x), Math.round(c.y));
       c.setDepth(60);
       c.add(g);
