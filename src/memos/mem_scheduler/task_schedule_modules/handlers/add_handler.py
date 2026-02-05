@@ -5,14 +5,14 @@ import json
 from typing import TYPE_CHECKING
 
 from memos.log import get_logger
-from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
 from memos.mem_scheduler.schemas.task_schemas import (
     ADD_TASK_LABEL,
     LONG_TERM_MEMORY_TYPE,
     USER_INPUT_TYPE,
 )
+from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube, is_cloud_env
+from memos.mem_scheduler.utils.misc_utils import is_cloud_env
 
 
 if TYPE_CHECKING:
@@ -24,40 +24,30 @@ logger = get_logger(__name__)
 
 
 class AddMessageHandler(BaseSchedulerHandler):
-    def handle(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {ADD_TASK_LABEL} handler.")
-        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
+    @property
+    def expected_task_label(self) -> str:
+        return ADD_TASK_LABEL
 
-        self.ctx.services.validate_messages(messages=messages, label=ADD_TASK_LABEL)
-        try:
-            for user_id in grouped_messages:
-                for mem_cube_id in grouped_messages[user_id]:
-                    batch = grouped_messages[user_id][mem_cube_id]
-                    if not batch:
-                        continue
+    def batch_handler(
+        self, user_id: str, mem_cube_id: str, batch: list[ScheduleMessageItem]
+    ) -> None:
+        for msg in batch:
+            prepared_add_items, prepared_update_items_with_original = self.log_add_messages(msg=msg)
+            logger.info(
+                "prepared_add_items: %s;\n prepared_update_items_with_original: %s",
+                prepared_add_items,
+                prepared_update_items_with_original,
+            )
+            cloud_env = is_cloud_env()
 
-                    for msg in batch:
-                        prepared_add_items, prepared_update_items_with_original = (
-                            self.log_add_messages(msg=msg)
-                        )
-                        logger.info(
-                            "prepared_add_items: %s;\n prepared_update_items_with_original: %s",
-                            prepared_add_items,
-                            prepared_update_items_with_original,
-                        )
-                        cloud_env = is_cloud_env()
-
-                        if cloud_env:
-                            self.send_add_log_messages_to_cloud_env(
-                                msg, prepared_add_items, prepared_update_items_with_original
-                            )
-                        else:
-                            self.send_add_log_messages_to_local_env(
-                                msg, prepared_add_items, prepared_update_items_with_original
-                            )
-
-        except Exception as e:
-            logger.error(f"Error: {e}", exc_info=True)
+            if cloud_env:
+                self.send_add_log_messages_to_cloud_env(
+                    msg, prepared_add_items, prepared_update_items_with_original
+                )
+            else:
+                self.send_add_log_messages_to_local_env(
+                    msg, prepared_add_items, prepared_update_items_with_original
+                )
 
     def log_add_messages(self, msg: ScheduleMessageItem):
         try:
@@ -70,7 +60,7 @@ class AddMessageHandler(BaseSchedulerHandler):
         prepared_update_items_with_original = []
         missing_ids: list[str] = []
 
-        mem_cube = self.ctx.get_mem_cube()
+        mem_cube = self.scheduler_context.get_mem_cube()
 
         for memory_id in userinput_memory_ids:
             try:
@@ -207,38 +197,38 @@ class AddMessageHandler(BaseSchedulerHandler):
 
         events = []
         if add_content_legacy:
-            event = self.ctx.services.create_event_log(
+            event = self.scheduler_context.services.create_event_log(
                 label="addMemory",
                 from_memory_type=USER_INPUT_TYPE,
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.ctx.get_mem_cube(),
+                mem_cube=self.scheduler_context.get_mem_cube(),
                 memcube_log_content=add_content_legacy,
                 metadata=add_meta_legacy,
                 memory_len=len(add_content_legacy),
-                memcube_name=self.ctx.services.map_memcube_name(msg.mem_cube_id),
+                memcube_name=self.scheduler_context.services.map_memcube_name(msg.mem_cube_id),
             )
             event.task_id = msg.task_id
             events.append(event)
         if update_content_legacy:
-            event = self.ctx.services.create_event_log(
+            event = self.scheduler_context.services.create_event_log(
                 label="updateMemory",
                 from_memory_type=LONG_TERM_MEMORY_TYPE,
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.ctx.get_mem_cube(),
+                mem_cube=self.scheduler_context.get_mem_cube(),
                 memcube_log_content=update_content_legacy,
                 metadata=update_meta_legacy,
                 memory_len=len(update_content_legacy),
-                memcube_name=self.ctx.services.map_memcube_name(msg.mem_cube_id),
+                memcube_name=self.scheduler_context.services.map_memcube_name(msg.mem_cube_id),
             )
             event.task_id = msg.task_id
             events.append(event)
         logger.info("send_add_log_messages_to_local_env: %s", len(events))
         if events:
-            self.ctx.services.submit_web_logs(
+            self.scheduler_context.services.submit_web_logs(
                 events, additional_log_info="send_add_log_messages_to_cloud_env"
             )
 
@@ -292,18 +282,18 @@ class AddMessageHandler(BaseSchedulerHandler):
                 msg.task_id,
                 json.dumps(kb_log_content, indent=2),
             )
-            event = self.ctx.services.create_event_log(
+            event = self.scheduler_context.services.create_event_log(
                 label="knowledgeBaseUpdate",
                 from_memory_type=USER_INPUT_TYPE,
                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                 user_id=msg.user_id,
                 mem_cube_id=msg.mem_cube_id,
-                mem_cube=self.ctx.get_mem_cube(),
+                mem_cube=self.scheduler_context.get_mem_cube(),
                 memcube_log_content=kb_log_content,
                 metadata=None,
                 memory_len=len(kb_log_content),
-                memcube_name=self.ctx.services.map_memcube_name(msg.mem_cube_id),
+                memcube_name=self.scheduler_context.services.map_memcube_name(msg.mem_cube_id),
             )
             event.log_content = f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
             event.task_id = msg.task_id
-            self.ctx.services.submit_web_logs([event])
+            self.scheduler_context.services.submit_web_logs([event])

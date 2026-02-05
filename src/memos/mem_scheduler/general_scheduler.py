@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from memos.configs.mem_scheduler import GeneralSchedulerConfig
 from memos.mem_scheduler.base_scheduler import BaseScheduler
-from memos.mem_scheduler.handlers import (
+from memos.mem_scheduler.task_schedule_modules.handlers import (
     SchedulerHandlerContext,
     SchedulerHandlerRegistry,
     SchedulerHandlerServices,

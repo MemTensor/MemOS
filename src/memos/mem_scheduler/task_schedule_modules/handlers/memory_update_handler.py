@@ -3,15 +3,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from memos.log import get_logger
-from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
 from memos.mem_scheduler.schemas.monitor_schemas import QueryMonitorItem
 from memos.mem_scheduler.schemas.task_schemas import (
     DEFAULT_MAX_QUERY_KEY_WORDS,
     MEM_UPDATE_TASK_LABEL,
     QUERY_TASK_LABEL,
 )
+from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.mem_scheduler.utils.filter_utils import is_all_chinese, is_all_english
-from memos.mem_scheduler.utils.misc_utils import group_messages_by_user_and_mem_cube
 from memos.memories.textual.naive import NaiveTextMemory
 from memos.memories.textual.tree import TreeTextMemory
 
@@ -25,21 +24,14 @@ if TYPE_CHECKING:
 
 
 class MemoryUpdateHandler(BaseSchedulerHandler):
-    def handle(self, messages: list[ScheduleMessageItem]) -> None:
-        logger.info(f"Messages {messages} assigned to {MEM_UPDATE_TASK_LABEL} handler.")
+    @property
+    def expected_task_label(self) -> str:
+        return MEM_UPDATE_TASK_LABEL
 
-        grouped_messages = group_messages_by_user_and_mem_cube(messages=messages)
-
-        self.ctx.services.validate_messages(messages=messages, label=MEM_UPDATE_TASK_LABEL)
-
-        for user_id in grouped_messages:
-            for mem_cube_id in grouped_messages[user_id]:
-                batch = grouped_messages[user_id][mem_cube_id]
-                if not batch:
-                    continue
-                self.long_memory_update_process(
-                    user_id=user_id, mem_cube_id=mem_cube_id, messages=batch
-                )
+    def batch_handler(
+        self, user_id: str, mem_cube_id: str, batch: list[ScheduleMessageItem]
+    ) -> None:
+        self.long_memory_update_process(user_id=user_id, mem_cube_id=mem_cube_id, messages=batch)
 
     def long_memory_update_process(
         self,
@@ -47,10 +39,10 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
         mem_cube_id: str,
         messages: list[ScheduleMessageItem],
     ) -> None:
-        mem_cube = self.ctx.get_mem_cube()
-        monitor = self.ctx.get_monitor()
+        mem_cube = self.scheduler_context.get_mem_cube()
+        monitor = self.scheduler_context.get_monitor()
 
-        query_key_words_limit = self.ctx.get_query_key_words_limit()
+        query_key_words_limit = self.scheduler_context.get_query_key_words_limit()
 
         for msg in messages:
             monitor.register_query_monitor_if_not_exists(user_id=user_id, mem_cube_id=mem_cube_id)
@@ -111,7 +103,7 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
             user_id=user_id,
             mem_cube_id=mem_cube_id,
             mem_cube=mem_cube,
-            top_k=self.ctx.get_top_k(),
+            top_k=self.scheduler_context.get_top_k(),
         )
         logger.info(
             "[long_memory_update_process] Processed %s queries %s and retrieved %s new candidate memories for user_id=%s: "
@@ -122,7 +114,7 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
             user_id,
         )
 
-        new_order_working_memory = self.ctx.services.replace_working_memory(
+        new_order_working_memory = self.scheduler_context.services.replace_working_memory(
             user_id=user_id,
             mem_cube_id=mem_cube_id,
             mem_cube=mem_cube,
@@ -158,11 +150,11 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
 
         logger.debug(
             "Activation memory update %s (interval: %ss)",
-            "enabled" if self.ctx.get_enable_activation_memory() else "disabled",
+            "enabled" if self.scheduler_context.get_enable_activation_memory() else "disabled",
             monitor.act_mem_update_interval,
         )
-        if self.ctx.get_enable_activation_memory():
-            self.ctx.services.update_activation_memory_periodically(
+        if self.scheduler_context.get_enable_activation_memory():
+            self.scheduler_context.services.update_activation_memory_periodically(
                 interval_seconds=monitor.act_mem_update_interval,
                 label=QUERY_TASK_LABEL,
                 user_id=user_id,
@@ -207,7 +199,7 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
         )
 
         text_working_memory: list[str] = [w_m.memory for w_m in cur_working_memory]
-        monitor = self.ctx.get_monitor()
+        monitor = self.scheduler_context.get_monitor()
         intent_result = monitor.detect_intent(
             q_list=queries, text_working_memory=text_working_memory
         )
@@ -247,8 +239,8 @@ class MemoryUpdateHandler(BaseSchedulerHandler):
         num_evidence = len(missing_evidences)
         k_per_evidence = max(1, top_k // max(1, num_evidence))
         new_candidates: list[TextualMemoryItem] = []
-        retriever = self.ctx.get_retriever()
-        search_method = self.ctx.get_search_method()
+        retriever = self.scheduler_context.get_retriever()
+        search_method = self.scheduler_context.get_search_method()
 
         for item in missing_evidences:
             logger.info(

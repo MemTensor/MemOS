@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.log import get_logger
-from memos.mem_scheduler.handlers.base import BaseSchedulerHandler
 from memos.mem_scheduler.schemas.task_schemas import (
     LONG_TERM_MEMORY_TYPE,
     MEM_READ_TASK_LABEL,
     USER_INPUT_TYPE,
 )
+from memos.mem_scheduler.task_schedule_modules.base_handler import BaseSchedulerHandler
 from memos.mem_scheduler.utils.filter_utils import transform_name_to_key
 from memos.mem_scheduler.utils.misc_utils import is_cloud_env
 from memos.memories.textual.tree import TreeTextMemory
@@ -27,76 +27,80 @@ if TYPE_CHECKING:
 
 
 class MemReadMessageHandler(BaseSchedulerHandler):
-    def handle(self, messages: list[ScheduleMessageItem]) -> None:
+    @property
+    def expected_task_label(self) -> str:
+        return MEM_READ_TASK_LABEL
+
+    def batch_handler(
+        self, user_id: str, mem_cube_id: str, batch: list[ScheduleMessageItem]
+    ) -> None:
         logger.info(
-            "[DIAGNOSTIC] mem_read_handler called. Received messages: %s",
-            [msg.model_dump_json(indent=2) for msg in messages],
+            "[DIAGNOSTIC] mem_read_handler batch_handler called. Batch size: %s", len(batch)
         )
-        logger.info(f"Messages {messages} assigned to {MEM_READ_TASK_LABEL} handler.")
 
-        def process_message(message: ScheduleMessageItem):
-            try:
-                user_id = message.user_id
-                mem_cube_id = message.mem_cube_id
-                mem_cube = self.ctx.get_mem_cube()
-                if mem_cube is None:
-                    logger.error(
-                        "mem_cube is None for user_id=%s, mem_cube_id=%s, skipping processing",
-                        user_id,
-                        mem_cube_id,
-                        stack_info=True,
-                    )
-                    return
-
-                content = message.content
-                user_name = message.user_name
-                info = message.info or {}
-                chat_history = message.chat_history
-
-                mem_ids = json.loads(content) if isinstance(content, str) else content
-                if not mem_ids:
-                    return
-
-                logger.info(
-                    "Processing mem_read for user_id=%s, mem_cube_id=%s, mem_ids=%s",
-                    user_id,
-                    mem_cube_id,
-                    mem_ids,
-                )
-
-                text_mem = mem_cube.text_mem
-                if not isinstance(text_mem, TreeTextMemory):
-                    logger.error("Expected TreeTextMemory but got %s", type(text_mem).__name__)
-                    return
-
-                self._process_memories_with_reader(
-                    mem_ids=mem_ids,
-                    user_id=user_id,
-                    mem_cube_id=mem_cube_id,
-                    text_mem=text_mem,
-                    user_name=user_name,
-                    custom_tags=info.get("custom_tags", None),
-                    task_id=message.task_id,
-                    info=info,
-                    chat_history=chat_history,
-                )
-
-                logger.info(
-                    "Successfully processed mem_read for user_id=%s, mem_cube_id=%s",
-                    user_id,
-                    mem_cube_id,
-                )
-
-            except Exception as e:
-                logger.error("Error processing mem_read message: %s", e, stack_info=True)
-
-        with ContextThreadPoolExecutor(max_workers=min(8, len(messages))) as executor:
-            futures = [executor.submit(process_message, msg) for msg in messages]
+        with ContextThreadPoolExecutor(max_workers=min(8, len(batch))) as executor:
+            futures = [executor.submit(self.process_message, msg) for msg in batch]
             for future in concurrent.futures.as_completed(futures):
                 try:
                     future.result()
                 except Exception as e:
                     logger.error("Thread task failed: %s", e, stack_info=True)
+
+    def process_message(self, message: ScheduleMessageItem):
+        try:
+            user_id = message.user_id
+            mem_cube_id = message.mem_cube_id
+            mem_cube = self.scheduler_context.get_mem_cube()
+            if mem_cube is None:
+                logger.error(
+                    "mem_cube is None for user_id=%s, mem_cube_id=%s, skipping processing",
+                    user_id,
+                    mem_cube_id,
+                    stack_info=True,
+                )
+                return
+
+            content = message.content
+            user_name = message.user_name
+            info = message.info or {}
+            chat_history = message.chat_history
+
+            mem_ids = json.loads(content) if isinstance(content, str) else content
+            if not mem_ids:
+                return
+
+            logger.info(
+                "Processing mem_read for user_id=%s, mem_cube_id=%s, mem_ids=%s",
+                user_id,
+                mem_cube_id,
+                mem_ids,
+            )
+
+            text_mem = mem_cube.text_mem
+            if not isinstance(text_mem, TreeTextMemory):
+                logger.error("Expected TreeTextMemory but got %s", type(text_mem).__name__)
+                return
+
+            self._process_memories_with_reader(
+                mem_ids=mem_ids,
+                user_id=user_id,
+                mem_cube_id=mem_cube_id,
+                text_mem=text_mem,
+                user_name=user_name,
+                custom_tags=info.get("custom_tags", None),
+                task_id=message.task_id,
+                info=info,
+                chat_history=chat_history,
+            )
+
+            logger.info(
+                "Successfully processed mem_read for user_id=%s, mem_cube_id=%s",
+                user_id,
+                mem_cube_id,
+            )
+
+        except Exception as e:
+            logger.error("Error processing mem_read message: %s", e, stack_info=True)
 
     def _process_memories_with_reader(
         self,
@@ -119,7 +123,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
         )
         kb_log_content: list[dict] = []
         try:
-            mem_reader = self.ctx.get_mem_reader()
+            mem_reader = self.scheduler_context.get_mem_reader()
             if mem_reader is None:
                 logger.warning(
                     "mem_reader not available in scheduler, skipping enhanced processing"
@@ -244,23 +248,25 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                                 task_id,
                                 json.dumps(kb_log_content, indent=2),
                             )
-                            event = self.ctx.services.create_event_log(
+                            event = self.scheduler_context.services.create_event_log(
                                 label="knowledgeBaseUpdate",
                                 from_memory_type=USER_INPUT_TYPE,
                                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                                 user_id=user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=self.ctx.get_mem_cube(),
+                                mem_cube=self.scheduler_context.get_mem_cube(),
                                 memcube_log_content=kb_log_content,
                                 metadata=None,
                                 memory_len=len(kb_log_content),
-                                memcube_name=self.ctx.services.map_memcube_name(mem_cube_id),
+                                memcube_name=self.scheduler_context.services.map_memcube_name(
+                                    mem_cube_id
+                                ),
                             )
                             event.log_content = (
                                 f"Knowledge Base Memory Update: {len(kb_log_content)} changes."
                             )
                             event.task_id = task_id
-                            self.ctx.services.submit_web_logs([event])
+                            self.scheduler_context.services.submit_web_logs([event])
                     else:
                         add_content_legacy: list[dict] = []
                         add_meta_legacy: list[dict] = []
@@ -288,20 +294,22 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                                 }
                             )
                         if add_content_legacy:
-                            event = self.ctx.services.create_event_log(
+                            event = self.scheduler_context.services.create_event_log(
                                 label="addMemory",
                                 from_memory_type=USER_INPUT_TYPE,
                                 to_memory_type=LONG_TERM_MEMORY_TYPE,
                                 user_id=user_id,
                                 mem_cube_id=mem_cube_id,
-                                mem_cube=self.ctx.get_mem_cube(),
+                                mem_cube=self.scheduler_context.get_mem_cube(),
                                 memcube_log_content=add_content_legacy,
                                 metadata=add_meta_legacy,
                                 memory_len=len(add_content_legacy),
-                                memcube_name=self.ctx.services.map_memcube_name(mem_cube_id),
+                                memcube_name=self.scheduler_context.services.map_memcube_name(
+                                    mem_cube_id
+                                ),
                             )
                             event.task_id = task_id
-                            self.ctx.services.submit_web_logs([event])
+                            self.scheduler_context.services.submit_web_logs([event])
                 else:
                     logger.info("No enhanced memories generated by mem_reader")
             else:
@@ -351,19 +359,19 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             }
                             for mem_id in mem_ids
                         ]
-                    event = self.ctx.services.create_event_log(
+                    event = self.scheduler_context.services.create_event_log(
                         label="knowledgeBaseUpdate",
                         from_memory_type=USER_INPUT_TYPE,
                         to_memory_type=LONG_TERM_MEMORY_TYPE,
                         user_id=user_id,
                         mem_cube_id=mem_cube_id,
-                        mem_cube=self.ctx.get_mem_cube(),
+                        mem_cube=self.scheduler_context.get_mem_cube(),
                         memcube_log_content=kb_log_content,
                         metadata=None,
                         memory_len=len(kb_log_content),
-                        memcube_name=self.ctx.services.map_memcube_name(mem_cube_id),
+                        memcube_name=self.scheduler_context.services.map_memcube_name(mem_cube_id),
                     )
                     event.log_content = f"Knowledge Base Memory Update failed: {exc!s}"
                     event.task_id = task_id
                     event.status = "failed"
-                    self.ctx.services.submit_web_logs([event])
+                    self.scheduler_context.services.submit_web_logs([event])
