@@ -109,6 +109,7 @@ def handle_get_subgraph(
     query: str,
     top_k: int,
     naive_mem_cube: Any,
+    search_type: Literal["embedding", "fulltext"],
 ) -> MemoryResponse:
     """
     Main handler for getting memory subgraph based on query.
@@ -128,7 +129,7 @@ def handle_get_subgraph(
     try:
         # Get relevant subgraph from text memory
         memories = naive_mem_cube.text_mem.get_relevant_subgraph(
-            query, top_k=top_k, user_name=mem_cube_id
+            query, top_k=top_k, user_name=mem_cube_id, search_type=search_type
         )
 
         # Format and convert to tree structure
@@ -139,7 +140,7 @@ def handle_get_subgraph(
             "UserMemory": 0.40,
         }
         tree_result, node_type_count = convert_graph_to_tree_forworkmem(
-            memories_cleaned, target_node_count=150, type_ratios=custom_type_ratios
+            memories_cleaned, target_node_count=200, type_ratios=custom_type_ratios
         )
         # Ensure all node IDs are unique in the tree structure
         tree_result = ensure_unique_tree_ids(tree_result)
