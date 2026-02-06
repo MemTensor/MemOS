@@ -31,7 +31,12 @@ MAX_RETRY_COUNT = 3
 class MemOSClient:
     """MemOS API client"""
 
-    def __init__(self, api_key: str | None = None, base_url: str | None = None, is_global: str | bool = "false"):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        is_global: str | bool = "false",
+    ):
         # Priority:
         # 1. base_url argument
         # 2. MEMOS_BASE_URL environment variable (direct URL)
@@ -44,10 +49,8 @@ class MemOSClient:
             if final_is_global
             else "https://memos.memtensor.cn/api/openmem/v1"
         )
-        
 
         self.base_url = base_url or os.getenv("MEMOS_BASE_URL") or default_url
-
 
         api_key = api_key or os.getenv("MEMOS_API_KEY")
 
