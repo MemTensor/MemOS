@@ -627,6 +627,7 @@ class SingleCubeView(MemCubeView):
                     info=add_req.info,
                     user_name=self.cube_id,
                     task_id=add_req.task_id,
+                    user_context=user_context,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
@@ -646,6 +647,7 @@ class SingleCubeView(MemCubeView):
                     "session_id": target_session_id,
                     "mem_cube_id": user_context.mem_cube_id,
                 },
+                user_context=user_context,
             )
             pref_ids_local: list[str] = self.naive_mem_cube.pref_mem.add(pref_memories_local)
             self.logger.info(

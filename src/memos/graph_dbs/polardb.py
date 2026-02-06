@@ -1773,6 +1773,8 @@ class PolarDBGraphDB(BaseGraphDB):
                 for row in results:
                     oldid = row[0]
                     id_val = str(oldid)
+                    if id_val.startswith('"') and id_val.endswith('"'):
+                        id_val = id_val[1:-1]
                     output.append({"id": id_val})
                 logger.info(
                     f"[search_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
