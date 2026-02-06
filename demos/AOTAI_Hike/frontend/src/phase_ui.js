@@ -151,6 +151,7 @@ export function applyPhaseUI(ws) {
   const enableSay = (phase === "await_player_say" || phase === "night_wait_player") && !isGameOver;
   if (sayInput) {
     sayInput.disabled = !enableSay;
+    sayInput.classList.toggle("input-attn", phase === "night_wait_player" && !isGameOver);
     sayInput.placeholder = isGameOver
       ? "游戏已结束"
       : enableSay

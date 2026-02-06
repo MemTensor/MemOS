@@ -257,6 +257,13 @@ input:focus {
   border-color: var(--accent);
 }
 
+/* Attention input (night vote pre-say) */
+input.input-attn {
+  border-color: #ffd27c;
+  box-shadow: 0 0 0 2px rgba(255, 210, 124, 0.25);
+  background: rgba(255, 210, 124, 0.08);
+}
+
 textarea {
   font: inherit;
   color: var(--text);

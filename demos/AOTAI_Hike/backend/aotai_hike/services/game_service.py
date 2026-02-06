@@ -164,14 +164,6 @@ class GameService:
         # Night arrival: pause, darken, and require player speech before voting.
         if world_state.time_of_day == "night" and world_state.phase == Phase.FREE:
             world_state.phase = Phase.NIGHT_WAIT_PLAYER
-            messages.append(
-                Message(
-                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                    kind="system",
-                    content="夜幕降临，队伍停下扎营。请你先发言，然后进行票选团长。",
-                    timestamp_ms=now_ms,
-                )
-            )
         else:
             # Per-step NPC cadence:
             # - Only trigger NPC chatter after a MOVE_FORWARD step.
@@ -700,6 +692,34 @@ class GameService:
                 self._advance_time(world_state)
                 self._tweak_party(world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0)
 
+                # If we are on an exit route and it turns rainy, retreat back to the junction.
+                try:
+                    edge_kind = None
+                    if world_state.in_transit_from_node_id and world_state.in_transit_to_node_id:
+                        for e in AoTaiGraph.outgoing(world_state.in_transit_from_node_id):
+                            if e.to_node_id == world_state.in_transit_to_node_id:
+                                edge_kind = getattr(e, "kind", None)
+                                break
+                    if edge_kind == "exit" and str(world_state.weather) == "rainy":
+                        messages.append(
+                            Message(
+                                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                                kind="system",
+                                content="下撤途中遇雨，撤退失败，返回岔路继续前进。",
+                                timestamp_ms=now_ms,
+                            )
+                        )
+                        world_state.in_transit_from_node_id = None
+                        world_state.in_transit_to_node_id = None
+                        world_state.in_transit_progress_km = 0.0
+                        world_state.in_transit_total_km = 0.0
+                        world_state.available_next_node_ids = AoTaiGraph.next_node_ids(
+                            world_state.current_node_id
+                        )
+                        return "MOVE_FORWARD:retreat_rain"
+                except Exception:
+                    pass
+
                 if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
                     # Arrive
                     next_id = world_state.in_transit_to_node_id
@@ -812,23 +832,35 @@ class GameService:
                 prev_id = None
                 if world_state.visited_node_ids and len(world_state.visited_node_ids) >= 2:
                     prev_id = world_state.visited_node_ids[-2]
-                fail_prob = 0.35
-                if prev_id and self._rng.random() < fail_prob:
-                    messages.append(
-                        Message(
-                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                            kind="system",
-                            content="下撤途中遭遇阻断，撤退失败，只能回撤上一步。",
-                            timestamp_ms=now_ms,
+                rainy_fail = str(world_state.weather) == "rainy"
+                if rainy_fail:
+                    non_exit = [e for e in outgoing if getattr(e, "kind", None) != "exit"]
+                    if non_exit:
+                        next_edge = self._rng.choice(non_exit)
+                        messages.append(
+                            Message(
+                                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                                kind="system",
+                                content="雨天不适合下撤，改走主线路线。",
+                                timestamp_ms=now_ms,
+                            )
                         )
-                    )
-                    next_edge = AoTaiEdge(
-                        from_node_id=world_state.current_node_id,
-                        to_node_id=prev_id,
-                        kind="main",
-                        label="回撤",
-                        distance_km=float(getattr(next_edge, "distance_km", 1.0) or 1.0),
-                    )
+                    elif prev_id:
+                        messages.append(
+                            Message(
+                                message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                                kind="system",
+                                content="雨天无法下撤，只能回撤上一步。",
+                                timestamp_ms=now_ms,
+                            )
+                        )
+                        next_edge = AoTaiEdge(
+                            from_node_id=world_state.current_node_id,
+                            to_node_id=prev_id,
+                            kind="main",
+                            label="回撤",
+                            distance_km=float(getattr(next_edge, "distance_km", 1.0) or 1.0),
+                        )
 
             # Start transit along chosen edge
             world_state.phase = Phase.FREE
@@ -968,6 +1000,8 @@ class GameService:
             world_state.day += 1
             world_state.time_of_day = "morning"
             world_state.time_step_counter = 0
+        # Weather can change on every time advance.
+        self._maybe_change_weather(world_state)
 
     def _tweak_party(
         self, world_state: WorldState, *, stamina_delta: int, mood_delta: int, exp_delta: int
