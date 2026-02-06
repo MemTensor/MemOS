@@ -4,7 +4,7 @@
 ##############################################################################
 
 name = "MemoryOS"
-version = "2.0.3"
+version = "2.0.4"
 description = "Intelligence Begins with Memory"
 license = {text = "Apache-2.0"}
 readme = "README.md"
@@ -37,7 +37,7 @@ classifiers = [
 ]
 dependencies = [
     "openai (>=1.77.0,<2.0.0)",
-    "ollama (>=0.4.8,<0.5.0)",
+    "ollama (>=0.5.0,<0.5.1)",
     "transformers (>=4.51.3,<5.0.0)",
     "tenacity (>=9.1.2,<10.0.0)",  # Error handling and retrying library
     "fastapi[all] (>=0.115.12,<0.116.0)",  # Web framework for building APIs
@@ -97,6 +97,11 @@ pref-mem = [
     "datasketch (>=1.6.5,<2.0.0)",  # MinHash library
 ]
 
+# SkillMemory
+skill-mem = [
+    "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
+]
+
 # All optional dependencies
 # Allow users to install with `pip install MemoryOS[all]`
 all = [
@@ -123,6 +128,7 @@ all = [
     "volcengine-python-sdk (>=4.0.4,<5.0.0)",
     "nltk (>=3.9.1,<4.0.0)",
     "rake-nltk (>=1.0.6,<1.1.0)",
+    "alibabacloud-oss-v2 (>=1.2.2,<1.2.3)",
 
     # Uncategorized dependencies
 ]
