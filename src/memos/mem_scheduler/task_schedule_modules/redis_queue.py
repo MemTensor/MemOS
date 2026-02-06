@@ -718,10 +718,10 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                     justid=False,
                 )
                 if len(claimed_result) == 2:
-                    next_id, claimed = claimed_result
-                    deleted_ids = []
+                    _next_id, claimed = claimed_result
+                    _deleted_ids = []
                 elif len(claimed_result) == 3:
-                    next_id, claimed, deleted_ids = claimed_result
+                    _next_id, claimed, _deleted_ids = claimed_result
                 else:
                     raise ValueError(
                         f"Unexpected xautoclaim response length: {len(claimed_result)}"
@@ -745,10 +745,10 @@ class SchedulerRedisQueue(RedisSchedulerModule):
                         justid=False,
                     )
                     if len(claimed_result) == 2:
-                        next_id, claimed = claimed_result
-                        deleted_ids = []
+                        _next_id, claimed = claimed_result
+                        _deleted_ids = []
                     elif len(claimed_result) == 3:
-                        next_id, claimed, deleted_ids = claimed_result
+                        _next_id, claimed, _deleted_ids = claimed_result
                     else:
                         raise ValueError(
                             f"Unexpected xautoclaim response length: {len(claimed_result)}"
