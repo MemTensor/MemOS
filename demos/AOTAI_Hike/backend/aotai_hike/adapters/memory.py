@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from dataclasses import dataclass
@@ -154,15 +155,20 @@ class MemOSMemoryClient:
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
-        resp = requests.post(url, json=payload, timeout=self._timeout_s)
+        resp = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=self._timeout_s,
+        )
         if resp.status_code >= 400:
             self._log.error("MemOS error %s: %s", resp.status_code, resp.text)
             resp.raise_for_status()
         try:
-            return resp.json()
+            post_results = resp.json()
+            return post_results
         except Exception:
             self._log.error("Invalid MemOS response: %s", resp.text)
-            return {}
 
 
 class MemoryAdapter:
@@ -204,7 +210,7 @@ class MemOSMemoryAdapter(MemoryAdapter):
             user_id=user_id,
             cube_id=cube_id,
             session_id=session_id,
-            memory_content=content,
+            messages=[{"role": "user", "content": content}],
             async_mode="sync",
             mode="fine",
             source="aotai_hike_world",

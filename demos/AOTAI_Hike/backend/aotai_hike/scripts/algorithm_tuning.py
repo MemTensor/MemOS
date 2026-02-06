@@ -88,7 +88,7 @@ def seed_memories(
         session_id=session_id,
         async_mode="sync",
         mode="fine",
-        memory_content="队伍即将进入多云、有风的上坡路段。",
+        messages=[{"role": "user", "content": "队伍即将进入多云、有风的上坡路段。"}],
         source="aotai_hike_seed",
     )
     client.add_memory(
@@ -97,7 +97,7 @@ def seed_memories(
         session_id=session_id,
         async_mode="sync",
         mode="fine",
-        memory_content="太白喜欢记录温度、风速，并提醒大家补水。",
+        messages=[{"role": "user", "content": "太白喜欢记录温度、风速，并提醒大家补水。"}],
         source="aotai_hike_seed",
     )
 
@@ -175,7 +175,7 @@ def main() -> None:
     parser.add_argument("--user-id", default="demo_user")
     parser.add_argument("--session-id", default=f"algo-{uuid.uuid4().hex[:6]}")
     parser.add_argument(
-        "--base-url", default=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8001")
+        "--base-url", default=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8002")
     )
     parser.add_argument("--output", default="", help="Optional JSONL output path")
     args = parser.parse_args()
