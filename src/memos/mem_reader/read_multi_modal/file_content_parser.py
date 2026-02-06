@@ -103,14 +103,25 @@ class FileContentParser(BaseMessageParser):
                 return response.text, None, True
 
             file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext in [".md", ".markdown", ".txt"]:
+            if file_ext in [".md", ".markdown", ".txt"] or self._is_oss_md(url_str):
                 return response.text, None, True
             with tempfile.NamedTemporaryFile(mode="wb", delete=False, suffix=file_ext) as temp_file:
                 temp_file.write(response.content)
             return "", temp_file.name, False
         except Exception as e:
             logger.error(f"[FileContentParser] URL processing error: {e}")
-            return f"[File URL download failed: {url_str}]", None
+            return f"[File URL download failed: {url_str}]", None, False
+
+    def _is_oss_md(self, url: str) -> bool:
+        """Check if URL is an OSS markdown file based on pattern."""
+        loose_pattern = re.compile(r"^https?://[^/]*\.aliyuncs\.com/.*/([^/?#]+)")
+        match = loose_pattern.search(url)
+        if not match:
+            return False
+
+        file_name = match.group(1)
+        lower_name = file_name.lower()
+        return lower_name.endswith((".md", ".markdown", ".txt"))
 
     def _is_base64(self, data: str) -> bool:
         """Quick heuristic to check base64-like string."""
@@ -133,7 +144,12 @@ class FileContentParser(BaseMessageParser):
         return ""
 
     def _process_single_image(
-        self, image_url: str, original_ref: str, info: dict[str, Any], header_context: list[str] | None = None, **kwargs
+        self,
+        image_url: str,
+        original_ref: str,
+        info: dict[str, Any],
+        header_context: list[str] | None = None,
+        **kwargs,
     ) -> tuple[str, str]:
         """
         Process a single image and return (original_ref, replacement_text).
@@ -178,11 +194,9 @@ class FileContentParser(BaseMessageParser):
             if extracted_texts:
                 # Combine all extracted texts
                 extracted_content = "\n".join(extracted_texts)
-                #build final replacement text
+                # build final replacement text
                 replacement_text = (
-                    f"{header_context_str}"
-                    f"[Image Content from {image_url}]:\n"
-                    f"{extracted_content}\n"
+                    f"{header_context_str}[Image Content from {image_url}]:\n{extracted_content}\n"
                 )
                 # Replace image with extracted content
                 return (
@@ -202,7 +216,9 @@ class FileContentParser(BaseMessageParser):
             # On error, keep original image reference
             return (original_ref, original_ref)
 
-    def _extract_and_process_images(self, text: str, info: dict[str, Any], headers: dict[int, dict] | None = None, **kwargs) -> str:
+    def _extract_and_process_images(
+        self, text: str, info: dict[str, Any], headers: dict[int, dict] | None = None, **kwargs
+    ) -> str:
         """
         Extract all images from markdown text and process them using ImageParser in parallel.
         Replaces image references with extracted text content.
@@ -239,7 +255,7 @@ class FileContentParser(BaseMessageParser):
             header_context = None
             if headers:
                 header_context = self._get_header_context(text, image_position, headers)
-            
+
             tasks.append((image_url, original_ref, header_context))
 
         # Process images in parallel
@@ -249,7 +265,12 @@ class FileContentParser(BaseMessageParser):
         with ContextThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
-                    self._process_single_image, image_url, original_ref, info, header_context, **kwargs
+                    self._process_single_image,
+                    image_url,
+                    original_ref,
+                    info,
+                    header_context,
+                    **kwargs,
                 ): (image_url, original_ref)
                 for image_url, original_ref, header_context in tasks
             }
@@ -669,18 +690,18 @@ class FileContentParser(BaseMessageParser):
                     )
         if not parsed_text:
             return []
-        
+
         # Extract markdown headers if applicable
         headers = {}
         if is_markdown:
             headers = self._extract_markdown_headers(parsed_text)
-            logger.info(
-                f"[FileContentParser] Extracted {len(headers)} headers from markdown"
-            )
+            logger.info(f"[FileContentParser] Extracted {len(headers)} headers from markdown")
 
         # Extract and process images from parsed_text
         if is_markdown and parsed_text and self.image_parser:
-            parsed_text = self._extract_and_process_images(parsed_text, info, headers=headers if headers else None, **kwargs)
+            parsed_text = self._extract_and_process_images(
+                parsed_text, info, headers=headers if headers else None, **kwargs
+            )
 
         # Extract info fields
         if not info:
@@ -858,58 +879,47 @@ class FileContentParser(BaseMessageParser):
     def _extract_markdown_headers(self, text: str) -> dict[int, dict]:
         """
         Extract markdown headers and their positions.
-        
+
         Args:
-            text: Markdown text to parse    
+            text: Markdown text to parse
         """
         if not text:
             return {}
-        
+
         headers = {}
         # Pattern to match markdown headers: # Title, ## Title, etc.
-        header_pattern = r'^(#{1,6})\s+(.+)$'
-        
-        lines = text.split('\n')
+        header_pattern = r"^(#{1,6})\s+(.+)$"
+
+        lines = text.split("\n")
         char_position = 0
-        
+
         for line_num, line in enumerate(lines):
             # Match header pattern (must be at start of line)
             match = re.match(header_pattern, line.strip())
             if match:
                 level = len(match.group(1))  # Number of # symbols (1-6)
                 title = match.group(2).strip()  # Extract title text
-                
+
                 # Store header info with its position
-                headers[line_num] = {
-                    'level': level,
-                    'title': title,
-                    'position': char_position
-                }
-                
-                logger.debug(
-                    f"[FileContentParser] Found H{level} at line {line_num}: {title}"
-                )
-            
+                headers[line_num] = {"level": level, "title": title, "position": char_position}
+
+                logger.debug(f"[FileContentParser] Found H{level} at line {line_num}: {title}")
+
             # Update character position for next line (+1 for newline character)
             char_position += len(line) + 1
-        
-        logger.info(
-            f"[FileContentParser] Extracted {len(headers)} headers from markdown"
-        )
+
+        logger.info(f"[FileContentParser] Extracted {len(headers)} headers from markdown")
         return headers
 
     def _get_header_context(
-        self, 
-        text: str, 
-        image_position: int, 
-        headers: dict[int, dict]
+        self, text: str, image_position: int, headers: dict[int, dict]
     ) -> list[str]:
         """
         Get all header levels above an image position in hierarchical order.
-        
+
         Finds the image's line number, then identifies all preceding headers
         and constructs the hierarchical path to the image location.
-        
+
         Args:
             text: Full markdown text
             image_position: Character position of the image in text
@@ -917,46 +927,42 @@ class FileContentParser(BaseMessageParser):
         """
         if not headers:
             return []
-        
+
         # Find the line number corresponding to the image position
-        lines = text.split('\n')
+        lines = text.split("\n")
         char_count = 0
         image_line = 0
-        
+
         for i, line in enumerate(lines):
             if char_count >= image_position:
                 image_line = i
                 break
             char_count += len(line) + 1  # +1 for newline
-        
+
         # Filter headers that appear before the image
         preceding_headers = {
-            line_num: info 
-            for line_num, info in headers.items() 
-            if line_num < image_line
+            line_num: info for line_num, info in headers.items() if line_num < image_line
         }
-        
+
         if not preceding_headers:
             return []
-        
+
         # Build hierarchical header stack
         header_stack = []
-        
+
         for line_num in sorted(preceding_headers.keys()):
             header = preceding_headers[line_num]
-            level = header['level']
-            title = header['title']
-            
-            # Pop headers of same or lower level 
-            while header_stack and header_stack[-1]['level'] >= level:
+            level = header["level"]
+            title = header["title"]
+
+            # Pop headers of same or lower level
+            while header_stack and header_stack[-1]["level"] >= level:
                 removed = header_stack.pop()
-                logger.debug(
-                    f"[FileContentParser] Popped H{removed['level']}: {removed['title']}"
-                )
-            
+                logger.debug(f"[FileContentParser] Popped H{removed['level']}: {removed['title']}")
+
             # Push current header onto stack
-            header_stack.append({'level': level, 'title': title})
-        
-        # Return titles in order 
-        result = [h['title'] for h in header_stack]
+            header_stack.append({"level": level, "title": title})
+
+        # Return titles in order
+        result = [h["title"] for h in header_stack]
         return result
