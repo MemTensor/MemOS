@@ -798,12 +798,14 @@ class MOSProduct(MOSCore):
             )
             # Add exception handling for the background task
             task.add_done_callback(
-                lambda t: logger.error(
-                    f"Error in background post-chat processing for user {user_id}: {t.exception()}",
-                    exc_info=True,
+                lambda t: (
+                    logger.error(
+                        f"Error in background post-chat processing for user {user_id}: {t.exception()}",
+                        exc_info=True,
+                    )
+                    if t.exception()
+                    else None
                 )
-                if t.exception()
-                else None
             )
         except RuntimeError:
             # No event loop, run in a new thread with context propagation
