@@ -327,6 +327,16 @@ class APISearchRequest(BaseRequest):
         description="Number of textual memories to retrieve (top-K). Default: 10.",
     )
 
+    relativity: float = Field(
+        0.0,
+        ge=0,
+        description=(
+            "Relevance threshold for recalled memories. "
+            "Only memories with metadata.relativity >= relativity will be returned. "
+            "Use 0 to disable threshold filtering. Default: 0.3."
+        ),
+    )
+
     dedup: Literal["no", "sim", "mmr"] | None = Field(
         "mmr",
         description=(
@@ -497,6 +507,8 @@ class APIADDRequest(BaseRequest):
         description="Session ID. If not provided, a default session will be used.",
     )
     task_id: str | None = Field(None, description="Task ID for monitering async tasks")
+    manager_user_id: str | None = Field(None, description="Manager User ID")
+    project_id: str | None = Field(None, description="Project ID")
 
     # ==== Multi-cube writing ====
     writable_cube_ids: list[str] | None = Field(
@@ -802,6 +814,12 @@ class GetMemoryRequest(BaseRequest):
     page_size: int | None = Field(
         None, description="Number of items per page. If None, exports all data without pagination."
     )
+
+
+class GetMemoryDashboardRequest(GetMemoryRequest):
+    """Request model for getting memories for dashboard."""
+
+    mem_cube_id: str | None = Field(None, description="Cube ID")
 
 
 class DeleteMemoryRequest(BaseRequest):

@@ -25,6 +25,7 @@ from memos.mem_scheduler.schemas.task_schemas import (
     PREF_ADD_TASK_LABEL,
 )
 from memos.multi_mem_cube.views import MemCubeView
+from memos.search import search_text_memories
 from memos.templates.mem_reader_prompts import PROMPT_MAPPING
 from memos.types.general_types import (
     FINE_STRATEGY,
@@ -72,6 +73,8 @@ class SingleCubeView(MemCubeView):
             user_id=add_req.user_id,
             mem_cube_id=self.cube_id,
             session_id=add_req.session_id or "default_session",
+            manager_user_id=add_req.manager_user_id,
+            project_id=add_req.project_id,
         )
 
         target_session_id = add_req.session_id or "default_session"
@@ -455,31 +458,12 @@ class SingleCubeView(MemCubeView):
         Returns:
             List of search results
         """
-        target_session_id = search_req.session_id or "default_session"
-        search_priority = {"session_id": search_req.session_id} if search_req.session_id else None
-        search_filter = search_req.filter or None
-        plugin = bool(search_req.source is not None and search_req.source == "plugin")
-
-        search_results = self.naive_mem_cube.text_mem.search(
-            query=search_req.query,
-            user_name=user_context.mem_cube_id,
-            top_k=search_req.top_k,
+        search_results = search_text_memories(
+            text_mem=self.naive_mem_cube.text_mem,
+            search_req=search_req,
+            user_context=user_context,
             mode=SearchMode.FAST,
-            manual_close_internet=not search_req.internet_search,
-            memory_type=search_req.search_memory_type,
-            search_filter=search_filter,
-            search_priority=search_priority,
-            info={
-                "user_id": search_req.user_id,
-                "session_id": target_session_id,
-                "chat_history": search_req.chat_history,
-            },
-            plugin=plugin,
-            search_tool_memory=search_req.search_tool_memory,
-            tool_mem_top_k=search_req.tool_mem_top_k,
-            include_skill_memory=search_req.include_skill_memory,
-            skill_mem_top_k=search_req.skill_mem_top_k,
-            dedup=search_req.dedup,
+            include_embedding=(search_req.dedup == "mmr"),
         )
 
         formatted_memories = [
@@ -554,6 +538,7 @@ class SingleCubeView(MemCubeView):
                     user_name=self.cube_id,
                     info=add_req.info,
                     chat_history=add_req.chat_history,
+                    user_context=user_context,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_read])
                 self.logger.info(
@@ -624,6 +609,7 @@ class SingleCubeView(MemCubeView):
                     info=add_req.info,
                     user_name=self.cube_id,
                     task_id=add_req.task_id,
+                    user_context=user_context,
                 )
                 self.mem_scheduler.submit_messages(messages=[message_item_pref])
                 self.logger.info(f"[SingleCubeView] cube={self.cube_id} Submitted PREF_ADD async")
@@ -643,6 +629,7 @@ class SingleCubeView(MemCubeView):
                     "session_id": target_session_id,
                     "mem_cube_id": user_context.mem_cube_id,
                 },
+                user_context=user_context,
             )
             pref_ids_local: list[str] = self.naive_mem_cube.pref_mem.add(pref_memories_local)
             self.logger.info(
@@ -809,6 +796,7 @@ class SingleCubeView(MemCubeView):
             mode=extract_mode,
             user_name=user_context.mem_cube_id,
             chat_history=add_req.chat_history,
+            user_context=user_context,
         )
         self.logger.info(
             f"Time for get_memory in extract mode {extract_mode}: {time.time() - init_time}"

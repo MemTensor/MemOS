@@ -3,7 +3,7 @@ import json
 import re
 import traceback
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
@@ -18,6 +18,10 @@ from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_ME
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
 from memos.utils import timed
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = log.get_logger(__name__)
@@ -667,6 +671,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if file_ids:
                 extra_kwargs["file_ids"] = file_ids
 
+            # Extract manager_user_id and project_id from user_context
+            user_context: UserContext | None = kwargs.get("user_context")
+            if user_context:
+                extra_kwargs["manager_user_id"] = user_context.manager_user_id
+                extra_kwargs["project_id"] = user_context.project_id
+
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
@@ -782,6 +792,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         fine_memory_items = []
 
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         for fast_item in fast_memory_items:
             # Extract memory text (string content)
             mem_str = fast_item.memory or ""
@@ -808,6 +823,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         correctness=m.get("correctness", ""),
                         experience=m.get("experience", ""),
                         tool_used_status=m.get("tool_used_status", []),
+                        manager_user_id=manager_user_id,
+                        project_id=project_id,
                     )
                     fine_memory_items.append(node)
                 except Exception as e:

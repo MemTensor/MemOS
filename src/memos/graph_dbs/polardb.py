@@ -1691,7 +1691,7 @@ class PolarDBGraphDB(BaseGraphDB):
         raise NotImplementedError
 
     @timed
-    def seach_by_keywords_like(
+    def search_by_keywords_like(
         self,
         query_word: str,
         scope: str | None = None,
@@ -1761,7 +1761,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         params = (query_word,)
         logger.info(
-            f"[seach_by_keywords_LIKE start:]  user_name: {user_name}, query: {query}, params: {params}"
+            f"[search_by_keywords_LIKE start:]  user_name: {user_name}, query: {query}, params: {params}"
         )
         conn = None
         try:
@@ -1773,16 +1773,18 @@ class PolarDBGraphDB(BaseGraphDB):
                 for row in results:
                     oldid = row[0]
                     id_val = str(oldid)
+                    if id_val.startswith('"') and id_val.endswith('"'):
+                        id_val = id_val[1:-1]
                     output.append({"id": id_val})
                 logger.info(
-                    f"[seach_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
+                    f"[search_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
                 )
                 return output
         finally:
             self._return_connection(conn)
 
     @timed
-    def seach_by_keywords_tfidf(
+    def search_by_keywords_tfidf(
         self,
         query_words: list[str],
         scope: str | None = None,
@@ -1858,7 +1860,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
         params = (tsquery_string,)
         logger.info(
-            f"[seach_by_keywords_TFIDF start:] user_name: {user_name}, query: {query}, params: {params}"
+            f"[search_by_keywords_TFIDF start:] user_name: {user_name}, query: {query}, params: {params}"
         )
         conn = None
         try:
@@ -1870,10 +1872,12 @@ class PolarDBGraphDB(BaseGraphDB):
                 for row in results:
                     oldid = row[0]
                     id_val = str(oldid)
+                    if id_val.startswith('"') and id_val.endswith('"'):
+                        id_val = id_val[1:-1]
                     output.append({"id": id_val})
 
                 logger.info(
-                    f"[seach_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
+                    f"[search_by_keywords_TFIDF end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
                 )
                 return output
         finally:
@@ -2003,6 +2007,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     rank = row[2]  # rank score
 
                     id_val = str(oldid)
+                    if id_val.startswith('"') and id_val.endswith('"'):
+                        id_val = id_val[1:-1]
                     score_val = float(rank)
 
                     # Apply threshold filter if specified
@@ -2167,6 +2173,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     oldid = row[3]  # old_id
                     score = row[4]  # scope
                     id_val = str(oldid)
+                    if id_val.startswith('"') and id_val.endswith('"'):
+                        id_val = id_val[1:-1]
                     score_val = float(score)
                     score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
                     if threshold is None or score_val >= threshold:
