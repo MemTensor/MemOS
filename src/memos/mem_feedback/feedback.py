@@ -1165,7 +1165,7 @@ class MemFeedback(BaseMemFeedback):
                 info,
                 **kwargs,
             )
-            done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
+            _done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
             for fut in pending:
                 fut.cancel()
             try:
