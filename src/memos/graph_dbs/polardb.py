@@ -2543,6 +2543,7 @@ class PolarDBGraphDB(BaseGraphDB):
         page_size: int | None = None,
         filter: dict | None = None,
         memory_type: list[str] | None = None,
+        status: list[str] | None = None,
         **kwargs,
     ) -> dict[str, Any]:
         """
@@ -2562,6 +2563,9 @@ class PolarDBGraphDB(BaseGraphDB):
             Example: {"and": [{"created_at": {"gte": "2025-01-01"}}, {"tags": {"contains": "AI"}}]}
         memory_type (list[str], optional): List of memory_type values to filter by. If provided, only nodes/edges with
             memory_type in this list will be exported. Example: ["LongTermMemory", "WorkingMemory"]
+        status (list[str], optional): List of status values to filter by. If not provided, only nodes/edges with
+            status != 'deleted' are exported. If provided, only nodes/edges with status in this list are exported.
+            Example: ["activated"] or ["activated", "archived"]
 
         Returns:
             {
@@ -2572,7 +2576,7 @@ class PolarDBGraphDB(BaseGraphDB):
             }
         """
         logger.info(
-            f"[export_graph] include_embedding: {include_embedding}, user_name: {user_name}, user_id: {user_id}, page: {page}, page_size: {page_size}, filter: {filter}, memory_type: {memory_type}"
+            f"[export_graph] include_embedding: {include_embedding}, user_name: {user_name}, user_id: {user_id}, page: {page}, page_size: {page_size}, filter: {filter}, memory_type: {memory_type}, status: {status}"
         )
         user_id = user_id if user_id else self._get_config_value("user_id")
 
@@ -2618,6 +2622,23 @@ class PolarDBGraphDB(BaseGraphDB):
                 memory_type_in_clause = ", ".join(memory_type_values)
                 where_conditions.append(
                     f"ag_catalog.agtype_access_operator(properties, '\"memory_type\"'::agtype) IN ({memory_type_in_clause})"
+                )
+
+            # Add status filter condition: if not passed, exclude deleted; otherwise filter by IN list
+            if status is None:
+                # Default behavior: exclude deleted entries
+                where_conditions.append(
+                    "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) <> '\"deleted\"'::agtype"
+                )
+            elif isinstance(status, list) and len(status) > 0:
+                # status IN (list)
+                status_values = []
+                for st in status:
+                    escaped_status = str(st).replace("'", "''")
+                    status_values.append(f"'\"{escaped_status}\"'::agtype")
+                status_in_clause = ", ".join(status_values)
+                where_conditions.append(
+                    f"ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) IN ({status_in_clause})"
                 )
 
             # Build filter conditions using common method
@@ -2723,6 +2744,16 @@ class PolarDBGraphDB(BaseGraphDB):
                 # Cypher IN syntax: a.memory_type IN ['LongTermMemory', 'WorkingMemory']
                 cypher_where_conditions.append(f"a.memory_type IN [{memory_type_list_str}]")
                 cypher_where_conditions.append(f"b.memory_type IN [{memory_type_list_str}]")
+
+            # Add status filter for edges: if not passed, exclude deleted; otherwise filter by IN list
+            if status is None:
+                # Default behavior: exclude deleted entries
+                cypher_where_conditions.append("a.status <> 'deleted' AND b.status <> 'deleted'")
+            elif isinstance(status, list) and len(status) > 0:
+                escaped_statuses = [st.replace("'", "\\'") for st in status]
+                status_list_str = ", ".join([f"'{st}'" for st in escaped_statuses])
+                cypher_where_conditions.append(f"a.status IN [{status_list_str}]")
+                cypher_where_conditions.append(f"b.status IN [{status_list_str}]")
 
             # Build filter conditions for edges (apply to both source and target nodes)
             filter_where_clause = self._build_filter_conditions_cypher(filter)
