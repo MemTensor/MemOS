@@ -320,7 +320,7 @@ class APISearchRequest(BaseRequest):
     )
 
     relativity: float = Field(
-        0.57,
+        0,
         ge=0,
         description=(
             "Relevance threshold for recalled memories. "
