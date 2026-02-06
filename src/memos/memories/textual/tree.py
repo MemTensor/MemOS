@@ -363,7 +363,7 @@ class TreeTextMemory(BaseTextMemory):
 
     def get_all(
         self,
-        user_name: str,
+        user_name: str | None = None,
         user_id: str | None = None,
         page: int | None = None,
         page_size: int | None = None,
