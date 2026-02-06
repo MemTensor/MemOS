@@ -1163,6 +1163,10 @@ class Neo4jGraphDB(BaseGraphDB):
         self,
         page: int | None = None,
         page_size: int | None = None,
+        memory_type: list[str] | None = None,
+        status: list[str] | None = None,
+        filter: dict | None = None,
+        include_embedding: bool = False,
         **kwargs,
     ) -> dict[str, Any]:
         """
@@ -1171,6 +1175,13 @@ class Neo4jGraphDB(BaseGraphDB):
         Args:
             page (int, optional): Page number (starts from 1). If None, exports all data without pagination.
             page_size (int, optional): Number of items per page. If None, exports all data without pagination.
+            memory_type (list[str], optional): List of memory_type values to filter by. If provided, only nodes/edges
+                with memory_type in this list will be exported.
+            status (list[str], optional): If not provided, only nodes/edges with status != 'deleted' are exported.
+                If provided (non-empty list), only nodes/edges with status in this list are exported.
+            filter (dict, optional): Filter conditions with 'and' or 'or' logic. Same as get_all_memory_items.
+                Example: {"and": [{"id": "xxx"}, {"A": "yyy"}]} or {"or": [{"id": "xxx"}, {"A": "yyy"}]}
+            include_embedding (bool): Whether to include embedding fields in node metadata. Default False (same as get_node).
             **kwargs: Additional keyword arguments, including:
                 - user_name (str, optional): User name for filtering in non-multi-db mode
 
@@ -1182,6 +1193,9 @@ class Neo4jGraphDB(BaseGraphDB):
                 "total_edges": int,   # Total number of edges matching the filter criteria
             }
         """
+        logger.info(
+            f" export_graph include_embedding: {include_embedding}, kwargs: {kwargs}, page: {page}, page_size: {page_size}, filter: {filter}, memory_type: {memory_type}, status: {status}"
+        )
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
 
         # Initialize total counts
@@ -1200,15 +1214,61 @@ class Neo4jGraphDB(BaseGraphDB):
             skip = (page - 1) * page_size
 
         with self.driver.session(database=self.db_name) as session:
-            # Build base queries
-            node_base_query = "MATCH (n:Memory)"
-            edge_base_query = "MATCH (a:Memory)-[r]->(b:Memory)"
-            params = {}
+            # Build WHERE conditions for nodes
+            node_where_clauses = []
+            params: dict[str, Any] = {}
 
             if not self.config.use_multi_db and (self.config.user_name or user_name):
-                node_base_query += " WHERE n.user_name = $user_name"
-                edge_base_query += " WHERE a.user_name = $user_name AND b.user_name = $user_name"
+                node_where_clauses.append("n.user_name = $user_name")
                 params["user_name"] = user_name
+
+            if memory_type and isinstance(memory_type, list) and len(memory_type) > 0:
+                node_where_clauses.append("n.memory_type IN $memory_type")
+                params["memory_type"] = memory_type
+
+            if status is None:
+                node_where_clauses.append("n.status <> 'deleted'")
+            elif isinstance(status, list) and len(status) > 0:
+                node_where_clauses.append("n.status IN $status")
+                params["status"] = status
+
+            # Build filter conditions using common method (same as get_all_memory_items)
+            filter_conditions, filter_params = self._build_filter_conditions_cypher(
+                filter=filter,
+                param_counter_start=0,
+                node_alias="n",
+            )
+            logger.info(f"export_graph filter_conditions: {filter_conditions}")
+            node_where_clauses.extend(filter_conditions)
+            if filter_params:
+                params.update(filter_params)
+
+            node_base_query = "MATCH (n:Memory)"
+            if node_where_clauses:
+                node_base_query += " WHERE " + " AND ".join(node_where_clauses)
+            logger.info(f"export_graph node_base_query: {node_base_query}")
+
+            # Build WHERE conditions for edges (a and b must match same filters)
+            edge_where_clauses = []
+            if not self.config.use_multi_db and (self.config.user_name or user_name):
+                edge_where_clauses.append("a.user_name = $user_name AND b.user_name = $user_name")
+            if memory_type and isinstance(memory_type, list) and len(memory_type) > 0:
+                edge_where_clauses.append("a.memory_type IN $memory_type AND b.memory_type IN $memory_type")
+            if status is None:
+                edge_where_clauses.append("a.status <> 'deleted' AND b.status <> 'deleted'")
+            elif isinstance(status, list) and len(status) > 0:
+                edge_where_clauses.append("a.status IN $status AND b.status IN $status")
+            # Apply same filter to both endpoints of the edge
+            if filter_conditions:
+                filter_a = [c.replace("n.", "a.") for c in filter_conditions]
+                filter_b = [c.replace("n.", "b.") for c in filter_conditions]
+                edge_where_clauses.append(
+                    f"({' AND '.join(filter_a)}) AND ({' AND '.join(filter_b)})"
+                )
+
+            edge_base_query = "MATCH (a:Memory)-[r]->(b:Memory)"
+            if edge_where_clauses:
+                edge_base_query += " WHERE " + " AND ".join(edge_where_clauses)
 
             # Get total count of nodes before pagination
             count_node_query = node_base_query + " RETURN COUNT(n) AS count"
@@ -1221,7 +1281,13 @@ class Neo4jGraphDB(BaseGraphDB):
                 node_query += f" SKIP {skip} LIMIT {page_size}"
 
             node_result = session.run(node_query, params)
-            nodes = [self._parse_node(dict(record["n"])) for record in node_result]
+            nodes = []
+            for record in node_result:
+                node_dict = dict(record["n"])
+                if not include_embedding:
+                    for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                        node_dict.pop(key, None)
+                nodes.append(self._parse_node(node_dict))
 
             # Get total count of edges before pagination
             count_edge_query = edge_base_query + " RETURN COUNT(r) AS count"
@@ -1235,7 +1301,7 @@ class Neo4jGraphDB(BaseGraphDB):
             )
             if use_pagination:
                 edge_query += f" SKIP {skip} LIMIT {page_size}"
-
+            logger.info(f"export_graph edge_query: {edge_query},params:{params}")
             edge_result = session.run(edge_query, params)
             edges = [
                 {"source": record["source"], "target": record["target"], "type": record["type"]}
@@ -1323,10 +1389,6 @@ class Neo4jGraphDB(BaseGraphDB):
         logger.info(
             f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
         )
-        print(
-            f"[get_all_memory_items] scope: {scope},filter: {filter},knowledgebase_ids: {knowledgebase_ids},status: {status}"
-        )
-
         user_name = kwargs.get("user_name") if kwargs.get("user_name") else self.config.user_name
         if scope not in {"WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"}:
             raise ValueError(f"Unsupported memory type scope: {scope}")
@@ -1377,11 +1439,17 @@ class Neo4jGraphDB(BaseGraphDB):
             RETURN n
             """
         logger.info(f"[get_all_memory_items] query: {query},params: {params}")
-        print(f"[get_all_memory_items] query: {query},params: {params}")
 
         with self.driver.session(database=self.db_name) as session:
             results = session.run(query, params)
-            return [self._parse_node(dict(record["n"])) for record in results]
+            nodes = []
+            for record in results:
+                node_dict = dict(record["n"])
+                if not include_embedding:
+                    for key in ("embedding", "embedding_1024", "embedding_3072", "embedding_768"):
+                        node_dict.pop(key, None)
+                nodes.append(self._parse_node(node_dict))
+            return nodes
 
     def get_structure_optimization_candidates(self, scope: str, **kwargs) -> list[dict]:
         """
