@@ -756,7 +756,7 @@ class MemFeedback(BaseMemFeedback):
         for judge in all_judge:
             valid_update = None
             if judge["judgement"] == "UPDATE_APPROVED":
-                valid_update = id2op.get(judge["id"], None)
+                valid_update = id2op.get(judge["id"])
             if valid_update:
                 valid_updates.append(valid_update)
 
