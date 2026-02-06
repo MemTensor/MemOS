@@ -1253,7 +1253,9 @@ class Neo4jGraphDB(BaseGraphDB):
             if not self.config.use_multi_db and (self.config.user_name or user_name):
                 edge_where_clauses.append("a.user_name = $user_name AND b.user_name = $user_name")
             if memory_type and isinstance(memory_type, list) and len(memory_type) > 0:
-                edge_where_clauses.append("a.memory_type IN $memory_type AND b.memory_type IN $memory_type")
+                edge_where_clauses.append(
+                    "a.memory_type IN $memory_type AND b.memory_type IN $memory_type"
+                )
             if status is None:
                 edge_where_clauses.append("a.status <> 'deleted' AND b.status <> 'deleted'")
             elif isinstance(status, list) and len(status) > 0:
