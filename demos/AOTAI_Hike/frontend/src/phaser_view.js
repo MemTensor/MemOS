@@ -160,6 +160,20 @@ export function initPhaser() {
       // outcome banner (success / fail)
       this._outcomeBanner = null;
       this._outcomeState = null; // "success" | "fail" | null
+
+      // weather effects
+      this._rainGfx = null;
+      this._rainDrops = [];
+      this._rainActive = false;
+      this._snowGfx = null;
+      this._snowFlakes = [];
+      this._snowActive = false;
+      this._windGfx = null;
+      this._windStreaks = [];
+      this._windActive = false;
+      this._fogGfx = null;
+      this._fogBlobs = [];
+      this._fogActive = false;
     }
 
     preload() {
@@ -242,6 +256,30 @@ export function initPhaser() {
       this.worldOverlay.setDepth(10);
       this.world.add(this.worldOverlay);
 
+      // --- rain layer (code-generated) ---
+      this._rainGfx = this.add.graphics();
+      this._rainGfx.setDepth(20);
+      this.world.add(this._rainGfx);
+      this._initRainDrops();
+
+      // --- snow layer ---
+      this._snowGfx = this.add.graphics();
+      this._snowGfx.setDepth(21);
+      this.world.add(this._snowGfx);
+      this._initSnowFlakes();
+
+      // --- wind layer ---
+      this._windGfx = this.add.graphics();
+      this._windGfx.setDepth(22);
+      this.world.add(this._windGfx);
+      this._initWindStreaks();
+
+      // --- fog layer ---
+      this._fogGfx = this.add.graphics();
+      this._fogGfx.setDepth(23);
+      this.world.add(this._fogGfx);
+      this._initFogBlobs();
+
       // --- cameras ---
       this.mainCam = this.cameras.main;
       this.mainCam.setViewport(0, 0, VIEW_W, MAIN_H);
@@ -322,6 +360,10 @@ export function initPhaser() {
 
     update(time, delta) {
       const ws = this._ws || {};
+      this._updateRain(delta);
+      this._updateSnow(delta);
+      this._updateWind(delta);
+      this._updateFog(delta);
       const walking = Boolean(ws && ws.in_transit_to_node_id);
       const phase = ws && ws.phase ? String(ws.phase) : "free";
       const modalBlocking = Boolean(window.__aoTaiNightVoteOpen);
@@ -944,6 +986,10 @@ export function initPhaser() {
       this._weather = weather;
       this._tod = tod;
       this._ws = ws || {};
+      this._rainActive = String(weather) === "rainy";
+      this._snowActive = String(weather) === "snowy";
+      this._windActive = String(weather) === "windy";
+      this._fogActive = String(weather) === "foggy";
 
       // render roles on big map
       try {
@@ -1031,6 +1077,160 @@ export function initPhaser() {
       if (this.worldOverlay) {
         this.worldOverlay.fillColor = overlayColor;
         this.worldOverlay.setAlpha(overlayAlpha);
+      }
+    }
+
+    _initRainDrops() {
+      this._rainDrops = [];
+      const count = Math.max(80, Math.floor((VIEW_W * MAIN_H) / 6000));
+      for (let i = 0; i < count; i++) {
+        this._rainDrops.push({
+          x: Math.random() * VIEW_W,
+          y: Math.random() * MAIN_H,
+          len: 6 + Math.random() * 6,
+          speed: 140 + Math.random() * 120,
+          drift: -12 + Math.random() * 24,
+        });
+      }
+    }
+
+    _updateRain(delta) {
+      if (!this._rainGfx) return;
+      if (!this._rainActive) {
+        this._rainGfx.clear();
+        return;
+      }
+      const dt = Math.max(0, Number(delta || 0) / 1000);
+      this._rainGfx.clear();
+      this._rainGfx.lineStyle(1, 0x8ab4ff, 0.6);
+      for (const d of this._rainDrops) {
+        d.y += d.speed * dt;
+        d.x += d.drift * dt;
+        if (d.y > MAIN_H + d.len) {
+          d.y = -d.len;
+          d.x = Math.random() * VIEW_W;
+        }
+        if (d.x < -20) d.x = VIEW_W + 20;
+        if (d.x > VIEW_W + 20) d.x = -20;
+        const x1 = Math.round(d.x);
+        const y1 = Math.round(d.y);
+        const x2 = Math.round(d.x + 1);
+        const y2 = Math.round(d.y + d.len);
+        this._rainGfx.beginPath();
+        this._rainGfx.moveTo(x1, y1);
+        this._rainGfx.lineTo(x2, y2);
+        this._rainGfx.strokePath();
+      }
+    }
+
+    _initSnowFlakes() {
+      this._snowFlakes = [];
+      const count = Math.max(60, Math.floor((VIEW_W * MAIN_H) / 9000));
+      for (let i = 0; i < count; i++) {
+        this._snowFlakes.push({
+          x: Math.random() * VIEW_W,
+          y: Math.random() * MAIN_H,
+          r: 1 + Math.random() * 1.6,
+          speed: 26 + Math.random() * 24,
+          drift: -8 + Math.random() * 16,
+        });
+      }
+    }
+
+    _updateSnow(delta) {
+      if (!this._snowGfx) return;
+      if (!this._snowActive) {
+        this._snowGfx.clear();
+        return;
+      }
+      const dt = Math.max(0, Number(delta || 0) / 1000);
+      this._snowGfx.clear();
+      this._snowGfx.fillStyle(0xe8f0ff, 0.75);
+      for (const f of this._snowFlakes) {
+        f.y += f.speed * dt;
+        f.x += f.drift * dt;
+        if (f.y > MAIN_H + 4) {
+          f.y = -4;
+          f.x = Math.random() * VIEW_W;
+        }
+        if (f.x < -10) f.x = VIEW_W + 10;
+        if (f.x > VIEW_W + 10) f.x = -10;
+        this._snowGfx.fillCircle(Math.round(f.x), Math.round(f.y), f.r);
+      }
+    }
+
+    _initWindStreaks() {
+      this._windStreaks = [];
+      const count = Math.max(40, Math.floor((VIEW_W * MAIN_H) / 12000));
+      for (let i = 0; i < count; i++) {
+        this._windStreaks.push({
+          x: Math.random() * VIEW_W,
+          y: Math.random() * MAIN_H,
+          len: 10 + Math.random() * 12,
+          speed: 80 + Math.random() * 60,
+        });
+      }
+    }
+
+    _updateWind(delta) {
+      if (!this._windGfx) return;
+      if (!this._windActive) {
+        this._windGfx.clear();
+        return;
+      }
+      const dt = Math.max(0, Number(delta || 0) / 1000);
+      this._windGfx.clear();
+      this._windGfx.lineStyle(1, 0xc6d0e8, 0.5);
+      for (const w of this._windStreaks) {
+        w.x += w.speed * dt;
+        w.y += (w.speed * 0.12) * dt;
+        if (w.x > VIEW_W + w.len) {
+          w.x = -w.len;
+          w.y = Math.random() * MAIN_H;
+        }
+        if (w.y > MAIN_H + 10) w.y = -10;
+        const x1 = Math.round(w.x);
+        const y1 = Math.round(w.y);
+        const x2 = Math.round(w.x + w.len);
+        const y2 = Math.round(w.y + w.len * 0.15);
+        this._windGfx.beginPath();
+        this._windGfx.moveTo(x1, y1);
+        this._windGfx.lineTo(x2, y2);
+        this._windGfx.strokePath();
+      }
+    }
+
+    _initFogBlobs() {
+      this._fogBlobs = [];
+      const count = 5;
+      for (let i = 0; i < count; i++) {
+        this._fogBlobs.push({
+          x: Math.random() * VIEW_W,
+          y: Math.random() * MAIN_H,
+          w: VIEW_W * (0.4 + Math.random() * 0.5),
+          h: MAIN_H * (0.12 + Math.random() * 0.18),
+          speed: 6 + Math.random() * 6,
+        });
+      }
+    }
+
+    _updateFog(delta) {
+      if (!this._fogGfx) return;
+      if (!this._fogActive) {
+        this._fogGfx.clear();
+        return;
+      }
+      const dt = Math.max(0, Number(delta || 0) / 1000);
+      this._fogGfx.clear();
+      this._fogGfx.fillStyle(0xc6d0e8, 0.18);
+      for (const b of this._fogBlobs) {
+        b.x += b.speed * dt;
+        if (b.x > VIEW_W + b.w) b.x = -b.w;
+        const x = Math.round(b.x);
+        const y = Math.round(b.y);
+        const w = Math.round(b.w);
+        const h = Math.round(b.h);
+        this._fogGfx.fillRect(x, y, w, h);
       }
     }
 
