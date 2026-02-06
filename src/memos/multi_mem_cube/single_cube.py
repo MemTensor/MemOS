@@ -480,6 +480,7 @@ class SingleCubeView(MemCubeView):
             include_skill_memory=search_req.include_skill_memory,
             skill_mem_top_k=search_req.skill_mem_top_k,
             dedup=search_req.dedup,
+            include_embedding=(search_req.dedup == "mmr"),
         )
 
         formatted_memories = [
