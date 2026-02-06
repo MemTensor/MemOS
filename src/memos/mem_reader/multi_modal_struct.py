@@ -3,7 +3,7 @@ import json
 import re
 import traceback
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memos import log
 from memos.configs.mem_reader import MultiModalStructMemReaderConfig
@@ -18,6 +18,10 @@ from memos.templates.mem_reader_prompts import MEMORY_MERGE_PROMPT_EN, MEMORY_ME
 from memos.templates.tool_mem_prompts import TOOL_TRAJECTORY_PROMPT_EN, TOOL_TRAJECTORY_PROMPT_ZH
 from memos.types import MessagesType
 from memos.utils import timed
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = log.get_logger(__name__)
@@ -108,10 +112,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 )
                 return split_item
 
-            # Use thread pool to parallel process chunks
+            # Use thread pool to parallel process chunks, but keep the original order
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                 futures = [executor.submit(_create_chunk_item, chunk) for chunk in chunks]
-                for future in concurrent.futures.as_completed(futures):
+                for future in futures:
                     split_item = future.result()
                     if split_item is not None:
                         split_items.append(split_item)
@@ -146,26 +150,33 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         parallel_chunking = True
 
         if parallel_chunking:
-            # parallel chunk large memory items
+            # parallel chunk large memory items, but keep the original order
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                future_to_item = {
-                    executor.submit(self._split_large_memory_item, item, max_tokens): item
-                    for item in all_memory_items
-                    if (item.memory or "") and self._count_tokens(item.memory) > max_tokens
-                }
-                processed_items.extend(
-                    [
-                        item
-                        for item in all_memory_items
-                        if not (
-                            (item.memory or "") and self._count_tokens(item.memory) > max_tokens
-                        )
-                    ]
-                )
-                # collect split items from futures
-                for future in concurrent.futures.as_completed(future_to_item):
-                    split_items = future.result()
-                    processed_items.extend(split_items)
+                # Create a list to hold futures with their original index
+                futures = []
+                for idx, item in enumerate(all_memory_items):
+                    if (item.memory or "") and self._count_tokens(item.memory) > max_tokens:
+                        future = executor.submit(self._split_large_memory_item, item, max_tokens)
+                        futures.append(
+                            (idx, future, True)
+                        )  # True indicates this item needs splitting
+                    else:
+                        futures.append((idx, item, False))  # False indicates no splitting needed
+
+                # Process results in original order
+                temp_results = [None] * len(all_memory_items)
+                for idx, future_or_item, needs_splitting in futures:
+                    if needs_splitting:
+                        # Wait for the future to complete and get the split items
+                        split_items = future_or_item.result()
+                        temp_results[idx] = split_items
+                    else:
+                        # No splitting needed, use the original item
+                        temp_results[idx] = [future_or_item]
+
+                # Flatten the results while preserving order
+                for items in temp_results:
+                    processed_items.extend(items)
         else:
             # serial chunk large memory items
             for item in all_memory_items:
@@ -660,6 +671,12 @@ class MultiModalStructMemReader(SimpleStructMemReader):
             if file_ids:
                 extra_kwargs["file_ids"] = file_ids
 
+            # Extract manager_user_id and project_id from user_context
+            user_context: UserContext | None = kwargs.get("user_context")
+            if user_context:
+                extra_kwargs["manager_user_id"] = user_context.manager_user_id
+                extra_kwargs["project_id"] = user_context.project_id
+
             # Determine prompt type based on sources
             prompt_type = self._determine_prompt_type(sources)
 
@@ -775,6 +792,11 @@ class MultiModalStructMemReader(SimpleStructMemReader):
 
         fine_memory_items = []
 
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         for fast_item in fast_memory_items:
             # Extract memory text (string content)
             mem_str = fast_item.memory or ""
@@ -801,6 +823,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         correctness=m.get("correctness", ""),
                         experience=m.get("experience", ""),
                         tool_used_status=m.get("tool_used_status", []),
+                        manager_user_id=manager_user_id,
+                        project_id=project_id,
                     )
                     fine_memory_items.append(node)
                 except Exception as e:
@@ -831,8 +855,9 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         if isinstance(scene_data_info, list):
             # Parse each message in the list
             all_memory_items = []
-            # Use thread pool to parse each message in parallel
+            # Use thread pool to parse each message in parallel, but keep the original order
             with ContextThreadPoolExecutor(max_workers=30) as executor:
+                # submit tasks and keep the original order
                 futures = [
                     executor.submit(
                         self.multi_modal_parser.parse,
@@ -844,7 +869,8 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                     )
                     for msg in scene_data_info
                 ]
-                for future in concurrent.futures.as_completed(futures):
+                # collect results in original order
+                for future in futures:
                     try:
                         items = future.result()
                         all_memory_items.extend(items)

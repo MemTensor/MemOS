@@ -5,14 +5,16 @@ import tempfile
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from memos.configs.memory import TreeTextMemoryConfig
 from memos.configs.reranker import RerankerConfigFactory
+from memos.dependency import require_python_package
 from memos.embedders.factory import EmbedderFactory, OllamaEmbedder
 from memos.graph_dbs.factory import GraphStoreFactory, Neo4jGraphDB
 from memos.llms.factory import AzureLLM, LLMFactory, OllamaLLM, OpenAILLM
 from memos.log import get_logger
+from memos.mem_reader.read_multi_modal.utils import detect_lang
 from memos.memories.textual.base import BaseTextMemory
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.organize.manager import MemoryManager
@@ -23,6 +25,7 @@ from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedB
 from memos.memories.textual.tree_text_memory.retrieve.internet_retriever_factory import (
     InternetRetrieverFactory,
 )
+from memos.memories.textual.tree_text_memory.retrieve.retrieve_utils import StopwordManager
 from memos.reranker.factory import RerankerFactory
 from memos.types import MessageList
 
@@ -164,6 +167,7 @@ class TreeTextMemory(BaseTextMemory):
         include_skill_memory: bool = False,
         skill_mem_top_k: int = 3,
         dedup: str | None = None,
+        include_embedding: bool | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
         """Search for memories based on a query.
@@ -187,6 +191,9 @@ class TreeTextMemory(BaseTextMemory):
         Returns:
             list[TextualMemoryItem]: List of matching memories.
         """
+        # Use parameter if provided, otherwise fall back to instance attribute
+        include_emb = include_embedding if include_embedding is not None else self.include_embedding
+
         searcher = Searcher(
             self.dispatcher_llm,
             self.graph_store,
@@ -197,7 +204,7 @@ class TreeTextMemory(BaseTextMemory):
             search_strategy=self.search_strategy,
             manual_close_internet=manual_close_internet,
             tokenizer=self.tokenizer,
-            include_embedding=self.include_embedding,
+            include_embedding=include_emb,
         )
         return searcher.search(
             query,
@@ -223,6 +230,7 @@ class TreeTextMemory(BaseTextMemory):
         depth: int = 2,
         center_status: str = "activated",
         user_name: str | None = None,
+        search_type: Literal["embedding", "fulltext"] = "fulltext",
     ) -> dict[str, Any]:
         """
         Find and merge the local neighborhood sub-graphs of the top-k
@@ -249,13 +257,40 @@ class TreeTextMemory(BaseTextMemory):
                  - 'nodes': List of unique nodes (core + neighbors) in the merged subgraph.
                  - 'edges': List of unique edges (as dicts with 'from', 'to', 'type') in the merged subgraph.
         """
-        # Step 1: Embed query
-        query_embedding = self.embedder.embed([query])[0]
+        if search_type == "embedding":
+            # Step 1: Embed query
+            query_embedding = self.embedder.embed([query])[0]
 
-        # Step 2: Get top-1 similar node
-        similar_nodes = self.graph_store.search_by_embedding(
-            query_embedding, top_k=top_k, user_name=user_name
-        )
+            # Step 2: Get top-1 similar node
+            similar_nodes = self.graph_store.search_by_embedding(
+                query_embedding, top_k=top_k, user_name=user_name
+            )
+
+        elif search_type == "fulltext":
+
+            @require_python_package(
+                import_name="jieba",
+                install_command="pip install jieba",
+                install_link="https://github.com/fxsjy/jieba",
+            )
+            def _tokenize_chinese(text):
+                """split zh jieba"""
+                import jieba
+
+                stopword_manager = StopwordManager()
+                tokens = jieba.lcut(text)
+                tokens = [token.strip() for token in tokens if token.strip()]
+                return stopword_manager.filter_words(tokens)
+
+            lang = detect_lang(query)
+            queries = _tokenize_chinese(query) if lang == "zh" else query.split()
+
+            similar_nodes = self.graph_store.search_by_fulltext(
+                query_words=queries,
+                top_k=top_k,
+                user_name=user_name,
+            )
+
         if not similar_nodes:
             logger.info("No similar nodes found for query embedding.")
             return {"core_id": None, "nodes": [], "edges": []}
@@ -328,7 +363,7 @@ class TreeTextMemory(BaseTextMemory):
 
     def get_all(
         self,
-        user_name: str,
+        user_name: str | None = None,
         user_id: str | None = None,
         page: int | None = None,
         page_size: int | None = None,
