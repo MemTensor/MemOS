@@ -1012,7 +1012,7 @@ class GameService:
             r.attrs.experience = max(0, min(100, r.attrs.experience + exp_delta))
 
     def _maybe_change_weather(self, world_state: WorldState) -> None:
-        if self._rng.random() < 0.35:
+        if self._rng.random() < 0.5:
             world_state.weather = self._rng.choice(["sunny", "cloudy", "windy", "rainy", "foggy"])
 
     def _format_memory_event(
