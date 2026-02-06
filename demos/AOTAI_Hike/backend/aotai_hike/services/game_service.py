@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 @dataclass
 class GameConfig:
     memory_top_k: int = 5
+    chat_history_max_len: int = 40
 
 
 class GameService:
@@ -108,6 +109,7 @@ class GameService:
             )
             node_after = AoTaiGraph.get_node(world_state.current_node_id)
             bg = self._safe_get_background(node_after.scene_id)
+            self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
 
         if world_state.phase == Phase.NIGHT_VOTE_READY and req.action != ActionType.DECIDE:
@@ -121,6 +123,7 @@ class GameService:
             )
             node_after = AoTaiGraph.get_node(world_state.current_node_id)
             bg = self._safe_get_background(node_after.scene_id)
+            self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
 
         if world_state.phase == Phase.AWAIT_PLAYER_SAY and req.action != ActionType.SAY:
@@ -134,6 +137,7 @@ class GameService:
             )
             node_after = AoTaiGraph.get_node(world_state.current_node_id)
             bg = self._safe_get_background(node_after.scene_id)
+            self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
 
         if req.action == ActionType.DECIDE:
@@ -190,6 +194,7 @@ class GameService:
                         )
                     )
 
+        self._append_chat_history(world_state, messages)
         return ActResponse(world_state=world_state, messages=messages, background=bg)
 
     def _apply_decision(
@@ -1051,3 +1056,27 @@ class GameService:
         persona = (active.persona if active else "")[:80]
         ev = "；".join(world_state.recent_events[-3:])
         return f"鳌太线 {node.name} {world_state.weather} {world_state.time_of_day} 动作:{req.action} {user_action_desc} 事件:{ev} 人设:{persona}"
+
+    def _append_chat_history(self, world_state: WorldState, messages: list[Message]) -> None:
+        if not messages:
+            return
+        history = list(world_state.chat_history or [])
+        for msg in messages:
+            if msg.kind == "action":
+                continue
+            if msg.kind == "system":
+                role = "system"
+            elif msg.role_id and msg.role_id == world_state.active_role_id:
+                role = "user"
+            else:
+                role = "assistant"
+            item = {"role": role, "content": msg.content}
+            if msg.timestamp_ms:
+                item["chat_time"] = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(msg.timestamp_ms / 1000)
+                )
+            history.append(item)
+        max_len = self._config.chat_history_max_len
+        if max_len and len(history) > max_len:
+            history = history[-max_len:]
+        world_state.chat_history = history

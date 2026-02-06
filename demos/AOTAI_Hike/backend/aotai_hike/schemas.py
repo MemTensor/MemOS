@@ -107,6 +107,7 @@ class WorldState(BaseModel):
     time_step_counter: int = 0
     weather: Literal["sunny", "cloudy", "windy", "rainy", "snowy", "foggy"] = "rainy"
     recent_events: list[str] = Field(default_factory=list)
+    chat_history: list[dict[str, str]] = Field(default_factory=list)
 
 
 class Message(BaseModel):

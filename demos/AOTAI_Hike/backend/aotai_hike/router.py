@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import os
 import uuid
 
 from fastapi import APIRouter, HTTPException
 
 from aotai_hike.adapters.background import BackgroundRequest, StaticBackgroundProvider
-from aotai_hike.adapters.companion import MockCompanionBrain
-from aotai_hike.adapters.memory import InMemoryMemoryAdapter
+from aotai_hike.adapters.companion import MemoryCompanionBrain
+from aotai_hike.adapters.memory import MemOSMemoryAdapter, MemOSMemoryClient
 from aotai_hike.schemas import (
     ActRequest,
     ActResponse,
@@ -31,9 +32,10 @@ router = APIRouter(prefix="/api/demo/ao-tai", tags=["AoTai Demo"])
 
 _sessions = InMemorySessionStore()
 _background = StaticBackgroundProvider()
+_memory_client = MemOSMemoryClient(base_url=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8001"))
 _game = GameService(
-    memory=InMemoryMemoryAdapter(),
-    companion=MockCompanionBrain(),
+    memory=MemOSMemoryAdapter(_memory_client),
+    companion=MemoryCompanionBrain(memory=_memory_client),
     background=_background,
 )
 
