@@ -9,6 +9,7 @@ from memos.context.context import generate_trace_id
 from memos.log import get_logger
 from memos.mem_scheduler.general_modules.misc import DictConversionMixin
 from memos.mem_scheduler.utils.db_utils import get_utc_now
+from memos.types.general_types import UserContext
 
 from .general_schemas import NOT_INITIALIZED
 
@@ -55,6 +56,7 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
         description="Optional business-level task ID. Multiple items can share the same task_id.",
     )
     chat_history: list | None = Field(default=None, description="user chat history")
+    user_context: UserContext | None = Field(default=None, description="user context")
 
     # Pydantic V2 model configuration
     model_config = ConfigDict(
@@ -91,6 +93,9 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             "user_name": self.user_name,
             "task_id": self.task_id if self.task_id is not None else "",
             "chat_history": self.chat_history if self.chat_history is not None else [],
+            "user_context": self.user_context.model_dump(exclude_none=True)
+            if self.user_context
+            else None,
         }
 
     @classmethod
@@ -107,6 +112,9 @@ class ScheduleMessageItem(BaseModel, DictConversionMixin):
             user_name=data.get("user_name"),
             task_id=data.get("task_id"),
             chat_history=data.get("chat_history"),
+            user_context=UserContext.model_validate(data.get("user_context"))
+            if data.get("user_context")
+            else None,
         )
 
 

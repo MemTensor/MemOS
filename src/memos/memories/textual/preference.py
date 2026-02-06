@@ -67,7 +67,7 @@ class PreferenceTextMemory(BaseTextMemory):
         )
 
     def get_memory(
-        self, messages: list[MessageList], type: str, info: dict[str, Any]
+        self, messages: list[MessageList], type: str, info: dict[str, Any], **kwargs
     ) -> list[TextualMemoryItem]:
         """Get memory based on the messages.
         Args:
@@ -75,7 +75,7 @@ class PreferenceTextMemory(BaseTextMemory):
             type (str): The type of memory to get.
             info (dict[str, Any]): The info to get memory.
         """
-        return self.extractor.extract(messages, type, info)
+        return self.extractor.extract(messages, type, info, **kwargs)
 
     def search(
         self, query: str, top_k: int, info=None, search_filter=None, **kwargs
