@@ -50,6 +50,7 @@ class PrefAddMessageHandler(BaseSchedulerHandler):
             mem_cube_id = message.mem_cube_id
             content = message.content
             messages_list = json.loads(content)
+            user_context = message.user_context
             info = message.info or {}
 
             logger.info("Processing pref_add for user_id=%s, mem_cube_id=%s", user_id, mem_cube_id)
@@ -78,6 +79,7 @@ class PrefAddMessageHandler(BaseSchedulerHandler):
                     "session_id": session_id,
                     "mem_cube_id": mem_cube_id,
                 },
+                user_context=user_context,
             )
             pref_ids = pref_mem.add(pref_memories)
 

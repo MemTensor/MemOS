@@ -24,6 +24,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from memos.mem_scheduler.schemas.message_schemas import ScheduleMessageItem
+    from memos.types.general_types import UserContext
 
 
 class MemReadMessageHandler(BaseSchedulerHandler):
@@ -64,6 +65,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
             user_name = message.user_name
             info = message.info or {}
             chat_history = message.chat_history
+            user_context = message.user_context
 
             mem_ids = json.loads(content) if isinstance(content, str) else content
             if not mem_ids:
@@ -91,6 +93,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 task_id=message.task_id,
                 info=info,
                 chat_history=chat_history,
+                user_context=user_context,
             )
 
             logger.info(
@@ -113,6 +116,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
         task_id: str | None = None,
         info: dict | None = None,
         chat_history: list | None = None,
+        user_context: UserContext | None = None,
     ) -> None:
         logger.info(
             "[DIAGNOSTIC] mem_read_handler._process_memories_with_reader called. mem_ids: %s, user_id: %s, mem_cube_id: %s, task_id: %s",
@@ -165,6 +169,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     custom_tags=custom_tags,
                     user_name=user_name,
                     chat_history=chat_history,
+                    user_context=user_context,
                 )
             except Exception as e:
                 logger.warning("%s: Fail to transfer mem: %s", e, memory_items)
