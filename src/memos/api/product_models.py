@@ -327,6 +327,16 @@ class APISearchRequest(BaseRequest):
         description="Number of textual memories to retrieve (top-K). Default: 10.",
     )
 
+    relativity: float = Field(
+        0.57,
+        ge=0,
+        description=(
+            "Relevance threshold for recalled memories. "
+            "Only memories with metadata.relativity >= relativity will be returned. "
+            "Use 0 to disable threshold filtering. Default: 0.3."
+        ),
+    )
+
     dedup: Literal["no", "sim", "mmr"] | None = Field(
         "mmr",
         description=(

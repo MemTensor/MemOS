@@ -5157,6 +5157,9 @@ class PolarDBGraphDB(BaseGraphDB):
             "info",
             "source",
             "file_ids",
+            "project_id",
+            "manager_user_id",
+            "delete_time",
         }
 
         def process_condition(condition):
@@ -5478,27 +5481,15 @@ class PolarDBGraphDB(BaseGraphDB):
     @timed
     def delete_node_by_mem_cube_id(
         self,
-        mem_cube_id: dict | None = None,
-        delete_record_id: dict | None = None,
+        mem_cube_id: str | None = None,
+        delete_record_id: str | None = None,
         hard_delete: bool = False,
     ) -> int:
-        """
-        (inner) Delete memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set.
+        logger.info(
+            f"delete_node_by_mem_cube_id mem_cube_id:{mem_cube_id}, "
+            f"delete_record_id:{delete_record_id}, hard_delete:{hard_delete}"
+        )
 
-        Args:
-            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
-            delete_record_id: The delete_record_id to match.
-            hard_delete: Whether to hard delete the nodes.
-        """
-        # Handle dict type parameters (extract value if dict)
-        if isinstance(mem_cube_id, dict):
-            # Try to get a value from dict, use first value if multiple
-            mem_cube_id = next(iter(mem_cube_id.values())) if mem_cube_id else None
-
-        if isinstance(delete_record_id, dict):
-            delete_record_id = next(iter(delete_record_id.values())) if delete_record_id else None
-
-        # Validate required parameters
         if not mem_cube_id:
             logger.warning("[delete_node_by_mem_cube_id] mem_cube_id is required but not provided")
             return 0
@@ -5509,32 +5500,18 @@ class PolarDBGraphDB(BaseGraphDB):
             )
             return 0
 
-        # Convert to string if needed
-        mem_cube_id = str(mem_cube_id) if mem_cube_id else None
-        delete_record_id = str(delete_record_id) if delete_record_id else None
-
-        logger.info(
-            f"[delete_node_by_mem_cube_id] mem_cube_id={mem_cube_id}, "
-            f"delete_record_id={delete_record_id}, hard_delete={hard_delete}"
-        )
-
         conn = None
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                # Build WHERE clause for user_name using parameter binding
-                # user_name must match mem_cube_id
                 user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
 
-                # Prepare parameter for user_name
                 user_name_param = self.format_param_value(mem_cube_id)
 
                 if hard_delete:
-                    # Hard delete: WHERE user_name = mem_cube_id AND delete_record_id = $delete_record_id
                     delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
                     where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
 
-                    # Prepare parameters for WHERE clause (user_name and delete_record_id)
                     where_params = [user_name_param, self.format_param_value(delete_record_id)]
 
                     delete_query = f"""
@@ -5549,40 +5526,39 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
                     return deleted_count
                 else:
-                    # Soft delete: WHERE user_name = mem_cube_id (only user_name condition)
-                    where_clause = user_name_condition
+                    delete_time_empty_condition = (
+                        "(ag_catalog.agtype_access_operator(properties, '\"delete_time\"'::agtype) IS NULL "
+                        "OR ag_catalog.agtype_access_operator(properties, '\"delete_time\"'::agtype) = '\"\"'::agtype)"
+                    )
+                    delete_record_id_empty_condition = (
+                        "(ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) IS NULL "
+                        "OR ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = '\"\"'::agtype)"
+                    )
+                    where_clause = f"{user_name_condition} AND {delete_time_empty_condition} AND {delete_record_id_empty_condition}"
 
                     current_time = datetime.utcnow().isoformat()
-                    # Build update properties JSON with status, delete_time, and delete_record_id
-                    # Use PostgreSQL JSONB merge operator (||) to update properties
-                    # Convert agtype to jsonb, merge with new values, then convert back to agtype
                     update_query = f"""
                         UPDATE "{self.db_name}_graph"."Memory"
                         SET properties = (
                             properties::jsonb || %s::jsonb
-                        )::text::agtype
+                        )::text::agtype,
+                        deletetime = %s
                         WHERE {where_clause}
                     """
-                    # Create update JSON with the three fields to update
                     update_properties = {
                         "status": "deleted",
                         "delete_time": current_time,
                         "delete_record_id": delete_record_id,
                     }
                     logger.info(
-                        f"[delete_node_by_mem_cube_id] Soft delete update_query: {update_query}"
+                        f"delete_node_by_mem_cube_id Soft delete update_query:{update_query},update_properties:{update_properties},deletetime:{current_time}"
                     )
-                    logger.info(
-                        f"[delete_node_by_mem_cube_id] update_properties: {update_properties}"
-                    )
-
-                    # Combine update_properties JSON with user_name parameter (only user_name, no delete_record_id)
-                    update_params = [json.dumps(update_properties), user_name_param]
+                    update_params = [json.dumps(update_properties), current_time, user_name_param]
                     cursor.execute(update_query, update_params)
                     updated_count = cursor.rowcount
 
                     logger.info(
-                        f"[delete_node_by_mem_cube_id] Soft deleted (updated) {updated_count} nodes"
+                        f"delete_node_by_mem_cube_id Soft deleted (updated) {updated_count} nodes"
                     )
                     return updated_count
 
@@ -5600,36 +5576,22 @@ class PolarDBGraphDB(BaseGraphDB):
         mem_cube_id: str | None = None,
         delete_record_id: str | None = None,
     ) -> int:
-        """
-        (inner) Recover memory nodes by mem_cube_id (user_name) and delete_record_id. Record id is inner field, just for delete and recover memory, not for user to set.
-
-        This function updates the status to 'activated', and clears delete_record_id and delete_time.
-
-        Args:
-            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
-            delete_record_id: The delete_record_id to match.
-
-        Returns:
-            int: Number of nodes recovered (updated).
-        """
         logger.info(
             f"recover_memory_by_mem_cube_id mem_cube_id:{mem_cube_id},delete_record_id:{delete_record_id}"
         )
         # Validate required parameters
         if not mem_cube_id:
-            logger.warning(
-                "[recover_memory_by_mem_cube_id] mem_cube_id is required but not provided"
-            )
+            logger.warning("recover_memory_by_mem_cube_id mem_cube_id is required but not provided")
             return 0
 
         if not delete_record_id:
             logger.warning(
-                "[recover_memory_by_mem_cube_id] delete_record_id is required but not provided"
+                "recover_memory_by_mem_cube_id delete_record_id is required but not provided"
             )
             return 0
 
         logger.info(
-            f"[recover_memory_by_mem_cube_id] mem_cube_id={mem_cube_id}, "
+            f"recover_memory_by_mem_cube_id mem_cube_id={mem_cube_id}, "
             f"delete_record_id={delete_record_id}"
         )
 
@@ -5637,19 +5599,15 @@ class PolarDBGraphDB(BaseGraphDB):
         try:
             conn = self._get_connection()
             with conn.cursor() as cursor:
-                # Build WHERE clause for user_name and delete_record_id using parameter binding
                 user_name_condition = "ag_catalog.agtype_access_operator(properties, '\"user_name\"'::agtype) = %s::agtype"
                 delete_record_id_condition = "ag_catalog.agtype_access_operator(properties, '\"delete_record_id\"'::agtype) = %s::agtype"
                 where_clause = f"{user_name_condition} AND {delete_record_id_condition}"
 
-                # Prepare parameters for WHERE clause
                 where_params = [
                     self.format_param_value(mem_cube_id),
                     self.format_param_value(delete_record_id),
                 ]
 
-                # Build update properties: status='activated', delete_record_id='', delete_time=''
-                # Use PostgreSQL JSONB merge operator (||) to update properties
                 update_properties = {
                     "status": "activated",
                     "delete_record_id": "",
@@ -5660,7 +5618,8 @@ class PolarDBGraphDB(BaseGraphDB):
                     UPDATE "{self.db_name}_graph"."Memory"
                     SET properties = (
                         properties::jsonb || %s::jsonb
-                    )::text::agtype
+                    )::text::agtype,
+                    deletetime = NULL 
                     WHERE {where_clause}
                 """
 
@@ -5669,7 +5628,6 @@ class PolarDBGraphDB(BaseGraphDB):
                     f"[recover_memory_by_mem_cube_id] update_properties: {update_properties}"
                 )
 
-                # Combine update_properties JSON with where_params
                 update_params = [json.dumps(update_properties), *where_params]
                 cursor.execute(update_query, update_params)
                 updated_count = cursor.rowcount
