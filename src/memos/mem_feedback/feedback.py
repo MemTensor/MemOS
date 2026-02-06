@@ -949,7 +949,7 @@ class MemFeedback(BaseMemFeedback):
             )
 
             must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
-            retrieved_ids = self.graph_store.seach_by_keywords_tfidf(
+            retrieved_ids = self.graph_store.search_by_keywords_tfidf(
                 [must_part], user_name=user_name, filter=filter_dict
             )
             if len(retrieved_ids) < 1:
@@ -957,7 +957,7 @@ class MemFeedback(BaseMemFeedback):
                     queries, top_k=100, user_name=user_name, filter=filter_dict
                 )
         else:
-            retrieved_ids = self.graph_store.seach_by_keywords_like(
+            retrieved_ids = self.graph_store.search_by_keywords_like(
                 f"%{original_word}%", user_name=user_name, filter=filter_dict
             )
 
