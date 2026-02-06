@@ -56,7 +56,7 @@ class MemOSClient:
         message_limit_number: int = 6,
         source: str | None = None,
     ) -> MemOSGetMessagesResponse | None:
-        """Get messages"""
+        """Get message"""
         # Validate required parameters
         self._validate_required_params(user_id=user_id)
 
