@@ -111,6 +111,7 @@ class OptimizedScheduler(GeneralScheduler):
             search_req=search_req,
             user_context=user_context,
             mode=mode,
+            include_embedding=(search_req.dedup == "mmr"),
         )
 
     def mix_search_memories(

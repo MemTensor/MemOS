@@ -463,6 +463,7 @@ class SingleCubeView(MemCubeView):
             search_req=search_req,
             user_context=user_context,
             mode=SearchMode.FAST,
+            include_embedding=(search_req.dedup == "mmr"),
         )
 
         formatted_memories = [

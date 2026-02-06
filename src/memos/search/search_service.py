@@ -41,6 +41,7 @@ def search_text_memories(
     search_req: APISearchRequest,
     user_context: UserContext,
     mode: SearchMode,
+    include_embedding: bool | None = None,
 ) -> list[Any]:
     """
     Shared text-memory search logic for API and scheduler paths.
@@ -62,4 +63,5 @@ def search_text_memories(
         include_skill_memory=search_req.include_skill_memory,
         skill_mem_top_k=search_req.skill_mem_top_k,
         dedup=search_req.dedup,
+        include_embedding=include_embedding,
     )
