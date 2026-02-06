@@ -8,7 +8,7 @@ import zipfile
 from concurrent.futures import as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dotenv import load_dotenv
 
@@ -33,6 +33,10 @@ from memos.types import MessageList
 
 
 load_dotenv()
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
+
 
 logger = get_logger(__name__)
 
@@ -544,11 +548,19 @@ description: {skill_memory.get("description", "")}
 
 
 def create_skill_memory_item(
-    skill_memory: dict[str, Any], info: dict[str, Any], embedder: BaseEmbedder | None = None
+    skill_memory: dict[str, Any],
+    info: dict[str, Any],
+    embedder: BaseEmbedder | None = None,
+    **kwargs: Any,
 ) -> TextualMemoryItem:
     info_ = info.copy()
     user_id = info_.pop("user_id", "")
     session_id = info_.pop("session_id", "")
+
+    # Extract manager_user_id and project_id from user_context
+    user_context: UserContext | None = kwargs.get("user_context")
+    manager_user_id = user_context.manager_user_id if user_context else None
+    project_id = user_context.project_id if user_context else None
 
     # Use description as the memory content
     memory_content = skill_memory.get("description", "")
@@ -580,6 +592,8 @@ def create_skill_memory_item(
         scripts=skill_memory.get("scripts"),
         others=skill_memory.get("others"),
         url=skill_memory.get("url", ""),
+        manager_user_id=manager_user_id,
+        project_id=project_id,
     )
 
     # If this is an update, use the old memory ID
@@ -827,7 +841,7 @@ def process_skill_memory_fine(
     skill_memory_items = []
     for skill_memory in skill_memories:
         try:
-            memory_item = create_skill_memory_item(skill_memory, info, embedder)
+            memory_item = create_skill_memory_item(skill_memory, info, embedder, **kwargs)
             skill_memory_items.append(memory_item)
         except Exception as e:
             logger.warning(f"[PROCESS_SKILLS] Error creating skill memory item: {e}")

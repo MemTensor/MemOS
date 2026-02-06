@@ -5,7 +5,7 @@ import os
 import re
 import tempfile
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tqdm import tqdm
 
@@ -32,6 +32,10 @@ from memos.templates.mem_reader_prompts import (
     SIMPLE_STRUCT_DOC_READER_PROMPT_ZH,
 )
 from memos.types.openai_chat_completion_types import File
+
+
+if TYPE_CHECKING:
+    from memos.types.general_types import UserContext
 
 
 logger = get_logger(__name__)
@@ -412,7 +416,6 @@ class FileContentParser(BaseMessageParser):
         # Extract file parameters (all are optional)
         file_data = file_info.get("file_data", "")
         file_id = file_info.get("file_id", "")
-        filename = file_info.get("filename", "")
         file_url_flag = False
         # Build content string based on available information
         content_parts = []
@@ -433,24 +436,11 @@ class FileContentParser(BaseMessageParser):
                 # Check if it looks like a URL
                 elif file_data.startswith(("http://", "https://", "file://")):
                     file_url_flag = True
-                    content_parts.append(f"[File URL: {file_data}]")
                 else:
                     # TODO: split into multiple memory items
                     content_parts.append(file_data)
             else:
                 content_parts.append(f"[File Data: {type(file_data).__name__}]")
-
-        # Priority 2: If file_id is provided, reference it
-        if file_id:
-            content_parts.append(f"[File ID: {file_id}]")
-
-        # Priority 3: If filename is provided, include it
-        if filename:
-            content_parts.append(f"[Filename: {filename}]")
-
-        # If no content can be extracted, create a placeholder
-        if not content_parts:
-            content_parts.append("[File: unknown]")
 
         # Combine content parts
         content = " ".join(content_parts)
@@ -464,6 +454,11 @@ class FileContentParser(BaseMessageParser):
             info_.update({"file_id": file_id})
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
+
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
 
         # For file content parts, default to LongTermMemory
         # (since we don't have role information at this level)
@@ -509,6 +504,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)
@@ -541,6 +538,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
             memory_items.append(memory_item)
@@ -658,6 +657,12 @@ class FileContentParser(BaseMessageParser):
         info_ = info.copy()
         user_id = info_.pop("user_id", "")
         session_id = info_.pop("session_id", "")
+
+        # Extract manager_user_id and project_id from user_context
+        user_context: UserContext | None = kwargs.get("user_context")
+        manager_user_id = user_context.manager_user_id if user_context else None
+        project_id = user_context.project_id if user_context else None
+
         if file_id:
             info_["file_id"] = file_id
         file_ids = [file_id] if file_id else []
@@ -716,6 +721,8 @@ class FileContentParser(BaseMessageParser):
                     type="fact",
                     info=info_,
                     file_ids=file_ids,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 ),
             )
 
@@ -724,7 +731,7 @@ class FileContentParser(BaseMessageParser):
             chunk_idx: int, chunk_text: str, reason: str = "raw"
         ) -> TextualMemoryItem:
             """Create fallback memory item with raw chunk text."""
-            return _make_memory_item(
+            raw_chunk_mem = _make_memory_item(
                 value=chunk_text,
                 tags=[
                     "mode:fine",
@@ -735,6 +742,11 @@ class FileContentParser(BaseMessageParser):
                 chunk_idx=chunk_idx,
                 chunk_content=chunk_text,
             )
+            tags_list = self.tokenizer.tokenize_mixed(raw_chunk_mem.metadata.key)
+            tags_list = [tag for tag in tags_list if len(tag) > 1]
+            tags_list = sorted(tags_list, key=len, reverse=True)
+            raw_chunk_mem.metadata.tags.extend(tags_list[:5])
+            return raw_chunk_mem
 
         # Handle empty chunks case
         if not valid_chunks:
