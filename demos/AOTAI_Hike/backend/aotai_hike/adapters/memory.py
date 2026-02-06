@@ -30,7 +30,7 @@ class MemOSMemoryClient:
         self,
         *,
         base_url: str,
-        timeout_s: float = 8.0,
+        timeout_s: float = 20.0,
         default_mode: str = "fine",
         default_top_k: int = 5,
     ):

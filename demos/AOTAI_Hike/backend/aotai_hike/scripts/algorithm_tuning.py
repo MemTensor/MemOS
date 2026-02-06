@@ -48,6 +48,43 @@ def _now_str() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
 
+class LoggingMemoryClient:
+    def __init__(self, base: MemOSMemoryClient, *, user_id: str):
+        self._base = base
+        self._user_id = user_id
+
+    def add_memory(self, **kwargs):
+        cube_id = str(kwargs.get("cube_id") or "")
+        messages = kwargs.get("messages") or []
+        mem_text = ""
+        if messages:
+            mem_text = "; ".join(
+                f"{m.get('role')}: {m.get('content')}" for m in messages if isinstance(m, dict)
+            )
+        print(f"[mem:add] cube={cube_id} content={mem_text[:160]}")
+        return self._base.add_memory(**kwargs)
+
+    def search_memory(self, **kwargs):
+        cube_id = str(kwargs.get("cube_id") or "")
+        query = kwargs.get("query") or ""
+        print(f"[mem:search] cube={cube_id} query={query}")
+        result = self._base.search_memory(**kwargs)
+        snippet_preview = " | ".join(s[:80] for s in result.snippets[:5])
+        print(f"[mem:search] hits={len(result.snippets)} snippets={snippet_preview}")
+        return result
+
+    def chat_complete(self, **kwargs):
+        cube_id = str(kwargs.get("cube_id") or "")
+        query = kwargs.get("query") or ""
+        print(f"[mem:chat] cube={cube_id} query={query}")
+        response = self._base.chat_complete(**kwargs)
+        print(f"[mem:chat] response={response[:200]}{'…' if len(response) > 200 else ''}")
+        return response
+
+    def __getattr__(self, item):
+        return getattr(self._base, item)
+
+
 def build_roles() -> list[Role]:
     return [
         Role(
@@ -82,6 +119,7 @@ def seed_memories(
     world_cube_id: str,
     role_cube_ids: dict[str, str],
 ) -> None:
+    print("[seed] writing initial memories...")
     client.add_memory(
         user_id=user_id,
         cube_id=world_cube_id,
@@ -100,6 +138,7 @@ def seed_memories(
         messages=[{"role": "user", "content": "太白喜欢记录温度、风速，并提醒大家补水。"}],
         source="aotai_hike_seed",
     )
+    print("[seed] done.")
 
 
 def run_scenario(
@@ -109,8 +148,10 @@ def run_scenario(
     session_id: str,
     steps: list[ActionStep],
 ) -> list[dict[str, str]]:
-    memory = MemOSMemoryAdapter(client)
-    companion = MemoryCompanionBrain(memory=client)
+    print(f"[init] user_id={user_id} session_id={session_id}")
+    logging_client = LoggingMemoryClient(client, user_id=user_id)
+    memory = MemOSMemoryAdapter(logging_client)
+    companion = MemoryCompanionBrain(memory=logging_client)
     game = GameService(
         memory=memory,
         companion=companion,
@@ -135,12 +176,13 @@ def run_scenario(
     world_cube_id = MemoryNamespace.world_cube_id(user_id=user_id)
 
     seed_memories(
-        client=client,
+        client=logging_client,
         user_id=user_id,
         session_id=session_id,
         world_cube_id=world_cube_id,
         role_cube_ids=role_cube_ids,
     )
+    print(f"[init] roles={len(roles)} active_role={roles[0].role_id}")
 
     for role in roles:
         game.upsert_role(world_state, RoleUpsertRequest(session_id=session_id, role=role))
@@ -150,14 +192,25 @@ def run_scenario(
 
     logs: list[dict[str, str]] = []
 
-    for step in steps:
+    for idx, step in enumerate(steps, start=1):
+        print(
+            f"[step {idx}] action={step.action} payload={json.dumps(step.payload, ensure_ascii=False)}"
+        )
         resp = game.act(
             world_state,
             ActRequest(session_id=session_id, action=step.action, payload=step.payload),
         )
+        print(
+            f"[step {idx}] messages={len(resp.messages)} phase={resp.world_state.phase} "
+            f"time={resp.world_state.time_of_day} weather={resp.world_state.weather}"
+        )
         for msg in resp.messages:
             if msg.kind != "speech":
                 continue
+            print(
+                f"[npc] {msg.role_name or msg.role_id}: {msg.content[:120]}"
+                f"{'…' if len(msg.content) > 120 else ''}"
+            )
             logs.append(
                 {
                     "role_id": msg.role_id or "",
@@ -180,6 +233,7 @@ def main() -> None:
     parser.add_argument("--output", default="", help="Optional JSONL output path")
     args = parser.parse_args()
 
+    print(f"[config] base_url={args.base_url}")
     client = MemOSMemoryClient(base_url=args.base_url)
     steps = [
         ActionStep(
