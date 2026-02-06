@@ -1953,33 +1953,15 @@ class Neo4jGraphDB(BaseGraphDB):
 
     def delete_node_by_mem_cube_id(
         self,
-        mem_cube_id: dict | None = None,
-        delete_record_id: dict | None = None,
+        mem_cube_id: str | None = None,
+        delete_record_id: str | None = None,
         hard_delete: bool = False,
     ) -> int:
-        """
-        Delete nodes by mem_cube_id (user_name) and delete_record_id.
+        logger.info(
+            f"delete_node_by_mem_cube_id mem_cube_id:{mem_cube_id}, "
+            f"delete_record_id:{delete_record_id}, hard_delete:{hard_delete}"
+        )
 
-        Args:
-            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
-                Can be dict or str. If dict, will extract the value.
-            delete_record_id: The delete_record_id to match.
-                Can be dict or str. If dict, will extract the value.
-            hard_delete: If True, performs hard delete (directly deletes records).
-                If False, performs soft delete (updates status to 'deleted' and sets delete_record_id and delete_time).
-
-        Returns:
-            int: Number of nodes deleted or updated.
-        """
-        # Handle dict type parameters (extract value if dict)
-        if isinstance(mem_cube_id, dict):
-            # Try to get a value from dict, use first value if multiple
-            mem_cube_id = next(iter(mem_cube_id.values())) if mem_cube_id else None
-
-        if isinstance(delete_record_id, dict):
-            delete_record_id = next(iter(delete_record_id.values())) if delete_record_id else None
-
-        # Validate required parameters
         if not mem_cube_id:
             logger.warning("[delete_node_by_mem_cube_id] mem_cube_id is required but not provided")
             return 0
@@ -1990,19 +1972,9 @@ class Neo4jGraphDB(BaseGraphDB):
             )
             return 0
 
-        # Convert to string if needed
-        mem_cube_id = str(mem_cube_id) if mem_cube_id else None
-        delete_record_id = str(delete_record_id) if delete_record_id else None
-
-        logger.info(
-            f"[delete_node_by_mem_cube_id] mem_cube_id={mem_cube_id}, "
-            f"delete_record_id={delete_record_id}, hard_delete={hard_delete}"
-        )
-
         try:
             with self.driver.session(database=self.db_name) as session:
                 if hard_delete:
-                    # Hard delete: WHERE user_name = mem_cube_id AND delete_record_id = $delete_record_id
                     query = """
                         MATCH (n:Memory)
                         WHERE n.user_name = $mem_cube_id AND n.delete_record_id = $delete_record_id
@@ -2019,12 +1991,13 @@ class Neo4jGraphDB(BaseGraphDB):
                     logger.info(f"[delete_node_by_mem_cube_id] Hard deleted {deleted_count} nodes")
                     return deleted_count
                 else:
-                    # Soft delete: WHERE user_name = mem_cube_id (only user_name condition)
                     current_time = datetime.utcnow().isoformat()
 
                     query = """
                         MATCH (n:Memory)
                         WHERE n.user_name = $mem_cube_id
+                            AND (n.delete_time IS NULL OR n.delete_time = "")
+                            AND (n.delete_record_id IS NULL OR n.delete_record_id = "")
                         SET n.status = $status,
                             n.delete_record_id = $delete_record_id,
                             n.delete_time = $delete_time
@@ -2043,7 +2016,7 @@ class Neo4jGraphDB(BaseGraphDB):
                     updated_count = record["updated_count"] if record else 0
 
                     logger.info(
-                        f"[delete_node_by_mem_cube_id] Soft deleted (updated) {updated_count} nodes"
+                        f"delete_node_by_mem_cube_id Soft deleted (updated) {updated_count} nodes"
                     )
                     return updated_count
 
@@ -2058,33 +2031,22 @@ class Neo4jGraphDB(BaseGraphDB):
         mem_cube_id: str | None = None,
         delete_record_id: str | None = None,
     ) -> int:
-        """
-        Recover memory nodes by mem_cube_id (user_name) and delete_record_id.
-
-        This function updates the status to 'activated', and clears delete_record_id and delete_time.
-
-        Args:
-            mem_cube_id: The mem_cube_id which corresponds to user_name in the table.
-            delete_record_id: The delete_record_id to match.
-
-        Returns:
-            int: Number of nodes recovered (updated).
-        """
+        logger.info(
+            f"recover_memory_by_mem_cube_id mem_cube_id:{mem_cube_id},delete_record_id:{delete_record_id}"
+        )
         # Validate required parameters
         if not mem_cube_id:
-            logger.warning(
-                "[recover_memory_by_mem_cube_id] mem_cube_id is required but not provided"
-            )
+            logger.warning("recover_memory_by_mem_cube_id mem_cube_id is required but not provided")
             return 0
 
         if not delete_record_id:
             logger.warning(
-                "[recover_memory_by_mem_cube_id] delete_record_id is required but not provided"
+                "recover_memory_by_mem_cube_id delete_record_id is required but not provided"
             )
             return 0
 
         logger.info(
-            f"[recover_memory_by_mem_cube_id] mem_cube_id={mem_cube_id}, "
+            f"recover_memory_by_mem_cube_id mem_cube_id={mem_cube_id}, "
             f"delete_record_id={delete_record_id}"
         )
 
