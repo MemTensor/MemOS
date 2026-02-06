@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Pure algorithm script for AoTai Hike multi-role memory + chat tuning.
+Algorithm script that 1:1 replays the online AoTai Hike behavior.
+It drives `GameService.act()` end-to-end so memory/search/chat flows
+match the runtime server logic.
 
 Run:
   python -m aotai_hike.scripts.algorithm_tuning \
@@ -20,16 +22,26 @@ import uuid
 
 from dataclasses import dataclass
 
-from aotai_hike.adapters.companion import MemoryChatConfig, MemoryCompanionBrain
-from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryClient
-from aotai_hike.schemas import Role, RoleAttrs, WorldState
+from aotai_hike.adapters.background import StaticBackgroundProvider
+from aotai_hike.adapters.companion import MemoryCompanionBrain
+from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryAdapter, MemOSMemoryClient
+from aotai_hike.schemas import (
+    ActionType,
+    ActRequest,
+    Role,
+    RoleAttrs,
+    RoleUpsertRequest,
+    SetActiveRoleRequest,
+    WorldState,
+)
+from aotai_hike.services.game_service import GameService
 
 
 @dataclass(frozen=True)
 class ActionStep:
-    user_text: str
-    user_action: str
-    world_event: str
+    action: ActionType
+    payload: dict[str, object]
+    note: str = ""
 
 
 def _now_str() -> str:
@@ -69,11 +81,7 @@ def seed_memories(
     session_id: str,
     world_cube_id: str,
     role_cube_ids: dict[str, str],
-    dry_run: bool,
 ) -> None:
-    if dry_run:
-        return
-
     client.add_memory(
         user_id=user_id,
         cube_id=world_cube_id,
@@ -94,46 +102,25 @@ def seed_memories(
     )
 
 
-def add_world_event(
-    *,
-    client: MemOSMemoryClient,
-    user_id: str,
-    session_id: str,
-    world_cube_id: str,
-    event_text: str,
-    dry_run: bool,
-) -> None:
-    if dry_run:
-        return
-    client.add_memory(
-        user_id=user_id,
-        cube_id=world_cube_id,
-        session_id=session_id,
-        async_mode="sync",
-        mode="fine",
-        memory_content=event_text,
-        source="aotai_hike_event",
-    )
-
-
-def append_chat_history(history: list[dict[str, str]], role: str, content: str) -> None:
-    history.append({"role": role, "content": content, "chat_time": _now_str()})
-
-
 def run_scenario(
     *,
     client: MemOSMemoryClient,
     user_id: str,
     session_id: str,
     steps: list[ActionStep],
-    dry_run: bool,
 ) -> list[dict[str, str]]:
+    memory = MemOSMemoryAdapter(client)
+    companion = MemoryCompanionBrain(memory=client)
+    game = GameService(
+        memory=memory,
+        companion=companion,
+        background=StaticBackgroundProvider(),
+    )
+
     roles = build_roles()
     world_state = WorldState(
         session_id=session_id,
         user_id=user_id,
-        active_role_id=roles[0].role_id,
-        roles=roles,
         weather="windy",
         time_of_day="afternoon",
         current_node_id="start",
@@ -153,48 +140,24 @@ def run_scenario(
         session_id=session_id,
         world_cube_id=world_cube_id,
         role_cube_ids=role_cube_ids,
-        dry_run=dry_run,
     )
 
-    brain = MemoryCompanionBrain(
-        memory=client,
-        config=MemoryChatConfig(memory_top_k=5, history_max_items=20, mode="fine"),
-        seed=42,
+    for role in roles:
+        game.upsert_role(world_state, RoleUpsertRequest(session_id=session_id, role=role))
+    game.set_active_role(
+        world_state, SetActiveRoleRequest(session_id=session_id, active_role_id=roles[0].role_id)
     )
 
     logs: list[dict[str, str]] = []
 
     for step in steps:
-        append_chat_history(world_state.chat_history, "user", step.user_text)
-        add_world_event(
-            client=client,
-            user_id=user_id,
-            session_id=session_id,
-            world_cube_id=world_cube_id,
-            event_text=step.world_event,
-            dry_run=dry_run,
+        resp = game.act(
+            world_state,
+            ActRequest(session_id=session_id, action=step.action, payload=step.payload),
         )
-
-        world_memories = client.search_memory(
-            user_id=user_id,
-            cube_id=world_cube_id,
-            query=step.user_action,
-            top_k=5,
-            mode="fine",
-            session_id=session_id,
-        ).snippets
-
-        output = brain.generate(
-            world_state=world_state,
-            active_role=roles[0],
-            memory_snippets=world_memories,
-            user_action=step.user_action,
-        )
-
-        for msg in output.messages:
+        for msg in resp.messages:
             if msg.kind != "speech":
                 continue
-            append_chat_history(world_state.chat_history, "assistant", msg.content)
             logs.append(
                 {
                     "role_id": msg.role_id or "",
@@ -214,21 +177,20 @@ def main() -> None:
     parser.add_argument(
         "--base-url", default=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8001")
     )
-    parser.add_argument("--dry-run", action="store_true", help="Skip add_memory writes")
     parser.add_argument("--output", default="", help="Optional JSONL output path")
     args = parser.parse_args()
 
     client = MemOSMemoryClient(base_url=args.base_url)
     steps = [
         ActionStep(
-            user_text="大家注意脚下，风有点大。",
-            user_action="SAY:大家注意脚下，风有点大。",
-            world_event="队伍提醒注意脚下，风力增强。",
+            action=ActionType.SAY,
+            payload={"text": "大家注意脚下，风有点大。"},
+            note="player_say",
         ),
         ActionStep(
-            user_text="我们继续保持速度，别走散。",
-            user_action="MOVE_FORWARD:keep_pace",
-            world_event="队伍继续前进，保持队形。",
+            action=ActionType.MOVE_FORWARD,
+            payload={"step_km": 1.0},
+            note="advance_step",
         ),
     ]
 
@@ -237,7 +199,6 @@ def main() -> None:
         user_id=args.user_id,
         session_id=args.session_id,
         steps=steps,
-        dry_run=args.dry_run,
     )
 
     if args.output:
