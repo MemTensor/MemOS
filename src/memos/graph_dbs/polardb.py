@@ -2618,7 +2618,7 @@ class PolarDBGraphDB(BaseGraphDB):
 
             # Add status filter condition: if not passed, exclude deleted; otherwise filter by IN list
             if status is None:
-                # Default: status != 'deleted'
+                # Default behavior: exclude deleted entries
                 where_conditions.append(
                     "ag_catalog.agtype_access_operator(properties, '\"status\"'::agtype) <> '\"deleted\"'::agtype"
                 )
@@ -2739,10 +2739,8 @@ class PolarDBGraphDB(BaseGraphDB):
 
             # Add status filter for edges: if not passed, exclude deleted; otherwise filter by IN list
             if status is None:
-                # Default: status != 'deleted'
-                cypher_where_conditions.append(
-                    "a.status <> 'deleted' AND b.status <> 'deleted'"
-                )
+                # Default behavior: exclude deleted entries
+                cypher_where_conditions.append("a.status <> 'deleted' AND b.status <> 'deleted'")
             elif isinstance(status, list) and len(status) > 0:
                 escaped_statuses = [st.replace("'", "\\'") for st in status]
                 status_list_str = ", ".join([f"'{st}'" for st in escaped_statuses])
