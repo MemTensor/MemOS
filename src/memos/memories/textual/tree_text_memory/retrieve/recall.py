@@ -2,7 +2,7 @@ import concurrent.futures
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
-from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem
 from memos.memories.textual.tree_text_memory.retrieve.bm25_util import EnhancedBM25
@@ -19,7 +19,7 @@ class GraphMemoryRetriever:
 
     def __init__(
         self,
-        graph_store: Neo4jGraphDB,
+        graph_store: BaseGraphDB,
         embedder: OllamaEmbedder,
         bm25_retriever: EnhancedBM25 | None = None,
         include_embedding: bool = False,

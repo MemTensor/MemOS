@@ -2,7 +2,7 @@ import traceback
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
-from memos.graph_dbs.factory import Neo4jGraphDB
+from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import SearchedTreeNodeTextualMemoryMetadata, TextualMemoryItem
@@ -39,7 +39,7 @@ class Searcher:
     def __init__(
         self,
         dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM,
-        graph_store: Neo4jGraphDB,
+        graph_store: BaseGraphDB,
         embedder: OllamaEmbedder,
         reranker: BaseReranker,
         bm25_retriever: EnhancedBM25 | None = None,

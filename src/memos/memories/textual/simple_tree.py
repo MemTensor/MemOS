@@ -15,7 +15,6 @@ from memos.reranker.base import BaseReranker
 
 if TYPE_CHECKING:
     from memos.embedders.factory import OllamaEmbedder
-    from memos.graph_dbs.factory import Neo4jGraphDB
     from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 
 
@@ -47,7 +46,7 @@ class SimpleTreeTextMemory(TreeTextMemory):
         self.extractor_llm: OpenAILLM | OllamaLLM | AzureLLM = llm
         self.dispatcher_llm: OpenAILLM | OllamaLLM | AzureLLM = llm
         self.embedder: OllamaEmbedder = embedder
-        self.graph_store: Neo4jGraphDB = graph_db
+        self.graph_store: BaseGraphDB = graph_db
         self.search_strategy = config.search_strategy
         self.bm25_retriever = (
             EnhancedBM25()

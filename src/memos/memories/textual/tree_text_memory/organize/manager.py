@@ -7,7 +7,7 @@ from datetime import datetime
 
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
-from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.factory import AzureLLM, OllamaLLM, OpenAILLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -54,7 +54,7 @@ def extract_working_binding_ids(mem_items: list[TextualMemoryItem]) -> set[str]:
 class MemoryManager:
     def __init__(
         self,
-        graph_store: Neo4jGraphDB,
+        graph_store: BaseGraphDB,
         embedder: OllamaEmbedder,
         llm: OpenAILLM | OllamaLLM | AzureLLM,
         memory_size: dict | None = None,

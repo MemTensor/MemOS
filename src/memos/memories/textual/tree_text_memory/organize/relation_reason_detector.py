@@ -3,7 +3,7 @@ import traceback
 
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.item import GraphDBNode
-from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TreeNodeTextualMemoryMetadata
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 
 class RelationAndReasoningDetector:
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: OllamaEmbedder):
+    def __init__(self, graph_store: BaseGraphDB, llm: BaseLLM, embedder: OllamaEmbedder):
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder

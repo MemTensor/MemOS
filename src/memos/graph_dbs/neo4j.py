@@ -7,17 +7,11 @@ from typing import Any, Literal
 from memos.configs.graph_db import Neo4jGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
+from memos.graph_dbs.utils import compose_node as _compose_node
 from memos.log import get_logger
 
 
 logger = get_logger(__name__)
-
-
-def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-    node_id = item["id"]
-    memory = item["memory"]
-    metadata = item.get("metadata", {})
-    return node_id, memory, metadata
 
 
 def _prepare_node_metadata(metadata: dict[str, Any]) -> dict[str, Any]:

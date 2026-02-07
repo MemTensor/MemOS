@@ -272,3 +272,93 @@ class BaseGraphDB(ABC):
                 - metadata: dict[str, Any] - Node metadata
             user_name: Optional user name (will use config default if not provided)
         """
+
+    @abstractmethod
+    def get_edges(
+        self, id: str, type: str = "ANY", direction: str = "ANY"
+    ) -> list[dict[str, str]]:
+        """
+        Get edges connected to a node, with optional type and direction filter.
+        Args:
+            id: Node ID to retrieve edges for.
+            type: Relationship type to match, or 'ANY' to match all.
+            direction: 'OUTGOING', 'INCOMING', or 'ANY'.
+        Returns:
+            List of edge dicts with 'from', 'to', and 'type' keys.
+        """
+
+    @abstractmethod
+    def search_by_fulltext(
+        self, query_words: list[str], top_k: int = 10, **kwargs
+    ) -> list[dict]:
+        """
+        Full-text search for memory nodes.
+        Args:
+            query_words: List of words to search for.
+            top_k: Maximum number of results.
+        Returns:
+            List of dicts with 'id' and 'score'.
+        """
+
+    @abstractmethod
+    def get_neighbors_by_tag(
+        self,
+        tags: list[str],
+        exclude_ids: list[str],
+        top_k: int = 5,
+        min_overlap: int = 1,
+        **kwargs,
+    ) -> list[dict[str, Any]]:
+        """
+        Find top-K neighbor nodes with maximum tag overlap.
+        Args:
+            tags: Tags to match.
+            exclude_ids: Node IDs to exclude.
+            top_k: Max neighbors to return.
+            min_overlap: Minimum overlapping tags required.
+        Returns:
+            List of node dicts.
+        """
+
+    @abstractmethod
+    def delete_node_by_prams(
+        self,
+        memory_ids: list[str] | None = None,
+        writable_cube_ids: list[str] | None = None,
+        file_ids: list[str] | None = None,
+        filter: dict | None = None,
+        **kwargs,
+    ) -> int:
+        """
+        Delete nodes matching given parameters.
+        Returns:
+            Number of deleted nodes.
+        """
+
+    @abstractmethod
+    def get_user_names_by_memory_ids(self, memory_ids: list[str]) -> list[str]:
+        """
+        Get distinct user names that own the given memory IDs.
+        """
+
+    @abstractmethod
+    def exist_user_name(self, user_name: str) -> bool:
+        """
+        Check if a user_name exists in the graph.
+        """
+
+    @abstractmethod
+    def search_by_keywords_like(
+        self, query_word: str, **kwargs
+    ) -> list[dict]:
+        """
+        Search memories using SQL LIKE pattern matching.
+        """
+
+    @abstractmethod
+    def search_by_keywords_tfidf(
+        self, query_words: list[str], **kwargs
+    ) -> list[dict]:
+        """
+        Search memories using TF-IDF fulltext scoring.
+        """

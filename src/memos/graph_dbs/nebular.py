@@ -11,6 +11,7 @@ import numpy as np
 from memos.configs.graph_db import NebulaGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
+from memos.graph_dbs.utils import compose_node as _compose_node
 from memos.log import get_logger
 from memos.utils import timed
 
@@ -42,14 +43,6 @@ def _normalize(vec: list[float]) -> list[float]:
     v = np.asarray(vec, dtype=np.float32)
     norm = np.linalg.norm(v)
     return (v / (norm if norm else 1.0)).tolist()
-
-
-@timed
-def _compose_node(item: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-    node_id = item["id"]
-    memory = item["memory"]
-    metadata = item.get("metadata", {})
-    return node_id, memory, metadata
 
 
 @timed

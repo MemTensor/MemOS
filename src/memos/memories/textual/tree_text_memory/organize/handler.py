@@ -6,7 +6,7 @@ from datetime import datetime
 from dateutil import parser
 
 from memos.embedders.base import BaseEmbedder
-from memos.graph_dbs.neo4j import Neo4jGraphDB
+from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.base import BaseLLM
 from memos.log import get_logger
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 class NodeHandler:
     EMBEDDING_THRESHOLD: float = 0.8  # Threshold for embedding similarity to consider conflict
 
-    def __init__(self, graph_store: Neo4jGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
+    def __init__(self, graph_store: BaseGraphDB, llm: BaseLLM, embedder: BaseEmbedder):
         self.graph_store = graph_store
         self.llm = llm
         self.embedder = embedder
