@@ -2035,6 +2035,10 @@ class PolarDBGraphDB(BaseGraphDB):
         """
         Retrieve node IDs based on vector similarity using PostgreSQL vector operations.
         """
+        # DIAGNOSTIC: Log inputs
+        logger.info(f"[search_by_embedding_DEBUG] Called with vector dim: {len(vector) if vector else 'None'}, top_k: {top_k}, scope: {scope}, status: {status}")
+        logger.info(f"[search_by_embedding_DEBUG] user_name: {user_name}, search_filter: {search_filter}")
+
         # Build WHERE clause dynamically like nebular.py
         logger.info(
             f"[search_by_embedding] filter: {filter}, knowledgebase_ids: {knowledgebase_ids}"
@@ -2140,6 +2144,7 @@ class PolarDBGraphDB(BaseGraphDB):
         conn = None
         try:
             conn = self._get_connection()
+            logger.info(f"[search_by_embedding_DEBUG] Got DB connection successfully")
             with conn.cursor() as cursor:
                 try:
                     # If params is empty, execute query directly without parameters
@@ -2147,6 +2152,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         cursor.execute(query, params)
                     else:
                         cursor.execute(query)
+                    logger.info(f"[search_by_embedding_DEBUG] Query executed successfully")
                 except Exception as e:
                     logger.error(f"[search_by_embedding] Error executing query: {e}")
                     logger.error(f"[search_by_embedding] Query length: {len(query)}")
@@ -2156,6 +2162,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     logger.error(f"[search_by_embedding] Query contains %s: {'%s' in query}")
                     raise
                 results = cursor.fetchall()
+                logger.info(f"[search_by_embedding_DEBUG] Fetched {len(results)} rows from database")
                 output = []
                 for row in results:
                     """
@@ -2173,7 +2180,12 @@ class PolarDBGraphDB(BaseGraphDB):
                     score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
                     if threshold is None or score_val >= threshold:
                         output.append({"id": id_val, "score": score_val})
+                logger.info(f"[search_by_embedding_DEBUG] Returning {len(output)} results after threshold filter")
+                logger.info(f"[search_by_embedding_DEBUG] Result IDs: {[r['id'] for r in output[:5]]} (showing first 5)")
                 return output[:top_k]
+        except Exception as e:
+            logger.error(f"[search_by_embedding_DEBUG] EXCEPTION in search_by_embedding: {type(e).__name__}: {e}", exc_info=True)
+            return []
         finally:
             self._return_connection(conn)
 

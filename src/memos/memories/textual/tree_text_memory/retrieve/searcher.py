@@ -751,16 +751,32 @@ class Searcher:
         query_words = list(set(query_words))[: top_k * 3]
         query_words = [query, *query_words]
         logger.info(f"[SIMPLESEARCH] Query words: {query_words}")
-        query_embeddings = self.embedder.embed(query_words)
 
-        items = self.graph_retriever.retrieve_from_mixed(
-            top_k=top_k * 2,
-            memory_scope=None,
-            query_embedding=query_embeddings,
-            search_filter=search_filter,
-            user_name=user_name,
-        )
-        logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
+        # DIAGNOSTIC: Log embedder config
+        logger.info(f"[SIMPLESEARCH_DEBUG] Embedder type: {type(self.embedder).__name__}")
+        logger.info(f"[SIMPLESEARCH_DEBUG] Embedder config: {getattr(self.embedder, 'config', 'No config attr')}")
+
+        try:
+            query_embeddings = self.embedder.embed(query_words)
+            logger.info(f"[SIMPLESEARCH_DEBUG] Successfully generated {len(query_embeddings)} embeddings, dims: {len(query_embeddings[0]) if query_embeddings else 'N/A'}")
+        except Exception as e:
+            logger.error(f"[SIMPLESEARCH_DEBUG] EMBEDDER FAILED: {type(e).__name__}: {e}", exc_info=True)
+            return []
+
+        logger.info(f"[SIMPLESEARCH_DEBUG] Calling retrieve_from_mixed with {len(query_embeddings)} embeddings")
+        try:
+            items = self.graph_retriever.retrieve_from_mixed(
+                top_k=top_k * 2,
+                memory_scope=None,
+                query_embedding=query_embeddings,
+                search_filter=search_filter,
+                user_name=user_name,
+            )
+            logger.info(f"[SIMPLESEARCH] Items count: {len(items)}")
+            logger.info(f"[SIMPLESEARCH_DEBUG] Retrieved items: {[item.id for item in items] if items else 'NONE'}")
+        except Exception as e:
+            logger.error(f"[SIMPLESEARCH_DEBUG] retrieve_from_mixed FAILED: {type(e).__name__}: {e}", exc_info=True)
+            return []
         documents = [getattr(item, "memory", "") for item in items]
         if not documents:
             return []
