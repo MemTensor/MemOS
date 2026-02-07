@@ -629,6 +629,8 @@ class MOSCore:
                         search_filter=search_filter,
                     )
                     search_time_end = time.time()
+                    print(f"🔍 [SEARCH_DEBUG] cube_id={cube_id}, found {len(memories)} memories", flush=True)
+                    logger.warning(f"[SEARCH_DEBUG] cube_id={cube_id}, memories_count={len(memories)}, first_3_ids={[m.id for m in memories[:3]]}")
                     logger.info(
                         f"🧠 [Memory] Searched memories from {cube_id}:\n{self._str_memories(memories)}\n"
                     )
