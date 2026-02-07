@@ -431,15 +431,30 @@ class APIConfig:
         """Get embedder configuration."""
         embedder_backend = os.getenv("MOS_EMBEDDER_BACKEND", "ollama")
 
-        if embedder_backend == "universal_api":
+        # Map voyageai to universal_api
+        if embedder_backend in ["universal_api", "voyageai"]:
+            # Handle API Key - support VOYAGE_API_KEY for convenience
+            api_key = os.getenv("MOS_EMBEDDER_API_KEY")
+            if not api_key and embedder_backend == "voyageai":
+                api_key = os.getenv("VOYAGE_API_KEY")
+            if not api_key:
+                api_key = "sk-xxxx"
+
+            # Auto-configure VoyageAI base URL
+            base_url = os.getenv("MOS_EMBEDDER_API_BASE")
+            if not base_url and embedder_backend == "voyageai":
+                base_url = "https://api.voyageai.com/v1"
+            if not base_url:
+                base_url = "http://openai.com"
+
             return {
                 "backend": "universal_api",
                 "config": {
                     "provider": os.getenv("MOS_EMBEDDER_PROVIDER", "openai"),
-                    "api_key": os.getenv("MOS_EMBEDDER_API_KEY", "sk-xxxx"),
+                    "api_key": api_key,
                     "model_name_or_path": os.getenv("MOS_EMBEDDER_MODEL", "text-embedding-3-large"),
                     "headers_extra": json.loads(os.getenv("MOS_EMBEDDER_HEADERS_EXTRA", "{}")),
-                    "base_url": os.getenv("MOS_EMBEDDER_API_BASE", "http://openai.com"),
+                    "base_url": base_url,
                     "backup_client": os.getenv("MOS_EMBEDDER_BACKUP_CLIENT", "false").lower()
                     == "true",
                     "backup_base_url": os.getenv(
