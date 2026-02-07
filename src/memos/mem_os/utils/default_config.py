@@ -232,11 +232,13 @@ def get_default_cube_config(
         }
 
     # Configure activation memory if enabled.
-    # KV cache activation memory requires a local HuggingFace model (it extracts
-    # internal attention KV tensors), so it cannot work with remote API backends.
+    # KV cache activation memory requires a local HuggingFace/vLLM model (it
+    # extracts internal attention KV tensors via build_kv_cache), so it cannot
+    # work with remote API backends like OpenAI or Gemini.
+    # Only create act_mem when activation_memory_backend is explicitly provided.
     act_mem_config = {}
     if kwargs.get("enable_activation_memory", False):
-        extractor_backend = kwargs.get("activation_memory_backend", "huggingface")
+        extractor_backend = kwargs.get("activation_memory_backend")
         if extractor_backend in ("huggingface", "huggingface_singleton", "vllm"):
             act_mem_config = {
                 "backend": "kv_cache",
@@ -246,15 +248,15 @@ def get_default_cube_config(
                     ),
                     "extractor_llm": {
                         "backend": extractor_backend,
-                        "config": openai_config,
+                        "config": kwargs.get("activation_memory_llm_config", {}),
                     },
                 },
             }
         else:
-            logger.warning(
+            logger.info(
                 "Activation memory (kv_cache) requires a local model backend "
-                "(huggingface/vllm), but no local backend configured. "
-                "Skipping activation memory in MemCube config."
+                "(huggingface/vllm) via activation_memory_backend kwarg. "
+                "Skipping act_mem in MemCube config."
             )
 
     # Create MemCube configuration
