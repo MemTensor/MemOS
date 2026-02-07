@@ -3,11 +3,14 @@ Default configuration utilities for MemOS.
 Provides simplified configuration generation for users.
 """
 
+import logging
 from typing import Literal
 
 from memos.configs.mem_cube import GeneralMemCubeConfig
 from memos.configs.mem_os import MOSConfig
 from memos.mem_cube.general import GeneralMemCube
+
+logger = logging.getLogger(__name__)
 
 
 def get_default_config(
@@ -228,21 +231,31 @@ def get_default_cube_config(
             },
         }
 
-    # Configure activation memory if enabled
+    # Configure activation memory if enabled.
+    # KV cache activation memory requires a local HuggingFace model (it extracts
+    # internal attention KV tensors), so it cannot work with remote API backends.
     act_mem_config = {}
     if kwargs.get("enable_activation_memory", False):
-        act_mem_config = {
-            "backend": "kv_cache",
-            "config": {
-                "memory_filename": kwargs.get(
-                    "activation_memory_filename", "activation_memory.pickle"
-                ),
-                "extractor_llm": {
-                    "backend": "openai",
-                    "config": openai_config,
+        extractor_backend = kwargs.get("activation_memory_backend", "huggingface")
+        if extractor_backend in ("huggingface", "huggingface_singleton", "vllm"):
+            act_mem_config = {
+                "backend": "kv_cache",
+                "config": {
+                    "memory_filename": kwargs.get(
+                        "activation_memory_filename", "activation_memory.pickle"
+                    ),
+                    "extractor_llm": {
+                        "backend": extractor_backend,
+                        "config": openai_config,
+                    },
                 },
-            },
-        }
+            }
+        else:
+            logger.warning(
+                "Activation memory (kv_cache) requires a local model backend "
+                "(huggingface/vllm), but no local backend configured. "
+                "Skipping activation memory in MemCube config."
+            )
 
     # Create MemCube configuration
     cube_config_dict = {
