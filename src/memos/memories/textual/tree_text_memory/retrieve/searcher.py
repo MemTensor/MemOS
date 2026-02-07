@@ -85,6 +85,7 @@ class Searcher:
         skill_mem_top_k: int = 3,
         **kwargs,
     ) -> list[tuple[TextualMemoryItem, float]]:
+        print(f"🔍 [SEARCHER.RETRIEVE] query='{query}', mode={mode}, kwargs={kwargs}", flush=True)
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
@@ -302,6 +303,7 @@ class Searcher:
         )
 
         # DIAGNOSTIC: Log parsed goal
+        print(f"🔍 [PARSE_TASK] memories={parsed_goal.memories}, rephrased={parsed_goal.rephrased_query}", flush=True)
         logger.warning(f"[_parse_task_DEBUG] Parsed goal: memories={parsed_goal.memories}, rephrased_query={parsed_goal.rephrased_query}")
         logger.warning(f"[_parse_task_DEBUG] Parsed goal keys={parsed_goal.keys}, tags={parsed_goal.tags}, internet_search={parsed_goal.internet_search}")
 
