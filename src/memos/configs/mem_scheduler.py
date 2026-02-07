@@ -250,8 +250,12 @@ class AuthConfig(BaseConfig, DictConversionMixin):
                 "All configuration components are None. This may indicate missing environment variables or configuration files."
             )
         elif failed_components:
-            logger.warning(
-                f"Failed to initialize components: {', '.join(failed_components)}. Successfully initialized: {', '.join(initialized_components)}"
+            # Use info level: individual from_local_env() methods already log
+            # warnings for actual initialization failures. Components that are
+            # simply not configured (no env vars) are not errors.
+            logger.info(
+                f"Components not configured: {', '.join(failed_components)}. "
+                f"Successfully initialized: {', '.join(initialized_components)}"
             )
 
         return self
