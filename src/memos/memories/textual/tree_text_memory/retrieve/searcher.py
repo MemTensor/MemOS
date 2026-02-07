@@ -301,10 +301,17 @@ class Searcher:
             **kwargs,
         )
 
+        # DIAGNOSTIC: Log parsed goal
+        logger.info(f"[_parse_task_DEBUG] Parsed goal: memories={parsed_goal.memories}, rephrased_query={parsed_goal.rephrased_query}")
+        logger.info(f"[_parse_task_DEBUG] Parsed goal keys={parsed_goal.keys}, tags={parsed_goal.tags}, internet_search={parsed_goal.internet_search}")
+
         query = parsed_goal.rephrased_query or query
         # if goal has extra memories, embed them too
         if parsed_goal.memories:
             query_embedding = self.embedder.embed(list({query, *parsed_goal.memories}))
+            logger.info(f"[_parse_task_DEBUG] Generated {len(query_embedding)} embeddings from parsed_goal.memories")
+        else:
+            logger.warning(f"[_parse_task_DEBUG] parsed_goal.memories is EMPTY - query_embedding will be None!")
 
         return parsed_goal, query_embedding, context, query
 
