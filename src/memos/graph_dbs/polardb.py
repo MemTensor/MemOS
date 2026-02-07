@@ -1774,7 +1774,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 output = []
                 for row in results:
                     oldid = row[0]
-                    id_val = str(oldid)
+                    id_val = str(oldid).strip('"')
                     output.append({"id": id_val})
                 logger.info(
                     f"[seach_by_keywords_LIKE end:] user_name: {user_name}, query: {query}, params: {params} recalled: {output}"
@@ -1871,7 +1871,7 @@ class PolarDBGraphDB(BaseGraphDB):
                 output = []
                 for row in results:
                     oldid = row[0]
-                    id_val = str(oldid)
+                    id_val = str(oldid).strip('"')
                     output.append({"id": id_val})
 
                 logger.info(
@@ -2004,7 +2004,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     oldid = row[0]  # old_id
                     rank = row[2]  # rank score
 
-                    id_val = str(oldid)
+                    id_val = str(oldid).strip('"')
                     score_val = float(rank)
 
                     # Apply threshold filter if specified
@@ -2175,7 +2175,7 @@ class PolarDBGraphDB(BaseGraphDB):
                         continue
                     oldid = row[3]  # old_id
                     score = row[4]  # scope
-                    id_val = str(oldid)
+                    id_val = str(oldid).strip('"')
                     score_val = float(score)
                     score_val = (score_val + 1) / 2  # align to neo4j, Normalized Cosine Score
                     if threshold is None or score_val >= threshold:
