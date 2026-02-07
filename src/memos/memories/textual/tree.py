@@ -166,6 +166,7 @@ class TreeTextMemory(BaseTextMemory):
         dedup: str | None = None,
         **kwargs,
     ) -> list[TextualMemoryItem]:
+        print(f"🌲 [TREE.SEARCH] query='{query}', mode={mode}, user_name={user_name}, kwargs={kwargs}", flush=True)
         """Search for memories based on a query.
         User query -> TaskGoalParser -> MemoryPathResolver ->
         GraphMemoryRetriever -> MemoryReranker -> MemoryReasoner -> Final output
