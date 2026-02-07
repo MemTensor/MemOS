@@ -116,20 +116,9 @@ def get_default_config(
             },
         }
 
-    # Add activation memory if enabled
-    if config_dict.get("enable_activation_memory", False):
-        config_dict["act_mem"] = {
-            "backend": "kv_cache",
-            "config": {
-                "memory_filename": kwargs.get(
-                    "activation_memory_filename", "activation_memory.pickle"
-                ),
-                "extractor_llm": {
-                    "backend": "openai",
-                    "config": openai_config,
-                },
-            },
-        }
+    # Note: act_mem configuration belongs in MemCube config (get_default_cube_config),
+    # not in MOSConfig which doesn't have an act_mem field.
+    # The enable_activation_memory flag above is sufficient for MOSConfig.
 
     return MOSConfig(**config_dict)
 
