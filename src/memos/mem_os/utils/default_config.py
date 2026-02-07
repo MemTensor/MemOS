@@ -231,6 +231,8 @@ def get_default_cube_config(
                         "collection_name": kwargs.get("collection_name", f"{user_id}_collection"),
                         "vector_dimension": kwargs.get("vector_dimension", 3072),
                         "distance_metric": "cosine",
+                        **({"host": kwargs["qdrant_host"]} if "qdrant_host" in kwargs else {}),
+                        **({"port": kwargs["qdrant_port"]} if "qdrant_port" in kwargs else {}),
                     },
                 },
                 "embedder": embedder_config,

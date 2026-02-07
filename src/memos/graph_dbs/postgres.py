@@ -11,6 +11,7 @@ Tables:
 
 import json
 import time
+
 from contextlib import suppress
 from datetime import datetime
 from typing import Any, Literal
@@ -19,6 +20,7 @@ from memos.configs.graph_db import PostgresGraphDBConfig
 from memos.dependency import require_python_package
 from memos.graph_dbs.base import BaseGraphDB
 from memos.log import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -712,7 +714,6 @@ class PostgresGraphDB(BaseGraphDB):
 
     def deduplicate_nodes(self) -> None:
         """Not implemented - handled at application level."""
-        pass
 
     def get_grouped_counts(
         self,
@@ -745,7 +746,7 @@ class PostgresGraphDB(BaseGraphDB):
         group_by = ", ".join([f"properties->>'{field}'" for field in group_fields])
 
         # Build WHERE clause
-        conditions = [f"user_name = %s"]
+        conditions = ["user_name = %s"]
         query_params = [user_name]
 
         if where_clause:
