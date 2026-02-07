@@ -110,7 +110,7 @@ class FileContentParser(BaseMessageParser):
             return "", temp_file.name, False
         except Exception as e:
             logger.error(f"[FileContentParser] URL processing error: {e}")
-            return f"[File URL download failed: {url_str}]", None
+            return f"[File URL download failed: {url_str}]", None, False
 
     def _is_base64(self, data: str) -> bool:
         """Quick heuristic to check base64-like string."""
