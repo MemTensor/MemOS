@@ -172,38 +172,53 @@ def get_default_cube_config(
 
     # Configure text memory based on type
     if text_mem_type == "tree_text":
-        # Tree text memory requires Neo4j configuration
-        # NOTE: Neo4j Community Edition does NOT support multiple databases.
-        # It only has one default database named 'neo4j'.
-        # If you are using Community Edition:
-        # 1. Set 'use_multi_db' to False (default)
-        # 2. Set 'db_name' to 'neo4j' (default)
-        # 3. Set 'auto_create' to False to avoid 'CREATE DATABASE' permission errors.
-        db_name = f"memos{user_id.replace('-', '').replace('_', '')}"
-        if not kwargs.get("use_multi_db", False):
-            db_name = kwargs.get("neo4j_db_name", "neo4j")
+        graph_db_backend = kwargs.get("graph_db_backend", "neo4j").lower()
 
-        neo4j_config = {
-            "uri": kwargs.get("neo4j_uri", "bolt://localhost:7687"),
-            "user": kwargs.get("neo4j_user", "neo4j"),
-            "db_name": db_name,
-            "password": kwargs.get("neo4j_password", "12345678"),
-            "auto_create": kwargs.get("neo4j_auto_create", True),
-            "use_multi_db": kwargs.get("use_multi_db", False),
-            "embedding_dimension": kwargs.get("embedding_dimension", 3072),
-        }
-        if not kwargs.get("use_multi_db", False):
-            neo4j_config["user_name"] = f"memos{user_id.replace('-', '').replace('_', '')}"
+        if graph_db_backend in ("polardb", "postgres"):
+            # PolarDB (Postgres + Apache AGE) configuration
+            user_name = f"memos{user_id.replace('-', '').replace('_', '')}"
+            graph_db_config = {
+                "backend": "polardb",
+                "config": {
+                    "host": kwargs.get("polar_db_host", "localhost"),
+                    "port": int(kwargs.get("polar_db_port", 5432)),
+                    "user": kwargs.get("polar_db_user", "postgres"),
+                    "password": kwargs.get("polar_db_password", ""),
+                    "db_name": kwargs.get("polar_db_name", "memos"),
+                    "user_name": user_name,
+                    "use_multi_db": kwargs.get("use_multi_db", False),
+                    "auto_create": kwargs.get("neo4j_auto_create", True),
+                    "embedding_dimension": int(kwargs.get("embedding_dimension", 1024)),
+                },
+            }
+        else:
+            # Neo4j configuration (default)
+            db_name = f"memos{user_id.replace('-', '').replace('_', '')}"
+            if not kwargs.get("use_multi_db", False):
+                db_name = kwargs.get("neo4j_db_name", "neo4j")
+
+            neo4j_config = {
+                "uri": kwargs.get("neo4j_uri", "bolt://localhost:7687"),
+                "user": kwargs.get("neo4j_user", "neo4j"),
+                "db_name": db_name,
+                "password": kwargs.get("neo4j_password", "12345678"),
+                "auto_create": kwargs.get("neo4j_auto_create", True),
+                "use_multi_db": kwargs.get("use_multi_db", False),
+                "embedding_dimension": int(kwargs.get("embedding_dimension", 3072)),
+            }
+            if not kwargs.get("use_multi_db", False):
+                neo4j_config["user_name"] = f"memos{user_id.replace('-', '').replace('_', '')}"
+            graph_db_config = {
+                "backend": "neo4j",
+                "config": neo4j_config,
+            }
 
         text_mem_config = {
             "backend": "tree_text",
             "config": {
                 "extractor_llm": {"backend": "openai", "config": openai_config},
                 "dispatcher_llm": {"backend": "openai", "config": openai_config},
-                "graph_db": {
-                    "backend": "neo4j",
-                    "config": neo4j_config,
-                },
+                "graph_db": graph_db_config,
                 "embedder": embedder_config,
                 "reorganize": kwargs.get("enable_reorganize", False),
             },

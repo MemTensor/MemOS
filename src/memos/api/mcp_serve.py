@@ -59,6 +59,16 @@ def load_default_config(user_id="default_user"):
         "SCHEDULER_TOP_K": "scheduler_top_k",
         "MOS_SCHEDULER_TOP_K": "scheduler_top_k",
         "SCHEDULER_TOP_N": "scheduler_top_n",
+        # Graph DB backend selection (neo4j, polardb, etc.)
+        "GRAPH_DB_BACKEND": "graph_db_backend",
+        "NEO4J_BACKEND": "graph_db_backend",
+        # PolarDB connection (Postgres + Apache AGE)
+        "POLAR_DB_HOST": "polar_db_host",
+        "POLAR_DB_PORT": "polar_db_port",
+        "POLAR_DB_USER": "polar_db_user",
+        "POLAR_DB_PASSWORD": "polar_db_password",
+        "POLAR_DB_DB_NAME": "polar_db_name",
+        "EMBEDDING_DIMENSION": "embedding_dimension",
     }
 
     # Fields that should always be kept as strings (not converted to numbers)
@@ -72,6 +82,11 @@ def load_default_config(user_id="default_user"):
         "text_mem_type",
         "model_name",
         "embedder_model",
+        "graph_db_backend",
+        "polar_db_host",
+        "polar_db_user",
+        "polar_db_password",
+        "polar_db_name",
     }
 
     kwargs = {"user_id": user_id}
