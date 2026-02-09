@@ -109,6 +109,7 @@ canvas {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  overflow-y: visible;
   padding-bottom: 3px;
 }
 .party-strip::-webkit-scrollbar {
@@ -128,12 +129,29 @@ canvas {
   padding: 8px;
   cursor: pointer;
   user-select: none;
+  position: relative;
+  overflow: visible;
 }
 .party-card.active {
   border-color: var(--accent);
 }
 .party-card:hover {
   border-color: var(--accent);
+}
+
+.role-tooltip-float {
+  position: fixed;
+  padding: 8px;
+  border: 2px solid rgba(124, 242, 255, 0.35);
+  background: rgba(6, 16, 34, 0.95);
+  color: var(--text);
+  font-size: 9px;
+  line-height: 1.5;
+  max-height: 160px;
+  max-width: 260px;
+  overflow: auto;
+  z-index: 999;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
 }
 
 .party-head {
@@ -216,6 +234,10 @@ canvas {
   min-height: 0;
   max-height: 42vh;
   overflow: hidden;
+}
+
+#party-panel {
+  overflow: visible;
 }
 
 .panel-title {
@@ -553,7 +575,7 @@ button.primary {
 #right {
   min-width: 420px;
   height: calc(100vh - 24px);
-  overflow: hidden;
+  overflow: visible;
   padding-right: 2px;
   display: flex;
   flex-direction: column;
@@ -563,6 +585,7 @@ button.primary {
 #right-top {
   margin-bottom: 10px;
   flex: 0 0 auto;
+  overflow: visible;
 }
 
 #panels {

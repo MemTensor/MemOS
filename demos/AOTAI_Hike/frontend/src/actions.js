@@ -68,8 +68,14 @@ export async function apiGetMap() {
   setMapData(data);
 }
 
+function _makeUserId() {
+  const ts = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `demo_user_${ts}_${rand}`;
+}
+
 export async function apiNewSession() {
-  const data = await api("/session/new", { user_id: "demo_user" });
+  const data = await api("/session/new", { user_id: _makeUserId() });
   setSessionId(data.session_id);
   setWorldState(data.world_state);
   logMsg({ kind: "system", content: "已创建新 Session。", timestamp_ms: Date.now() });

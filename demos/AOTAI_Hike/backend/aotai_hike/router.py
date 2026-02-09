@@ -44,19 +44,19 @@ _DEFAULT_ROLES: list[dict] = [
     {
         "name": "阿鳌",
         "avatar_key": "green",
-        "persona": "阿鳌：队伍领队，路线熟悉，偏谨慎。",
+        "persona": "阿鳌：持灯的领路者，熟知鳌太古道与太白山脉。谨慎、稳重，誓要带队抵达太白之巅。",
         "attrs": {"stamina": 75, "mood": 58, "experience": 35, "risk_tolerance": 35},
     },
     {
         "name": "太白",
         "avatar_key": "blue",
-        "persona": "太白：装备党，喜欢记录数据与天气变化。",
+        "persona": "太白：表面是器材与数据的虔信者，经验丰厚、言辞克制。暗闻2800下撤口藏有金矿，欲借“体力不支”脱队潜行。",
         "attrs": {"stamina": 68, "mood": 62, "experience": 42, "risk_tolerance": 45},
     },
     {
         "name": "小山",
         "avatar_key": "red",
-        "persona": "小山：乐观的新人徒步者，敢想敢冲但听劝。",
+        "persona": "小山：笑容背后的新人徒步者，乐观只是外壳。多年前真主在2800下撤口埋下金矿，此行只为取回；若同伴相助便分金，不助则设法让其滞留山顶。",
         "attrs": {"stamina": 70, "mood": 72, "experience": 12, "risk_tolerance": 65},
     },
 ]

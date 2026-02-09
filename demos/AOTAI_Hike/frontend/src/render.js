@@ -176,6 +176,7 @@ export function renderPartyStatus() {
     card.onclick = async () => {
       await window.__aoTaiActions.apiSetActiveRole(r.role_id);
     };
+    if (r.persona) attachRoleTooltip(card, r.persona);
 
     const stamina = pct(r?.attrs?.stamina);
     const mood = pct(r?.attrs?.mood);
@@ -226,4 +227,46 @@ export function renderPartyStatus() {
     card.appendChild(stat);
     partyEl.appendChild(card);
   }
+}
+
+let _roleTooltip = null;
+let _roleTooltipPinned = false;
+
+function ensureRoleTooltip() {
+  if (_roleTooltip) return _roleTooltip;
+  const tip = document.createElement("div");
+  tip.className = "role-tooltip-float";
+  tip.style.display = "none";
+  tip.addEventListener("mouseenter", () => {
+    _roleTooltipPinned = true;
+  });
+  tip.addEventListener("mouseleave", () => {
+    _roleTooltipPinned = false;
+    tip.style.display = "none";
+  });
+  document.body.appendChild(tip);
+  _roleTooltip = tip;
+  return tip;
+}
+
+function attachRoleTooltip(card, persona) {
+  const tip = ensureRoleTooltip();
+  const show = () => {
+    tip.textContent = persona || "";
+    const rect = card.getBoundingClientRect();
+    tip.style.left = `${Math.round(rect.left)}px`;
+    tip.style.top = `${Math.round(rect.bottom + 6)}px`;
+    tip.style.display = "block";
+  };
+  card.addEventListener("mouseenter", () => {
+    _roleTooltipPinned = true;
+    show();
+  });
+  card.addEventListener("mousemove", () => {
+    if (_roleTooltipPinned) show();
+  });
+  card.addEventListener("mouseleave", () => {
+    _roleTooltipPinned = false;
+    tip.style.display = "none";
+  });
 }
