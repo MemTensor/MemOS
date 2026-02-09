@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import shutil
@@ -22,12 +23,18 @@ from memos.mem_reader.read_multi_modal import detect_lang
 from memos.memories.textual.item import TextualMemoryItem, TreeNodeTextualMemoryMetadata
 from memos.memories.textual.tree_text_memory.retrieve.searcher import Searcher
 from memos.templates.skill_mem_prompt import (
+    OTHERS_GENERATION_PROMPT,
+    OTHERS_GENERATION_PROMPT_ZH,
+    SCRIPT_GENERATION_PROMPT,
     SKILL_MEMORY_EXTRACTION_PROMPT,
+    SKILL_MEMORY_EXTRACTION_PROMPT_MD,
+    SKILL_MEMORY_EXTRACTION_PROMPT_MD_ZH,
     SKILL_MEMORY_EXTRACTION_PROMPT_ZH,
     TASK_CHUNKING_PROMPT,
     TASK_CHUNKING_PROMPT_ZH,
     TASK_QUERY_REWRITE_PROMPT,
     TASK_QUERY_REWRITE_PROMPT_ZH,
+    TOOL_GENERATION_PROMPT,
 )
 from memos.types import MessageList
 
@@ -39,6 +46,200 @@ if TYPE_CHECKING:
 
 
 logger = get_logger(__name__)
+
+
+def _generate_content_by_llm(llm: BaseLLM, prompt_template: str, **kwargs) -> Any:
+    """Generate content using LLM."""
+    try:
+        prompt = prompt_template.format(**kwargs)
+        response = llm.generate([{"role": "user", "content": prompt}])
+        if "json" in prompt_template.lower():
+            response = response.replace("```json", "").replace("```", "").strip()
+            return json.loads(response)
+        return response.strip()
+    except Exception as e:
+        logger.warning(f"[PROCESS_SKILLS] LLM generation failed: {e}")
+        return {} if "json" in prompt_template.lower() else ""
+
+
+def _batch_extract_skills(
+    task_chunks: dict[str, MessageList],
+    related_memories_map: dict[str, list[TextualMemoryItem]],
+    llm: BaseLLM,
+    chat_history: MessageList,
+) -> list[tuple[dict[str, Any], str, MessageList]]:
+    """Phase 1: Batch extract base skill structures from all task chunks in parallel."""
+    results = []
+    with ContextThreadPoolExecutor(max_workers=min(5, len(task_chunks))) as executor:
+        futures = {
+            executor.submit(
+                _extract_skill_memory_by_llm_md,
+                messages=messages,
+                old_memories=related_memories_map.get(task_type, []),
+                llm=llm,
+                chat_history=chat_history,
+            ): task_type
+            for task_type, messages in task_chunks.items()
+        }
+
+        for future in as_completed(futures):
+            task_type = futures[future]
+            try:
+                skill_memory = future.result()
+                if skill_memory:
+                    results.append((skill_memory, task_type, task_chunks.get(task_type, [])))
+            except Exception as e:
+                logger.warning(
+                    f"[PROCESS_SKILLS] Error extracting skill memory for task '{task_type}': {e}"
+                )
+    return results
+
+
+def _batch_generate_skill_details(
+    raw_skills_data: list[tuple[dict[str, Any], str, MessageList]],
+    related_skill_memories_map: dict[str, list[TextualMemoryItem]],
+    llm: BaseLLM,
+) -> list[dict[str, Any]]:
+    """Phase 2: Batch generate details (scripts, tools, others, examples) for all skills in parallel."""
+    generation_tasks = []
+
+    # Helper to create task objects
+    def create_task(skill_mem, gen_type, prompt, requirements, context, **kwargs):
+        return {
+            "type": gen_type,
+            "skill_memory": skill_mem,
+            "func": _generate_content_by_llm,
+            "args": (llm, prompt),
+            "kwargs": {"requirements": requirements, "context": context, **kwargs},
+        }
+
+    # 1. Collect all generation tasks from all skills
+    for skill_memory, task_type, messages in raw_skills_data:
+        messages_context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+
+        # Script
+        script_req = copy.deepcopy(skill_memory.get("scripts"))
+        if script_req:
+            generation_tasks.append(
+                create_task(
+                    skill_memory, "scripts", SCRIPT_GENERATION_PROMPT, script_req, messages_context
+                )
+            )
+            # TODO Add loop verification after code completion to ensure the generated script meets requirements
+        else:
+            skill_memory["scripts"] = {}
+
+        # Tool
+        tool_req = skill_memory.get("tool")
+        if tool_req:
+            # Extract available tool schemas from related memories
+            tool_memories = [
+                memory
+                for memory in related_skill_memories_map.get(task_type, [])
+                if memory.metadata.memory_type == "ToolSchemaMemory"
+            ]
+            tool_schemas_list = [memory.memory for memory in tool_memories]
+
+            tool_schemas_str = (
+                "\n\n".join(
+                    [
+                        f"Tool Schema {i + 1}:\n{schema}"
+                        for i, schema in enumerate(tool_schemas_list)
+                    ]
+                )
+                if tool_schemas_list
+                else "No specific tool schemas available."
+            )
+
+            generation_tasks.append(
+                create_task(
+                    skill_memory,
+                    "tool",
+                    TOOL_GENERATION_PROMPT,
+                    tool_req,
+                    messages_context,
+                    tool_schemas=tool_schemas_str,
+                )
+            )
+        else:
+            skill_memory["tool"] = {}
+
+        lang = detect_lang(messages_context)
+        others_req = skill_memory.get("others")
+        if others_req and isinstance(others_req, dict):
+            for filename, summary in others_req.items():
+                generation_tasks.append(
+                    {
+                        "type": "others",
+                        "skill_memory": skill_memory,
+                        "key": filename,
+                        "func": _generate_content_by_llm,
+                        "args": (
+                            llm,
+                            OTHERS_GENERATION_PROMPT_ZH
+                            if lang == "zh"
+                            else OTHERS_GENERATION_PROMPT,
+                        ),
+                        "kwargs": {
+                            "filename": filename,
+                            "summary": summary,
+                            "context": messages_context,
+                        },
+                    }
+                )
+        else:
+            skill_memory["others"] = {}
+
+    if not generation_tasks:
+        return [item[0] for item in raw_skills_data]
+
+    # 2. Execute all tasks in parallel
+    with ContextThreadPoolExecutor(max_workers=min(len(generation_tasks), 5)) as executor:
+        futures = {
+            executor.submit(t["func"], *t["args"], **t["kwargs"]): t for t in generation_tasks
+        }
+
+        for future in as_completed(futures):
+            task_info = futures[future]
+            try:
+                result = future.result()
+                if not result:
+                    continue
+
+                skill_mem = task_info["skill_memory"]
+
+                if task_info["type"] == "scripts":
+                    if isinstance(result, dict):
+                        # Combine code with script_req
+                        try:
+                            skill_mem["scripts"] = {
+                                filename: f"# {abstract}:\n{code}"
+                                for abstract, (filename, code) in zip(
+                                    script_req, result.items(), strict=False
+                                )
+                            }
+                        except ValueError:
+                            logger.warning(
+                                f"[PROCESS_SKILLS] Invalid script generation result: {result}"
+                            )
+                            skill_mem["scripts"] = {}
+
+                elif task_info["type"] == "tool":
+                    skill_mem["tool"] = result
+
+                elif task_info["type"] == "others":
+                    if "others" not in skill_mem or not isinstance(skill_mem["others"], dict):
+                        skill_mem["others"] = {}
+                    skill_mem["others"][task_info["key"]] = (
+                        f"# {task_info['kwargs']['summary']}\n{result}"
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    f"[PROCESS_SKILLS] Error in generation task {task_info['type']}: {e}"
+                )
+
+    return [item[0] for item in raw_skills_data]
 
 
 def add_id_to_mysql(memory_id: str, mem_cube_id: str):
@@ -272,6 +473,125 @@ def _extract_skill_memory_by_llm(
     return None
 
 
+def _extract_skill_memory_by_llm_md(
+    messages: MessageList,
+    old_memories: list[TextualMemoryItem],
+    llm: BaseLLM,
+    chat_history: MessageList,
+    chat_history_max_length: int = 5000,
+) -> dict[str, Any]:
+    old_memories_dict = [memory.model_dump() for memory in old_memories]
+    old_memories_context = {}
+    old_skill_content = []
+    seen_messages = set()
+
+    for mem in old_memories_dict:
+        if mem["metadata"]["memory_type"] == "SkillMemory" and mem["metadata"]["relativity"] > 0.02:
+            old_skill_content.append(
+                {
+                    "id": mem["id"],
+                    "name": mem["metadata"]["name"],
+                    "description": mem["metadata"]["description"],
+                    "procedure": mem["metadata"]["procedure"],
+                    "experience": mem["metadata"]["experience"],
+                    "preference": mem["metadata"]["preference"],
+                    "examples": mem["metadata"]["examples"],
+                    "others": mem["metadata"].get("others"),  # TODO: maybe remove, too long
+                }
+            )
+        else:
+            # Filter and deduplicate messages
+            unique_messages = []
+            for item in mem["metadata"]["sources"]:
+                message_content = f"{item['role']}: {item['content']}"
+                if message_content not in seen_messages:
+                    seen_messages.add(message_content)
+                    unique_messages.append(message_content)
+
+            if unique_messages:
+                old_memories_context.setdefault(mem["metadata"]["memory_type"], []).extend(
+                    unique_messages
+                )
+
+    # Prepare current conversation context
+    messages_context = "\n".join(
+        [f"{message['role']}: {message['content']}" for message in messages]
+    )
+
+    # Prepare history context
+    chat_history_context = "\n".join(
+        [f"{history['role']}: {history['content']}" for history in chat_history]
+    )
+    chat_history_context = chat_history_context[-chat_history_max_length:]
+
+    # Prepare old memories context
+    old_skill_content = (
+        ("Exsit Skill Schemas: \n" + json.dumps(old_skill_content, ensure_ascii=False, indent=2))
+        if old_skill_content
+        else ""
+    )
+
+    old_memories_context = "Relavant Context:\n" + "\n".join(
+        [f"{k}:\n{v}" for k, v in old_memories_context.items()]
+    )
+
+    # Prepare prompt
+    lang = detect_lang(messages_context)
+    template = (
+        SKILL_MEMORY_EXTRACTION_PROMPT_MD_ZH if lang == "zh" else SKILL_MEMORY_EXTRACTION_PROMPT_MD
+    )
+    prompt_content = (
+        template.replace("{old_memories}", old_memories_context + old_skill_content)
+        .replace("{messages}", messages_context)
+        .replace("{chat_history}", chat_history_context)
+    )
+
+    prompt = [{"role": "user", "content": prompt_content}]
+    logger.info(f"[Skill Memory]: _extract_skill_memory_by_llm_md: Prompt {prompt_content}")
+
+    # Call LLM to extract skill memory with retry logic
+    for attempt in range(3):
+        try:
+            # Only pass model_name_or_path if SKILLS_LLM is set
+            skills_llm = os.getenv("SKILLS_LLM", None)
+            llm_kwargs = {"model_name_or_path": skills_llm} if skills_llm else {}
+            response_text = llm.generate(prompt, **llm_kwargs)
+            # Clean up response (remove Markdown code blocks if present)
+            logger.info(f"[Skill Memory]: response_text {response_text}")
+            response_text = response_text.strip()
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
+
+            # Parse JSON response
+            skill_memory = json.loads(response_text)
+
+            # If LLM returns null (parsed as None), log and return None
+            if skill_memory is None:
+                logger.info(
+                    "[PROCESS_SKILLS] No skill memory extracted from conversation (LLM returned null)"
+                )
+                return None
+
+            return skill_memory
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"[PROCESS_SKILLS] JSON decode failed (attempt {attempt + 1}): {e}")
+            logger.debug(f"[PROCESS_SKILLS] Response text: {response_text}")
+            if attempt == 2:
+                logger.warning("[PROCESS_SKILLS] Failed to parse skill memory after 3 retries")
+                return None
+        except Exception as e:
+            logger.warning(
+                f"[PROCESS_SKILLS] LLM skill memory extraction failed (attempt {attempt + 1}): {e}"
+            )
+            if attempt == 2:
+                logger.warning(
+                    "[PROCESS_SKILLS] LLM skill memory extraction failed after 3 retries"
+                )
+                return None
+
+    return None
+
+
 def _recall_related_skill_memories(
     task_type: str,
     messages: MessageList,
@@ -285,7 +605,7 @@ def _recall_related_skill_memories(
     related_skill_memories = searcher.search(
         query,
         top_k=5,
-        memory_type="SkillMemory",
+        memory_type="All",
         info=info,
         include_skill_memory=True,
         user_name=mem_cube_id,
@@ -442,6 +762,11 @@ description: {skill_memory.get("description", "")}
 ---
 """
 
+    # 加入trigger
+    trigger = skill_memory.get("trigger", "")
+    if trigger:
+        skill_md_content += f"\n## Trigger\n{trigger}\n"
+
     # Add Procedure section only if present
     procedure = skill_memory.get("procedure", "")
     if procedure and procedure.strip():
@@ -476,6 +801,10 @@ description: {skill_memory.get("description", "")}
         for script_name in scripts:
             skill_md_content += f"- `./scripts/{script_name}`\n"
 
+    tool_usage = skill_memory.get("tool", "")
+    if tool_usage:
+        skill_md_content += f"\n## Tool Usage\n{tool_usage}\n"
+
     # Add others - handle both inline content and separate markdown files
     others = skill_memory.get("others")
     if others and isinstance(others, dict):
@@ -501,7 +830,7 @@ description: {skill_memory.get("description", "")}
                 skill_md_content += "\n## Additional Information\n"
             skill_md_content += "\nSee also:\n"
             for md_filename in md_files:
-                skill_md_content += f"- [{md_filename}](./{md_filename})\n"
+                skill_md_content += f"- [{md_filename}](./reference/{md_filename})\n"
 
     # Write SKILL.md file
     skill_md_path = skill_dir / "SKILL.md"
@@ -512,7 +841,9 @@ description: {skill_memory.get("description", "")}
     if others and isinstance(others, dict):
         for key, value in others.items():
             if key.endswith(".md"):
-                md_file_path = skill_dir / key
+                md_file_dir = skill_dir / "reference"
+                md_file_dir.mkdir(parents=True, exist_ok=True)
+                md_file_path = md_file_dir / key
                 with open(md_file_path, "w", encoding="utf-8") as f:
                     f.write(value)
 
@@ -571,7 +902,7 @@ def create_skill_memory_item(
         session_id=session_id,
         memory_type="SkillMemory",
         status="activated",
-        tags=skill_memory.get("tags", []),
+        tags=skill_memory.get("tags") or skill_memory.get("trigger", []),
         key=skill_memory.get("name", ""),
         sources=[],
         usage=[],
@@ -666,6 +997,7 @@ def process_skill_memory_fine(
     rewrite_query: bool = True,
     oss_config: dict[str, Any] | None = None,
     skills_dir_config: dict[str, Any] | None = None,
+    complete_skill_memory: bool = True,
     **kwargs,
 ) -> list[TextualMemoryItem]:
     skills_repo_backend = _get_skill_file_storage_location()
@@ -719,26 +1051,56 @@ def process_skill_memory_fine(
                 )
                 related_skill_memories_by_task[task_name] = []
 
-    skill_memories = []
-    with ContextThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(
-                _extract_skill_memory_by_llm,
-                messages,
-                related_skill_memories_by_task.get(task_type, []),
-                llm,
-                chat_history,
-            ): task_type
-            for task_type, messages in task_chunks.items()
-        }
-        for future in as_completed(futures):
-            try:
-                skill_memory = future.result()
-                if skill_memory:  # Only add non-None results
-                    skill_memories.append(skill_memory)
-            except Exception as e:
-                logger.warning(f"[PROCESS_SKILLS] Error extracting skill memory: {e}")
-                continue
+    def _simple_extract():
+        # simple extract skill memory, only one stage
+        memories = []
+        with ContextThreadPoolExecutor(max_workers=min(5, len(task_chunks))) as executor:
+            futures = {
+                executor.submit(
+                    _extract_skill_memory_by_llm,
+                    messages=chunk_messages,
+                    # Filter only SkillMemory types
+                    old_memories=[
+                        item
+                        for item in related_skill_memories_by_task.get(task_type, [])
+                        if item and getattr(item.metadata, "memory_type", "") == "SkillMemory"
+                    ],
+                    llm=llm,
+                    chat_history=chat_history,
+                ): task_type
+                for task_type, chunk_messages in task_chunks.items()
+            }
+
+            for future in as_completed(futures):
+                task_type = futures[future]
+                try:
+                    skill_memory = future.result()
+                    if skill_memory:
+                        memories.append(skill_memory)
+                except Exception as e:
+                    logger.warning(
+                        f"[PROCESS_SKILLS] _simple_extract: Error processing task '{task_type}': {e}"
+                    )
+        return memories
+
+    def _full_extract():
+        # full extract skill memory, include two stage
+        raw_extraction_results = _batch_extract_skills(
+            task_chunks=task_chunks,
+            related_memories_map=related_skill_memories_by_task,
+            llm=llm,
+            chat_history=chat_history,
+        )
+        if not raw_extraction_results:
+            return []
+        return _batch_generate_skill_details(
+            raw_skills_data=raw_extraction_results,
+            related_skill_memories_map=related_skill_memories_by_task,
+            llm=llm,
+        )
+
+    # Execute both parts in parallel
+    skill_memories = _simple_extract() if not complete_skill_memory else _full_extract()
 
     # write skills to file and get zip paths
     skill_memory_with_paths = []
