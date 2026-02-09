@@ -210,6 +210,8 @@ class ChatHandler(BaseHandler):
                     query=chat_req.query,
                     full_response=response,
                     async_mode="async",
+                    manager_user_id=chat_req.manager_user_id,
+                    project_id=chat_req.project_id,
                 )
                 end = time.time()
                 self.logger.info(f"[Cloud Service] Chat Add Time: {end - start} seconds")
@@ -382,6 +384,8 @@ class ChatHandler(BaseHandler):
                             query=chat_req.query,
                             full_response=full_response,
                             async_mode="async",
+                            manager_user_id=chat_req.manager_user_id,
+                            project_id=chat_req.project_id,
                         )
                         end = time.time()
                         self.logger.info(
@@ -563,6 +567,8 @@ class ChatHandler(BaseHandler):
                         query=chat_req.query,
                         full_response=None,
                         async_mode="sync",
+                        manager_user_id=chat_req.manager_user_id,
+                        project_id=chat_req.project_id,
                     )
 
                     # Extract memories from search results (second search)
@@ -731,6 +737,8 @@ class ChatHandler(BaseHandler):
                         query=chat_req.query,
                         full_response=full_response,
                         async_mode="sync",
+                        manager_user_id=chat_req.manager_user_id,
+                        project_id=chat_req.project_id,
                     )
 
                 except Exception as e:
@@ -917,6 +925,8 @@ class ChatHandler(BaseHandler):
                             query=chat_req.query,
                             full_response=full_response,
                             async_mode="async",
+                            manager_user_id=chat_req.manager_user_id,
+                            project_id=chat_req.project_id,
                         )
                         end = time.time()
                         self.logger.info(
@@ -1309,6 +1319,8 @@ class ChatHandler(BaseHandler):
         writable_cube_ids: list[str],
         session_id: str,
         query: str,
+        manager_user_id: str | None = None,
+        project_id: str | None = None,
         clean_response: str | None = None,
         async_mode: Literal["async", "sync"] = "sync",
     ) -> None:
@@ -1333,6 +1345,8 @@ class ChatHandler(BaseHandler):
             session_id=session_id,
             messages=messages,
             async_mode=async_mode,
+            manager_user_id=manager_user_id,
+            project_id=project_id,
         )
 
         self.add_handler.handle_add_memories(add_req)
@@ -1540,6 +1554,8 @@ class ChatHandler(BaseHandler):
         query: str,
         full_response: str | None = None,
         async_mode: Literal["async", "sync"] = "sync",
+        manager_user_id: str | None = None,
+        project_id: str | None = None,
     ) -> None:
         def run_async_in_thread():
             try:
@@ -1557,6 +1573,8 @@ class ChatHandler(BaseHandler):
                             query=query,
                             clean_response=clean_response,
                             async_mode=async_mode,
+                            manager_user_id=manager_user_id,
+                            project_id=project_id,
                         )
                     )
                 finally:
@@ -1580,6 +1598,8 @@ class ChatHandler(BaseHandler):
                     query=query,
                     clean_response=clean_response,
                     async_mode=async_mode,
+                    manager_user_id=manager_user_id,
+                    project_id=project_id,
                 )
             )
             task.add_done_callback(

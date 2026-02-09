@@ -96,6 +96,8 @@ class ChatRequest(BaseRequest):
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+    manager_user_id: str | None = Field(None, description="Manager User ID")
+    project_id: str | None = Field(None, description="Project ID")
 
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(
@@ -771,6 +773,8 @@ class APIChatCompleteRequest(BaseRequest):
     temperature: float | None = Field(None, description="Temperature for sampling")
     top_p: float | None = Field(None, description="Top-p (nucleus) sampling parameter")
     add_message_on_answer: bool = Field(True, description="Add dialogs to memory after chat")
+    manager_user_id: str | None = Field(None, description="Manager User ID")
+    project_id: str | None = Field(None, description="Project ID")
 
     # ==== Filter conditions ====
     filter: dict[str, Any] | None = Field(

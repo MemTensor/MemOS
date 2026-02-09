@@ -421,13 +421,27 @@ def handle_get_memories_dashboard(
         filter=get_mem_req.filter,
         memory_type=text_memory_type,
     )
-    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
+    text_memories, _ = text_memories_info["nodes"], text_memories_info["total_nodes"]
+
+    # Group text memories by cube_id from metadata.user_name
+    text_mem_by_cube: dict[str, list] = {}
+    for memory in text_memories:
+        cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+        if cube_id not in text_mem_by_cube:
+            text_mem_by_cube[cube_id] = []
+        text_mem_by_cube[cube_id].append(memory)
+
+    # If no memories found, create a default entry with the requested cube_id
+    if not text_mem_by_cube and get_mem_req.mem_cube_id:
+        text_mem_by_cube[get_mem_req.mem_cube_id] = []
+
     results["text_mem"] = [
         {
-            "cube_id": get_mem_req.mem_cube_id,
-            "memories": text_memories,
-            "total_nodes": total_text_nodes,
+            "cube_id": cube_id,
+            "memories": memories,
+            "total_nodes": len(memories),
         }
+        for cube_id, memories in text_mem_by_cube.items()
     ]
 
     if get_mem_req.include_tool_memory:
@@ -439,18 +453,32 @@ def handle_get_memories_dashboard(
             filter=get_mem_req.filter,
             memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
         )
-        tool_memories, total_tool_nodes = (
+        tool_memories, _ = (
             tool_memories_info["nodes"],
             tool_memories_info["total_nodes"],
         )
 
+        # Group tool memories by cube_id from metadata.user_name
+        tool_mem_by_cube: dict[str, list] = {}
+        for memory in tool_memories:
+            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+            if cube_id not in tool_mem_by_cube:
+                tool_mem_by_cube[cube_id] = []
+            tool_mem_by_cube[cube_id].append(memory)
+
+        # If no memories found, create a default entry with the requested cube_id
+        if not tool_mem_by_cube and get_mem_req.mem_cube_id:
+            tool_mem_by_cube[get_mem_req.mem_cube_id] = []
+
         results["tool_mem"] = [
             {
-                "cube_id": get_mem_req.mem_cube_id,
-                "memories": tool_memories,
-                "total_nodes": total_tool_nodes,
+                "cube_id": cube_id,
+                "memories": memories,
+                "total_nodes": len(memories),
             }
+            for cube_id, memories in tool_mem_by_cube.items()
         ]
+
     if get_mem_req.include_skill_memory:
         skill_memories_info = naive_mem_cube.text_mem.get_all(
             user_name=get_mem_req.mem_cube_id,
@@ -460,18 +488,32 @@ def handle_get_memories_dashboard(
             filter=get_mem_req.filter,
             memory_type=["SkillMemory"],
         )
-        skill_memories, total_skill_nodes = (
+        skill_memories, _ = (
             skill_memories_info["nodes"],
             skill_memories_info["total_nodes"],
         )
 
+        # Group skill memories by cube_id from metadata.user_name
+        skill_mem_by_cube: dict[str, list] = {}
+        for memory in skill_memories:
+            cube_id = memory.get("metadata", {}).get("user_name", get_mem_req.mem_cube_id)
+            if cube_id not in skill_mem_by_cube:
+                skill_mem_by_cube[cube_id] = []
+            skill_mem_by_cube[cube_id].append(memory)
+
+        # If no memories found, create a default entry with the requested cube_id
+        if not skill_mem_by_cube and get_mem_req.mem_cube_id:
+            skill_mem_by_cube[get_mem_req.mem_cube_id] = []
+
         results["skill_mem"] = [
             {
-                "cube_id": get_mem_req.mem_cube_id,
-                "memories": skill_memories,
-                "total_nodes": total_skill_nodes,
+                "cube_id": cube_id,
+                "memories": memories,
+                "total_nodes": len(memories),
             }
+            for cube_id, memories in skill_mem_by_cube.items()
         ]
+
     preferences: list[TextualMemoryItem] = []
     total_preference_nodes = 0
 
@@ -507,13 +549,28 @@ def handle_get_memories_dashboard(
         )
         format_preferences = [format_memory_item(item, save_sources=False) for item in preferences]
 
-    results = post_process_pref_mem(
-        results, format_preferences, get_mem_req.mem_cube_id, get_mem_req.include_preference
-    )
-    if total_preference_nodes > 0 and results.get("pref_mem", []):
-        results["pref_mem"][0]["total_nodes"] = total_preference_nodes
+        # Group preferences by cube_id from metadata.mem_cube_id
+        pref_mem_by_cube: dict[str, list] = {}
+        for pref in format_preferences:
+            cube_id = pref.get("metadata", {}).get("mem_cube_id", get_mem_req.mem_cube_id)
+            if cube_id not in pref_mem_by_cube:
+                pref_mem_by_cube[cube_id] = []
+            pref_mem_by_cube[cube_id].append(pref)
 
-    # Filter to only keep text_mem, pref_mem, tool_mem
+        # If no preferences found, create a default entry with the requested cube_id
+        if not pref_mem_by_cube and get_mem_req.mem_cube_id:
+            pref_mem_by_cube[get_mem_req.mem_cube_id] = []
+
+        results["pref_mem"] = [
+            {
+                "cube_id": cube_id,
+                "memories": memories,
+                "total_nodes": len(memories),
+            }
+            for cube_id, memories in pref_mem_by_cube.items()
+        ]
+
+    # Filter to only keep text_mem, pref_mem, tool_mem, skill_mem
     filtered_results = {
         "text_mem": results.get("text_mem", []),
         "pref_mem": results.get("pref_mem", []),

@@ -5650,7 +5650,7 @@ class PolarDBGraphDB(BaseGraphDB):
                     SET properties = (
                         properties::jsonb || %s::jsonb
                     )::text::agtype,
-                    deletetime = NULL 
+                    deletetime = NULL
                     WHERE {where_clause}
                 """
 
