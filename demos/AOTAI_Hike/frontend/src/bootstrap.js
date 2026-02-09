@@ -1,5 +1,5 @@
 import { $ } from "./dom.js";
-import { apiAct, apiGetMap, apiNewSession, apiUpsertRole } from "./actions.js";
+import { apiAct, apiGetMap, apiNewSession, apiSetActiveRole, apiUpsertRole } from "./actions.js";
 import { initMinimapCanvas } from "./minimap.js";
 import { initPhaser } from "./phaser_view.js";
 import { logMsg } from "./render.js";
@@ -104,6 +104,9 @@ export async function bootstrap() {
       await apiUpsertRole(makeRole(r.name, r.persona));
       logMsg({ kind: "system", content: `新增角色：${r.name}`, timestamp_ms: Date.now() });
     }
+    const roles = worldState?.roles || [];
+    const pick = roles[0];
+    if (pick?.role_id) await apiSetActiveRole(pick.role_id);
     hideAndRemoveSetup();
   });
 
@@ -116,6 +119,9 @@ export async function bootstrap() {
     ];
     for (const r of defaults) await apiUpsertRole(makeRole(r.name, r.persona));
     logMsg({ kind: "system", content: "已创建 3 个默认角色。", timestamp_ms: Date.now() });
+    const roles = worldState?.roles || [];
+    const pick = roles[0];
+    if (pick?.role_id) await apiSetActiveRole(pick.role_id);
     hideAndRemoveSetup();
   });
 

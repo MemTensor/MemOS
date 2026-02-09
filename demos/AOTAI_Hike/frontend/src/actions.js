@@ -19,6 +19,7 @@ function _isGameOver(ws) {
 function _shouldAutoContinue(ws) {
   if (!ws) return false;
   if (_isGameOver(ws)) return false;
+  if (!ws.active_role_id) return false;
   const phase = ws.phase || "free";
   if (phase !== "free") return false;
   if (isNightVoteModalBlocking?.()) return false;
