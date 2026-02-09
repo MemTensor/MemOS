@@ -134,6 +134,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 )
                 return
 
+            # Get the original fast memory (raw chunk) items
             memory_items = []
             for mem_id in mem_ids:
                 try:
