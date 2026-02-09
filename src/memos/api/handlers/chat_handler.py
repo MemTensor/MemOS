@@ -1557,6 +1557,10 @@ class ChatHandler(BaseHandler):
         manager_user_id: str | None = None,
         project_id: str | None = None,
     ) -> None:
+        self.logger.info(
+            f"Start add to memory for user {user_id}, writable_cube_ids: {writable_cube_ids}, session_id: {session_id}, query: {query}, full_response: {full_response}, async_mode: {async_mode}, manager_user_id: {manager_user_id}, project_id: {project_id}"
+        )
+
         def run_async_in_thread():
             try:
                 loop = asyncio.new_event_loop()
