@@ -486,7 +486,7 @@ def _extract_skill_memory_by_llm_md(
     seen_messages = set()
 
     for mem in old_memories_dict:
-        if mem["metadata"]["memory_type"] == "SkillMemory" and mem["metadata"]["relativity"] > 0.02:
+        if mem["metadata"]["memory_type"] == "SkillMemory":
             old_skill_content.append(
                 {
                     "id": mem["id"],
@@ -524,19 +524,25 @@ def _extract_skill_memory_by_llm_md(
     )
     chat_history_context = chat_history_context[-chat_history_max_length:]
 
+    # Prepare prompt
+    lang = detect_lang(messages_context)
+
     # Prepare old memories context
     old_skill_content = (
-        ("Exsit Skill Schemas: \n" + json.dumps(old_skill_content, ensure_ascii=False, indent=2))
+        "已有技能列表: \n"
+        if lang == "zh"
+        else "Exsit Skill Schemas: \n" + json.dumps(old_skill_content, ensure_ascii=False, indent=2)
         if old_skill_content
         else ""
     )
 
-    old_memories_context = "Relavant Context:\n" + "\n".join(
-        [f"{k}:\n{v}" for k, v in old_memories_context.items()]
+    old_memories_context = (
+        "相关历史对话:\n"
+        if lang == "zh"
+        else "Relavant Context:\n"
+        + "\n".join([f"{k}:\n{v}" for k, v in old_memories_context.items()])
     )
 
-    # Prepare prompt
-    lang = detect_lang(messages_context)
     template = (
         SKILL_MEMORY_EXTRACTION_PROMPT_MD_ZH if lang == "zh" else SKILL_MEMORY_EXTRACTION_PROMPT_MD
     )
@@ -570,6 +576,10 @@ def _extract_skill_memory_by_llm_md(
                     "[PROCESS_SKILLS] No skill memory extracted from conversation (LLM returned null)"
                 )
                 return None
+            # If no old skill content, set update to False (for llm hallucination)
+            if not old_skill_content:
+                skill_memory["old_memory_id"] = ""
+                skill_memory["update"] = False
 
             return skill_memory
 
