@@ -834,6 +834,7 @@ class APIConfig:
                             "SKILLS_LOCAL_DIR", "/tmp/upload_skill_memory/"
                         ),
                     },
+                    "memory_version_switch": os.getenv("MEM_READER_MEM_VERSION_SWITCH", "off"),
                 },
             },
             "enable_textual_memory": True,

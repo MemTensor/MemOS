@@ -196,59 +196,60 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         enhanced_mem_ids,
                     )
 
-                    # add raw file nodes and edges
-                    if mem_reader.save_rawfile:
-                        raw_file_mem_group = [
+                    if getattr(mem_reader, "memory_version_switch", "off") != "on":
+                        # add raw file nodes and edges
+                        if mem_reader.save_rawfile:
+                            raw_file_mem_group = [
+                                memory
+                                for memory in flattened_memories
+                                if memory.metadata.memory_type == "RawFileMemory"
+                            ]
+                            text_mem.add_rawfile_nodes_n_edges(
+                                raw_file_mem_group,
+                                enhanced_mem_ids,
+                                user_id=user_id,
+                                user_name=user_name,
+                            )
+                            logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
+
+                        # Mark merged_from memories as archived when provided in memory metadata
+                        summary_memories = [
                             memory
                             for memory in flattened_memories
-                            if memory.metadata.memory_type == "RawFileMemory"
+                            if memory.metadata.memory_type != "RawFileMemory"
                         ]
-                        text_mem.add_rawfile_nodes_n_edges(
-                            raw_file_mem_group,
-                            enhanced_mem_ids,
-                            user_id=user_id,
-                            user_name=user_name,
-                        )
-                        logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
-
-                    # Mark merged_from memories as archived when provided in memory metadata
-                    summary_memories = [
-                        memory
-                        for memory in flattened_memories
-                        if memory.metadata.memory_type != "RawFileMemory"
-                    ]
-                    if mem_reader.graph_db:
-                        for memory in summary_memories:
-                            merged_from = (memory.metadata.info or {}).get("merged_from")
-                            if merged_from:
-                                old_ids = (
-                                    merged_from
-                                    if isinstance(merged_from, (list | tuple | set))
-                                    else [merged_from]
-                                )
-                                for old_id in old_ids:
-                                    try:
-                                        mem_reader.graph_db.update_node(
-                                            str(old_id), {"status": "archived"}, user_name=user_name
-                                        )
-                                        logger.info(
-                                            "[Scheduler] Archived merged_from memory: %s",
-                                            old_id,
-                                        )
-                                    except Exception as e:
-                                        logger.warning(
-                                            "[Scheduler] Failed to archive merged_from memory %s: %s",
-                                            old_id,
-                                            e,
-                                        )
-                    else:
-                        has_merged_from = any(
-                            (m.metadata.info or {}).get("merged_from") for m in summary_memories
-                        )
-                        if has_merged_from:
-                            logger.warning(
-                                "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
+                        if mem_reader.graph_db:
+                            for memory in summary_memories:
+                                merged_from = (memory.metadata.info or {}).get("merged_from")
+                                if merged_from:
+                                    old_ids = (
+                                        merged_from
+                                        if isinstance(merged_from, (list | tuple | set))
+                                        else [merged_from]
+                                    )
+                                    for old_id in old_ids:
+                                        try:
+                                            mem_reader.graph_db.update_node(
+                                                str(old_id), {"status": "archived"}, user_name=user_name
+                                            )
+                                            logger.info(
+                                                "[Scheduler] Archived merged_from memory: %s",
+                                                old_id,
+                                            )
+                                        except Exception as e:
+                                            logger.warning(
+                                                "[Scheduler] Failed to archive merged_from memory %s: %s",
+                                                old_id,
+                                                e,
+                                            )
+                        else:
+                            has_merged_from = any(
+                                (m.metadata.info or {}).get("merged_from") for m in summary_memories
                             )
+                            if has_merged_from:
+                                logger.warning(
+                                    "[Scheduler] merged_from provided but graph_db is unavailable; skip archiving."
+                                )
 
                     cloud_env = is_cloud_env()
                     if cloud_env:

@@ -109,8 +109,8 @@ class TextualMemoryMetadata(BaseModel):
         default_factory=list,
         description="Only valid if a node was once a (raw)fast node. Recording which new memory nodes it 'evolves' to after llm extraction.",
     )
-    version: int | None = Field(
-        default=None,
+    version: int = Field(
+        default=1,
         description="The version of the memory. Will be incremented when the memory is updated.",
     )
     history: list[ArchivedTextualMemory] | None = Field(
