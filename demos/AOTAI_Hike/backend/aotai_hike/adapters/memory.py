@@ -86,7 +86,6 @@ class MemOSMemoryClient:
         cube_id: str,
         query: str,
         top_k: int | None = None,
-        mode: str | None = None,
         session_id: str | None = None,
     ) -> MemorySearchResult:
         payload: dict[str, Any] = {
@@ -95,7 +94,6 @@ class MemOSMemoryClient:
             "top_k": top_k if top_k is not None else self._default_top_k,
             "readable_cube_ids": [cube_id],
             "mem_cube_id": cube_id,
-            "mode": mode or self._default_mode,
         }
         if session_id:
             payload["session_id"] = session_id
@@ -156,6 +154,7 @@ class MemOSMemoryClient:
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
+        self._log.info("[MemOS] POST %s payload=%s", url, json.dumps(payload, ensure_ascii=False))
         resp = requests.post(
             url,
             headers={"Content-Type": "application/json"},
@@ -167,6 +166,9 @@ class MemOSMemoryClient:
             resp.raise_for_status()
         try:
             post_results = resp.json()
+            self._log.info(
+                "[MemOS] POST %s response=%s", url, json.dumps(post_results, ensure_ascii=False)
+            )
             return post_results
         except Exception:
             self._log.error("Invalid MemOS response: %s", resp.text)
@@ -212,7 +214,7 @@ class MemOSMemoryAdapter(MemoryAdapter):
             cube_id=cube_id,
             session_id=session_id,
             messages=[{"role": "user", "content": content}],
-            async_mode="sync",
+            async_mode="async",
             mode="fine",
             source="aotai_hike_world",
         )

@@ -135,11 +135,6 @@ class MemoryCompanionBrain(CompanionBrain):
         "drink",
         "check_map",
     )
-    _FALLBACK_LINES: ClassVar[tuple[str, ...]] = (
-        "路况还行，我们保持节奏。",
-        "大家注意脚下，慢一点。",
-        "风有点大，别走散。",
-    )
 
     def __init__(
         self,
@@ -219,69 +214,63 @@ class MemoryCompanionBrain(CompanionBrain):
         user_action: str,
         world_memories: list[str],
     ) -> str:
-        try:
-            cube_id = MemoryNamespace.role_cube_id(
-                user_id=world_state.user_id, role_id=role.role_id
-            )
-            search_query = f"{role.persona} {user_action} 天气:{world_state.weather} 时间:{world_state.time_of_day}"
-            memories = self._memory.search_memory(
-                user_id=world_state.user_id,
-                cube_id=cube_id,
-                query=search_query,
-                top_k=self._config.memory_top_k,
-                mode=self._config.mode,
-                session_id=world_state.session_id,
-            ).snippets
-            combined_memories = [*world_memories, *memories]
+        cube_id = MemoryNamespace.role_cube_id(user_id=world_state.user_id, role_id=role.role_id)
+        search_query = f"{role.persona} {user_action} 天气:{world_state.weather} 时间:{world_state.time_of_day}"
+        memories = self._memory.search_memory(
+            user_id=world_state.user_id,
+            cube_id=cube_id,
+            query=search_query,
+            top_k=self._config.memory_top_k,
+            session_id=world_state.session_id,
+        ).snippets
+        combined_memories = [*world_memories, *memories]
 
-            system_prompt = self._build_system_prompt(
-                world_state=world_state,
-                role=role,
-                memories=combined_memories,
-            )
+        system_prompt = self._build_system_prompt(
+            world_state=world_state,
+            role=role,
+            memories=combined_memories,
+        )
 
-            history = (world_state.chat_history or [])[-self._config.history_max_items :]
-            response = self._memory.chat_complete(
-                user_id=world_state.user_id,
-                cube_id=cube_id,
-                query=user_action,
-                system_prompt=system_prompt,
-                history=history if history else None,
-                session_id=world_state.session_id,
-                top_k=1,
-                mode=self._config.mode,
-                add_message_on_answer=False,
-            )
-            response = (response or "").strip()
-            if not response:
-                return ""
+        history = (world_state.chat_history or [])[-self._config.history_max_items :]
+        response = self._memory.chat_complete(
+            user_id=world_state.user_id,
+            cube_id=cube_id,
+            query=user_action,
+            system_prompt=system_prompt,
+            history=history if history else None,
+            session_id=world_state.session_id,
+            top_k=1,
+            mode=self._config.mode,
+            add_message_on_answer=False,
+        )
+        response = (response or "").strip()
+        if not response:
+            return ""
 
-            if len(response) > self._config.max_response_chars:
-                response = response[: self._config.max_response_chars].rstrip() + "…"
+        if len(response) > self._config.max_response_chars:
+            response = response[: self._config.max_response_chars].rstrip() + "…"
 
-            chat_time = self._format_time_ms()
-            self._memory.add_memory(
-                user_id=world_state.user_id,
-                cube_id=cube_id,
-                session_id=world_state.session_id,
-                async_mode="sync",
-                mode=self._config.mode,
-                messages=[
-                    {"role": "user", "content": user_action, "chat_time": chat_time},
-                    {"role": "assistant", "content": response, "chat_time": chat_time},
-                ],
-                info={
-                    "role_id": role.role_id,
-                    "role_name": role.name,
-                    "weather": world_state.weather,
-                    "time_of_day": world_state.time_of_day,
-                    "scene_id": world_state.current_node_id,
-                    "event": "npc_chat",
-                },
-            )
-            return response
-        except Exception:
-            return self._rng.choice(self._FALLBACK_LINES)
+        chat_time = self._format_time_ms()
+        self._memory.add_memory(
+            user_id=world_state.user_id,
+            cube_id=cube_id,
+            session_id=world_state.session_id,
+            async_mode="async",
+            mode=self._config.mode,
+            messages=[
+                {"role": "user", "content": user_action, "chat_time": chat_time},
+                {"role": "assistant", "content": response, "chat_time": chat_time},
+            ],
+            info={
+                "role_id": role.role_id,
+                "role_name": role.name,
+                "weather": world_state.weather,
+                "time_of_day": world_state.time_of_day,
+                "scene_id": world_state.current_node_id,
+                "event": "npc_chat",
+            },
+        )
+        return response
 
     def _build_system_prompt(
         self, *, world_state: WorldState, role: Role, memories: list[str]
