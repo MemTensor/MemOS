@@ -24,7 +24,12 @@ from dataclasses import dataclass
 
 from aotai_hike.adapters.background import StaticBackgroundProvider
 from aotai_hike.adapters.companion import MemoryCompanionBrain
-from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryAdapter, MemOSMemoryClient
+from aotai_hike.adapters.memory import (
+    MemoryNamespace,
+    MemorySearchResult,
+    MemOSMemoryAdapter,
+    MemOSMemoryClient,
+)
 from aotai_hike.schemas import (
     ActionType,
     ActRequest,
@@ -49,36 +54,106 @@ def _now_str() -> str:
 
 
 class LoggingMemoryClient:
-    def __init__(self, base: MemOSMemoryClient, *, user_id: str):
+    def __init__(self, base: MemOSMemoryClient, *, user_id: str, log_world_search: bool):
         self._base = base
         self._user_id = user_id
+        self._log_world_search = log_world_search
 
     def add_memory(self, **kwargs):
         cube_id = str(kwargs.get("cube_id") or "")
-        messages = kwargs.get("messages") or []
-        mem_text = ""
-        if messages:
-            mem_text = "; ".join(
-                f"{m.get('role')}: {m.get('content')}" for m in messages if isinstance(m, dict)
-            )
-        print(f"[mem:add] cube={cube_id} content={mem_text[:160]}")
-        return self._base.add_memory(**kwargs)
+        payload = {
+            "user_id": kwargs.get("user_id") or self._user_id,
+            "writable_cube_ids": [cube_id],
+            "mem_cube_id": cube_id,
+            "async_mode": kwargs.get("async_mode") or "sync",
+        }
+        if kwargs.get("session_id"):
+            payload["session_id"] = kwargs.get("session_id")
+        if kwargs.get("mode"):
+            payload["mode"] = kwargs.get("mode")
+        if kwargs.get("memory_content"):
+            payload["memory_content"] = kwargs.get("memory_content")
+        if kwargs.get("messages"):
+            payload["messages"] = kwargs.get("messages")
+        if kwargs.get("chat_history") is not None:
+            payload["chat_history"] = kwargs.get("chat_history")
+        if kwargs.get("info"):
+            payload["info"] = kwargs.get("info")
+        if kwargs.get("custom_tags"):
+            payload["custom_tags"] = kwargs.get("custom_tags")
+        if kwargs.get("source"):
+            payload["source"] = kwargs.get("source")
+        resp = self._base._post("/product/add", payload)
+        print(f"[mem:add to cube: {cube_id}] response={json.dumps(resp, ensure_ascii=False)}")
+        return resp
 
     def search_memory(self, **kwargs):
         cube_id = str(kwargs.get("cube_id") or "")
         query = kwargs.get("query") or ""
-        print(f"[mem:search] cube={cube_id} query={query}")
-        result = self._base.search_memory(**kwargs)
-        snippet_preview = " | ".join(s[:80] for s in result.snippets[:5])
-        print(f"[mem:search] hits={len(result.snippets)} snippets={snippet_preview}")
-        return result
+        suppress = (not self._log_world_search) and cube_id.endswith("_world")
+        payload = {
+            "user_id": kwargs.get("user_id") or self._user_id,
+            "query": query,
+            "top_k": kwargs.get("top_k")
+            if kwargs.get("top_k") is not None
+            else getattr(self._base, "_default_top_k", 5),
+            "readable_cube_ids": [cube_id],
+            "mem_cube_id": cube_id,
+            "include_skill_memory": False,
+            "mode": kwargs.get("mode") or getattr(self._base, "_default_mode", "fine"),
+        }
+        if kwargs.get("session_id"):
+            payload["session_id"] = kwargs.get("session_id")
+        data = self._base._post("/product/search", payload)
+        snippets: list[str] = []
+        try:
+            mem_data = (data or {}).get("data", {})
+            for entry in mem_data.get("text_mem", []) or []:
+                for mem in entry.get("memories", []) or []:
+                    text = mem.get("memory")
+                    if text:
+                        snippets.append(text)
+        except Exception:
+            snippets = []
+        snippet_preview = " | ".join(s[:300] for s in snippets[:5])
+        if not suppress:
+            print(
+                f"[mem:search from cube: {cube_id}] hits={len(snippets)} "
+                f"query is {query}, snippets={snippet_preview}"
+            )
+        return MemorySearchResult(snippets=snippets)
 
     def chat_complete(self, **kwargs):
         cube_id = str(kwargs.get("cube_id") or "")
         query = kwargs.get("query") or ""
-        print(f"[mem:chat] cube={cube_id} query={query}")
-        response = self._base.chat_complete(**kwargs)
-        print(f"[mem:chat] response={response[:200]}{'…' if len(response) > 200 else ''}")
+        payload = {
+            "user_id": kwargs.get("user_id") or self._user_id,
+            "query": query,
+            "readable_cube_ids": [cube_id],
+            "writable_cube_ids": [cube_id],
+            "mem_cube_id": cube_id,
+            "top_k": max(1, int(kwargs.get("top_k") or 1)),
+            "mode": kwargs.get("mode") or getattr(self._base, "_default_mode", "fine"),
+            "add_message_on_answer": kwargs.get("add_message_on_answer", False),
+        }
+        if kwargs.get("system_prompt"):
+            payload["system_prompt"] = kwargs.get("system_prompt")
+        if kwargs.get("history") is not None:
+            payload["history"] = kwargs.get("history")
+        if kwargs.get("session_id"):
+            payload["session_id"] = kwargs.get("session_id")
+        if kwargs.get("model_name_or_path"):
+            payload["model_name_or_path"] = kwargs.get("model_name_or_path")
+        if kwargs.get("temperature") is not None:
+            payload["temperature"] = kwargs.get("temperature")
+        if kwargs.get("max_tokens") is not None:
+            payload["max_tokens"] = kwargs.get("max_tokens")
+        data = self._base._post("/product/chat/complete", payload)
+        response = ((data or {}).get("data") or {}).get("response") or ""
+        print(
+            f"[mem:chat with cube: {cube_id}] request={kwargs.get('system_prompt')}, output"
+            f"={response[:200]}{'…' if len(response) > 200 else ''}"
+        )
         return response
 
     def __getattr__(self, item):
@@ -138,7 +213,6 @@ def seed_memories(
         messages=[{"role": "user", "content": "太白喜欢记录温度、风速，并提醒大家补水。"}],
         source="aotai_hike_seed",
     )
-    print("[seed] done.")
 
 
 def run_scenario(
@@ -146,10 +220,11 @@ def run_scenario(
     client: MemOSMemoryClient,
     user_id: str,
     session_id: str,
-    steps: list[ActionStep],
+    max_steps: int,
+    log_world_search: bool,
 ) -> list[dict[str, str]]:
     print(f"[init] user_id={user_id} session_id={session_id}")
-    logging_client = LoggingMemoryClient(client, user_id=user_id)
+    logging_client = LoggingMemoryClient(client, user_id=user_id, log_world_search=log_world_search)
     memory = MemOSMemoryAdapter(logging_client)
     companion = MemoryCompanionBrain(memory=logging_client)
     game = GameService(
@@ -191,8 +266,45 @@ def run_scenario(
     )
 
     logs: list[dict[str, str]] = []
+    action_queue: list[ActionStep] = []
 
-    for idx, step in enumerate(steps, start=1):
+    for idx in range(1, max_steps + 1):
+        if not action_queue:
+            phase = str(getattr(world_state.phase, "value", world_state.phase) or "free").lower()
+            if phase == "free":
+                action_queue.append(
+                    ActionStep(action=ActionType.CONTINUE, payload={}, note="auto_continue")
+                )
+            elif phase in ("await_player_say", "night_wait_player"):
+                say_text = ""
+                while not say_text:
+                    say_text = input("[input] SAY> ").strip()
+                action_queue.append(
+                    ActionStep(
+                        action=ActionType.SAY,
+                        payload={"text": say_text},
+                        note="player_say",
+                    )
+                )
+            elif phase == "night_vote_ready":
+                leader_id = world_state.leader_role_id or world_state.active_role_id
+                if not leader_id and world_state.roles:
+                    leader_id = world_state.roles[0].role_id
+                action_queue.append(
+                    ActionStep(
+                        action=ActionType.DECIDE,
+                        payload={
+                            "kind": "night_vote",
+                            "leader_role_id": leader_id,
+                        },
+                        note="night_vote",
+                    )
+                )
+            else:
+                print(f"[step {idx}] phase={phase} no action generated; stopping.")
+                break
+
+        step = action_queue.pop(0)
         print(
             f"[step {idx}] action={step.action} payload={json.dumps(step.payload, ensure_ascii=False)}"
         )
@@ -225,34 +337,28 @@ def run_scenario(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AoTai Hike memory+chat tuning script")
-    parser.add_argument("--user-id", default="demo_user")
+    parser.add_argument("--user-id", default="demo_user_06")
     parser.add_argument("--session-id", default=f"algo-{uuid.uuid4().hex[:6]}")
     parser.add_argument(
         "--base-url", default=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8002")
+    )
+    parser.add_argument("--max-steps", type=int, default=8)
+    parser.add_argument(
+        "--log-world-search",
+        action="store_true",
+        help="Log world-cube searches (default: off)",
     )
     parser.add_argument("--output", default="", help="Optional JSONL output path")
     args = parser.parse_args()
 
     print(f"[config] base_url={args.base_url}")
     client = MemOSMemoryClient(base_url=args.base_url)
-    steps = [
-        ActionStep(
-            action=ActionType.SAY,
-            payload={"text": "大家注意脚下，风有点大。"},
-            note="player_say",
-        ),
-        ActionStep(
-            action=ActionType.MOVE_FORWARD,
-            payload={"step_km": 1.0},
-            note="advance_step",
-        ),
-    ]
-
     logs = run_scenario(
         client=client,
         user_id=args.user_id,
         session_id=args.session_id,
-        steps=steps,
+        max_steps=args.max_steps,
+        log_world_search=args.log_world_search,
     )
 
     if args.output:

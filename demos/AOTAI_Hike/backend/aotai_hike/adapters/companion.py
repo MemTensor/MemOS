@@ -248,7 +248,7 @@ class MemoryCompanionBrain(CompanionBrain):
                 system_prompt=system_prompt,
                 history=history if history else None,
                 session_id=world_state.session_id,
-                top_k=0,
+                top_k=1,
                 mode=self._config.mode,
                 add_message_on_answer=False,
             )

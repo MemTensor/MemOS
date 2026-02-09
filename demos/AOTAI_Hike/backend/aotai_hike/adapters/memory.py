@@ -128,13 +128,14 @@ class MemOSMemoryClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
+        safe_top_k = self._default_top_k if top_k is None else max(1, int(top_k))
         payload: dict[str, Any] = {
             "user_id": user_id,
             "query": query,
             "readable_cube_ids": [cube_id],
             "writable_cube_ids": [cube_id],
             "mem_cube_id": cube_id,
-            "top_k": top_k if top_k is not None else 0,
+            "top_k": safe_top_k,
             "mode": mode or self._default_mode,
             "add_message_on_answer": add_message_on_answer,
         }
