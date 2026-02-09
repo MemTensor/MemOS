@@ -125,6 +125,14 @@ export async function apiSetActiveRole(roleId) {
 
 export async function apiAct(action, payload = {}) {
   if (_isGameOver(worldState)) return null;
+  // Show "conversing" hint immediately when moving forward (may trigger NPC chat)
+  if (action === "MOVE_FORWARD") {
+    logMsg({
+      kind: "system",
+      content: "正在与队友对话…",
+      timestamp_ms: Date.now(),
+    });
+  }
   const data = await api("/act", { session_id: sessionId, action, payload });
   setWorldState(data.world_state);
   for (const m of data.messages || []) logMsg(m);

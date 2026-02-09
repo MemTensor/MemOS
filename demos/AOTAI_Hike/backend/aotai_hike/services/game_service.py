@@ -170,14 +170,22 @@ class GameService:
         )
 
         # Night arrival: pause, darken, and require player speech before voting.
-        if world_state.time_of_day == "night" and world_state.phase == Phase.FREE:
+        # Skip NPC chat if we're entering night vote phase.
+        is_entering_night_vote = (
+            world_state.time_of_day == "night" and world_state.phase == Phase.FREE
+        )
+        if is_entering_night_vote:
             world_state.phase = Phase.NIGHT_WAIT_PLAYER
         else:
             # Per-step NPC cadence:
             # - Only trigger NPC chatter after a MOVE_FORWARD step.
             # - It may gate further progress until the player replies.
-            if req.action == ActionType.MOVE_FORWARD and user_action_desc.startswith(
-                "MOVE_FORWARD"
+            # - Skip chat if we're already in night vote phases.
+            if (
+                req.action == ActionType.MOVE_FORWARD
+                and user_action_desc.startswith("MOVE_FORWARD")
+                and world_state.phase != Phase.NIGHT_WAIT_PLAYER
+                and world_state.phase != Phase.NIGHT_VOTE_READY
             ):
                 comp = self._companion.generate(
                     world_state=world_state,
@@ -196,7 +204,7 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content="队友看向你：轮到你发言了（发言后继续前进）",
+                            content="队友看向你：轮到你发言了（发一句话后才能继续）。",
                             timestamp_ms=now_ms,
                         )
                     )
