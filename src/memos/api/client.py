@@ -31,10 +31,27 @@ MAX_RETRY_COUNT = 3
 class MemOSClient:
     """MemOS API client"""
 
-    def __init__(self, api_key: str | None = None, base_url: str | None = None):
-        self.base_url = (
-            base_url or os.getenv("MEMOS_BASE_URL") or "https://memos.memtensor.cn/api/openmem/v1"
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        is_global: str | bool = "false",
+    ):
+        # Priority:
+        # 1. base_url argument
+        # 2. MEMOS_BASE_URL environment variable (direct URL)
+        # 3. MEMOS_IS_GLOBAL environment variable (True/False toggle)
+        arg_is_global = str(is_global).lower() in ("true", "1", "yes")
+        memos_is_global = os.getenv("MEMOS_IS_GLOBAL", "false").lower() in ("true", "1", "yes")
+        final_is_global = arg_is_global or memos_is_global
+        default_url = (
+            "https://api.memt.ai/platform/api/openmem/v1"
+            if final_is_global
+            else "https://memos.memtensor.cn/api/openmem/v1"
         )
+
+        self.base_url = base_url or os.getenv("MEMOS_BASE_URL") or default_url
+
         api_key = api_key or os.getenv("MEMOS_API_KEY")
 
         if not api_key:
@@ -56,7 +73,7 @@ class MemOSClient:
         message_limit_number: int = 6,
         source: str | None = None,
     ) -> MemOSGetMessagesResponse | None:
-        """Get messages"""
+        """Get message"""
         # Validate required parameters
         self._validate_required_params(user_id=user_id)
 

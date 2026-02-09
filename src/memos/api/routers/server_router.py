@@ -38,6 +38,7 @@ from memos.api.product_models import (
     DeleteMemoryResponse,
     ExistMemCubeIdRequest,
     ExistMemCubeIdResponse,
+    GetMemoryDashboardRequest,
     GetMemoryPlaygroundRequest,
     GetMemoryRequest,
     GetMemoryResponse,
@@ -455,4 +456,14 @@ def recover_memory_by_record_id(memory_req: RecoverMemoryByRecordIdRequest):
         code=200,
         message="Called Successfully",
         data={"status": "success"},
+    )
+
+
+@router.post(
+    "/get_memory_dashboard", summary="Get memories for dashboard", response_model=GetMemoryResponse
+)
+def get_memories_dashboard(memory_req: GetMemoryDashboardRequest):
+    return handlers.memory_handler.handle_get_memories_dashboard(
+        get_mem_req=memory_req,
+        naive_mem_cube=naive_mem_cube,
     )

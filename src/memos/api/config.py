@@ -538,6 +538,10 @@ class APIConfig:
                         "chunker": {
                             "backend": "sentence",
                             "config": {
+                                "save_rawfile": os.getenv(
+                                    "MEM_READER_SAVE_RAWFILENODE", "true"
+                                ).lower()
+                                == "true",
                                 "tokenizer_or_token_counter": "gpt2",
                                 "chunk_size": 512,
                                 "chunk_overlap": 128,
@@ -804,6 +808,8 @@ class APIConfig:
                     "chunker": {
                         "backend": "sentence",
                         "config": {
+                            "save_rawfile": os.getenv("MEM_READER_SAVE_RAWFILENODE", "true").lower()
+                            == "true",
                             "tokenizer_or_token_counter": "gpt2",
                             "chunk_size": 512,
                             "chunk_overlap": 128,
@@ -821,7 +827,12 @@ class APIConfig:
                     "oss_config": APIConfig.get_oss_config(),
                     "skills_dir_config": {
                         "skills_oss_dir": os.getenv("SKILLS_OSS_DIR", "skill_memory/"),
-                        "skills_local_dir": os.getenv("SKILLS_LOCAL_DIR", "/tmp/skill_memory/"),
+                        "skills_local_tmp_dir": os.getenv(
+                            "SKILLS_LOCAL_TMP_DIR", "/tmp/skill_memory/"
+                        ),
+                        "skills_local_dir": os.getenv(
+                            "SKILLS_LOCAL_DIR", "/tmp/upload_skill_memory/"
+                        ),
                     },
                 },
             },
@@ -919,6 +930,8 @@ class APIConfig:
                     "chunker": {
                         "backend": "sentence",
                         "config": {
+                            "save_rawfile": os.getenv("MEM_READER_SAVE_RAWFILENODE", "true").lower()
+                            == "true",
                             "tokenizer_or_token_counter": "gpt2",
                             "chunk_size": 512,
                             "chunk_overlap": 128,
