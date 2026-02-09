@@ -197,7 +197,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                     )
 
                     # add raw file nodes and edges
-                    if self.mem_reader.save_rawfile:
+                    if mem_reader.save_rawfile:
                         raw_file_mem_group = [
                             memory
                             for memory in flattened_memories
@@ -209,7 +209,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                             user_id=user_id,
                             user_name=user_name,
                         )
-                        logger.info(f"Added {len(raw_file_mem_group)} Rawfile memories.")
+                        logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
 
                     # Mark merged_from memories as archived when provided in memory metadata
                     summary_memories = [
@@ -218,7 +218,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                         if memory.metadata.memory_type != "RawFileMemory"
                     ]
                     if mem_reader.graph_db:
-                        for memory in flattened_memories:
+                        for memory in summary_memories:
                             merged_from = (memory.metadata.info or {}).get("merged_from")
                             if merged_from:
                                 old_ids = (
