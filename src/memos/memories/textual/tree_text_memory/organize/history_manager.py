@@ -10,14 +10,15 @@ from memos.extras.nli_model.client import NLIClient
 from memos.extras.nli_model.types import NLIResult
 from memos.graph_dbs.base import BaseGraphDB
 from memos.llms.base import BaseLLM
+from memos.mem_reader.read_multi_modal.utils import detect_lang
 from memos.memories.textual.item import (
     ArchivedTextualMemory,
     TextualMemoryItem,
     TreeNodeTextualMemoryMetadata,
 )
 from memos.templates.mem_reader_mem_version_prompts import (
-    ASYNC_MEMORY_UPDATE_PROMPT_ZH,
-    MEMORY_MERGE_PROMPT_ZH,
+    ASYNC_MEMORY_UPDATE_PROMPT_DICT,
+    MEMORY_MERGE_PROMPT_DICT,
 )
 
 
@@ -162,9 +163,22 @@ class MemoryHistoryManager:
 
         return item, archived_item
 
-    @staticmethod
+    def _determine_lang(self, sources: list | None, fallback_text: str) -> str:
+        lang = None
+        if sources:
+            for source in sources:
+                if hasattr(source, "lang") and source.lang:
+                    lang = source.lang
+                    break
+                if isinstance(source, dict) and source.get("lang"):
+                    lang = source.get("lang")
+                    break
+        if lang is None:
+            lang = detect_lang(fallback_text)
+        return lang
+
     def format_async_update_prompt(
-        item: TextualMemoryItem, conversation: str | None = None, custom_tags_prompt: str = ""
+        self, item: TextualMemoryItem, conversation: str | None = None, custom_tags_prompt: str = ""
     ) -> str:
         """
         Format the prompt for asynchronous memory update.
@@ -195,14 +209,18 @@ class MemoryHistoryManager:
                 # Includes "unrelated" and any other types
                 unrelated_candidates.append(candidate_str)
 
-        # Helper to format list as string
-        def format_list(candidates):
-            return "\n".join(candidates) if candidates else "无"
+        sources = item.metadata.sources if item.metadata else None
+        lang = self._determine_lang(sources, conversation or item.memory)
+        empty_label = "None"
 
+        def format_list(candidates):
+            return "\n".join(candidates) if candidates else empty_label
+
+        prompt_template = ASYNC_MEMORY_UPDATE_PROMPT_DICT.get(
+            lang, ASYNC_MEMORY_UPDATE_PROMPT_DICT["en"]
+        )
         return (
-            ASYNC_MEMORY_UPDATE_PROMPT_ZH.replace(
-                "${duplicate_candidates}", format_list(duplicate_candidates)
-            )
+            prompt_template.replace("${duplicate_candidates}", format_list(duplicate_candidates))
             .replace("${conflict_candidates}", format_list(conflict_candidates))
             .replace("${unrelated_candidates}", format_list(unrelated_candidates))
             .replace("${custom_tags_prompt}", custom_tags_prompt)
@@ -668,7 +686,9 @@ class MemoryHistoryManager:
         if not self.llm:
             return proposed_update
 
-        prompt = MEMORY_MERGE_PROMPT_ZH.replace("${latest_memory}", latest_memory).replace(
+        lang = self._determine_lang(None, f"{latest_memory}\n{proposed_update}")
+        prompt_template = MEMORY_MERGE_PROMPT_DICT.get(lang, MEMORY_MERGE_PROMPT_DICT["en"])
+        prompt = prompt_template.replace("${latest_memory}", latest_memory).replace(
             "${proposed_update}", proposed_update
         )
 
