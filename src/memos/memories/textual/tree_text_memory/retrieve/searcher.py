@@ -90,7 +90,7 @@ class Searcher:
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
-        parsed_goal, query_embedding, context, query = self._parse_task(
+        parsed_goal, query_embedding, _context, query = self._parse_task(
             query,
             info,
             mode,

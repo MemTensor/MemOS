@@ -64,7 +64,7 @@ def test_chat_passthrough():
 
 
 def test_doc_local_file():
-    local_path, content = create_temp_file("test local file content")
+    local_path, _content = create_temp_file("test local file content")
     result = coerce_scene_data([local_path], "doc")
 
     filename = os.path.basename(local_path)
@@ -108,7 +108,7 @@ def test_doc_plain_text():
 
 
 def test_doc_mixed():
-    local_path, content = create_temp_file("local file content")
+    local_path, _content = create_temp_file("local file content")
     url = "https://example.com/x.pdf"
     plain = "hello world"
 
