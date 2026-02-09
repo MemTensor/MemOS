@@ -67,12 +67,14 @@ Get Free API: [Try API](https://memos-dashboard.openmem.net/quickstart/?source=g
 ## 🦞 Enhanced OpenClaw with MemOS Plugin
 ![](https://cdn.memtensor.com.cn/img/1770612303123_mnaisk_compressed.png)
 
-• 50-60% lower token usage – intelligent memory retrieval instead of loading full chat history
-• Persistent cross-session memory – remembers user preferences accurately, not just recent chatter
-• Faster, more accurate responses – retrieves the right context without hallucinations
+- **50-60% lower token usage** – intelligent memory retrieval instead of loading full chat history
+- **Persistent cross-session memory** – remembers user preferences accurately, not just recent chatter
+- **Faster, more accurate responses** – retrieves the right context without hallucinations
 
 Get your API key: [MemOS Dashboard](https://memos-dashboard.openmem.net/cn/login/)
+
 Your lobster now has a working memory system.
+
 Try it: Full tutorial → [MemOS-Cloud-OpenClaw-Plugin](https://github.com/MemTensor/MemOS-Cloud-OpenClaw-Plugin)
 
 ## 📌 MemOS: Memory Operating System for AI Agents
