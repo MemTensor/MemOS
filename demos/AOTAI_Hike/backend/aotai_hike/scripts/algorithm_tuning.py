@@ -17,10 +17,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 import uuid
 
 from dataclasses import dataclass
+
+from loguru import logger
 
 from aotai_hike.adapters.background import StaticBackgroundProvider
 from aotai_hike.adapters.companion import MemoryCompanionBrain
@@ -84,7 +87,11 @@ class LoggingMemoryClient:
         if kwargs.get("source"):
             payload["source"] = kwargs.get("source")
         resp = self._base._post("/product/add", payload)
-        print(f"[mem:add to cube: {cube_id}] response={json.dumps(resp, ensure_ascii=False)}")
+        logger.info(
+            "[mem:add to cube: {}] response={}",
+            cube_id,
+            json.dumps(resp, ensure_ascii=False),
+        )
         return resp
 
     def search_memory(self, **kwargs):
@@ -100,6 +107,7 @@ class LoggingMemoryClient:
             "readable_cube_ids": [cube_id],
             "mem_cube_id": cube_id,
             "include_skill_memory": False,
+            "include_preference": False,
             "mode": kwargs.get("mode") or getattr(self._base, "_default_mode", "fine"),
         }
         if kwargs.get("session_id"):
@@ -117,9 +125,12 @@ class LoggingMemoryClient:
             snippets = []
         snippet_preview = " | ".join(s[:300] for s in snippets[:5])
         if not suppress:
-            print(
-                f"[mem:search from cube: {cube_id}] hits={len(snippets)} "
-                f"query is {query}, snippets={snippet_preview}"
+            logger.info(
+                "[mem:search from cube: {}] hits={} query={} snippets={}",
+                cube_id,
+                len(snippets),
+                query,
+                snippet_preview,
             )
         return MemorySearchResult(snippets=snippets)
 
@@ -150,9 +161,12 @@ class LoggingMemoryClient:
             payload["max_tokens"] = kwargs.get("max_tokens")
         data = self._base._post("/product/chat/complete", payload)
         response = ((data or {}).get("data") or {}).get("response") or ""
-        print(
-            f"[mem:chat with cube: {cube_id}] request={kwargs.get('system_prompt')}, output"
-            f"={response[:200]}{'…' if len(response) > 200 else ''}"
+        logger.info(
+            "[mem:chat with cube: {}] prompt={} output={}{}",
+            cube_id,
+            (kwargs.get("system_prompt") or "")[:200],
+            response[:200],
+            "…" if len(response) > 200 else "",
         )
         return response
 
@@ -194,7 +208,7 @@ def seed_memories(
     world_cube_id: str,
     role_cube_ids: dict[str, str],
 ) -> None:
-    print("[seed] writing initial memories...")
+    logger.info("[seed] writing initial memories...")
     client.add_memory(
         user_id=user_id,
         cube_id=world_cube_id,
@@ -223,7 +237,7 @@ def run_scenario(
     max_steps: int,
     log_world_search: bool,
 ) -> list[dict[str, str]]:
-    print(f"[init] user_id={user_id} session_id={session_id}")
+    logger.info("[init] user_id={} session_id={}", user_id, session_id)
     logging_client = LoggingMemoryClient(client, user_id=user_id, log_world_search=log_world_search)
     memory = MemOSMemoryAdapter(logging_client)
     companion = MemoryCompanionBrain(memory=logging_client)
@@ -257,7 +271,7 @@ def run_scenario(
         world_cube_id=world_cube_id,
         role_cube_ids=role_cube_ids,
     )
-    print(f"[init] roles={len(roles)} active_role={roles[0].role_id}")
+    logger.info("[init] roles={} active_role={}", len(roles), roles[0].role_id)
 
     for role in roles:
         game.upsert_role(world_state, RoleUpsertRequest(session_id=session_id, role=role))
@@ -301,27 +315,36 @@ def run_scenario(
                     )
                 )
             else:
-                print(f"[step {idx}] phase={phase} no action generated; stopping.")
+                logger.warning("[step {}] phase={} no action generated; stopping.", idx, phase)
                 break
 
         step = action_queue.pop(0)
-        print(
-            f"[step {idx}] action={step.action} payload={json.dumps(step.payload, ensure_ascii=False)}"
+        logger.info(
+            "[step {}] action={} payload={}",
+            idx,
+            step.action,
+            json.dumps(step.payload, ensure_ascii=False),
         )
         resp = game.act(
             world_state,
             ActRequest(session_id=session_id, action=step.action, payload=step.payload),
         )
-        print(
-            f"[step {idx}] messages={len(resp.messages)} phase={resp.world_state.phase} "
-            f"time={resp.world_state.time_of_day} weather={resp.world_state.weather}"
+        logger.info(
+            "[step {}] messages={} phase={} time={} weather={}",
+            idx,
+            len(resp.messages),
+            resp.world_state.phase,
+            resp.world_state.time_of_day,
+            resp.world_state.weather,
         )
         for msg in resp.messages:
             if msg.kind != "speech":
                 continue
-            print(
-                f"[npc] {msg.role_name or msg.role_id}: {msg.content[:120]}"
-                f"{'…' if len(msg.content) > 120 else ''}"
+            logger.info(
+                "[npc] {}: {}{}",
+                msg.role_name or msg.role_id,
+                msg.content[:120],
+                "…" if len(msg.content) > 120 else "",
             )
             logs.append(
                 {
@@ -351,7 +374,9 @@ def main() -> None:
     parser.add_argument("--output", default="", help="Optional JSONL output path")
     args = parser.parse_args()
 
-    print(f"[config] base_url={args.base_url}")
+    logger.remove()
+    logger.add(sys.stdout, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
+    logger.info("[config] base_url={}", args.base_url)
     client = MemOSMemoryClient(base_url=args.base_url)
     logs = run_scenario(
         client=client,
@@ -366,7 +391,7 @@ def main() -> None:
             for item in logs:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
     else:
-        print(json.dumps({"responses": logs}, ensure_ascii=False, indent=2))
+        logger.info(json.dumps({"responses": logs}, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
