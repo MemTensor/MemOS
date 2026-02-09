@@ -422,8 +422,8 @@ class APISearchRequest(BaseRequest):
     )
     # Internal field for search memory type
     search_memory_type: str = Field(
-        "All",
-        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, SkillMemory",
+        "AllSummaryMemory",
+        description="Type of memory to search: All, WorkingMemory, LongTermMemory, UserMemory, OuterMemory, ToolSchemaMemory, ToolTrajectoryMemory, RawFileMemory, AllSummaryMemory, SkillMemory",
     )
 
     # ==== Context ====
@@ -459,6 +459,13 @@ class APISearchRequest(BaseRequest):
     source: str | None = Field(
         None,
         description="Source of the search query [plugin will router diff search]",
+    )
+
+    neighbor_discovery: bool = Field(
+        False,
+        description="Whether to enable neighbor discovery. "
+        "If enabled, the system will automatically recall neighbor chunks "
+        "relevant to the query. Default: False.",
     )
 
     @model_validator(mode="after")

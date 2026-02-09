@@ -134,6 +134,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 )
                 return
 
+            # Get the original fast memory (raw chunk) items
             memory_items = []
             for mem_id in mem_ids:
                 try:
@@ -183,15 +184,41 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                 logger.info("mem_reader processed %s enhanced memories", len(flattened_memories))
 
                 if flattened_memories:
-                    enhanced_mem_ids = text_mem.add(flattened_memories, user_name=user_name)
+                    mem_group = [
+                        memory
+                        for memory in flattened_memories
+                        if memory.metadata.memory_type != "RawFileMemory"
+                    ]
+                    enhanced_mem_ids = text_mem.add(mem_group, user_name=user_name)
                     logger.info(
                         "Added %s enhanced memories: %s",
                         len(enhanced_mem_ids),
                         enhanced_mem_ids,
                     )
 
+                    # add raw file nodes and edges
+                    if mem_reader.save_rawfile:
+                        raw_file_mem_group = [
+                            memory
+                            for memory in flattened_memories
+                            if memory.metadata.memory_type == "RawFileMemory"
+                        ]
+                        text_mem.add_rawfile_nodes_n_edges(
+                            raw_file_mem_group,
+                            enhanced_mem_ids,
+                            user_id=user_id,
+                            user_name=user_name,
+                        )
+                        logger.info("Added %s Rawfile memories.", len(raw_file_mem_group))
+
+                    # Mark merged_from memories as archived when provided in memory metadata
+                    summary_memories = [
+                        memory
+                        for memory in flattened_memories
+                        if memory.metadata.memory_type != "RawFileMemory"
+                    ]
                     if mem_reader.graph_db:
-                        for memory in flattened_memories:
+                        for memory in summary_memories:
                             merged_from = (memory.metadata.info or {}).get("merged_from")
                             if merged_from:
                                 old_ids = (
@@ -216,7 +243,7 @@ class MemReadMessageHandler(BaseSchedulerHandler):
                                         )
                     else:
                         has_merged_from = any(
-                            (m.metadata.info or {}).get("merged_from") for m in flattened_memories
+                            (m.metadata.info or {}).get("merged_from") for m in summary_memories
                         )
                         if has_merged_from:
                             logger.warning(
