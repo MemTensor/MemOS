@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api/demo/ao-tai", tags=["AoTai Demo"])
 
 _sessions = InMemorySessionStore()
 _background = StaticBackgroundProvider()
-_memory_client = MemOSMemoryClient(base_url=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8001"))
+_memory_client = MemOSMemoryClient(base_url=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8002"))
 _game = GameService(
     memory=MemOSMemoryAdapter(_memory_client),
     companion=MemoryCompanionBrain(memory=_memory_client),

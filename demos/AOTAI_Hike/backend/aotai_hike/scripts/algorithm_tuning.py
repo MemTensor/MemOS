@@ -57,10 +57,18 @@ def _now_str() -> str:
 
 
 class LoggingMemoryClient:
-    def __init__(self, base: MemOSMemoryClient, *, user_id: str, log_world_search: bool):
+    def __init__(
+        self,
+        base: MemOSMemoryClient,
+        *,
+        user_id: str,
+        log_world_search: bool,
+        log_full_prompt: bool,
+    ):
         self._base = base
         self._user_id = user_id
         self._log_world_search = log_world_search
+        self._log_full_prompt = log_full_prompt
 
     def add_memory(self, **kwargs):
         cube_id = str(kwargs.get("cube_id") or "")
@@ -108,7 +116,6 @@ class LoggingMemoryClient:
             "mem_cube_id": cube_id,
             "include_skill_memory": False,
             "include_preference": False,
-            "mode": kwargs.get("mode") or getattr(self._base, "_default_mode", "fine"),
         }
         if kwargs.get("session_id"):
             payload["session_id"] = kwargs.get("session_id")
@@ -123,7 +130,7 @@ class LoggingMemoryClient:
                         snippets.append(text)
         except Exception:
             snippets = []
-        snippet_preview = " | ".join(s[:300] for s in snippets[:5])
+        snippet_preview = " | ".join(s[:1000] for s in snippets[:5])
         if not suppress:
             logger.info(
                 "[mem:search from cube: {}] hits={} query={} snippets={}",
@@ -161,12 +168,29 @@ class LoggingMemoryClient:
             payload["max_tokens"] = kwargs.get("max_tokens")
         data = self._base._post("/product/chat/complete", payload)
         response = ((data or {}).get("data") or {}).get("response") or ""
+        system_prompt = kwargs.get("system_prompt") or ""
+        if self._log_full_prompt:
+            logger.info(
+                "[mem:chat with cube: {}] prompt(full)={}",
+                cube_id,
+                system_prompt,
+            )
+        else:
+            head = system_prompt[:500]
+            tail = system_prompt[-500:] if len(system_prompt) > 500 else ""
+            logger.info(
+                "[mem:chat with cube: {}] prompt(len={}) head={}{}{}",
+                cube_id,
+                len(system_prompt),
+                head,
+                " ... " if tail else "",
+                tail,
+            )
         logger.info(
-            "[mem:chat with cube: {}] prompt={} output={}{}",
+            "[mem:chat with cube: {}] output={}{}",
             cube_id,
-            (kwargs.get("system_prompt") or "")[:200],
-            response[:200],
-            "…" if len(response) > 200 else "",
+            response[:500],
+            "…" if len(response) > 500 else "",
         )
         return response
 
@@ -236,9 +260,15 @@ def run_scenario(
     session_id: str,
     max_steps: int,
     log_world_search: bool,
+    log_full_prompt: bool,
 ) -> list[dict[str, str]]:
     logger.info("[init] user_id={} session_id={}", user_id, session_id)
-    logging_client = LoggingMemoryClient(client, user_id=user_id, log_world_search=log_world_search)
+    logging_client = LoggingMemoryClient(
+        client,
+        user_id=user_id,
+        log_world_search=log_world_search,
+        log_full_prompt=log_full_prompt,
+    )
     memory = MemOSMemoryAdapter(logging_client)
     companion = MemoryCompanionBrain(memory=logging_client)
     game = GameService(
@@ -314,6 +344,24 @@ def run_scenario(
                         note="night_vote",
                     )
                 )
+            elif phase == "junction_decision":
+                options = list(world_state.available_next_node_ids or [])
+                if not options:
+                    logger.warning(
+                        "[step {}] phase=junction_decision but no options; stopping.", idx
+                    )
+                    break
+                logger.info("[input] 路线可选: {}", ", ".join(options))
+                picked = ""
+                while picked not in options:
+                    picked = input("[input] 选择 next_node_id> ").strip()
+                action_queue.append(
+                    ActionStep(
+                        action=ActionType.MOVE_FORWARD,
+                        payload={"next_node_id": picked},
+                        note="junction_pick",
+                    )
+                )
             else:
                 logger.warning("[step {}] phase={} no action generated; stopping.", idx, phase)
                 break
@@ -360,7 +408,7 @@ def run_scenario(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AoTai Hike memory+chat tuning script")
-    parser.add_argument("--user-id", default="demo_user_06")
+    parser.add_argument("--user-id", default="demo_user_13")
     parser.add_argument("--session-id", default=f"algo-{uuid.uuid4().hex[:6]}")
     parser.add_argument(
         "--base-url", default=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8002")
@@ -370,6 +418,11 @@ def main() -> None:
         "--log-world-search",
         action="store_true",
         help="Log world-cube searches (default: off)",
+    )
+    parser.add_argument(
+        "--log-full-prompt",
+        action="store_true",
+        help="Log full system prompt (default: truncated)",
     )
     parser.add_argument("--output", default="", help="Optional JSONL output path")
     args = parser.parse_args()
@@ -384,6 +437,7 @@ def main() -> None:
         session_id=args.session_id,
         max_steps=args.max_steps,
         log_world_search=args.log_world_search,
+        log_full_prompt=args.log_full_prompt,
     )
 
     if args.output:
