@@ -821,7 +821,12 @@ class APIConfig:
                     "oss_config": APIConfig.get_oss_config(),
                     "skills_dir_config": {
                         "skills_oss_dir": os.getenv("SKILLS_OSS_DIR", "skill_memory/"),
-                        "skills_local_dir": os.getenv("SKILLS_LOCAL_DIR", "/tmp/skill_memory/"),
+                        "skills_local_tmp_dir": os.getenv(
+                            "SKILLS_LOCAL_TMP_DIR", "/tmp/skill_memory/"
+                        ),
+                        "skills_local_dir": os.getenv(
+                            "SKILLS_LOCAL_DIR", "/tmp/upload_skill_memory/"
+                        ),
                     },
                 },
             },
