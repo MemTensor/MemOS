@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+from loguru import logger
 
 
 @dataclass
@@ -38,7 +39,6 @@ class MemOSMemoryClient:
         self._timeout_s = timeout_s
         self._default_mode = default_mode
         self._default_top_k = default_top_k
-        self._log = logging.getLogger(__name__)
 
     def add_memory(
         self,
@@ -48,7 +48,7 @@ class MemOSMemoryClient:
         memory_content: str | None = None,
         messages: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
-        async_mode: str = "sync",
+        async_mode: str = "async",
         mode: str | None = None,
         info: dict[str, Any] | None = None,
         custom_tags: list[str] | None = None,
@@ -154,7 +154,7 @@ class MemOSMemoryClient:
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
-        self._log.info("[MemOS] POST %s payload=%s", url, json.dumps(payload, ensure_ascii=False))
+        logger.info("[MemOS] POST {} payload={}", url, json.dumps(payload, ensure_ascii=False))
         resp = requests.post(
             url,
             headers={"Content-Type": "application/json"},
@@ -162,16 +162,16 @@ class MemOSMemoryClient:
             timeout=self._timeout_s,
         )
         if resp.status_code >= 400:
-            self._log.error("MemOS error %s: %s", resp.status_code, resp.text)
+            logger.error("MemOS error {}: {}", resp.status_code, resp.text)
             resp.raise_for_status()
         try:
             post_results = resp.json()
-            self._log.info(
-                "[MemOS] POST %s response=%s", url, json.dumps(post_results, ensure_ascii=False)
+            logger.info(
+                "[MemOS] POST {} response={}", url, json.dumps(post_results, ensure_ascii=False)
             )
             return post_results
         except Exception:
-            self._log.error("Invalid MemOS response: %s", resp.text)
+            logger.error("Invalid MemOS response: {}", resp.text)
 
 
 class MemoryAdapter:

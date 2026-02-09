@@ -25,6 +25,7 @@ from aotai_hike.schemas import (
     WorldState,
 )
 from aotai_hike.world.map_data import AoTaiGraph
+from loguru import logger
 
 
 if TYPE_CHECKING:
@@ -81,6 +82,7 @@ class GameService:
         now_ms = int(time.time() * 1000)
         active = self._get_active_role(world_state)
         messages: list[Message] = []
+        logger.info("[act] action={} phase={}", req.action, world_state.phase)
 
         # Random default leader (assigned on first act after roles exist).
         if world_state.roles and world_state.leader_role_id is None:
@@ -151,6 +153,7 @@ class GameService:
         mem_event = self._format_memory_event(
             world_state, req, node_after, user_action_desc, messages
         )
+        logger.info("[mem:event] {}", mem_event)
         self._memory.add_event(
             user_id=world_state.user_id,
             session_id=world_state.session_id,
@@ -158,6 +161,7 @@ class GameService:
         )
 
         query = self._build_memory_query(world_state, req, node_after, user_action_desc)
+        logger.info("[mem:search] query={}", query)
         mem_res = self._memory.search(
             user_id=world_state.user_id,
             session_id=world_state.session_id,
@@ -182,6 +186,9 @@ class GameService:
                     user_action=user_action_desc,
                 )
                 messages.extend(comp.messages)
+                for m in comp.messages:
+                    if m.kind == "speech":
+                        logger.info("[npc] {}: {}", m.role_name or m.role_id, m.content)
                 self._apply_message_effects(world_state, comp.messages)
                 if getattr(comp, "requires_player_say", False):
                     world_state.phase = Phase.AWAIT_PLAYER_SAY
@@ -189,7 +196,7 @@ class GameService:
                         Message(
                             message_id=f"sys-{uuid.uuid4().hex[:8]}",
                             kind="system",
-                            content="队友看向你：轮到你发言了（发一句话后才能继续）。",
+                            content="队友看向你：轮到你发言了（发言后继续前进）",
                             timestamp_ms=now_ms,
                         )
                     )

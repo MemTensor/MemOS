@@ -8,8 +8,35 @@ export function logMsg(msg) {
     el.scrollTop + el.clientHeight >= el.scrollHeight - thresholdPx;
   const stickToBottom = isNearBottom(chatEl);
 
+  if (msg.kind === "action") {
+    const last = chatEl.lastElementChild;
+    if (last && last.dataset && last.dataset.roleName === (msg.role_name || "")) {
+      const contentEl = last.querySelector(".content");
+      if (contentEl) {
+        const raw = String(msg.content || "");
+        const action = raw.includes("：") ? raw.split("：").slice(1).join("：") : raw;
+        contentEl.textContent = `${contentEl.textContent}(${action})`;
+        if (stickToBottom) {
+          const scrollToBottom = () => {
+            try {
+              chatEl.scrollTop = chatEl.scrollHeight;
+            } catch {}
+          };
+          try {
+            requestAnimationFrame(scrollToBottom);
+            setTimeout(scrollToBottom, 0);
+          } catch {
+            scrollToBottom();
+          }
+        }
+        return;
+      }
+    }
+  }
+
   const div = document.createElement("div");
   div.className = `msg ${msg.kind}`;
+  div.dataset.roleName = msg.role_name || "";
   const meta = document.createElement("div");
   meta.className = "meta";
   const who = msg.kind === "system" ? "系统" : msg.role_name || "未知";
