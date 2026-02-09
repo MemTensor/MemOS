@@ -661,12 +661,13 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
 def _upload_skills(
     skills_repo_backend: str,
     skills_oss_dir: dict[str, Any] | None,
-    local_file_path: str,
+    local_tmp_file_path: str,
+    local_save_file_path: str,
     client: Any,
     user_id: str,
 ) -> str:
     if skills_repo_backend == "OSS":
-        zip_filename = Path(local_file_path).name
+        zip_filename = Path(local_tmp_file_path).name
         oss_path = (Path(skills_oss_dir) / user_id / zip_filename).as_posix()
 
         import alibabacloud_oss_v2 as oss
@@ -676,7 +677,7 @@ def _upload_skills(
                 bucket=os.getenv("OSS_BUCKET_NAME"),
                 key=oss_path,
             ),
-            filepath=local_file_path,
+            filepath=local_tmp_file_path,
         )
 
         if result.status_code != 200:
@@ -698,11 +699,10 @@ def _upload_skills(
             else "8000"
         )
 
-        zip_path = str(local_file_path)
-        local_save_path = os.getenv("FILE_LOCAL_PATH")
-        os.makedirs(local_save_path, exist_ok=True)
+        zip_path = str(local_tmp_file_path)
+        os.makedirs(local_save_file_path, exist_ok=True)
         file_name = os.path.basename(zip_path)
-        target_full_path = os.path.join(local_save_path, file_name)
+        target_full_path = os.path.join(local_save_file_path, file_name)
         shutil.copy2(zip_path, target_full_path)
         return f"http://localhost:{port}/download/{file_name}"
 
@@ -716,6 +716,7 @@ def _delete_skills(
     zip_filename: str,
     client: Any,
     skills_oss_dir: dict[str, Any] | None,
+    local_save_file_path: str,
     user_id: str,
 ) -> Any:
     if skills_repo_backend == "OSS":
@@ -729,7 +730,7 @@ def _delete_skills(
             )
         )
     else:
-        target_full_path = os.path.join(os.getenv("FILE_LOCAL_PATH"), zip_filename)
+        target_full_path = os.path.join(local_save_file_path, zip_filename)
         target_path = Path(target_full_path)
         try:
             if target_path.is_file():
@@ -748,7 +749,7 @@ def _write_skills_to_file(
     skill_name = skill_memory.get("name", "unnamed_skill").replace(" ", "_").lower()
 
     # Create tmp directory for user if it doesn't exist
-    tmp_dir = Path(skills_dir_config["skills_local_dir"]) / user_id
+    tmp_dir = Path(skills_dir_config["skills_local_tmp_dir"]) / user_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Create skill directory directly in tmp_dir
@@ -955,7 +956,7 @@ def _skill_init(skills_repo_backend, oss_config, skills_dir_config):
             return None, None, False
 
         # Validate skills_dir has required keys
-        required_keys = ["skills_local_dir", "skills_oss_dir"]
+        required_keys = ["skills_local_tmp_dir", "skills_local_dir", "skills_oss_dir"]
         missing_keys = [key for key in required_keys if key not in skills_dir_config]
         if missing_keys:
             logger.warning(
@@ -1150,6 +1151,7 @@ def process_skill_memory_fine(
                                 zip_filename=zip_filename,
                                 client=oss_client,
                                 skills_oss_dir=skills_dir_config["skills_oss_dir"],
+                                local_save_file_path=skills_dir_config["skills_local_dir"],
                                 user_id=user_id,
                             )
                             logger.info(
@@ -1172,7 +1174,8 @@ def process_skill_memory_fine(
             url = _upload_skills(
                 skills_repo_backend=skills_repo_backend,
                 skills_oss_dir=skills_dir_config["skills_oss_dir"],
-                local_file_path=zip_path,
+                local_tmp_file_path=zip_path,
+                local_save_file_path=skills_dir_config["skills_local_dir"],
                 client=oss_client,
                 user_id=user_id,
             )
