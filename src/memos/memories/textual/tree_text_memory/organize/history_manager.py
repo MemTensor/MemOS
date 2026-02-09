@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from memos.context.context import ContextThreadPoolExecutor
+from memos.embedders.base import BaseEmbedder
 from memos.extras.nli_model.client import NLIClient
 from memos.extras.nli_model.types import NLIResult
 from memos.graph_dbs.base import BaseGraphDB
@@ -126,7 +127,11 @@ def _determine_lang(sources: list | None, fallback_text: str) -> str:
 
 class MemoryHistoryManager:
     def __init__(
-        self, nli_client: NLIClient, graph_db: BaseGraphDB, llm: BaseLLM | None = None
+        self,
+        nli_client: NLIClient,
+        graph_db: BaseGraphDB,
+        llm: BaseLLM | None = None,
+        embedder: BaseEmbedder | None = None,
     ) -> None:
         """
         Initialize the MemoryHistoryManager.
@@ -139,6 +144,16 @@ class MemoryHistoryManager:
         self.nli_client = nli_client
         self.graph_db = graph_db
         self.llm = llm
+        self.embedder = embedder
+
+    def _compute_embedding(self, text: str) -> list[float] | None:
+        if not self.embedder:
+            return None
+        try:
+            return self.embedder.embed([text])[0]
+        except Exception as e:
+            logger.error(f"[MemoryHistoryManager] Failed to compute embedding: {e}")
+            return None
 
     @staticmethod
     def is_applicable(item: TextualMemoryItem) -> bool:
@@ -621,6 +636,7 @@ class MemoryHistoryManager:
             current_item.metadata.history = merged_history
             current_item.metadata.version = new_primary_version
         merged_history_dump = [h.model_dump(exclude_none=True) for h in merged_history]
+        embedding = self._compute_embedding(current_item.memory)
         # update old memory node with new content and updated history
         self.graph_db.update_node(
             id=primary_id,
@@ -629,6 +645,7 @@ class MemoryHistoryManager:
                 **fields,
                 "history": merged_history_dump,
                 "version": new_primary_version,
+                "embedding": embedding,
             },
             user_name=user_name,
         )
@@ -764,6 +781,7 @@ class MemoryHistoryManager:
                 key=key,
                 created_at=datetime.now().isoformat(),
                 history=[],
+                embedding=self._compute_embedding(new_value),
             ),
         )
         return new_item
@@ -807,6 +825,7 @@ class MemoryHistoryManager:
                     tags=tags,
                     created_at=datetime.now().isoformat(),
                     history=source_history,
+                    embedding=self._compute_embedding(value),
                 ),
             )
             created_items.append(new_item)
