@@ -288,6 +288,7 @@ class MultiModalStructMemReader(SimpleStructMemReader):
         # Collect all memory texts and sources
         memory_texts = []
         all_sources = []
+        seen_content = set()  # Track seen source content to avoid duplicates
         roles = set()
         aggregated_file_ids: list[str] = []
 
@@ -301,8 +302,18 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 item_sources = [item_sources]
 
             for source in item_sources:
-                # Add source to all_sources
-                all_sources.append(source)
+                # Get content from source for deduplication
+                source_content = None
+                if isinstance(source, dict):
+                    source_content = source.get("content", "")
+                else:
+                    source_content = getattr(source, "content", "") or ""
+
+                # Only add if content is different (empty content is considered unique)
+                content_key = source_content if source_content else None
+                if content_key and content_key not in seen_content:
+                    seen_content.add(content_key)
+                    all_sources.append(source)
 
                 # Extract role from source
                 if hasattr(source, "role") and source.role:
@@ -464,7 +475,10 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 source_role = source.get("role")
             if source_role in {"user", "assistant", "system", "tool"}:
                 prompt_type = "chat"
-
+                if hasattr(source, "type"):
+                    source_type = source.type
+                    if source_type == "file":
+                        prompt_type = "doc"
         return prompt_type
 
     def _get_maybe_merged_memory(
@@ -641,11 +655,14 @@ class MultiModalStructMemReader(SimpleStructMemReader):
     ) -> list[TextualMemoryItem]:
         """
         Process fast mode memory items through LLM to generate fine mode memories.
+        Where fast_memory_items are raw chunk memory items, not the final memory items.
         """
         if not fast_memory_items:
             return []
 
-        def _process_one_item(fast_item: TextualMemoryItem) -> list[TextualMemoryItem]:
+        def _process_one_item(
+            fast_item: TextualMemoryItem, chunk_idx: int, total_chunks: int
+        ) -> list[TextualMemoryItem]:
             """Process a single fast memory item and return a list of fine items."""
             fine_items: list[TextualMemoryItem] = []
 
@@ -749,12 +766,40 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                 except Exception as e:
                     logger.error(f"[MultiModalFine] parse error: {e}")
 
+            # save rawfile node
+            if self.save_rawfile and prompt_type == "doc" and len(fine_items) > 0:
+                rawfile_chunk = mem_str
+                file_info = fine_items[0].metadata.sources[0].file_info
+                source = self.multi_modal_parser.file_content_parser.create_source(
+                    message={"file": file_info},
+                    info=info_per_item,
+                    chunk_index=chunk_idx,
+                    chunk_total=total_chunks,
+                    chunk_content="",
+                )
+                rawfile_node = self._make_memory_item(
+                    value=rawfile_chunk,
+                    info=info_per_item,
+                    memory_type="RawFileMemory",
+                    tags=[
+                        "mode:fine",
+                        "multimodal:file",
+                        f"chunk:{chunk_idx + 1}/{total_chunks}",
+                    ],
+                    sources=[source],
+                )
+                rawfile_node.metadata.summary_ids = [mem_node.id for mem_node in fine_items]
+                fine_items.append(rawfile_node)
             return fine_items
 
         fine_memory_items: list[TextualMemoryItem] = []
+        total_chunks_len = len(fast_memory_items)
 
         with ContextThreadPoolExecutor(max_workers=30) as executor:
-            futures = [executor.submit(_process_one_item, item) for item in fast_memory_items]
+            futures = [
+                executor.submit(_process_one_item, item, idx, total_chunks_len)
+                for idx, item in enumerate[TextualMemoryItem](fast_memory_items)
+            ]
 
             for future in concurrent.futures.as_completed(futures):
                 try:
@@ -763,6 +808,63 @@ class MultiModalStructMemReader(SimpleStructMemReader):
                         fine_memory_items.extend(result)
                 except Exception as e:
                     logger.error(f"[MultiModalFine] worker error: {e}")
+
+        # related preceding and following rawfilememories
+        fine_memory_items = self._relate_preceding_following_rawfile_memories(fine_memory_items)
+        return fine_memory_items
+
+    def _relate_preceding_following_rawfile_memories(
+        self, fine_memory_items: list[TextualMemoryItem]
+    ) -> list[TextualMemoryItem]:
+        """
+        Relate RawFileMemory items to each other by setting preceding_id and following_id.
+        """
+        # Filter RawFileMemory items and track their original positions
+        rawfile_items_with_pos = []
+        for idx, item in enumerate[TextualMemoryItem](fine_memory_items):
+            if (
+                hasattr(item.metadata, "memory_type")
+                and item.metadata.memory_type == "RawFileMemory"
+            ):
+                rawfile_items_with_pos.append((idx, item))
+
+        if len(rawfile_items_with_pos) <= 1:
+            return fine_memory_items
+
+        def get_chunk_idx(item_with_pos) -> int:
+            """Extract chunk_idx from item's source metadata."""
+            _, item = item_with_pos
+            if item.metadata.sources and len(item.metadata.sources) > 0:
+                source = item.metadata.sources[0]
+                # Handle both SourceMessage object and dict
+                if isinstance(source, dict):
+                    file_info = source.get("file_info")
+                    if file_info and isinstance(file_info, dict):
+                        chunk_idx = file_info.get("chunk_index")
+                        if chunk_idx is not None:
+                            return chunk_idx
+                else:
+                    # SourceMessage object
+                    file_info = getattr(source, "file_info", None)
+                    if file_info and isinstance(file_info, dict):
+                        chunk_idx = file_info.get("chunk_index")
+                        if chunk_idx is not None:
+                            return chunk_idx
+            return float("inf")
+
+        # Sort items by chunk_index
+        sorted_rawfile_items_with_pos = sorted(rawfile_items_with_pos, key=get_chunk_idx)
+
+        # Relate adjacent items
+        for i in range(len(sorted_rawfile_items_with_pos) - 1):
+            _, current_item = sorted_rawfile_items_with_pos[i]
+            _, next_item = sorted_rawfile_items_with_pos[i + 1]
+            current_item.metadata.following_id = next_item.id
+            next_item.metadata.preceding_id = current_item.id
+
+        # Replace sorted items back to original positions in fine_memory_items
+        for orig_idx, item in sorted_rawfile_items_with_pos:
+            fine_memory_items[orig_idx] = item
 
         return fine_memory_items
 

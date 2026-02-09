@@ -68,6 +68,10 @@ class UserParser(BaseMessageParser):
                     part_type = part.get("type", "")
                     if part_type == "text":
                         text_contents.append(part.get("text", ""))
+                    if part_type == "file":
+                        file_info = part.get("file", {})
+                        file_data = file_info.get("file_data", "")
+                        text_contents.append(file_data)
 
             # Detect overall language from all text content
             overall_lang = "en"
