@@ -518,7 +518,7 @@ class Searcher:
                         use_fast_graph=self.use_fast_graph,
                     )
                 )
-            if memory_type in ["All", "RawFileMemory"]:
+            if memory_type in ["RawFileMemory"]:
                 tasks.append(
                     executor.submit(
                         self.graph_retriever.retrieve,
