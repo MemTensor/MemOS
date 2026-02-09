@@ -3,7 +3,6 @@ import json
 import os
 import shutil
 import uuid
-import warnings
 import zipfile
 
 from concurrent.futures import as_completed
@@ -531,7 +530,7 @@ def _extract_skill_memory_by_llm_md(
     old_skill_content = (
         "已有技能列表: \n"
         if lang == "zh"
-        else "Exsit Skill Schemas: \n" + json.dumps(old_skill_content, ensure_ascii=False, indent=2)
+        else "Exist Skill Schemas: \n" + json.dumps(old_skill_content, ensure_ascii=False, indent=2)
         if old_skill_content
         else ""
     )
@@ -539,7 +538,7 @@ def _extract_skill_memory_by_llm_md(
     old_memories_context = (
         "相关历史对话:\n"
         if lang == "zh"
-        else "Relavant Context:\n"
+        else "Relevant Context:\n"
         + "\n".join([f"{k}:\n{v}" for k, v in old_memories_context.items()])
     )
 
@@ -745,11 +744,11 @@ def _delete_skills(
         try:
             if target_path.is_file():
                 target_path.unlink()
-                logger.info(f"本地文件 {target_path} 已成功删除")
+                logger.info(f"Local file {target_path} successfully deleted")
             else:
-                print(f"本地文件 {target_path} 不存在，无需删除")
+                logger.info(f"Local file {target_path} does not exist, no need to delete")
         except Exception as e:
-            print(f"删除本地文件时出错：{e}")
+            logger.warning(f"Error deleting local file: {e}")
 
 
 def _write_skills_to_file(
@@ -773,7 +772,7 @@ description: {skill_memory.get("description", "")}
 ---
 """
 
-    # 加入trigger
+    # Add trigger
     trigger = skill_memory.get("trigger", "")
     if trigger:
         skill_md_content += f"\n## Trigger\n{trigger}\n"
@@ -984,16 +983,14 @@ def _skill_init(skills_repo_backend, oss_config, skills_dir_config):
 
 
 def _get_skill_file_storage_location() -> str:
-    # SKILLS_REPO_BACKEND: Skill 文件保存地址 OSS/LOCAL
+    # SKILLS_REPO_BACKEND: Skill file storage location OSS/LOCAL
     allowed_backends = {"OSS", "LOCAL"}
     raw_backend = os.getenv("SKILLS_REPO_BACKEND")
     if raw_backend in allowed_backends:
         return raw_backend
     else:
-        warnings.warn(
-            "环境变量【SKILLS_REPO_BACKEND】赋值错误，本次使用 LOCAL 存储 skill",
-            UserWarning,
-            stacklevel=1,
+        logger.warning(
+            "Environment variable [SKILLS_REPO_BACKEND] is invalid, using LOCAL to store skill",
         )
         return "LOCAL"
 
