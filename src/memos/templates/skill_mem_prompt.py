@@ -247,10 +247,10 @@ Analyze the current messages and chat history to extract a universal, effective 
 # Skill Extraction Principles
 To define the content of a skill, comprehensively analyze the dialogue content to create a list of reusable resources, including scripts, reference materials, and resources. Please generate the skill according to the following principles:
 1. **Generalization**: Extract abstract methodologies that can be applied across scenarios. Avoid specific details (e.g., 'travel planning' rather than 'Beijing travel planning').  Moreover, the skills acquired should be durable and effective, rather than tied to a specific time.
-2. **Similarity Check**: If a similar skill exists, set "update": true and provide the "old_memory_id". Otherwise, set "update": false and leave "old_memory_id" blank.
+2. **Similarity Check**: If the skill list in 'existing skill memory' is not empty and there are skills with the **same topic**, you need to set "update": true and "old_memory_id". Otherwise, set "update": false and leave "old_memory_id" empty.
 3. **Language Consistency**: Keep consistent with the language of the dialogue.
 4. **Historical Usage Constraint**: Use 'historically related dialogues' as auxiliary context. If the current historical messages are insufficient to form a complete skill, and the historically related dialogue can provide missing information in the messages that is related to the current task objectives, execution methods, or constraints, it may be considered.
-5. If the abstract methodology you extract and an existing skill memory describe the same topic (such as the same life scenario), be sure to use the update operation rather than creating a new methodology. Properly append it to the existing skill memory to ensure fluency and retain the information of the existing methodology.
+Note: If the similarity check result shows that an existing **skill** description covers the same topic, be sure to use the update operation and set old_memory_id to the ID of the existing skill. Do not create a new methodology; make sure to reasonably add it to the existing skill memory, ensuring smoothness while preserving the information of the existing methodology.
 
 # Output Format and Field Specifications
 ## Output Format
@@ -320,10 +320,10 @@ SKILL_MEMORY_EXTRACTION_PROMPT_MD_ZH = """
 # 技能提取原则
 为了确定技能的内容，综合分析对话内容以创建可重复使用资源的清单，包括脚本、参考资料和资源，请你按照下面的原则来生成技能：
 1. **通用化**：提取可跨场景应用的抽象方法论。避免具体细节（如"旅行规划"而非"北京旅行规划"）。 而且提取的技能应该是持久有效的，而非与特定时间绑定。
-2. **相似性检查**：如存在相似技能，设置"update": true 及"old_memory_id"。否则设置"update": false 并将"old_memory_id"留空。
+2. **相似性检查**：如果‘现有技能记忆’中的技能列表不为空，且存在**相同主题**的技能，则需要设置"update": true 及"old_memory_id"。否则设置"update": false 并将"old_memory_id"留空。
 3. **语言一致性**：与对话语言保持一致。
 4. **历史使用约束**：“历史相关对话”作为辅助上下文，若当前历史消息不足以形成完整的技能，且历史相关对话能提供 messages 中缺失、且与当前任务目标、执行方式或约束相关的信息增量时，可以纳入考虑。
-5. 如果你提取的抽象方法论和已有的技能记忆描述的是同一个主题（比如同一个生活场景），请务必使用更新操作，不要新建一个方法论，注意合理的追加到已有的技能记忆上，保证通顺且不丢失已有方法论的信息。
+注意：如果相似性检查结果是存在已有的**一个**技能描述的是同一个主题，请务必使用更新操作，并将old_memory_id设置为该历史技能的id，不要新建一个方法论，注意合理的追加到已有的技能记忆上，保证通顺的同时不丢失已有方法论的信息。
 
 # 输出格式的模版和字段规范描述
 ## 输出格式
