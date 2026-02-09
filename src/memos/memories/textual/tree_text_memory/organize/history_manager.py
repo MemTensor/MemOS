@@ -248,9 +248,13 @@ class MemoryHistoryManager:
             # Safely get created_at, fallback to updated_at
             created_at = getattr(r_item.metadata, "created_at", None) or r_item.metadata.updated_at
 
+            # TODO: change the way of marking fast nodes by directly using is_fast field.
             archived = ArchivedTextualMemory(
                 version=r_item.metadata.version or 1,
-                is_fast=r_item.metadata.is_fast or False,
+                is_fast=(
+                    r_item.metadata.is_fast
+                    or ("mode:fast" in (getattr(r_item.metadata, "tags", None) or []))
+                ),
                 memory=r_item.memory,
                 update_type=update_type,
                 archived_memory_id=r_item.id,
