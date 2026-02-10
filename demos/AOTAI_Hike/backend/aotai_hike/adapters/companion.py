@@ -8,6 +8,7 @@ from typing import ClassVar
 
 from aotai_hike.adapters.memory import MemoryNamespace, MemOSMemoryClient
 from aotai_hike.schemas import Message, Role, WorldState
+from aotai_hike.world.map_data import AoTaiGraph
 
 
 @dataclass
@@ -275,15 +276,136 @@ class MemoryCompanionBrain(CompanionBrain):
     def _build_system_prompt(
         self, *, world_state: WorldState, role: Role, memories: list[str]
     ) -> str:
+        # Get current node name + altitude + terrain hint
+        try:
+            node = AoTaiGraph.get_node(world_state.current_node_id)
+            location_name = node.name if node else world_state.current_node_id
+            altitude = (
+                f"{getattr(node, 'altitude_m', '未知')}m"
+                if node and getattr(node, "altitude_m", None) is not None
+                else "未知海拔"
+            )
+            terrain_hint = getattr(node, "hint", "") or ""
+        except Exception:
+            location_name = world_state.current_node_id
+            altitude = "未知海拔"
+            terrain_hint = ""
+
+        # Build NPC info section (current role + other roles)
+        all_roles = world_state.roles or []
+        npc_info_lines = []
+        for r in all_roles:
+            attrs = r.attrs
+            npc_info_lines.append(
+                f"```|<{r.name}&未知>|\n"
+                f"# {r.name}设定：{r.persona}\n"
+                f"当前状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100\n"
+                f"```"
+            )
+        npc_info_section = "\n".join(npc_info_lines)
+
+        # Build memories section
         mem_lines = "\n".join(f"- {m}" for m in memories[:12]) if memories else "（无）"
-        attrs = role.attrs
+
+        # Build recent dialogue section (who said what).
+        recent_history = (world_state.chat_history or [])[-8:]
+        dialogue_lines: list[str] = []
+        for h in recent_history:
+            content = str(h.get("content") or "").strip()
+            if not content:
+                continue
+            role_tag = str(h.get("role") or "").strip() or "assistant"
+            speaker_name = str(h.get("speaker_name") or "").strip()
+            if role_tag == "system":
+                prefix = "|<旁白>|"
+            elif role_tag == "user":
+                # 当前玩家扮演的角色
+                prefix = "|<你&未知>|"
+            else:
+                prefix = f"|<{speaker_name}&未知>|" if speaker_name else "|<队友&未知>|"
+            dialogue_lines.append(f"{prefix}{content}")
+        dialogue_block = "\n".join(dialogue_lines) if dialogue_lines else "（暂无关键对话）"
+
+        # Get active role name
+        active_role = next((r for r in all_roles if r.role_id == world_state.active_role_id), None)
+        active_name = active_role.name if active_role else "玩家"
+
+        # Build story background
+        leader_role = next((r for r in all_roles if r.role_id == world_state.leader_role_id), None)
+        leader_name = leader_role.name if leader_role else "未知"
+
+        # Build simple textual map overview and mark current node.
+        route_nodes = [
+            "start",
+            "slope_forest",
+            "camp_2800",
+            "stone_sea",
+            "ridge_wind",
+            "da_ye_hai",
+            "ba_xian_tai",
+            "end_exit",
+        ]
+        # Map of mainline nodes to their bailout exits
+        bailout_map = {
+            "camp_2800": "bailout_2800",
+            "ridge_wind": "bailout_ridge",
+        }
+
+        def _label_node(nid: str) -> str:
+            try:
+                n = AoTaiGraph.get_node(nid)
+                base = n.name
+            except Exception:
+                base = nid
+            if nid == world_state.current_node_id:
+                return f"[{base}]"
+            return base
+
+        def _format_route_node(nid: str) -> str:
+            label = _label_node(nid)
+            # Check if this node has a bailout exit
+            if nid in bailout_map:
+                bailout_id = bailout_map[nid]
+                bailout_label = _label_node(bailout_id)
+                return f"{label}(可下撤至{bailout_label})"
+            return label
+
+        mainline_str = " → ".join(_format_route_node(nid) for nid in route_nodes)
+
         return (
-            f"你是徒步队伍中的角色：{role.name}。\n"
-            f"角色设定：{role.persona}\n"
-            f"当前天气：{world_state.weather}，时间：{world_state.time_of_day}，位置：{world_state.current_node_id}\n"
-            f"角色状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100\n"
-            f"相关记忆：\n{mem_lines}\n"
-            "请结合玩家动作和当前场景，用简短自然的口吻回应，不要罗列条目。"
+            "# 任务描述\n"
+            "你是互动剧情游戏的叙事引擎，根据提供的剧本/<本章剧情>、人物设定/<主演NPC信息介绍>和上下文，针对用户输入进行情节演绎。输出内容须符合剧本描述，逻辑连贯，人物发言符合其设定和成长轨迹。\n"
+            "1. 游戏流程：你的输出->其他角色输入->...->你的输出->用户输入。\n"
+            "2. 每次输出应：对用户输入有承接、中段推进剧情、末段提供铺垫，确保用户有明确目标感。\n"
+            "3. 回复的字数不超过120字。\n"
+            "<符号与格式>\n"
+            "（神态描写）台词\n"
+            "</符号与格式>\n\n"
+            "<你的信息介绍>\n"
+            f"{npc_info_section}\n"
+            "</你的信息介绍>\n\n"
+            "<故事背景>\n"
+            f"你们是一支徒步队伍，正在穿越危险的鳌太线。今天是第{world_state.day}天，当前时间是{world_state.time_of_day}，天气：{world_state.weather}。\n"
+            f"你们现在位于：{location_name}（{altitude}），地形提示：{terrain_hint or '无特别提示'}。\n"
+            f"当前队长是：{leader_name}。\n"
+            f"玩家当前扮演的角色是：{active_name}。\n"
+            f"剧情围绕{role.name}展开，{role.name}需要根据当前情况做出反应和发言。\n"
+            f"整条路线示意：{mainline_str}。\n"
+            "</故事背景>\n\n"
+            "<对话记录>\n"
+            f"{dialogue_block}\n"
+            "</对话记录>\n\n"
+            "<相关记忆>\n"
+            f"{mem_lines}\n"
+            "</相关记忆>\n\n"
+            "# 剧情输出规则\n"
+            "1. 保持情节逻辑、人物塑造与情感连贯性\n"
+            "2. 发言符合人物设定和成长轨迹，包括表面人设与隐藏动机。\n"
+            '3. 以用户为核心展开剧情，使用"你"指代用户，禁止代替用户发言或使用"用户"一词。\n'
+            f"4. 当前发言角色是{role.name}，请以{role.name}的身份和口吻进行回应。\n"
+            "5. 在推进剧情时，要有意识地围绕各角色的真实目的制造冲突与选择，但不要一次性泄露全部真相，应通过多轮对话逐步显露。\n"
+            "6. 结合当前天气、时间、位置和角色状态，让事件合理发生，例如在恶劣天气或体力不足时暴露队伍分歧或私心。\n"
+            "7. 回复用简短自然的口吻，不要罗列条目。"
         )
 
     @staticmethod

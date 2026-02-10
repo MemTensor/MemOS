@@ -408,7 +408,7 @@ def run_scenario(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AoTai Hike memory+chat tuning script")
-    parser.add_argument("--user-id", default="demo_user_13")
+    parser.add_argument("--user-id", default="demo_user_14")
     parser.add_argument("--session-id", default=f"algo-{uuid.uuid4().hex[:6]}")
     parser.add_argument(
         "--base-url", default=os.getenv("MEMOS_API_BASE_URL", "http://0.0.0.0:8002")

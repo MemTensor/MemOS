@@ -6,7 +6,7 @@ import time
 import uuid
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aotai_hike.adapters.background import BackgroundProvider, BackgroundRequest
 from aotai_hike.schemas import (
@@ -1085,7 +1085,17 @@ class GameService:
                 role = "user"
             else:
                 role = "assistant"
-            item = {"role": role, "content": msg.content}
+            item: dict[str, Any] = {
+                "role": role,
+                "content": msg.content,
+            }
+            # Preserve speaker identity for prompt reconstruction.
+            if msg.role_id:
+                item["speaker_id"] = msg.role_id
+            if msg.role_name:
+                item["speaker_name"] = msg.role_name
+            if msg.kind:
+                item["kind"] = msg.kind
             if msg.timestamp_ms:
                 item["chat_time"] = time.strftime(
                     "%Y-%m-%d %H:%M:%S", time.localtime(msg.timestamp_ms / 1000)
