@@ -412,6 +412,12 @@ def handle_get_memories_dashboard(
     get_mem_req: GetMemoryDashboardRequest, naive_mem_cube: NaiveMemCube
 ) -> GetMemoryResponse:
     results: dict[str, Any] = {"text_mem": [], "pref_mem": [], "tool_mem": [], "skill_mem": []}
+    # for statistics
+    total_text_nodes, total_tool_nodes, total_skill_nodes, total_preference_nodes = 0, 0, 0, 0
+    total_tool_nodes = 0
+    total_skill_nodes = 0
+    total_preference_nodes = 0
+
     text_memory_type = ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
     text_memories_info = naive_mem_cube.text_mem.get_all(
         user_name=get_mem_req.mem_cube_id,
@@ -421,7 +427,7 @@ def handle_get_memories_dashboard(
         filter=get_mem_req.filter,
         memory_type=text_memory_type,
     )
-    text_memories, _ = text_memories_info["nodes"], text_memories_info["total_nodes"]
+    text_memories, total_text_nodes = text_memories_info["nodes"], text_memories_info["total_nodes"]
 
     # Group text memories by cube_id from metadata.user_name
     text_mem_by_cube: dict[str, list] = {}
@@ -453,7 +459,7 @@ def handle_get_memories_dashboard(
             filter=get_mem_req.filter,
             memory_type=["ToolSchemaMemory", "ToolTrajectoryMemory"],
         )
-        tool_memories, _ = (
+        tool_memories, total_tool_nodes = (
             tool_memories_info["nodes"],
             tool_memories_info["total_nodes"],
         )
@@ -488,7 +494,7 @@ def handle_get_memories_dashboard(
             filter=get_mem_req.filter,
             memory_type=["SkillMemory"],
         )
-        skill_memories, _ = (
+        skill_memories, total_skill_nodes = (
             skill_memories_info["nodes"],
             skill_memories_info["total_nodes"],
         )
@@ -515,7 +521,6 @@ def handle_get_memories_dashboard(
         ]
 
     preferences: list[TextualMemoryItem] = []
-    total_preference_nodes = 0
 
     format_preferences = []
     if get_mem_req.include_preference and naive_mem_cube.pref_mem is not None:
@@ -577,5 +582,14 @@ def handle_get_memories_dashboard(
         "tool_mem": results.get("tool_mem", []),
         "skill_mem": results.get("skill_mem", []),
     }
+
+    # statistics
+    statistics = {
+        "total_text_nodes": total_text_nodes,
+        "total_tool_nodes": total_tool_nodes,
+        "total_skill_nodes": total_skill_nodes,
+        "total_preference_nodes": total_preference_nodes,
+    }
+    filtered_results["statistics"] = statistics
 
     return GetMemoryResponse(message="Memories retrieved successfully", data=filtered_results)
