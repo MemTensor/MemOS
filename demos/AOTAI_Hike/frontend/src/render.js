@@ -193,6 +193,7 @@ export function renderPartyStatus() {
     const mood = pct(r?.attrs?.mood);
     const exp = pct(r?.attrs?.experience);
     const risk = pct(r?.attrs?.risk_tolerance);
+    const supplies = pct(r?.attrs?.supplies || 80);
 
     const head = document.createElement("div");
     head.className = "party-head";
@@ -231,6 +232,11 @@ export function renderPartyStatus() {
         <div class="stat-label">冒险</div>
         <div class="stat-bar warn"><div style="width:${risk}%"></div></div>
         <div class="stat-val">${risk}</div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-label">物资</div>
+        <div class="stat-bar ${statClass(supplies)}"><div style="width:${supplies}%"></div></div>
+        <div class="stat-val">${supplies}</div>
       </div>
     `;
 

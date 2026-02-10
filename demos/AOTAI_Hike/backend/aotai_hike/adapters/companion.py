@@ -299,7 +299,7 @@ class MemoryCompanionBrain(CompanionBrain):
             npc_info_lines.append(
                 f"```|<{r.name}&未知>|\n"
                 f"# {r.name}设定：{r.persona}\n"
-                f"当前状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100\n"
+                f"当前状态：体力{attrs.stamina}/100，情绪{attrs.mood}/100，经验{attrs.experience}/100，风险偏好{attrs.risk_tolerance}/100，物资{attrs.supplies}/100\n"
                 f"```"
             )
         npc_info_section = "\n".join(npc_info_lines)

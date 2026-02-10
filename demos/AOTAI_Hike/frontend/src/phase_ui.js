@@ -42,6 +42,17 @@ function setActionButtonsEnabled(enabled) {
   });
 }
 
+function updateCampButtonState(ws) {
+  const actions = $("#actions-panel");
+  if (!actions) return;
+  const campBtn = actions.querySelector('button[data-act="CAMP"]');
+  if (!campBtn) return;
+
+  const isLeader = ws?.active_role_id && ws?.active_role_id === ws?.leader_role_id;
+  campBtn.disabled = !isLeader;
+  campBtn.title = isLeader ? "扎营（恢复体力，消耗物资）" : "只有队长可以决定扎营";
+}
+
 function ensureNightVoteModal() {
   if (nightVoteBackdrop) return;
   nightVoteBackdrop = $("#night-vote-modal");
@@ -169,6 +180,7 @@ export function applyPhaseUI(ws) {
   // Default: free play
   if (phase === "free") {
     setActionButtonsEnabled(false);
+    updateCampButtonState(ws); // Enable CAMP button if player is leader
     phasePanel.style.display = "none";
     if (nightVoteMode !== "result") hideNightVoteModal();
     return;
@@ -176,6 +188,7 @@ export function applyPhaseUI(ws) {
 
   if (isGameOver) {
     setActionButtonsEnabled(false);
+    updateCampButtonState(ws); // Disable CAMP button when game over
     phasePanel.style.display = "none";
     hideNightVoteModal();
     return;
@@ -187,6 +200,7 @@ export function applyPhaseUI(ws) {
   if (phase === "await_player_say") {
     // Block all action buttons; allow user to SAY.
     setActionButtonsEnabled(false);
+    updateCampButtonState(ws); // Disable CAMP button
     hintEl.textContent = "队伍等待你发言：请在输入框里发一句话（发言后才能继续）。";
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
@@ -196,6 +210,7 @@ export function applyPhaseUI(ws) {
 
   if (phase === "night_wait_player") {
     setActionButtonsEnabled(false);
+    updateCampButtonState(ws); // Disable CAMP button
     hintEl.textContent = "夜晚到来：请先发言（发送一句话）后才能开始票选队长。";
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
@@ -206,6 +221,7 @@ export function applyPhaseUI(ws) {
 
   if (phase === "night_vote_ready") {
     setActionButtonsEnabled(false);
+    updateCampButtonState(ws); // Disable CAMP button
     hintEl.textContent = "夜晚票选：请在弹窗中选择队长。";
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
@@ -219,5 +235,6 @@ export function applyPhaseUI(ws) {
 
   // Unknown phase: be safe and block actions.
   setActionButtonsEnabled(false);
+  updateCampButtonState(ws); // Disable CAMP button
   hintEl.textContent = `当前阶段：${phase}（动作暂不可用）`;
 }

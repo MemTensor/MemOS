@@ -958,15 +958,33 @@ class GameService:
             return "REST"
 
         if req.action == ActionType.CAMP:
+            # Only leader can decide to camp
+            if not active or active.role_id != world_state.leader_role_id:
+                messages.append(
+                    Message(
+                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                        kind="system",
+                        content="只有队长可以决定扎营。",
+                        timestamp_ms=now_ms,
+                    )
+                )
+                node_after = AoTaiGraph.get_node(world_state.current_node_id)
+                bg = self._safe_get_background(node_after.scene_id)
+                self._append_chat_history(world_state, messages)
+                return ActResponse(world_state=world_state, messages=messages, background=bg)
+
             world_state.time_of_day = "night"
             ev = self._rng.choice(["升起炉火。", "搭好帐篷。", "分配守夜。", "检查余粮。"])
             self._push_event(world_state, f"扎营：{ev}")
-            self._tweak_party(world_state, stamina_delta=18, mood_delta=6, exp_delta=0)
+            # Camping: restore stamina and mood, but consume supplies
+            self._tweak_party(
+                world_state, stamina_delta=18, mood_delta=6, exp_delta=0, supplies_delta=-15
+            )
             messages.append(
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"你决定扎营。{ev}",
+                    content=f"{active.name}决定扎营。{ev} 体力恢复，但消耗了物资。",
                     timestamp_ms=now_ms,
                 )
             )
@@ -1029,12 +1047,19 @@ class GameService:
         self._maybe_change_weather(world_state)
 
     def _tweak_party(
-        self, world_state: WorldState, *, stamina_delta: int, mood_delta: int, exp_delta: int
+        self,
+        world_state: WorldState,
+        *,
+        stamina_delta: int = 0,
+        mood_delta: int = 0,
+        exp_delta: int = 0,
+        supplies_delta: int = 0,
     ) -> None:
         for r in world_state.roles:
             r.attrs.stamina = max(0, min(100, r.attrs.stamina + stamina_delta))
             r.attrs.mood = max(0, min(100, r.attrs.mood + mood_delta))
             r.attrs.experience = max(0, min(100, r.attrs.experience + exp_delta))
+            r.attrs.supplies = max(0, min(100, r.attrs.supplies + supplies_delta))
 
     def _maybe_change_weather(self, world_state: WorldState) -> None:
         if self._rng.random() < 0.7:

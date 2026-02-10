@@ -64,6 +64,7 @@ class RoleAttrs(BaseModel):
     mood: int = Field(60, ge=0, le=100)
     experience: int = Field(10, ge=0, le=100)
     risk_tolerance: int = Field(50, ge=0, le=100)
+    supplies: int = Field(80, ge=0, le=100, description="物资储备，扎营会消耗物资")
 
 
 class Role(BaseModel):
