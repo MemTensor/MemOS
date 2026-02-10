@@ -146,6 +146,23 @@ class GameService:
             self._append_chat_history(world_state, messages)
             return ActResponse(world_state=world_state, messages=messages, background=bg)
 
+        if world_state.phase == Phase.AWAIT_CAMP_DECISION and req.action not in (
+            ActionType.CAMP,
+            ActionType.MOVE_FORWARD,
+        ):
+            messages.append(
+                Message(
+                    message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                    kind="system",
+                    content="请选择：扎营恢复体力，或继续前进。",
+                    timestamp_ms=now_ms,
+                )
+            )
+            node_after = AoTaiGraph.get_node(world_state.current_node_id)
+            bg = self._safe_get_background(node_after.scene_id)
+            self._append_chat_history(world_state, messages)
+            return ActResponse(world_state=world_state, messages=messages, background=bg)
+
         if req.action == ActionType.DECIDE:
             user_action_desc = self._apply_decision(world_state, req, now_ms, messages)
         else:
@@ -213,6 +230,11 @@ class GameService:
                             timestamp_ms=now_ms,
                         )
                     )
+
+        # If we were in AWAIT_CAMP_DECISION and player chose to continue (MOVE_FORWARD),
+        # return to FREE phase
+        if world_state.phase == Phase.AWAIT_CAMP_DECISION and req.action == ActionType.MOVE_FORWARD:
+            world_state.phase = Phase.FREE
 
         self._append_chat_history(world_state, messages)
         return ActResponse(world_state=world_state, messages=messages, background=bg)
@@ -695,15 +717,27 @@ class GameService:
                 return f"SAY:{text[:80]}"
             # If we were waiting for the player to respond, a SAY clears the gate.
             if world_state.phase == Phase.AWAIT_PLAYER_SAY:
-                world_state.phase = Phase.FREE
-                messages.append(
-                    Message(
-                        message_id=f"sys-{uuid.uuid4().hex[:8]}",
-                        kind="system",
-                        content="收到你的回应，队伍继续前进。",
-                        timestamp_ms=now_ms,
+                # If player is leader, allow them to decide whether to camp
+                if active and active.role_id == world_state.leader_role_id:
+                    world_state.phase = Phase.AWAIT_CAMP_DECISION
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content="收到你的回应。作为队长，你可以选择扎营恢复体力，或继续前进。",
+                            timestamp_ms=now_ms,
+                        )
                     )
-                )
+                else:
+                    world_state.phase = Phase.FREE
+                    messages.append(
+                        Message(
+                            message_id=f"sys-{uuid.uuid4().hex[:8]}",
+                            kind="system",
+                            content="收到你的回应，队伍继续前进。",
+                            timestamp_ms=now_ms,
+                        )
+                    )
             return f"SAY:{text[:80]}"
 
         if req.action == ActionType.MOVE_FORWARD:
@@ -715,7 +749,10 @@ class GameService:
             if world_state.in_transit_to_node_id:
                 world_state.in_transit_progress_km += step_km
                 self._advance_time(world_state)
-                self._tweak_party(world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0)
+                # Moving forward consumes stamina, mood, and supplies
+                self._tweak_party(
+                    world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0, supplies_delta=-5
+                )
 
                 # If we are on an exit route and it turns rainy, retreat back to the junction.
                 try:
@@ -898,7 +935,10 @@ class GameService:
             # Immediately take first step
             world_state.in_transit_progress_km += step_km
             self._advance_time(world_state)
-            self._tweak_party(world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0)
+            # Moving forward consumes stamina, mood, and supplies
+            self._tweak_party(
+                world_state, stamina_delta=-3, mood_delta=-1, exp_delta=0, supplies_delta=-5
+            )
 
             if world_state.in_transit_progress_km + 1e-6 >= world_state.in_transit_total_km:
                 # Arrive in the same action
@@ -976,15 +1016,15 @@ class GameService:
             world_state.time_of_day = "night"
             ev = self._rng.choice(["升起炉火。", "搭好帐篷。", "分配守夜。", "检查余粮。"])
             self._push_event(world_state, f"扎营：{ev}")
-            # Camping: restore stamina and mood, but consume supplies
+            # Camping: restore stamina and mood, but consume more supplies
             self._tweak_party(
-                world_state, stamina_delta=18, mood_delta=6, exp_delta=0, supplies_delta=-15
+                world_state, stamina_delta=18, mood_delta=6, exp_delta=0, supplies_delta=-25
             )
             messages.append(
                 Message(
                     message_id=f"sys-{uuid.uuid4().hex[:8]}",
                     kind="system",
-                    content=f"{active.name}决定扎营。{ev} 体力恢复，但消耗了物资。",
+                    content=f"{active.name}决定扎营。{ev} 体力恢复，但消耗了较多物资。",
                     timestamp_ms=now_ms,
                 )
             )
@@ -992,6 +1032,9 @@ class GameService:
             world_state.time_of_day = "morning"
             world_state.time_step_counter = 0
             self._maybe_change_weather(world_state)
+            # After camping, return to FREE phase
+            if world_state.phase == Phase.AWAIT_CAMP_DECISION:
+                world_state.phase = Phase.FREE
             return "CAMP"
 
         if req.action == ActionType.OBSERVE:

@@ -48,9 +48,17 @@ function updateCampButtonState(ws) {
   const campBtn = actions.querySelector('button[data-act="CAMP"]');
   if (!campBtn) return;
 
+  // Only show CAMP button in AWAIT_CAMP_DECISION phase (after player says something)
+  const phase = String(ws?.phase || "free").toLowerCase();
+  const isCampDecisionPhase = phase === "await_camp_decision";
   const isLeader = ws?.active_role_id && ws?.active_role_id === ws?.leader_role_id;
-  campBtn.disabled = !isLeader;
-  campBtn.title = isLeader ? "扎营（恢复体力，消耗物资）" : "只有队长可以决定扎营";
+
+  // Show button only in AWAIT_CAMP_DECISION phase and if player is leader
+  campBtn.style.display = isCampDecisionPhase && isLeader ? "block" : "none";
+  if (isCampDecisionPhase && isLeader) {
+    campBtn.disabled = false;
+    campBtn.title = "扎营（恢复体力，消耗较多物资）";
+  }
 }
 
 function ensureNightVoteModal() {
@@ -180,7 +188,15 @@ export function applyPhaseUI(ws) {
   // Default: free play
   if (phase === "free") {
     setActionButtonsEnabled(false);
-    updateCampButtonState(ws); // Enable CAMP button if player is leader
+    updateCampButtonState(ws); // Hide CAMP button
+    // Hide MOVE_FORWARD button in FREE phase
+    const actions = $("#actions-panel");
+    if (actions) {
+      const forwardBtn = actions.querySelector('button[data-act="MOVE_FORWARD"]');
+      if (forwardBtn) {
+        forwardBtn.style.display = "none";
+      }
+    }
     phasePanel.style.display = "none";
     if (nightVoteMode !== "result") hideNightVoteModal();
     return;
@@ -200,8 +216,28 @@ export function applyPhaseUI(ws) {
   if (phase === "await_player_say") {
     // Block all action buttons; allow user to SAY.
     setActionButtonsEnabled(false);
-    updateCampButtonState(ws); // Disable CAMP button
+    updateCampButtonState(ws); // Hide CAMP button
     hintEl.textContent = "队伍等待你发言：请在输入框里发一句话（发言后才能继续）。";
+    phasePanel.querySelectorAll("div,select,button").forEach((n) => {
+      if (n !== hintEl) n.remove?.();
+    });
+    return;
+  }
+
+  if (phase === "await_camp_decision") {
+    // After SAY, leader can choose to camp or continue
+    setActionButtonsEnabled(false);
+    updateCampButtonState(ws); // Show CAMP button if leader
+    // Enable MOVE_FORWARD button (continue without camping)
+    const actions = $("#actions-panel");
+    if (actions) {
+      const forwardBtn = actions.querySelector('button[data-act="MOVE_FORWARD"]');
+      if (forwardBtn) {
+        forwardBtn.style.display = "block";
+        forwardBtn.disabled = false;
+      }
+    }
+    hintEl.textContent = "作为队长，你可以选择扎营恢复体力（消耗较多物资），或继续前进。";
     phasePanel.querySelectorAll("div,select,button").forEach((n) => {
       if (n !== hintEl) n.remove?.();
     });

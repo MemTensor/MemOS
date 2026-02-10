@@ -19,6 +19,7 @@ class ActionType(str, Enum):
 class Phase(str, Enum):
     FREE = "free"
     AWAIT_PLAYER_SAY = "await_player_say"
+    AWAIT_CAMP_DECISION = "await_camp_decision"  # After SAY, leader can choose to camp
     NIGHT_WAIT_PLAYER = "night_wait_player"
     NIGHT_VOTE_READY = "night_vote_ready"
     CAMP_MEETING_DECIDE = "camp_meeting_decide"

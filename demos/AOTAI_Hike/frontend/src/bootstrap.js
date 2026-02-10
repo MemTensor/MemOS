@@ -144,16 +144,11 @@ export async function bootstrap() {
     apiAct(btn.getAttribute("data-act"));
   });
 
-  // New flow: movement/rest/observe are now automatic. Keep buttons for debugging, but hide by default.
-  // CAMP button should be visible as it requires player decision.
+  // New flow: movement/rest/observe are now automatic. Hide all action buttons by default.
+  // CAMP button will be shown only in AWAIT_CAMP_DECISION phase by phase_ui.js
   try {
     document.querySelectorAll("#actions-panel button[data-act]").forEach((b) => {
-      const act = b.getAttribute("data-act");
-      if (act === "CAMP") {
-        b.style.display = "block"; // Show CAMP button
-      } else {
-        b.style.display = "none"; // Hide other action buttons
-      }
+      b.style.display = "none"; // Hide all action buttons by default
     });
   } catch {}
 
