@@ -146,7 +146,7 @@ def make_header(
 
     # center alignment
     title_w, title_h = _text_wh(draw, title, font_title)
-    sub_w, sub_h = _text_wh(draw, subtitle, font_sub)
+    sub_w, _sub_h = _text_wh(draw, subtitle, font_sub)
 
     title_x = (w - title_w) // 2
     title_y = h // 2 - title_h

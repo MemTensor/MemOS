@@ -235,20 +235,16 @@ class MemFeedback(BaseMemFeedback):
             to_add_memory.metadata.tags = new_memory_item.metadata.tags
             to_add_memory.memory = new_memory_item.memory
             to_add_memory.metadata.embedding = new_memory_item.metadata.embedding
-
             to_add_memory.metadata.user_id = new_memory_item.metadata.user_id
-            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-                datetime.now().isoformat()
-            )
-            to_add_memory.metadata.background = new_memory_item.metadata.background
         else:
             to_add_memory = new_memory_item.model_copy(deep=True)
-            to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
-                datetime.now().isoformat()
-            )
-            to_add_memory.metadata.background = new_memory_item.metadata.background
 
-        to_add_memory.id = ""
+        to_add_memory.metadata.created_at = to_add_memory.metadata.updated_at = (
+            datetime.now().isoformat()
+        )
+        to_add_memory.metadata.background = new_memory_item.metadata.background
+        to_add_memory.metadata.sources = []
+
         added_ids = self._retry_db_operation(
             lambda: self.memory_manager.add([to_add_memory], user_name=user_name, use_batch=False)
         )
@@ -626,10 +622,39 @@ class MemFeedback(BaseMemFeedback):
 
     def _retrieve(self, query: str, info=None, top_k=20, user_name=None):
         """Retrieve memory items"""
-        retrieved_mems = self.searcher.search(
-            query, info=info, user_name=user_name, top_k=top_k, full_recall=True
+
+        def check_has_edges(mem_item: TextualMemoryItem) -> tuple[TextualMemoryItem, bool]:
+            """Check if a memory item has edges."""
+            edges = self.searcher.graph_store.get_edges(mem_item.id, user_name=user_name)
+            return (mem_item, len(edges) == 0)
+
+        text_mems = self.searcher.search(
+            query,
+            info=info,
+            memory_type="AllSummaryMemory",
+            user_name=user_name,
+            top_k=top_k,
+            full_recall=True,
         )
-        retrieved_mems = [item[0] for item in retrieved_mems if float(item[1]) > 0.01]
+        text_mems = [item[0] for item in text_mems if float(item[1]) > 0.01]
+
+        # Memory with edges is not modified by feedback
+        retrieved_mems = []
+        with ContextThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(check_has_edges, item): item for item in text_mems}
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    mem_item, has_no_edges = future.result()
+                    if has_no_edges:
+                        retrieved_mems.append(mem_item)
+                except Exception as e:
+                    logger.error(f"[0107 Feedback Core: _retrieve] Error checking edges: {e}")
+
+        if len(retrieved_mems) < len(text_mems):
+            logger.info(
+                f"[0107 Feedback Core: _retrieve] {len(text_mems) - len(retrieved_mems)} "
+                f"text memories are not modified by feedback due to edges."
+            )
 
         if self.pref_feedback:
             pref_info = {}
@@ -924,7 +949,7 @@ class MemFeedback(BaseMemFeedback):
             )
 
             must_part = f"{' & '.join(queries)}" if len(queries) > 1 else queries[0]
-            retrieved_ids = self.graph_store.seach_by_keywords_tfidf(
+            retrieved_ids = self.graph_store.search_by_keywords_tfidf(
                 [must_part], user_name=user_name, filter=filter_dict
             )
             if len(retrieved_ids) < 1:
@@ -932,7 +957,7 @@ class MemFeedback(BaseMemFeedback):
                     queries, top_k=100, user_name=user_name, filter=filter_dict
                 )
         else:
-            retrieved_ids = self.graph_store.seach_by_keywords_like(
+            retrieved_ids = self.graph_store.search_by_keywords_like(
                 f"%{original_word}%", user_name=user_name, filter=filter_dict
             )
 
@@ -1165,7 +1190,7 @@ class MemFeedback(BaseMemFeedback):
                 info,
                 **kwargs,
             )
-            done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
+            _done, pending = concurrent.futures.wait([answer_future, core_future], timeout=30)
             for fut in pending:
                 fut.cancel()
             try:

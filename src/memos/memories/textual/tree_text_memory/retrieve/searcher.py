@@ -1,5 +1,7 @@
 import traceback
 
+from concurrent.futures import as_completed
+
 from memos.context.context import ContextThreadPoolExecutor
 from memos.embedders.factory import OllamaEmbedder
 from memos.graph_dbs.factory import Neo4jGraphDB
@@ -88,7 +90,7 @@ class Searcher:
         logger.info(
             f"[RECALL] Start query='{query}', top_k={top_k}, mode={mode}, memory_type={memory_type}"
         )
-        parsed_goal, query_embedding, context, query = self._parse_task(
+        parsed_goal, query_embedding, _context, query = self._parse_task(
             query,
             info,
             mode,
@@ -483,8 +485,8 @@ class Searcher:
         else:
             cot_embeddings = query_embedding
 
-        with ContextThreadPoolExecutor(max_workers=2) as executor:
-            if memory_type in ["All", "LongTermMemory"]:
+        with ContextThreadPoolExecutor(max_workers=3) as executor:
+            if memory_type in ["All", "AllSummaryMemory", "LongTermMemory"]:
                 tasks.append(
                     executor.submit(
                         self.graph_retriever.retrieve,
@@ -500,7 +502,7 @@ class Searcher:
                         use_fast_graph=self.use_fast_graph,
                     )
                 )
-            if memory_type in ["All", "UserMemory"]:
+            if memory_type in ["All", "AllSummaryMemory", "UserMemory"]:
                 tasks.append(
                     executor.submit(
                         self.graph_retriever.retrieve,
@@ -516,10 +518,28 @@ class Searcher:
                         use_fast_graph=self.use_fast_graph,
                     )
                 )
+            if memory_type in ["RawFileMemory"]:
+                tasks.append(
+                    executor.submit(
+                        self.graph_retriever.retrieve,
+                        query=query,
+                        parsed_goal=parsed_goal,
+                        query_embedding=cot_embeddings,
+                        top_k=top_k * 2,
+                        memory_scope="RawFileMemory",
+                        search_filter=search_filter,
+                        search_priority=search_priority,
+                        user_name=user_name,
+                        id_filter=id_filter,
+                        use_fast_graph=self.use_fast_graph,
+                    )
+                )
 
             # Collect results from all tasks
             for task in tasks:
                 results.extend(task.result())
+            results = self._deduplicate_rawfile_results(results, user_name=user_name)
+            results = self._filter_intermediate_content(results)
 
         return self.reranker.rerank(
             query=query,
@@ -872,7 +892,7 @@ class Searcher:
             (item, score)
             for item, score in results
             if item.metadata.memory_type
-            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory"]
+            in ["WorkingMemory", "LongTermMemory", "UserMemory", "OuterMemory", "RawFileMemory"]
         ]
 
         sorted_results = sorted(results, key=lambda pair: pair[1], reverse=True)[:top_k]
@@ -890,6 +910,66 @@ class Searcher:
                 )
             )
         return final_items
+
+    @timed
+    def _deduplicate_rawfile_results(self, results, user_name: str | None = None):
+        """
+        Deduplicate rawfile related memories by edge
+        """
+        if not results:
+            return results
+
+        summary_ids_to_remove = set()
+        rawfile_items = [item for item in results if item.metadata.memory_type == "RawFileMemory"]
+        if not rawfile_items:
+            return results
+
+        with ContextThreadPoolExecutor(max_workers=min(len(rawfile_items), 10)) as executor:
+            futures = [
+                executor.submit(
+                    self.graph_store.get_edges,
+                    rawfile_item.id,
+                    type="SUMMARY",
+                    direction="OUTGOING",
+                    user_name=user_name,
+                )
+                for rawfile_item in rawfile_items
+            ]
+            for future in as_completed(futures):
+                try:
+                    edges = future.result()
+                    for edge in edges:
+                        summary_target_id = edge.get("to")
+                        if summary_target_id:
+                            summary_ids_to_remove.add(summary_target_id)
+                            logger.debug(
+                                f"[DEDUP] Marking summary node {summary_target_id} for removal (pointed by RawFileMemory)"
+                            )
+                except Exception as e:
+                    logger.warning(f"[DEDUP] Failed to get summary target ids: {e}")
+
+        filtered_results = []
+        for item in results:
+            if item.id in summary_ids_to_remove:
+                logger.debug(
+                    f"[DEDUP] Removing summary node {item.id} because it is pointed by RawFileMemory"
+                )
+                continue
+            filtered_results.append(item)
+
+        return filtered_results
+
+    def _filter_intermediate_content(self, results):
+        """Filter intermediate content"""
+        filtered_results = []
+        for item in results:
+            if (
+                "File URL:" not in item.memory
+                and "File ID:" not in item.memory
+                and "Filename:" not in item.memory
+            ):
+                filtered_results.append(item)
+        return filtered_results
 
     @timed
     def _update_usage_history(self, items, info, user_name: str | None = None):
