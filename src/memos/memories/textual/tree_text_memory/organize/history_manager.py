@@ -175,6 +175,9 @@ class MemoryHistoryManager:
         tags: list[str] | None = None,
         key: str | None = None,
     ) -> tuple[TextualMemoryItem, TextualMemoryItem]:
+        now = datetime.now().isoformat()
+        last_update_time = item.metadata.updated_at
+
         old_id = item.id
         archived_id = str(uuid.uuid4())
         # archived memory(need to store this node to the db later)
@@ -182,6 +185,8 @@ class MemoryHistoryManager:
         archived_item.id = archived_id
         archived_item.metadata.evolve_to = [old_id]
         archived_item.metadata.status = "archived"
+        archived_item.metadata.created_at = last_update_time
+        archived_item.metadata.updated_at = now
 
         # original memory with updated contents and history
         archived_history = ArchivedTextualMemory(
@@ -190,11 +195,12 @@ class MemoryHistoryManager:
             memory=item.memory,
             update_type=update_type,
             archived_memory_id=archived_id,
-            created_at=getattr(item.metadata, "created_at", None) or datetime.now().isoformat(),
+            created_at=getattr(item.metadata, "updated_at", None) or last_update_time,
         )
         item.memory = new_memory
         item.metadata.version = (item.metadata.version or 1) + 1
         item.metadata.status = "activated"
+        item.metadata.updated_at = now
         if tags is not None:
             item.metadata.tags = tags
         if key is not None:
@@ -625,11 +631,7 @@ class MemoryHistoryManager:
             user_name=user_name,
         )
 
-        now = datetime.now().isoformat()
-        if hasattr(current_item.metadata, "updated_at"):
-            current_item.metadata.updated_at = now
         fields = current_item.metadata.model_dump(exclude_none=True)
-        fields.pop("created_at", None)
         merged_history = list(current_item.metadata.history or [])
         new_primary_version = current_item.metadata.version or 1
         # Multiple related ids indicates existing duplicates/conflicts to be merged
@@ -653,6 +655,14 @@ class MemoryHistoryManager:
             },
             user_name=user_name,
         )
+        working_binding = getattr(current_item.metadata, "working_binding", None)
+        if working_binding and working_binding != current_item.id:
+            try:
+                self.mark_memory_status([str(working_binding)], "deleted", user_name=user_name)
+            except Exception as e:
+                logger.warning(
+                    f"[MemoryHistoryManager] Failed to mark WorkingMemory {working_binding} as deleted: {e}"
+                )
 
         return current_item
 
