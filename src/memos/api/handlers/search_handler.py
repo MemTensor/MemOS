@@ -80,7 +80,9 @@ class SearchHandler(BaseHandler):
             self._strip_embeddings(results)
         elif search_req_local.dedup == "mmr":
             pref_top_k = getattr(search_req_local, "pref_top_k", 6)
-            results = self._mmr_dedup_text_memories(results, search_req.top_k, pref_top_k)
+            results = self._mmr_dedup_text_memories(
+                results, search_req.top_k, pref_top_k, forced_by_cube=forced_text_memories
+            )
             self._strip_embeddings(results)
 
         text_mem = results["text_mem"]
@@ -366,7 +368,11 @@ class SearchHandler(BaseHandler):
         return results
 
     def _mmr_dedup_text_memories(
-        self, results: dict[str, Any], text_top_k: int, pref_top_k: int = 6
+        self,
+        results: dict[str, Any],
+        text_top_k: int,
+        pref_top_k: int = 6,
+        forced_by_cube: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         MMR-based deduplication with progressive penalty for high similarity.
@@ -437,6 +443,47 @@ class SearchHandler(BaseHandler):
         text_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(text_buckets))}
         pref_selected_by_bucket: dict[int, list[int]] = {i: [] for i in range(len(pref_buckets))}
         selected_texts: set[str] = set()  # Track exact text content to avoid duplicates
+        text_top_k_by_bucket: dict[int, int] = {i: text_top_k for i in range(len(text_buckets))}
+
+        if forced_by_cube and isinstance(text_buckets, list):
+            text_key_to_flat_index: dict[tuple[int, str], int] = {}
+            for flat_index, (mem_type, bucket_idx, mem, _) in enumerate(flat):
+                if mem_type != "text":
+                    continue
+                if not isinstance(mem, dict):
+                    continue
+                mem_id = mem.get("id")
+                if mem_id is None:
+                    continue
+                text_key_to_flat_index[(bucket_idx, str(mem_id))] = flat_index
+
+            for bucket_idx, bucket in enumerate(text_buckets):
+                if not isinstance(bucket, dict):
+                    continue
+                cube_id = bucket.get("cube_id")
+                if not isinstance(cube_id, str) or cube_id not in forced_by_cube:
+                    continue
+                payload = forced_by_cube.get(cube_id) or {}
+                for key in ("keyword", "longterm_user"):
+                    candidate = payload.get(key)
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_id = candidate.get("id")
+                    if candidate_id is None:
+                        continue
+                    forced_index = text_key_to_flat_index.get((bucket_idx, str(candidate_id)))
+                    if forced_index is None or forced_index in selected_global:
+                        continue
+                    mem_text = flat[forced_index][2].get("memory", "").strip()
+                    if mem_text in selected_texts:
+                        continue
+                    selected_global.append(forced_index)
+                    text_selected_by_bucket[bucket_idx].append(forced_index)
+                    selected_texts.add(mem_text)
+
+            for bucket_idx in range(len(text_buckets)):
+                if len(text_selected_by_bucket[bucket_idx]) > text_top_k_by_bucket[bucket_idx]:
+                    text_top_k_by_bucket[bucket_idx] = len(text_selected_by_bucket[bucket_idx])
 
         # Phase 1: Prefill top N by relevance
         # Use the smaller of text_top_k and pref_top_k for prefill count
@@ -459,7 +506,10 @@ class SearchHandler(BaseHandler):
                 continue
 
             # Check bucket capacity with correct top_k for each type
-            if mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) < text_top_k:
+            if (
+                mem_type == "text"
+                and len(text_selected_by_bucket[bucket_idx]) < text_top_k_by_bucket[bucket_idx]
+            ):
                 selected_global.append(idx)
                 text_selected_by_bucket[bucket_idx].append(idx)
                 selected_texts.add(mem_text)
@@ -483,7 +533,8 @@ class SearchHandler(BaseHandler):
 
                 # Check bucket capacity with correct top_k for each type
                 if (
-                    mem_type == "text" and len(text_selected_by_bucket[bucket_idx]) >= text_top_k
+                    mem_type == "text"
+                    and len(text_selected_by_bucket[bucket_idx]) >= text_top_k_by_bucket[bucket_idx]
                 ) or (
                     mem_type == "preference"
                     and len(pref_selected_by_bucket[bucket_idx]) >= pref_top_k
@@ -541,7 +592,8 @@ class SearchHandler(BaseHandler):
 
             # Early termination: all buckets are full
             text_all_full = all(
-                len(text_selected_by_bucket[b_idx]) >= min(text_top_k, len(bucket_indices))
+                len(text_selected_by_bucket[b_idx])
+                >= min(text_top_k_by_bucket[b_idx], len(bucket_indices))
                 for b_idx, bucket_indices in text_indices_by_bucket.items()
             )
             pref_all_full = all(
