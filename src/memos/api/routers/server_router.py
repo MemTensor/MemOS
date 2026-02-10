@@ -53,7 +53,6 @@ from memos.api.product_models import (
     SuggestionResponse,
     TaskQueueResponse,
 )
-from memos.graph_dbs.polardb import PolarDBGraphDB
 from memos.log import get_logger
 from memos.mem_scheduler.base_scheduler import BaseScheduler
 from memos.mem_scheduler.utils.status_tracker import TaskStatusTracker
@@ -371,15 +370,6 @@ def feedback_memories(feedback_req: APIFeedbackRequest):
 )
 def get_user_names_by_memory_ids(request: GetUserNamesByMemoryIdsRequest):
     """Get user names by memory ids."""
-    if not isinstance(graph_db, PolarDBGraphDB):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "graph_db must be an instance of PolarDBGraphDB to use "
-                "get_user_names_by_memory_ids"
-                f"current graph_db is: {graph_db.__class__.__name__}"
-            ),
-        )
     result = graph_db.get_user_names_by_memory_ids(memory_ids=request.memory_ids)
     if vector_db:
         prefs = []
