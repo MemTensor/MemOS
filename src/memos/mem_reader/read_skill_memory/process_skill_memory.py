@@ -641,26 +641,22 @@ def _rewrite_query(task_type: str, messages: MessageList, llm: BaseLLM, rewrite_
     )
     prompt = [{"role": "user", "content": prompt_content}]
 
-    # Call LLM to rewrite the query with retry logic
-    for attempt in range(3):
-        try:
-            response_text = llm.generate(prompt)
-            # Clean up response (remove any markdown formatting if present)
-            response_text = response_text.strip()
-            logger.info(f"[PROCESS_SKILLS] Rewritten query for task '{task_type}': {response_text}")
-            return response_text
-        except Exception as e:
+    # Call LLM to rewrite the query
+    try:
+        response_text = llm.generate(prompt)
+        # Clean up response (remove any markdown formatting if present)
+        if response_text and isinstance(response_text, str):
+            return response_text.strip()
+        else:
             logger.warning(
-                f"[PROCESS_SKILLS] LLM query rewrite failed (attempt {attempt + 1}): {e}"
+                "[PROCESS_SKILLS] LLM returned empty or invalid response, returning first message content"
             )
-            if attempt == 2:
-                logger.warning(
-                    "[PROCESS_SKILLS] LLM query rewrite failed after 3 retries, returning first message content"
-                )
-                return messages[0]["content"] if messages else ""
-
-    # Fallback (should not reach here due to return in exception handling)
-    return messages[0]["content"] if messages else ""
+            return messages[0]["content"] if messages else ""
+    except Exception as e:
+        logger.warning(
+            f"[PROCESS_SKILLS] LLM query rewrite failed: {e}, returning first message content"
+        )
+        return messages[0]["content"] if messages else ""
 
 
 @require_python_package(
